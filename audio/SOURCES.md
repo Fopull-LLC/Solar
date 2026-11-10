@@ -11,7 +11,8 @@
 | `sfx/` | `surveyor_charge`, `surveyor_ready` (a seamless loop), `surveyor_fire`, `surveyor_hit`, `crew_hit` — the TL-5 Surveyor plasma rifle and the crew's HIT warning | synthesized by `tools/gen_weapon_audio.py` | the project's own |
 | `weather/` | `rain_light`, `rain_heavy`, `hail`, `dust` (seamless loops), `thunder_1..3` | synthesized by `tools/gen_weather_audio.py` | the project's own |
 | `foley/` | `laser_hiss`, `laser_crackle`, `laser_rumble` (seamless loops): the Terrain Laser's bite | synthesized by `tools/gen_grit_audio.py` | the project's own |
-| `ambience/` | `cave_tone` (seamless loop), `cave_drip_1..4`, `cave_creak_1..3`, `cave_groan_1..2`: underground.lua | synthesized by `tools/gen_grit_audio.py` | the project's own |
+| `ambience/` | `cave_tone` (seamless loop), `cave_drip_1..6`: underground.lua | real recordings in caves, cut and levelled by `tools/build_cave_audio.py` (table below) | CC0 (freesound.org) |
+| `ambience/` | `cave_creak_1..3`, `cave_groan_1..2`: underground.lua | synthesized by `tools/gen_grit_audio.py` | the project's own |
 | `sfx/` | `breath_calm`, `breath_heavy`, `suit_hum` (seamless loops): the suit, soundscape.lua | synthesized by `tools/gen_grit_audio.py` | the project's own |
 
 Levels (from `python3 tools/gen_soundscape_audio.py --stats`, confirmed with ffmpeg's
@@ -64,6 +65,26 @@ Levels (`--stats`): one-shots peak ≤ −1.2 dBFS with the loud part's RMS at m
 Kenney clips they replaced sat at −10 to −19); loops RMS −18 dBFS (gravel −23, the arc −28: their
 crackle sets the peak), `bore_hum` −16. Loops are crossfaded tail-into-head (equal power), and
 their 100 ms envelope varies 0.4–3.7 dB — none of them pulses.
+
+## audio/ambience — the cave, from real caves
+
+Ty, 2026-11-10: the synthesised drip "sounds like a really resonant water drop … very synthesized;
+I'd rather you find real sound effects". Both sources are CC0 1.0 (the licence was read on each
+sound's page, 2026-11-10). The originals need a freesound login; `tools/build_cave_audio.py` cuts
+from their HQ previews (the curl lines are in its docstring). Rebuild with
+`python3 tools/build_cave_audio.py <folder> --stats`.
+
+| file(s) | source | licence | what it was |
+|---|---|---|---|
+| `cave_drip_1..6` (mono one-shots, played as 3D sources where each drop lands) | "Drops in the small cave" by Selector, https://freesound.org/people/Selector/sounds/402929/ — drops at 14.6, 17.5, 20.9, 22.3, 74.3 and 110.7 s | CC0 1.0 | water dripping in the Ledyanaya cave near Staritsa, Russia (Zoom H6, XYH-6, 48 kHz) |
+| `cave_tone` (30 s loop) | "INT Cave Room tone.wav", https://freesound.org/people/deleted_user_2104797/sounds/164785/ — 40–74 s, 35 Hz–7 kHz | CC0 1.0 | the room tone of a cave in Kent, England (mono, directional) |
+
+Levels (`--stats`, ffmpeg `ebur128`): the drops peak −3.7 to −5.2 dBFS (the script sets each
+drop's level and the engine's distance falloff does the rest); `cave_tone` −35 LUFS, peak
+−12.7 dBFS (the synthesised one was −33 LUFS, −16 dBFS). Seen and not used: "Many drops of water
+in a big cave" (nomadas, #609161, CC0) — real, but its drops sit 15 dB over a busy floor, too
+close together to cut one clean; "Water Dripping in Cave" (#177958) and "Water Dripping (Large
+Echo)" (#162116) are effected or made in a DAW.
 
 ## audio/incoming/
 

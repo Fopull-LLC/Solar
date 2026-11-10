@@ -10,8 +10,6 @@ own licence, numpy + ffmpeg only.
     audio/foley/laser_hiss.ogg      12 s loop: the cut's steady hiss (vapour jetting off the bite)
     audio/foley/laser_crackle.ogg   12 s loop: molten rock spitting, sparks, spalling grit
     audio/foley/laser_rumble.ogg    12 s loop: the rock taking it, felt through the boots
-    audio/ambience/cave_tone.ogg    30 s loop: a cave's room tone, low and close
-    audio/ambience/cave_drip_1..4   a drop falling into a pool, in the cave's reverb
     audio/ambience/cave_creak_1..3  rock settling: a stick-slip creak through stone
     audio/ambience/cave_groan_1..2  a deep, far groan of the mountain, and a trickle of grit
     audio/sfx/breath_calm.ogg       ~7.6 s loop: two easy breaths inside a helmet
@@ -125,38 +123,8 @@ def laser_rumble(seconds=12.0, seed=1103):
 
 # ── the cave ────────────────────────────────────────────────────────────────
 
-def cave_tone(seconds=30.0, seed=1201):
-    rng = np.random.default_rng(seed)
-    n = int(seconds * SR)
-    out = []
-    for ch in range(2):
-        hum = shaped_noise(n, rng, 18, 140, tilt=-2.4)
-        hum = hum * (0.75 + 0.25 * loop_lfo(n, 2, rng.uniform(0, 6)))
-        # a standing mode of the chamber, faint and slowly breathing
-        mode = band_noise(n, rng, 64 * rng.uniform(0.97, 1.03), 18) * 0.35 * loop_lfo(n, 3, rng.uniform(0, 6))
-        air = shaped_noise(n, rng, 300, 2200, tilt=-1.6) * 0.06 * loop_lfo(n, 4, rng.uniform(0, 6))
-        out.append(hum + mode + air)
-    return level(np.stack(out, axis=1), lufs=-31.0, peak_db=-8.0)
-
-
-def cave_drip(seed):
-    rng = np.random.default_rng(seed)
-    n = int(0.25 * SR)
-    t = np.arange(n) / SR
-    # a drop into a pool: a rising "plink" (the bubble's resonance) and a tick
-    f0 = rng.uniform(900, 1500)
-    f1 = f0 * rng.uniform(1.6, 2.4)
-    d = rng.uniform(0.018, 0.04)
-    sweep = f0 + (f1 - f0) * np.clip(t / d, 0, 1)
-    ph = 2 * np.pi * np.cumsum(sweep) / SR
-    plink = np.sin(ph) * np.exp(-t / (d * 1.4))
-    tick = rng.standard_normal(n) * np.exp(-t / 0.0015) * 0.35
-    x = plink + highpass_fft(tick, 2500)
-    x = fade(x, 0.0005, 0.05)
-    p = pan(x, rng.uniform(-0.6, 0.6))
-    w = reverb(p, seconds=2.4, mix=0.55, seed=seed, damp_hz=3200.0)
-    return level(w, lufs=-25.0, peak_db=-6.0)
-
+# The room tone and the drips are real recordings now (2026-11-10, Ty: "find
+# real sound effects instead of synthesizing them"): tools/build_cave_audio.py.
 
 def cave_creak(seed):
     rng = np.random.default_rng(seed)
@@ -258,8 +226,6 @@ FILES = {
     "foley/laser_hiss.ogg": laser_hiss,
     "foley/laser_crackle.ogg": laser_crackle,
     "foley/laser_rumble.ogg": laser_rumble,
-    "ambience/cave_tone.ogg": cave_tone,
-    **{f"ambience/cave_drip_{i}.ogg": (lambda i=i: cave_drip(1210 + i)) for i in (1, 2, 3, 4)},
     **{f"ambience/cave_creak_{i}.ogg": (lambda i=i: cave_creak(1220 + i)) for i in (1, 2, 3)},
     **{f"ambience/cave_groan_{i}.ogg": (lambda i=i: cave_groan(1230 + i)) for i in (1, 2)},
     "sfx/breath_calm.ogg": lambda: breath(False, 1311),

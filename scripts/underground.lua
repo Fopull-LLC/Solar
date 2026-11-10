@@ -29,9 +29,10 @@
 --               vacuum, fewer.
 --   MIST        on a world with damp air, cold mist lying along the floor
 --               (vfx/CaveMist), the same trick.
---   DRIPS       on a wet world, a drop now and then from the roof near you
---               (vfx/CaveDrip) and its plink when it lands (the fall's time
---               later), in the cave's reverb.
+--   DRIPS       on a wet world, a few drip spots on the roof round you, each
+--               dripping at its own pace: the drop leaves the roof
+--               (vfx/CaveDrip) and is heard where it lands, the fall's time
+--               later, as a 3D source (real recordings; see DRIPS below).
 --   SOUND       a cave's room tone (low, close), and every half minute or so a
 --               creak of rock settling or a deep groan of the mountain with a
 --               trickle of grit, off to one side. In vacuum there is no air to
@@ -69,8 +70,13 @@ defaults = {
   toneGain = 0.32,
   --@range 0 1
   creakGain = 0.5,
+  --- A drop's level at `dripNear` m (it falls off with distance past that).
   --@range 0 1
-  dripGain = 0.45,
+  dripGain = 0.8,
+  --@range 0.5 5
+  dripNear = 1.5,
+  --- Drip on any world (probes): otherwise only where the air is damp.
+  dripsAlways = false,
   debug = false,
 }
 
@@ -129,8 +135,8 @@ local SKY_N = 5
 local hits = {}       -- ray index → true/false (last answer)
 local next_ray = 1
 local amb = { base = nil, wrote = nil }
-local fx_t = { motes = -10, mist = -10, drip = nil }
-local snd = { tone = nil, tone_v = 0, next_creak = nil, drip_at = nil, drip_lp = 0 }
+local fx_t = { motes = -10, mist = -10 }
+local snd = { tone = nil, tone_v = 0, next_creak = nil }
 local dbg_t = -10
 
 local function crew_eye()
@@ -232,36 +238,19 @@ local function effects(ex, ey, ez, ux, uy, uz, name, b, air, w)
     pcall(spawnEffect, "CaveMist", vec3(ex - ux * 1.45 + fx * 2.5, ey - uy * 1.45 + fy * 2.5, ez - uz * 1.45 + fz * 2.5),
       { normal = vec3(nx, ny, nz), intensity = 0.6 + 0.6 * dm })
   end
-  -- a drop from the roof, and its sound when it lands
-  if not vac and dm > 0.35 then
-    if not fx_t.drip then fx_t.drip = time + 3 + math.random() * 8 end
-    if time >= fx_t.drip then
-      fx_t.drip = time + (3 + math.random() * 9) / (0.5 + dm)
-      local tx, ty, tz, sx, sy, sz = tangents(ux, uy, uz)
-      local a, r = math.random() * 6.283, 1.0 + math.random() * 3.0
-      local px = ex + (tx * math.cos(a) + sx * math.sin(a)) * r
-      local py = ey + (ty * math.cos(a) + sy * math.sin(a)) * r
-      local pz = ez + (tz * math.cos(a) + sz * math.sin(a)) * r
-      local ok, h = pcall(terrain.raycast, vec3(px, py, pz), vec3(ux, uy, uz), 14)
-      if ok and h and h.pos and (h.distance or 0) > 0.2 then
-        local hx, hy, hz = h.pos.x - ux * 0.05, h.pos.y - uy * 0.05, h.pos.z - uz * 0.05
-        pcall(spawnEffect, "CaveDrip", vec3(hx, hy, hz), { normal = vec3(ux, uy, uz) })
-        local g = (b.mu or 0) / max(1, (b.radius or 1) ^ 2)
-        local fall = (h.distance or 2) + 1.6
-        snd.drip_at = time + sqrt(2 * fall / max(0.5, g))
-      end
-    end
-  end
 end
 
 -- ── the sound ──────────────────────────────────────────────────────────────
+-- Real recordings (tools/build_cave_audio.py, audio/SOURCES.md): the drops are
+-- cut from a field recording in the Ledyanaya cave, the room tone from a cave
+-- in Kent; the creaks and groans are still tools/gen_grit_audio.py's.
 local TONE = "audio/ambience/cave_tone.ogg"
-local DRIPS = { "audio/ambience/cave_drip_1.ogg", "audio/ambience/cave_drip_2.ogg",
-                "audio/ambience/cave_drip_3.ogg", "audio/ambience/cave_drip_4.ogg" }
+local DRIPS = { "audio/ambience/cave_drip_1.ogg", "audio/ambience/cave_drip_2.ogg", "audio/ambience/cave_drip_3.ogg",
+                "audio/ambience/cave_drip_4.ogg", "audio/ambience/cave_drip_5.ogg", "audio/ambience/cave_drip_6.ogg" }
 local CREAKS = { "audio/ambience/cave_creak_1.ogg", "audio/ambience/cave_creak_2.ogg", "audio/ambience/cave_creak_3.ogg" }
 local GROANS = { "audio/ambience/cave_groan_1.ogg", "audio/ambience/cave_groan_2.ogg" }
-local function play(clip, o)
-  if audio and audio.play then local ok, h = pcall(audio.play, clip, o); return ok and h or nil end
+local function play(clip, a, b, c, d)
+  if audio and audio.play then local ok, h = pcall(audio.play, clip, a, b, c, d); return ok and h or nil end
 end
 local function sounds(dt, air)
   if params.sound == false then return end
@@ -290,10 +279,122 @@ local function sounds(dt, air)
   else
     snd.next_creak = nil
   end
-  if snd.drip_at and time >= snd.drip_at then
-    snd.drip_at = nil
-    play(DRIPS[math.random(1, #DRIPS)], { track = "SFX", mode = "Flat", pan = (math.random() * 2 - 1) * 0.6,
-      volume = (params.dripGain or 0.45) * (0.5 + 0.5 * math.random()), pitch = 0.9 + 0.2 * math.random() })
+end
+
+-- ── DRIPS: drops from the roof, heard where they land ──────────────────────
+-- Ty, 2026-11-10: the old drip was one synthesised, resonant plink played
+-- flat in the middle of your head. A real cave drips from places: a few spots
+-- on the roof round you, each with its own drop, its own pace and its own
+-- pool. So the cave keeps up to DRIP_SPOTS of them within DRIP_KEEP m: each is
+-- found by rays (a level one so it is never behind a wall, one up to the
+-- roof, one down to the floor), held in the PLANET's frame (the planet moves
+-- metres a tick: docs/positions-and-frames.md rule 1), and drips every few
+-- seconds, a little irregularly. The drop is seen leaving the roof
+-- (vfx/CaveDrip, when it is close enough to see) and heard where it lands,
+-- the fall's time later, as a 3D source: the engine's distance falloff and
+-- direction, the SFX bus's room on top of the recording's own cave. Spots
+-- farther off than DRIP_KEEP are let go and new ones found, so walking
+-- through a cave passes drips by.
+DRIP_SPOTS = 4
+DRIP_KEEP = 16.0
+local spots = {}       -- { body, lx,ly,lz (landing), rx,ry,rz (roof), tf, clip, pitch, vol, period, next, shown }
+local ringing = {}     -- drops still sounding: { h, body, lx,ly,lz, till }
+local find_t = -10
+dripLog = { found = 0, played = 0, last = nil }   -- for probes: what the last drop was
+
+-- Pure (tests): how far out a new spot is looked for (u in 0..1: as many far
+-- as near per square metre of roof, so more of them are farther off), and a
+-- spot's pace in seconds on a world of dampness `dm`.
+function dripRadius(u) return 1.5 + 9.5 * sqrt(u) end
+function dripPeriod(dm, u) return (2.5 + 9.0 * u) / (0.5 + dm) end
+
+local function find_spot(ex, ey, ez, ux, uy, uz, name, b, dm)
+  local tx, ty, tz, sx, sy, sz = tangents(ux, uy, uz)
+  local a = math.random() * 6.283
+  local dx = tx * math.cos(a) + sx * math.sin(a)
+  local dy = ty * math.cos(a) + sy * math.sin(a)
+  local dz = tz * math.cos(a) + sz * math.sin(a)
+  local r = dripRadius(math.random())
+  -- never behind a wall: a level ray from the eye first
+  local ok0, hw = pcall(terrain.raycast, vec3(ex, ey, ez), vec3(dx, dy, dz), r)
+  if ok0 and hw and hw.distance then r = hw.distance - 0.6 end
+  if r < 0.8 then return nil end
+  local px, py, pz = ex + dx * r, ey + dy * r, ez + dz * r
+  local ok1, hr = pcall(terrain.raycast, vec3(px, py, pz), vec3(ux, uy, uz), 14)
+  if not (ok1 and hr and hr.pos and (hr.distance or 0) > 0.3) then return nil end
+  local rx, ry, rz = hr.pos.x - ux * 0.05, hr.pos.y - uy * 0.05, hr.pos.z - uz * 0.05
+  local ok2, hf = pcall(terrain.raycast, vec3(rx, ry, rz), vec3(-ux, -uy, -uz), 30)
+  if not (ok2 and hf and hf.pos and (hf.distance or 0) > 0.5) then return nil end
+  local g = (b.mu or 0) / max(1, (b.radius or 1) ^ 2)
+  local tf = sqrt(2 * hf.distance / max(0.5, g))
+  local period = dripPeriod(dm, math.random())
+  return {
+    body = name,
+    lx = hf.pos.x + ux * 0.03 - b.x, ly = hf.pos.y + uy * 0.03 - b.y, lz = hf.pos.z + uz * 0.03 - b.z,
+    rx = rx - b.x, ry = ry - b.y, rz = rz - b.z,
+    tf = tf, clip = DRIPS[math.random(1, #DRIPS)], pitch = 0.88 + 0.24 * math.random(),
+    vol = 0.6 + 0.4 * math.random(), period = period, next = time + tf + math.random() * period, shown = false,
+  }
+end
+
+local function drips(ex, ey, ez, ux, uy, uz, name, b, vac, dm)
+  -- the drops still ringing ride the planet (a 1 s sound left at a world
+  -- point would be 100+ m behind by its end)
+  for i = #ringing, 1, -1 do
+    local d = ringing[i]
+    local bb = d.body and space.body(d.body)
+    if time > d.till or not bb then
+      table.remove(ringing, i)
+    elseif d.h and d.h.setPosition then
+      pcall(d.h.setPosition, d.h, bb.x + d.lx, bb.y + d.ly, bb.z + d.lz)
+    end
+  end
+  local wet = ex and cave and not vac and dm > 0.35
+  if not wet then
+    if #spots > 0 then spots = {} end
+    return
+  end
+  -- let go of spots left behind (or on another world)
+  for i = #spots, 1, -1 do
+    local sp = spots[i]
+    local far = sp.body ~= name
+    if not far then
+      local dx, dy, dz = b.x + sp.lx - ex, b.y + sp.ly - ey, b.z + sp.lz - ez
+      far = dx * dx + dy * dy + dz * dz > DRIP_KEEP * DRIP_KEEP
+    end
+    if far then table.remove(spots, i) end
+  end
+  -- find one more (three rays, at most a few times a second)
+  if #spots < DRIP_SPOTS and time - find_t > 0.4 and terrain and terrain.raycast then
+    find_t = time
+    local sp = find_spot(ex, ey, ez, ux, uy, uz, name, b, dm)
+    if sp then spots[#spots + 1] = sp; dripLog.found = dripLog.found + 1 end
+  end
+  for _, sp in ipairs(spots) do
+    if not sp.shown and time >= sp.next - sp.tf then
+      sp.shown = true
+      local rx, ry, rz = b.x + sp.rx, b.y + sp.ry, b.z + sp.rz
+      local dx, dy, dz = rx - ex, ry - ey, rz - ez
+      if params.effects ~= false and spawnEffect and dx * dx + dy * dy + dz * dz < 81 then
+        pcall(spawnEffect, "CaveDrip", vec3(rx, ry, rz), { normal = vec3(ux, uy, uz) })
+      end
+    end
+    if time >= sp.next then
+      sp.next = time + sp.period * (0.8 + 0.4 * math.random())
+      sp.shown = false
+      if params.sound ~= false then
+        local lx, ly, lz = b.x + sp.lx, b.y + sp.ly, b.z + sp.lz
+        local h = play(sp.clip, lx, ly, lz, { track = "SFX", mode = "Spatial", falloff = "Inverse",
+          minDistance = params.dripNear or 1.5, maxDistance = 30,
+          volume = (params.dripGain or 0.8) * sp.vol * (0.85 + 0.3 * math.random()),
+          pitch = sp.pitch * (0.98 + 0.04 * math.random()) })
+        if h then ringing[#ringing + 1] = { h = h, body = name, lx = sp.lx, ly = sp.ly, lz = sp.lz, till = time + 1.5 } end
+        local dx, dy, dz = lx - ex, ly - ey, lz - ez
+        dripLog.played = dripLog.played + 1
+        dripLog.last = { dist = sqrt(dx * dx + dy * dy + dz * dz), above = (dx * ux + dy * uy + dz * uz),
+                         fall = sp.tf, clip = sp.clip, handle = h ~= nil, spots = #spots }
+      end
+    end
   end
 end
 
@@ -334,8 +435,10 @@ function update(node, dt)
     local vx = ref("vfx")
     air = (vx and vx.airAt and vx.airAt(ex, ey, ez)) or 0
   end
-  if cave and ex then effects(ex, ey, ez, ux, uy, uz, name, b, air, world_of(name)) end
+  local w = name and world_of(name)
+  if cave and ex then effects(ex, ey, ez, ux, uy, uz, name, b, air, w) end
   sounds(dt, air)
+  drips(ex, ey, ez, ux, uy, uz, name, b, air < 0.03, params.dripsAlways and 1.0 or damp(w))
   if params.debug and time - dbg_t > 1 then
     dbg_t = time
     print(string.format("underground: enclosed %.2f (sky %.2f walls %.2f) cave %s air %.2f", enclosed, sky, walls, tostring(cave), air))
@@ -356,5 +459,6 @@ end
 
 function onDestroy(node)
   if snd.tone then snd.tone:stop() end
+  for _, d in ipairs(ringing) do if d.h and d.h.stop then pcall(d.h.stop, d.h) end end
   darken(1.0)
 end

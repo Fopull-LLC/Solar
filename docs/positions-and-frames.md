@@ -169,6 +169,7 @@ local wx = F.ox + F.rx*lx + F.ux*ly + F.zx*lz   -- lx,ly,lz stored in the part's
 | Boarding rings drawn beside the ship | Drawn with node coords that lag the carry | Tick or drawn pose consistently |
 | Plants appearing, sliding and vanishing at the base | Sources redeclared with world-frame props | Keep scatter edits in the planet frame |
 | Prompts and target markers on a moving craft slid behind it (0.35 m on a rover at 10 m/s) | Drawn from `assembly.info`/`partFrameNow` (physics frame), and `rendered` was ignored | `partFrameNow(uid, true)`, `drawnShift()` |
+| A craft under its chute spun up in time warp and broke on landing | In warp the engine's conic owns position and velocity, not rotation: the chute drag (from a speed it could never slow) kept its torque | No off-centre force (chute drag) on the rails; the descent warp lowers a craft under chutes itself (vessel_controller `chuteWarpTick`) |
 | Grass round the feet blinked while walking | Each brushed plant was swapped for a node and back | Engine bending (`touch_engine = 1`), its points set in lateUpdate |
 
 ## Review checklist (code and screenshots)

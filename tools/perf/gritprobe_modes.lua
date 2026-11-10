@@ -376,6 +376,13 @@ function GR.run_cave()
   end
   wait(3)
   st("in")
+  -- the drips (real recordings, 3D where each drop lands): on any world here
+  if ug and ug.params then ug.params.dripsAlways = true end
+  wait(12)
+  local dl = ug and ug.dripLog or {}
+  local last = dl.last or {}
+  P("GR DRIPS: spots found %d, drops played %d; last: %s, %.1f m from the eye, %.1f m along up, fall %.2f s, handle %s, spots %s",
+    dl.found or -1, dl.played or -1, tostring(last.clip), last.dist or -1, last.above or 0, last.fall or 0, tostring(last.handle), tostring(last.spots))
   local back = { x = -t.x, y = -t.y, z = -t.z }
   look(t, -0.1, "cave_deep")
   look(back, 0.25, "cave_mouth")

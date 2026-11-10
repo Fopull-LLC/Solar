@@ -92,6 +92,90 @@ local windy = { kind = "wet", wind = 12.0, precip = 0, cover = 0.3, state = "cle
 ok(W.mistOf(windy, p, -0.4, 0.7, 3, 0, 360) == 0, "never on a windy night")
 ok(W.mistOf(calm, { airless = false, temp = 0.5, moist = 0.02 }, -0.4, 0.02, 3, 0, 360) < 0.05, "barely on a dry one")
 
+-- ── underground: drips heard where they land (Ty 2026-11-10) ───────────────
+-- A chamber 6 m high on a world racing along its rails (100 m a step): the
+-- drops play as 3D sources on the floor under the roof, near the crew, and
+-- the ones still sounding move with the planet.
+do
+  local R = 1000
+  local B = { name = "Home", x = 0, y = 0, z = 0, radius = R, mu = 9.0 * R * R, soi = 1e9 }
+  local astro = { x = 0, y = R, z = 0, valid = true }
+  local plays, moves = {}, {}
+  local function handle(rec)
+    return { setVolume = function() end, setLowpass = function() end, stop = function() end,
+             setPosition = function(_, x, y, z) moves[#moves + 1] = { rec = rec, x = x, y = y, z = z, bx = B.x } end }
+  end
+  local api = {
+    time = 0, vec3 = function(x, y, z) return { x = x, y = y, z = z } end,
+    find = function(n) if n == "Astronaut" then return astro end end,
+    findScript = function(k)
+      if k == "planet_walker" then return { valid = true, onFoot = true } end
+      if k == "vfx" then return { valid = true, airAt = function() return 1.0 end } end
+    end,
+    save = { get = function() return { climMoist = 0.8 } end },
+    space = { dominant = function() return "Home" end, body = function() return B end },
+    -- the cave: floor at R, roof at R + 6, walls 10 m off every level ray
+    terrain = { raycast = function(o, d, far)
+      local px, py, pz = o.x - B.x, o.y - B.y, o.z - B.z
+      local r = math.sqrt(px * px + py * py + pz * pz)
+      local radial = (px * d.x + py * d.y + pz * d.z) / r
+      local dist
+      if radial > 0.99 then dist = R + 6 - r elseif radial < -0.99 then dist = r - R else dist = 10 end
+      if dist <= 0 or dist > far then return nil end
+      return { distance = dist, pos = { x = o.x + d.x * dist, y = o.y + d.y * dist, z = o.z + d.z * dist } }
+    end },
+    audio = { play = function(clip, a, b, c, o)
+      local rec = { clip = clip, x = type(a) == "number" and a or nil, y = b, z = c, o = type(a) == "table" and a or o, bx = B.x }
+      plays[#plays + 1] = rec
+      return handle(rec)
+    end },
+  }
+  local G = load("solar/scripts/underground.lua", api)
+  G.params.effects = false
+  for step = 1, 1200 do                      -- 60 s at 20 Hz
+    api.time = step * 0.05
+    B.x = B.x + 100; astro.x = astro.x + 100
+    G.update({}, 0.05)
+  end
+  local drops, onfloor, near, spatial = 0, 0, 0, 0
+  for _, p in ipairs(plays) do
+    if p.clip:find("cave_drip_") then
+      drops = drops + 1
+      local rx, ry, rz = p.x - p.bx, p.y - B.y, p.z - B.z
+      local r = math.sqrt(rx * rx + ry * ry + rz * rz)
+      if math.abs(r - (R + 0.03)) < 0.05 then onfloor = onfloor + 1 end
+      local ex, ey, ez = p.x - (p.bx + 0), p.y - (R + 1.6), p.z
+      if math.sqrt(ex * ex + ey * ey + ez * ez) < 16.5 then near = near + 1 end
+      if p.o and p.o.mode == "Spatial" and p.o.track == "SFX" and (p.o.minDistance or 0) > 0 then spatial = spatial + 1 end
+    end
+  end
+  ok(G.cave, "the test chamber reads as a cave")
+  ok(drops >= 6, "a damp cave drips (" .. drops .. " drops in 60 s)")
+  ok(drops > 0 and onfloor == drops, "every drop lands on the floor (" .. onfloor .. "/" .. drops .. ")")
+  ok(drops > 0 and near == drops, "within reach of the crew (" .. near .. "/" .. drops .. ")")
+  ok(drops > 0 and spatial == drops, "as 3D sources with a distance falloff (" .. spatial .. "/" .. drops .. ")")
+  local rode = #moves > 0
+  for _, m in ipairs(moves) do
+    if math.abs((m.x - m.bx) - (m.rec.x - m.rec.bx)) > 1e-6 then rode = false end
+  end
+  ok(rode, "a drop still sounding moves with the planet (" .. #moves .. " moves)")
+  ok(G.dripRadius(0) >= 1.5 and G.dripRadius(1) <= 11.0, "drip spots 1.5 to 11 m out")
+  ok(G.dripPeriod(0.8, 0) > 1.5 and G.dripPeriod(0.35, 1) < 15, "each drips every few seconds")
+  -- a dry world: no drips
+  local G2 = load("solar/scripts/underground.lua", api)
+  api.save = { get = function() return { climMoist = 0.1, kind = "dune" } end }
+  local n0 = #plays
+  for step = 1, 400 do api.time = 100 + step * 0.05; G2.update({}, 0.05) end
+  local dry = 0
+  for i = n0 + 1, #plays do if plays[i].clip:find("cave_drip_") then dry = dry + 1 end end
+  ok(dry == 0, "a dry cave does not drip (" .. dry .. ")")
+end
+for i = 1, 6 do
+  local h = io.open("solar/audio/ambience/cave_drip_" .. i .. ".ogg", "rb")
+  ok(h ~= nil, "missing audio/ambience/cave_drip_" .. i .. ".ogg")
+  if h then h:close() end
+end
+
 -- ── the files ──────────────────────────────────────────────────────────────
 for _, f in ipairs({ "vfx/MiningBeam.vfx.ron", "vfx/MiningImpact.vfx.ron", "vfx/LaserChips.vfx.ron", "vfx/LaserChipsVac.vfx.ron",
                      "vfx/DigSmoke.vfx.ron", "vfx/CutGlow.vfx.ron", "vfx/LaserMuzzle.vfx.ron", "vfx/CaveMotes.vfx.ron",

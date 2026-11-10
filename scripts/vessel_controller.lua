@@ -3407,7 +3407,9 @@ local function update_chutes(node, dt)
   end
   local info = assembly.info(node)
   if not info then return end
-  local v = info.vel
+  -- (held by the descent warp, the craft is at rest in the sim: the air
+  -- moves past at the steady descent it is being lowered at)
+  local v = CHUTE_WARP.on and CHUTE_WARP.vel or info.vel
   local spd = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
   local dens = 0.0 -- the same band model as the drag and heating
   local dom = space.dominant(node.x, node.y, node.z)
@@ -3417,7 +3419,7 @@ local function update_chutes(node, dt)
     local alt = math.sqrt(dx * dx + dy * dy + dz * dz) - db.radius
     dens = airBandAt(db, alt)
   end
-  f.t, f.dens, f.spd, f.grounded = f.t + dt, dens, spd, info.grounded or false
+  f.t, f.dens, f.spd, f.grounded = f.t + dt, dens, spd, (info.grounded and not CHUTE_WARP.on) or false
   local PACK_LEN = 12.5   -- riser + lines + canopy, m (models/parts/parachute.glb)
   local FILL_D = 7.1      -- the inflated canopy's diameter, m
   local REEF_S, REEF_AREA = 0.4, 0.2
@@ -3432,8 +3434,11 @@ local function update_chutes(node, dt)
     local reefed = f.t - (f.ls or 0) < REEF_S
     -- Thin air cannot hold a canopy open: it stays partly collapsed.
     local hold = 0.3 + 0.7 * math.min(1.0, math.max(0.0, (dens - 0.03) / 0.37))
-    local air = dens > 0 and spd > 1.2 and not info.grounded
+    local air = dens > 0 and spd > 1.2 and not (info.grounded and not CHUTE_WARP.on)
     local target = air and math.min(reefed and REEF_AREA or 1.0, hold) or 0.0
+    -- lowered by the descent warp at its steady speed, a canopy stays as open
+    -- as it was (it may still fill as the air thickens)
+    if CHUTE_WARP.on and target < f.area then target = f.area end
     if target > f.area then
       local rate = math.min(6.0, math.max(0.8,
         spd / (2.5 * FILL_D) * (0.2 + 0.8 * math.sqrt(dens))))
@@ -5732,7 +5737,7 @@ function evaState()
   if not info then return nil end
   local v = info.vel
   local speed = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
-  local surface = info.grounded == true or info.anchored == true or R2.onWheels == true or WATER.splashed == true
+  local surface = ((info.grounded == true or info.anchored == true) and not CHUTE_WARP.on) or R2.onWheels == true or WATER.splashed == true
   local space_ = false
   if not surface then
     local px, py, pz = pod_world(node, info)
@@ -9137,6 +9142,130 @@ function waterTick(node, info, dt)
   end
   assembly.force(node, vec3(Fx, Fy, Fz))
   assembly.torque(node, vec3(Tx, Ty, Tz))
+end
+
+-- ── DESCENT WARP: time warp under open chutes ──────────────────────────────
+-- Ty, 2026-11-10: "warping with a parachute to get closer to the ground makes
+-- your craft start spinning forever out of control, then you explode due to
+-- the angular velocity when you land."
+--   Time warp puts every craft in flight on the engine's Kepler rails: each
+-- tick the engine sets its position and velocity from a conic, which knows
+-- gravity and nothing else. Under a canopy that is a free fall: the craft sped
+-- from 5 to 30 m/s in a second of ×10 (tools/perf/chutewarp.sh). Only position
+-- and velocity are on the rails, though; the turning is still the realtime
+-- sim's. So the chute drag, worked out from a speed it could no longer bring
+-- down, stood at its one-tick cap (half the speed a tick: dozens of times the
+-- craft's weight) every tick, and its pendulum torque at the canopy ran at
+-- the stiffest swing the lever cap allows (ω·dt = 0.3), with nothing to damp
+-- it (the spin brake is off in warp): under a full canopy the craft was
+-- turning at 6.5 rad/s after 0.7 s of ×10 (chutewarp.sh chutehill), and the
+-- warp dropped it at the free-fall speed near the ground.
+--   Now a craft hanging under open, filled canopies in the air warps by its
+-- chutes, not by a conic: it is held (anchored, so the rails leave it alone
+-- and nothing turns it) and lowered at the steady speed those canopies give
+-- in this air, √(m·g / (k·ρ)) with the drag pass's own k, warp × faster,
+-- kept in the planet's frame. It comes off the warp DESCENT_STOP m over the
+-- ground or the sea (one ray down, every tick) and drops on at that speed,
+-- not turning: the last tens of metres are flown for real. A canopy still
+-- opening (too little drag to hang under) or gone (cut, torn off) ends the
+-- warp. Above the air there is nothing for a chute to do and the rails are
+-- right, so the warp there is unchanged; so is a warp with no chutes out.
+DESCENT_STOP = 40.0       -- m over the ground (from the centre of mass)
+DESCENT_MIN_AREA = 0.25   -- the canopies' fill below which they cannot hold the craft
+CHUTE_WARP = { on = false, body = nil, rx = 0, ry = 0, rz = 0, vt = 0, vel = nil, kick = nil, was_anchored = false }
+
+function chuteWarpEnd(node, info, why)
+  local W = CHUTE_WARP
+  if not W.on then return end
+  W.on = false
+  if not W.was_anchored and not WATER.anchored then assembly.setAnchored(node, false) end
+  -- resume the fall at the steady descent (a held craft is at rest): set on
+  -- the first tick the craft is loose again
+  W.kick = W.vel and { body = W.body, x = W.vel.x, y = W.vel.y, z = W.vel.z } or nil
+  W.vel = nil
+  if why then warpSay(why) end
+  log(string.format("descent warp: off (%s), at %.1f m/s", tostring(why or "warp ended"), W.vt or 0))
+end
+
+function chuteWarpTick(node, info, dt)
+  local W = CHUTE_WARP
+  if W.kick and not info.anchored then
+    -- the steady descent the canopies held, as a velocity change through the CoM
+    local k, m = W.kick, math.max(0.05, info.mass or 1)
+    local v, cm = info.vel, info.com or info.origin
+    W.kick = nil
+    -- (a handoff, not a solver kick: the safety net's velocity clamp lets it be)
+    integ.handoff_t = time + 1.0
+    assembly.impulseAt(node, vec3((k.x - v.x) * m, (k.y - v.y) * m, (k.z - v.z) * m), cm)
+  end
+  local warp = space.warp()
+  local want = warp > 1.001 and chutes_deployed and #chutes > 0 and not chute_fill.cut
+    and not destroyed and not WATER.splashed and (W.on or not (info.anchored or info.grounded))
+  local cm = info.com or info.origin
+  local dom = want and space.dominant(cm.x, cm.y, cm.z)
+  local b = dom and space.body(dom)
+  if want and not (b and b.radius and (not W.on or W.body == dom)) then want = false end
+  local r, ux, uy, uz, dens = 0, 0, 0, 0, 0
+  if want then
+    ux, uy, uz = cm.x - b.x, cm.y - b.y, cm.z - b.z
+    r = math.sqrt(ux * ux + uy * uy + uz * uz)
+    ux, uy, uz = ux / r, uy / r, uz / r
+    dens = math.min(1.0, airBandAt(b, r - b.radius))
+    -- above the air: no drag to ride, the conic is the truth
+    if dens <= 0.002 then want = false end
+  end
+  if not want then
+    -- (a held craft reads grounded to the engine: the ground is the ray's
+    -- business below.) Off the chutes in the air, the warp ends too: the
+    -- conic would drop the craft unbraked.
+    if W.on then
+      if warp > 1.001 then space.warp(1) end
+      chuteWarpEnd(node, info, warp > 1.001 and "Warp ×1 · off the chutes" or nil)
+    end
+    return
+  end
+  local area = chute_fill.area or 0
+  if area < DESCENT_MIN_AREA then
+    space.warp(1)
+    chuteWarpEnd(node, info, nil)
+    warpSay("Warp ×1 · the chutes are still opening")
+    return
+  end
+  -- the steady descent under these canopies in this air (the drag pass's
+  -- F = 1.3·n·fill·ρ·v², against the weight)
+  local g = b.mu / (r * r)
+  if space.gravity then
+    local gx, gy, gz = space.gravity(cm.x, cm.y, cm.z)
+    if gx then g = math.sqrt(gx * gx + gy * gy + gz * gz) end
+  end
+  local kd = 1.3 * #chutes * area * dens
+  local vt = math.sqrt(math.max(0.05, info.mass or 1) * g / math.max(kd, 1e-6))
+  -- how far above the ground (or the open sea) the centre of mass is
+  local radar = math.huge
+  local ok, hit = pcall(terrain.raycast, vec3(cm.x, cm.y, cm.z), vec3(-ux, -uy, -uz), 6000)
+  if ok and hit and hit.distance then radar = hit.distance end
+  if not (WATER.cl and WATER.cl.valid ~= false) then WATER.cl = findScript and findScript("climate") or nil end
+  local sea = WATER.cl and WATER.cl.seaRadius and WATER.cl.seaRadius(dom) or 0
+  if sea > 0 then radar = math.min(radar, r - sea) end
+  local stop = math.max(DESCENT_STOP, vt * 6.0)
+  local step = vt * warp * dt
+  local last = radar - step <= stop
+  if last then step = math.max(0, radar - stop) end
+  if not W.on then
+    W.on, W.body, W.was_anchored = true, dom, info.anchored == true
+    local o = info.origin
+    W.rx, W.ry, W.rz = o.x - b.x, o.y - b.y, o.z - b.z
+    assembly.setAnchored(node, true)
+    log(string.format("descent warp: on at ×%d, %.0f m over the ground, %.1f m/s under %d chute(s) (fill %.2f, air %.2f)",
+      math.floor(warp + 0.5), radar, vt, #chutes, area, dens))
+  end
+  W.rx, W.ry, W.rz = W.rx - ux * step, W.ry - uy * step, W.rz - uz * step
+  W.vt, W.vel = vt, { x = -ux * vt, y = -uy * vt, z = -uz * vt }
+  assembly.teleport(node, vec3(b.x + W.rx, b.y + W.ry, b.z + W.rz))
+  if last then
+    space.warp(1)
+    chuteWarpEnd(node, info, "Warp ×1 · nearing the ground")
+  end
 end
 
 -- ── a stage that can fly itself ─────────────────────────────────────────────
@@ -14936,6 +15065,9 @@ function fixedUpdate(node, dt)
   if info then damage_tick(node, info, dt) end
   if info then stressTick(node, info, dt) end
   if info and not destroyed then waterTick(node, info, dt) end
+  -- time warp under open chutes rides them, not the conic (a global: the
+  -- upvalue ceiling)
+  if info then chuteWarpTick(node, info, dt) end
   -- DOCKING runs piloted or not — a station module has to keep its ports live
   -- so a lander can find them, and the soft-capture magnetism is mutual. Global
   -- call: `fixedUpdate` is at Lua's 60-upvalue ceiling and a global costs it
@@ -15277,7 +15409,7 @@ function fixedUpdate(node, dt)
   -- A rover's contact flag flickers over every bump at speed, and each flicker
   -- used to ring a metal clank and print "touchdown" (50 in a 25 s drive).
   if not info.grounded then SFX.live.air_since = SFX.live.air_since or time end
-  if info.grounded and not was_grounded and time - (SFX.live.air_since or time) > 0.6 then
+  if info.grounded and not CHUTE_WARP.on and not was_grounded and time - (SFX.live.air_since or time) > 0.6 then
     -- Touching down is worth saying however gently it happened — the dust and
     -- the thump below are gated on landing HARD, and a caption that only fires
     -- on a bad landing would tell a player they had crashed and nothing else.
@@ -15292,7 +15424,7 @@ function fixedUpdate(node, dt)
       add_shake(math.min(0.5, sp * 0.03)) -- a firm touchdown thuds the view
     end
   end
-  was_grounded = info.grounded or false
+  was_grounded = (info.grounded and not CHUTE_WARP.on) or false
   if info.grounded then SFX.live.air_since = nil end
   if burning and near_ground and time - launch_dust_t > 0.16 then
     launch_dust_t = time
@@ -15446,7 +15578,12 @@ function fixedUpdate(node, dt)
         local fx3 = -v.x * spd * density * drag_k
         local fy3 = -v.y * spd * density * drag_k
         local fz3 = -v.z * spd * density * drag_k
-        if not info.anchored then
+        -- Not on the rails: in time warp the engine's conic sets the craft's
+        -- position and velocity every tick, so this drag could never slow it
+        -- and stood at its cap, while its torque still turned the craft — the
+        -- spin of 2026-11-10 (chuteWarpTick, the descent warp, takes a craft
+        -- under its chutes off the rails).
+        if not info.anchored and space.warp() <= 1.001 then
           chuteDrag(node, info, fx3, fy3, fz3, dt)
         end
       end
@@ -15612,7 +15749,7 @@ function fixedUpdate(node, dt)
   if input.pressed("space") and elec.control == false then
     caption("no control — " .. (elec.why or "no signal"))
   elseif input.pressed("space") then
-    if info.anchored or (launch_mode and not released) then
+    if (info.anchored and not CHUTE_WARP.on and not WATER.anchored) or (launch_mode and not released) then
       -- The clamps (and the SELF-HEAL for a mid-launch sim rebuild that cleared
       -- the anchored flag before we ever released — `released` must latch or
       -- damage stays disarmed forever) live in ONE place, `releaseClamps`,
@@ -15658,10 +15795,10 @@ function fixedUpdate(node, dt)
     hud_t = time
     local t = {
       warp = warp, warp_cap = warp_cap, warp_why = warp_why,
-      anchored = info.anchored, grounded = info.grounded or R2.onWheels,
+      anchored = info.anchored and not CHUTE_WARP.on, grounded = (info.grounded and not CHUTE_WARP.on) or R2.onWheels,
       -- in the water (waterTick): the HUD's situation reads SPLASHED
       splashed = isSplashed(),
-      situation = isSplashed() and "SPLASHED" or ((info.grounded or R2.onWheels) and "LANDED" or nil),
+      situation = isSplashed() and "SPLASHED" or (((info.grounded and not CHUTE_WARP.on) or R2.onWheels) and "LANDED" or nil),
       ready = assembly_ready(info), parts = #info.parts, parts_total = part_total,
       -- TWR is finished below, once the local gravity is known (not 9.81).
       mass = info.mass,

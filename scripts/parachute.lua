@@ -509,6 +509,10 @@ function lateUpdate(node, dt)
       local hh = chute.h and chute.h * 0.5 or 0.3
       px, py, pz = w.x + up.x * hh, w.y + up.y * hh, w.z + up.z * hh
       vx, vy, vz = vnode.vx or 0, vnode.vy or 0, vnode.vz or 0
+      -- (lowered by the descent warp the craft is held at rest in the sim:
+      -- the air streams past at the descent it is being lowered at)
+      local cw = vc.CHUTE_WARP
+      if cw and cw.on and cw.vel then vx, vy, vz = cw.vel.x, cw.vel.y, cw.vel.z end
       stretch, area, dens = f.stretch or 0, f.area or 0, f.dens or 1
       grounded = f.grounded or false
       update_down(px, py, pz)
