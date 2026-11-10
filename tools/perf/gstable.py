@@ -4,6 +4,8 @@
   gstable.py a/gs.jsonl b/gs.jsonl ...      one table per resolution:
       scene x preset GPU total, then every pass, draws/instances/props.
   gstable.py --ab before.jsonl... -- after.jsonl...   before -> after per scene/preset
+  gstable.py --all a/gs.jsonl ...            every measurement with EVERY timer row (variants
+      such as "High_tree0" included), one column per row name, plus the counts
 """
 import json
 import sys
@@ -117,6 +119,24 @@ def tables(res):
                         print(f"| {sc} | {pr} | " + " | ".join(f(m["passes"].get(n)) for n in subs) + f" | {f(m['passes']['post total'])} |")
 
 
+def dump_all(rows):
+    names = []
+    for r in rows:
+        for n in (r.get("passes") or {}):
+            if n not in names:
+                names.append(n)
+    # biggest rows first (by their largest value), the tiny ones last
+    names.sort(key=lambda n: -max((r.get("passes") or {}).get(n, 0) for r in rows))
+    print("| run | GPU | " + " | ".join(names) + " | draws | inst | props | tris | sun-map draws / culled |")
+    print("|---|---|" + "---|" * (len(names) + 5))
+    for r in rows:
+        ps = r.get("passes") or {}
+        print(f"| {r['scene']} {r['preset']} ({r['w']}x{r['h']} @{f(r.get('scale'))}) | **{f(r.get('gpu'))}** | "
+              + " | ".join(f(ps.get(n)) for n in names)
+              + f" | {f(r.get('draws'), 0)} | {f(r.get('instances'), 0)} | {f(r.get('props'), 0)} | {tris(r.get('triangles'))}"
+              + f" | {f(r.get('sunMapDraws'), 0)} / {f(r.get('sunMapCulled'), 0)} |")
+
+
 def ab(before, after):
     rb, ra = avg(before), avg(after)
     resl = sorted({k[0] for k in rb} | {k[0] for k in ra})
@@ -137,7 +157,9 @@ def ab(before, after):
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    if args and args[0] == "--ab":
+    if args and args[0] == "--all":
+        dump_all(load(args[1:]))
+    elif args and args[0] == "--ab":
         i = args.index("--")
         ab(load(args[1:i]), load(args[i + 1:]))
     else:

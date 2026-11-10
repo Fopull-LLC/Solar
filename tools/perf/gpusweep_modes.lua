@@ -503,6 +503,8 @@ function GS.run()
           if T then pcall(T.on, c) end
           wait(2)
           local okm, em = pcall(GS.measure, sc, tostring(params.gfx or "High") .. "_" .. v)
+          -- what grows round the crew in this variant: per species, props by distance and LOD, est. triangles
+          pcall(flora_inventory, sc .. "_" .. v)
           if not okm then P("GS ERROR variant %s: %s", v, tostring(em)) end
           if T then pcall(T.off, c) end
           wait(1.5)
