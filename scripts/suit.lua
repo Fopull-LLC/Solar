@@ -527,7 +527,14 @@ local function beam_set(I)
     pcall(function() l.shadows = (P.lamp_shadows or 1) > 0 and 1 or 0 end)
     pcall(function() l.range = P.lamp_range end)
     beam.aimed = true
+    beam.sh = nil
   end
+  -- Underground the beam casts no shadows (underground.lua): a lamp's shadow
+  -- map lit nothing of a cave's walls (engine card draft, work/grit), and in
+  -- a cave there is nothing behind the rock for the light to leak onto.
+  local ug = ref("underground")
+  local sh = ((P.lamp_shadows or 1) > 0 and not (ug and (ug.enclosed or 0) > 0.3)) and 1 or 0
+  if sh ~= beam.sh then beam.sh = sh; pcall(function() l.shadows = sh end) end
   if math.abs((l.intensity or 0) - I) > 0.005 then l.intensity = I end
   beamLit = I
 end
@@ -541,6 +548,10 @@ local function beam_update()
     local sun = (at and at.sun_now) or 1
     -- fade in over the last of the dusk, so it never pops on at a threshold
     k = math.max(0, math.min(1, (P.lamp_dark - sun) / 0.08 + 0.5))
+    -- underground it is dark whatever the hour (underground.lua): the lamps
+    -- come up as the rock closes over
+    local ug = ref("underground")
+    if ug and (ug.enclosed or 0) > 0.3 then k = math.max(k, math.min(1, ((ug.enclosed or 0) - 0.3) / 0.3)) end
     local fl = ref("flashlight")
     if fl and (fl.lit or 0) > 0 then k = 0 end
   end

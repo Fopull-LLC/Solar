@@ -559,3 +559,22 @@ from the terrain, the pivot's, its roll against the local up), pictures in
 `save/user/buildshots/{flat,slope,cliff}_*.png`. Under load (another engine,
 load average 40+) every stretch shows 0.3-3.5 s `untimed` stalls, the shut
 kit's too: compare runs made back to back.
+
+## gritprobe.sh + gritprobe_modes.lua — the gritty pass: the dig, caves, alien air, fog banks
+
+    WORK=$SCRATCH/grit LOCK=/mnt/disks/3tb/.floptle-shared/engine2.lock tools/perf/gritprobe.sh <engine> [gritdig gritcave gritsky gritfog gritdigshot]
+
+Fresh save, High (`BENCH_STRS='("gfx", "Medium")'` for another level), spliced
+after vfxprobe_modes.lua (its freecam). `gritdig`: the Terrain Laser on open,
+dry ground, first person and from the side, the cut cooling, then at night,
+and `GR AB` (idle / firing alternated at one fixed camera: GPU, scripts,
+particle sim). `gritdigshot`: fixed cameras on the bite (close, mid, cooling,
+first person), day and dusk. `gritcave`: a tunnel and chamber carved ~25 m
+down with terrain.dig, the views in, the helmet lamps and torch, the lamp's
+shadows off (engine card draft: point-light shadows in terrain caves).
+`gritsky`: the home world's air record swapped for each atmo.lua template and
+for no air, day and night. `gritfog`: `weather.forceMist` seen from a hill and
+from the low ground, day and night. `GR` lines; pictures in
+`$WORK/shots/<TAG>` (`SHOTS=`). Results of the 2026-11-10 pass:
+/mnt/disks/3tb/.floptle-shared/solar/work/grit/NOTES.md.
+

@@ -779,8 +779,55 @@ local function publish_shake(v)
   end
 end
 
+-- THE CUT'S SOUND (2026-11-10). Beside the tool's hum: the bite's HISS
+-- (vapour jetting off the rock) and CRACKLE (molten rock spitting, sparks and
+-- spalled grit), which need air to reach you, and a RUMBLE of the rock taking
+-- it, which comes up through the tool and the boots in vacuum too (there the
+-- crackle is only what the tool's own frame carries: muffled).
+-- (in SFX: this chunk is at Lua's 200-locals ceiling)
+SFX.cs = { files = { hiss = "audio/foley/laser_hiss.ogg", crackle = "audio/foley/laser_crackle.ogg",
+                       rumble = "audio/foley/laser_rumble.ogg" },
+             h = {}, air = 1.0, air_t = -10 }   -- h: name → { h, lp }
+function SFX.cs.off()
+  for k, g in pairs(SFX.cs.h) do if g.h then g.h:stop() end SFX.cs.h[k] = nil end
+end
+function SFX.cs.set(name, vol, pitch, lp)
+  local g = SFX.cs.h[name]
+  if vol <= 0.003 then
+    if g and g.h then g.h:stop() end
+    SFX.cs.h[name] = nil
+    return
+  end
+  if not g then
+    g = { h = play(SFX.cs.files[name], { track = "SFX", loop = true, volume = 0.0 }), lp = 0 }
+    SFX.cs.h[name] = g
+  end
+  if g.h then
+    g.h:setVolume(vol)
+    g.h:setPitch(pitch)
+    if (lp or 0) ~= g.lp then g.lp = lp or 0; g.h:setLowpass(g.lp) end
+  end
+end
+-- The air at the bite (vfx.airAt), 0..1, read at most four times a second.
+function SFX.cs.airAt(x, y, z)
+  if time - SFX.cs.air_t > 0.25 then
+    SFX.cs.air_t = time
+    local fx = ref("vfx")
+    SFX.cs.air = (fx and fx.airAt and fx.airAt(x, y, z)) or 1.0
+  end
+  return SFX.cs.air
+end
+function SFX.cs.cut(power, air, pitch)
+  local a = math.min(1.0, air * 1.6)
+  SFX.cs.set("hiss", (0.04 + 0.14 * power) * a, pitch, 0)
+  SFX.cs.set("crackle", (0.05 + 0.2 * power) * (0.3 + 0.7 * a), 0.95 + 0.1 * math.random(), a < 0.2 and 700 or 0)
+  SFX.cs.set("rumble", 0.07 + 0.18 * power, 0.85 + 0.2 * power, 0)
+end
+-- SFX.cs.buzz(k, dt): the tool buzzing in the hands (below, beside the sway)
+
 local function hum_off()
   if hum then hum:stop() hum = nil end
+  SFX.cs.off()
 end
 
 local function hum_on(path, vol, pitch)
@@ -807,6 +854,14 @@ end
 local models = { tp = {}, fp = {} }    -- id → node | "spawning"
 local hand_n, socketed = nil, false
 local view = { sx = 0, sy = 0, vx = 0, vy = 0, kick = 0, kickv = 0, bob = 0, lfx = nil, lfy = nil, lfz = nil, dip = 0 }
+-- The tool buzzing in the hands while it cuts: small random kicks to the
+-- first-person sway (a spring, so it stays bounded and settles), scaled to
+-- the frame so it is the same at any frame rate.
+SFX.cs.buzz = function(k, dt)
+  local f = k * math.sqrt(math.min(dt, 0.05) * 60)
+  view.vx = view.vx + (math.random() - 0.5) * 0.07 * f
+  view.vy = view.vy + (math.random() - 0.5) * 0.06 * f
+end
 recoil = 0.0
 local aim_body = nil      -- the aim point in its planet's frame (see `update`)
 -- Published for probes: where the third-person right hand is sent (nil while
@@ -1730,7 +1785,11 @@ local function impact(hit, power, kind)
   local ps = impact_n:particles()
   local light = impact_n:getcomponent("PointLight")
   if hit then
-    impact_n.x, impact_n.y, impact_n.z = hit.x, hit.y, hit.z
+    -- (vfx.laserHit hangs the node under the body it cuts: then its place is
+    -- body-local; a parented node's .x/.y/.z are its parent's)
+    local pw = impact_n.parent and impact_n.parent.worldPos
+    if pw then impact_n.x, impact_n.y, impact_n.z = hit.x - pw.x, hit.y - pw.y, hit.z - pw.z
+    else impact_n.x, impact_n.y, impact_n.z = hit.x, hit.y, hit.z end
     -- Its particles (MiningImpact) are the dig's; the cut and the fill bring
     -- their own (CutBite, FillDeposit) and take only the light.
     if ps then
@@ -2040,6 +2099,8 @@ local function fire_dig(node, dt, firing)
     show_beam(hit, charge, "dig")
     publish_shake(0.05 + charge * 0.09)
     hum_on(SFX.hum, 0.10 + charge * 0.30, 0.72 + charge * 0.36 + focus * 0.10)
+    SFX.cs.cut(charge, SFX.cs.airAt(hit.x, hit.y, hit.z), 0.9 + 0.2 * charge - 0.1 * heat)
+    SFX.cs.buzz(0.4 + 0.6 * charge, dt)
     if math.random() < dt * 6 then recoil = recoil + 0.004 end
   else
     laser_cool(dt)
@@ -2381,6 +2442,12 @@ local function fire_cut(node, dt)
   publish_shake(biting and (0.02 + charge * 0.03) or 0.01)
   -- The hum pitches up as it bites, and climbs with the cut.
   hum_on(SFX.hum, 0.08 + charge * 0.2, 1.25 + charge * 0.3 + (biting and (0.15 + 0.3 * progress) or 0))
+  if biting then
+    SFX.cs.cut(0.5 * charge, SFX.cs.airAt(ex, ey, ez), 1.15 + 0.2 * charge)
+    SFX.cs.buzz(0.3 + 0.4 * charge, dt)
+  else
+    SFX.cs.off()
+  end
   if biting and math.random() < dt * 8 then recoil = recoil + 0.003 end
 end
 
@@ -3300,7 +3367,13 @@ local function paint_beam(req, dt)
                             power = 0.4 + 0.8 * p })
     impact(w, p, "fill")
   else
-    fx_use("DigBeam", { x = mx, y = my, z = mz, ex = w.x, ey = w.y, ez = w.z, power = 0.45 + heat * 0.3 + p * 0.6 })
+    -- A cutting beam shows only by what the air scatters of it: in vacuum
+    -- not at all (the bite carries it), in air faintly, as the air is thick.
+    local air = SFX.cs.airAt(w.x, w.y, w.z)
+    if air > 0.02 then
+      fx_use("DigBeam", { x = mx, y = my, z = mz, ex = w.x, ey = w.y, ez = w.z,
+                          power = (0.45 + heat * 0.3 + p * 0.6) * (0.35 + 0.65 * math.min(1, air * 1.4)) })
+    end
     impact(w, p, "dig")
   end
 end
@@ -3347,6 +3420,17 @@ function lateUpdate(node, dt)
   grav_idle_req = false
   -- The laser shedding heat: a shimmer and the odd ember off its heat sink,
   -- as strong as it is hot (vfx/LaserVent; nothing below a fifth of the heat).
+  -- The muzzle hot from cutting: a dull red-orange glow at the lens and a
+  -- shimmer off it, as strong as it is hot (vfx/LaserMuzzle), fading as it
+  -- cools after the trigger comes up.
+  if toolId() == "laser" and (heat or 0) > 0.06 then
+    local mx, my, mz = muzzle()
+    local _, _, a = crew_model()
+    if mx and a then
+      fx_use("LaserMuzzle", { x = mx, y = my, z = mz, ux = a.up_x or 0, uy = a.up_y or 1, uz = a.up_z or 0,
+        power = math.min(1, 0.2 + heat * 1.1) })
+    end
+  end
   if toolId() == "laser" and (heat or 0) > 0.2 then
     local vx, vy, vz = tool_at("vent")
     local _, _, a = crew_model()

@@ -686,40 +686,88 @@ end
 -- ── the mining laser ────────────────────────────────────────────────────────
 -- tool_belt places the Laser Impact node on the hit each frame and hands the
 -- state over: power (charge), heat and focus, all 0..1.
+--
+-- A cutting tool, not a ray gun (playtest 2026-11-10: "still feels a little
+-- silly with the lazer effects"). What carries it is the contact:
+--   * MiningImpact on the node: a small white-hot spot, sparks that fall on
+--     the world's gravity and skip off the ground, molten slag dribbling off
+--     the cut and cooling to black where it lands, spatter. The node is a
+--     child of the body it cuts (as the launch blast's is), so those World
+--     tracks ride the planet instead of being left in space by its orbit;
+--   * one-shots fired a few times a second, which ride the planet on their
+--     own (spawnEffect): spalled chips and grit with a puff of rock dust that
+--     hangs and drifts in the wind (LaserChips; LaserChipsVac in vacuum, where
+--     nothing hangs), a wisp of rock smoke and heat haze (DigSmoke, in air
+--     only), and the cut's edges glowing orange and cooling to dark over
+--     seconds, left behind on the rock as the bore eats on (CutGlow);
+--   * a burn mark where it has been cutting (outside a bore: see tool_belt's
+--     quiet_ground);
+--   * the point light: a hard, flickering white-orange light off the bite,
+--     the light a cutting torch throws on the work round it.
+local impact_on = nil   -- the body node the impact node hangs under
 function laserHit(impact, hit, power, hotness, focus)
   if not (impact and hit) then return end
-  local _, _, ux, uy, uz = frame(hit.x, hit.y, hit.z)
+  local name, b, ux, uy, uz, air = frame(hit.x, hit.y, hit.z)
   local nx, ny, nz = hit.nx or ux, hit.ny or uy, hit.nz or uz
-  -- Off the surface, so the molten core is not half inside the rock, and
-  -- turned so its sparks fountain off the face (gravity still pulls them down).
+  -- Ride the body: parented to its node, positions are body-local (planets
+  -- only translate). Re-parented when the cut moves to another world.
+  local bn = name and find(name)
+  if bn and impact_on ~= bn and impact.setParent then
+    impact_on = bn
+    pcall(impact.setParent, impact, bn, { keepWorld = false })
+  end
+  -- Off the surface, so the spot is not half inside the rock, and turned so
+  -- its sparks fountain off the face (gravity still pulls them down).
   local ox, oy, oz = 0, 0, 0
   local pw = impact.parent and impact.parent.worldPos
   if pw then ox, oy, oz = pw.x, pw.y, pw.z end
-  impact.x, impact.y, impact.z = hit.x + nx * 0.12 - ox, hit.y + ny * 0.12 - oy, hit.z + nz * 0.12 - oz
+  impact.x, impact.y, impact.z = hit.x + nx * 0.06 - ox, hit.y + ny * 0.06 - oy, hit.z + nz * 0.06 - oz
   local tx, ty, tz = 0, 0, 1
   if math.abs(nz) > 0.9 then tx, ty, tz = 1, 0, 0 end
   impact.yaw, impact.pitch, impact.roll = lookRotation(vec3(tx, ty, tz), vec3(nx, ny, nz))
   local ps = impact:particles()
-  if ps then ps:setIntensity(0.3 + power * (0.8 + 0.5 * (hotness or 0)) + 0.3 * (focus or 0)) end
+  if ps then ps:setIntensity(0.35 + power * (0.7 + 0.4 * (hotness or 0)) + 0.25 * (focus or 0)) end
   local light = impact:getcomponent("PointLight")
   if light then
-    -- Hotter optics → a whiter, harder light; a flicker so it reads as fire.
+    -- White-hot at the spot, orange in what it lights; hotter optics whiter.
+    -- A hard, irregular flicker: molten rock spitting, not a steady lamp.
     local h = hotness or 0
-    light.r, light.g, light.b = 1.0, 0.6 + 0.25 * h, 0.28 + 0.4 * h
-    light.intensity = (2.0 + power * 7.0) * (0.8 + 0.4 * math.random())
+    light.r, light.g, light.b = 1.0, 0.66 + 0.22 * h, 0.36 + 0.36 * h
+    local fl = 0.72 + 0.28 * math.random()
+    if math.random() < 0.08 then fl = fl * 0.55 end
+    -- (a short reach: a lamp here falls off to its range with no inverse
+    -- square, so a long one painted a hard yellow disc on the ground round
+    -- the bite — the "glowing ball" look)
+    light.range = 6.5
+    light.intensity = (0.9 + power * 2.6) * fl
   end
-  -- Spalled chips, faster as the cut goes in.
-  if power > 0.15 and now - laser.chip_t > 0.2 - 0.12 * power then
+  local k = 0.7 + 0.4 * (focus or 0)
+  local at = vec3(hit.x + nx * 0.1, hit.y + ny * 0.1, hit.z + nz * 0.1)
+  local nrm = vec3(nx, ny, nz)
+  -- Spalled rock, faster as the cut goes in.
+  if power > 0.15 and now - laser.chip_t > 0.3 - 0.12 * power then
     laser.chip_t = now
-    fire("LaserChips", hit.x + nx * 0.1, hit.y + ny * 0.1, hit.z + nz * 0.1,
-      { normal = vec3(nx, ny, nz), intensity = 0.7 + 0.4 * (focus or 0), dust = true })
+    fire(air > 0.03 and "LaserChips" or "LaserChipsVac", at.x, at.y, at.z, { normal = nrm, intensity = k, dust = true })
+  end
+  -- Fumes, where there is air to carry them.
+  if air > 0.03 and power > 0.25 and now - (laser.smoke_t or 0) > 0.55 - 0.2 * power then
+    laser.smoke_t = now
+    fire("DigSmoke", at.x, at.y, at.z, { normal = vec3(ux, uy, uz), intensity = math.min(1.2, 0.4 + air * 0.9) })
+  end
+  -- The cut glowing where it bit, a few times a second.
+  if power > 0.3 and now - (laser.glow_t or 0) > 0.45 then
+    laser.glow_t = now
+    fire("CutGlow", hit.x + nx * 0.03, hit.y + ny * 0.03, hit.z + nz * 0.03,
+      { normal = nrm, intensity = 0.6 + 0.5 * (hotness or 0) })
   end
   -- A burn where it has been cutting.
   if power > 0.6 and now - laser.scorch_t > 0.45 then
     laser.scorch_t = now
-    scorch(hit.x, hit.y, hit.z, nx, ny, nz, 0.35 + 0.4 * (hotness or 0), 0.5, "textures/vfx/decal/scorch_b.png", 240)
+    scorch(hit.x, hit.y, hit.z, nx, ny, nz, 0.35 + 0.4 * (hotness or 0), 0.55, "textures/vfx/decal/scorch_b.png", 240)
   end
 end
+-- The air at a point, 0..1 (tool_belt: the beam shows only through air).
+function airAt(x, y, z) return air_at(x, y, z) end
 
 -- ── swimming: bubbles under, wake on top ────────────────────────────────────
 -- Is the crew ON FOOT? vessel_controller's `crewOnFoot` (aboard no craft), not

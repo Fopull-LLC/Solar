@@ -1,7 +1,9 @@
-// Rock chips spalled off by the laser, thrown off the surface normal (vfx.lua adds it).
+// Rock spalled off by the laser, in air: chips and grit thrown off the surface
+// normal, and a puff of rock dust that hangs and drifts off in the wind (vfx.lua
+// fires it, tinted to the world's ground).
 (
     name: "LaserChips",
-    lifetime: 1.3,
+    lifetime: 5.0,
     playback: OneShot,
     end: Destroy,
     tracks: [
@@ -42,6 +44,27 @@
             drag: 0.0,
             inherit_velocity: 1.0,
             collide: Some((bounce: 0.2, friction: 0.6, die: false)),
+        ),
+        (
+            name: "Dust",
+            render: Billboard(texture: Some("textures/vfx/smoke/clump_a.png")),
+            blend: Alpha,
+            lit: true,
+            lamp_response: 0.35,
+            translucency: 0.6,
+            soft: 0.4,
+            space: Local,
+            clips: [(start: 0.0, end: 5.0, lifetime_jitter: 0.3, emit: Some(Burst(count: 1, count_jitter: 0.6, pulses: 1, interval: 0.0, interval_jitter: 0.2)))],
+            automation: [],
+            shape: Sphere(radius: 0.15, shell: false),
+            velocity: Range(Vec3((-0.3, 0.3, -0.3)), Vec3((0.3, 1.1, 0.3))),
+            size: CurveRange((keys: [(t: 0.0, v: F32(0.25), interp: Linear), (t: 0.3, v: F32(0.9), interp: Linear), (t: 1.0, v: F32(2.0), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: F32(0.1625), interp: Linear), (t: 0.3, v: F32(0.585), interp: Linear), (t: 1.0, v: F32(1.3), interp: Linear)], extrapolate: Clamp)),
+            rotation: Range(Vec3((0.0, 0.0, 0.0)), Vec3((0.0, 0.0, 6.283))),
+            angular_velocity: Range(Vec3((0.0, 0.0, -0.3)), Vec3((0.0, 0.0, 0.3))),
+            color: CurveRange((keys: [(t: 0.0, v: Rgba((0.6, 0.55, 0.48, 0.0)), interp: Linear), (t: 0.08, v: Rgba((0.6, 0.55, 0.48, 0.42)), interp: Linear), (t: 0.5, v: Rgba((0.62, 0.57, 0.5, 0.2)), interp: Linear), (t: 1.0, v: Rgba((0.62, 0.58, 0.52, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.492, 0.451, 0.3936, 0.0)), interp: Linear), (t: 0.08, v: Rgba((0.492, 0.451, 0.3936, 0.42)), interp: Linear), (t: 0.5, v: Rgba((0.5084, 0.4674, 0.41, 0.2)), interp: Linear), (t: 1.0, v: Rgba((0.5084, 0.4756, 0.4264, 0.0)), interp: Linear)], extrapolate: Clamp)),
+            gravity: 0.03,
+            drag: 0.0,
+            forces: [Wind(coupling: 1.1)],
         ),
     ],
     seed: 1,

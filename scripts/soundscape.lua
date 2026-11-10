@@ -20,6 +20,13 @@
 --                           roof is over you. Thunder is weather.lua's own:
 --                           it has to land late by the strike's distance
 --
+-- THE SUIT (2026-11-10): your own breathing and the suit's fans, inside the
+-- helmet, on foot. Always there and always faint, they come up as the world
+-- goes QUIET: no wind, no rain, an airless plain, a cave (underground.lua),
+-- the hush between two pieces of music. The breath is easy standing and
+-- walking and hard when running or climbing (the walker's speed), eased so
+-- it never snaps. Not aboard a craft, not bare-headed, not on the map.
+--
 -- MUSIC is sparse on purpose. Three calm pieces (tools/gen_soundscape_audio.py)
 -- with minutes of silence between them, each faded in and out in its own file.
 -- It never starts during loading, ducks under a burning engine (rockets are
@@ -65,6 +72,11 @@ defaults = {
   hailGain = 0.5,
   --@range 0 1
   dustGain = 0.6,
+  --- The suit: breathing (calm and hard) and its fans, before the quiet lift.
+  --@range 0 1
+  breathGain = 0.22,
+  --@range 0 1
+  suitGain = 0.2,
   --- Print the mix once every few seconds (for tuning under `floptle run`).
   debug = false,
 }
@@ -81,6 +93,9 @@ local RAIN_L = "audio/weather/rain_light.ogg"
 local RAIN_H = "audio/weather/rain_heavy.ogg"
 local HAIL = "audio/weather/hail.ogg"
 local DUST = "audio/weather/dust.ogg"
+local BREATH = "audio/sfx/breath_calm.ogg"
+local BREATH_HARD = "audio/sfx/breath_heavy.ogg"
+local SUIT = "audio/sfx/suit_hum.ogg"
 
 air, underwater, musicPlaying = 0.0, false, nil
 
@@ -151,14 +166,14 @@ end
 
 -- ── loops ───────────────────────────────────────────────────────────────────
 
-local function loop_to(name, clip, want, lowpass, dt)
+local function loop_to(name, clip, want, lowpass, dt, track)
   local L = loops[name]
   if not L then L = { v = 0, quiet = 0, lp = 0 }; loops[name] = L end
   L.v = L.v + (want - L.v) * math.min(1, dt * 1.2)
   if L.v > 0.004 then
     L.quiet = 0
     if not L.h then
-      L.h = audio.play(clip, { track = "Ambient", loop = true, volume = 0, mode = "Flat" })
+      L.h = audio.play(clip, { track = track or "Ambient", loop = true, volume = 0, mode = "Flat" })
       L.sent, L.lp = nil, 0
     end
   else
@@ -271,7 +286,7 @@ end
 function start(node)
   clock, music, next_at, hush_until = 0, nil, nil, -1
   loops = {}
-  local list = { WIND, GUST, SEA, RAIN_L, RAIN_H, HAIL, DUST }
+  local list = { WIND, GUST, SEA, RAIN_L, RAIN_H, HAIL, DUST, BREATH, BREATH_HARD, SUIT }
   if audio and audio.preload then audio.preload(list) end
 end
 
@@ -342,6 +357,34 @@ function update(node, dt)
   loop_to("rain_h", RAIN_H, rain_h, muffle, dt)
   loop_to("hail", HAIL, hail, muffle, dt)
   loop_to("dust", DUST, dust, muffle, dt)
+
+  -- The suit, louder as the world is quieter.
+  local breath, breath_hard, suit = 0, 0, 0
+  if not on_menu() and not loading and not map_open then
+    local wk = ref("planet_walker")
+    local su = ref("suit")
+    local helmet = not (su and su.helmetOn) or su.helmetOn() ~= false
+    if wk and wk.onFoot and helmet and not wk.downed then
+      local loud = (loops.wind and loops.wind.v or 0) + (loops.gust and loops.gust.v or 0)
+        + (loops.rain_l and loops.rain_l.v or 0) + (loops.rain_h and loops.rain_h.v or 0)
+        + (loops.hail and loops.hail.v or 0) + (loops.dust and loops.dust.v or 0) + 0.6 * music_gain
+      local quiet = 1 - smooth01(0.05, 0.5, loud)
+      local ug = ref("underground")
+      quiet = math.min(1, quiet + 0.35 * ((ug and ug.enclosed) or 0))
+      local lift = 0.35 + 0.65 * quiet
+      local run = (wk.params and wk.params.run) or 8
+      local walk = (wk.params and wk.params.walk) or 4.5
+      local hard = smooth01(walk + 0.5, run, wk.moveSpeed or 0)
+      held.hard = (held.hard or 0) + (hard - (held.hard or 0)) * math.min(1, dt * (hard > (held.hard or 0) and 0.8 or 0.12))
+      local bg = (params.breathGain or 0.22) * lift * scale
+      breath = bg * (1 - held.hard)
+      breath_hard = bg * 1.15 * held.hard
+      suit = (params.suitGain or 0.2) * lift * scale
+    end
+  end
+  loop_to("breath", BREATH, breath, 0, dt, "SFX")
+  loop_to("breath_hard", BREATH_HARD, breath_hard, 0, dt, "SFX")
+  loop_to("suit", SUIT, suit, 0, dt, "SFX")
 
   drive_music(dt, loading)
 

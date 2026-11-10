@@ -230,7 +230,13 @@ local function set_light(I)
     pcall(function() l.shadows = 1 end)
     pcall(function() l.range = P("range") end)
     R.aimed = true
+    R.sh = nil
   end
+  -- no shadows underground (as the helmet lamps, suit.lua): a lamp's shadow
+  -- map lit nothing of a cave's walls
+  local ug = ref("underground")
+  local sh = (ug and (ug.enclosed or 0) > 0.3) and 0 or 1
+  if sh ~= R.sh then R.sh = sh; pcall(function() l.shadows = sh end) end
   spot = l.spotAngle
   if math.abs((l.intensity or 0) - I) > 0.005 then l.intensity = I end
   lit = I

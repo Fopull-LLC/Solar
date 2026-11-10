@@ -209,15 +209,15 @@ and height above the ground.""")
 
 def touch_dust():
     tracks = [
-        T("Billow", TX + "smoke/billow_a.png", clips=burst(30, 0, 2.6, 0.3), shape=ring(0.8),
+        T("Billow", TX + "smoke/billow_a.png", lamp=0.3, clips=burst(30, 0, 2.6, 0.3), shape=ring(0.8),
           vel=R((-0.5, 3, -0.5), (0.5, 8, 0.5)), forces=[wind(2.0), push(0, 1, 0, 0.8)],
           size=K([(0, 0.8), (0.3, 2.4), (1, 3.6)]), rot=R((0, 0, 0), RAD), spin=R((0, 0, -0.6), (0, 0, 0.6)),
           color=K([(0, (0.8, 0.74, 0.66, 0)), (0.06, (0.78, 0.72, 0.64, 0.58)), (1, (0.74, 0.7, 0.64, 0))]),
           soft=1.0),
-        T("Skirt", TX + "smoke/billow_b.png", gravity=0.05, forces=[wind(3.0)], clips=burst(30, 0, 1.1, 0.3), shape=ring(0.6),
+        T("Skirt", TX + "smoke/billow_b.png", lamp=0.3, gravity=0.05, forces=[wind(3.0)], clips=burst(30, 0, 1.1, 0.3), shape=ring(0.6),
           vel=R((-0.5, 8, -0.5), (0.5, 14, 0.5)), size=K([(0, 0.4), (1, 1.9)]), squash=R(0.7, 1.4),
           rot=R((0, 0, 0), RAD), color=K([(0, (0.7, 0.62, 0.52, 0.4)), (1, (0.66, 0.6, 0.52, 0))]), soft=0.5),
-        T("Grit", TX + "debris/chip_b.png", clips=burst(16, 0, 1.0, 0.3), shape=cone(60, 0.8),
+        T("Grit", TX + "debris/chip_b.png", lamp=0.3, clips=burst(16, 0, 1.0, 0.3), shape=cone(60, 0.8),
           vel=R((0, 2, 0), (0, 6, 0)), forces=[push(0, -1, 0, G)], size=R(0.06, 0.16), rot=R((0, 0, 0), RAD),
           spin=R((0, 0, -10), (0, 0, 10)), color=C((0.4, 0.36, 0.31, 1))),
     ]
@@ -227,7 +227,7 @@ def touch_dust():
 def ground_shock():
     tracks = [
         # The dust wall a blast drives out along the ground.
-        T("Wall", TX + "smoke/billow_a.png", clips=burst(48, 0, 2.8, 0.3), shape=ring(1.0),
+        T("Wall", TX + "smoke/billow_a.png", lamp=0.3, clips=burst(48, 0, 2.8, 0.3), shape=ring(1.0),
           vel=R((-0.5, 12, -0.5), (0.5, 22, 0.5)), forces=[wind(2.4), push(0, 1, 0, 1.0)],
           size=K([(0, 1.0), (0.3, 3.4), (1, 5.0)]), rot=R((0, 0, 0), RAD), spin=R((0, 0, -0.5), (0, 0, 0.5)),
           color=K([(0, (0.55, 0.5, 0.45, 0)), (0.05, (0.55, 0.5, 0.45, 0.5)), (1, (0.5, 0.48, 0.45, 0))]),
@@ -237,7 +237,7 @@ def ground_shock():
         T("Ring", TX + "ring/dust.png", blend="Alpha", orient="WorldFixed", clips=burst(1, 0, 0.7, cj=0),
           shape=edge(0), size=K([(0, 1.0), (1, 22.0)]),
           color=K([(0, (0.6, 0.55, 0.48, 0.35)), (1, (0.55, 0.5, 0.45, 0))]), soft=0.2),
-        T("Debris", mesh=ROCK, clips=burst(10, 0, 1.6, 0.3), shape=cone(50, 0.6), vel=R((0, 6, 0), (0, 14, 0)),
+        T("Debris", lamp=0.3, mesh=ROCK, clips=burst(10, 0, 1.6, 0.3), shape=cone(50, 0.6), vel=R((0, 6, 0), (0, 14, 0)),
           forces=[push(0, -1, 0, G)], size=R(0.12, 0.3), rot=R((0, 0, 0), (6.28, 6.28, 6.28)),
           spin=R((-8, -8, -8), (8, 8, 8)), color=C((0.35, 0.32, 0.3, 1)), lit=True),
     ]
@@ -473,40 +473,35 @@ def pull(cx, cy, cz, s):
 
 def tools():
     BEAM = (24, (0, 0, -10), 0.0, 0, 0)
-    # FILL: the same tool laying rock back down — a cooler, denser beam, a
-    # slurry of pale blue in a soft glow, slow scroll.
+    # FILL: the same tool laying rock back down out of the pack's rubble — a
+    # stream of grit and dust jetted at the ground, not light: a dusty core,
+    # a looser scrolling plume round it.
     L = 0.3
     tracks = [
-        T("Core", TX + "beam/core.png", blend="Additive", beam=BEAM, clips=[],
-          size=K([(0, 0.055), (0.5, 0.065), (1, 0.055)], repeat=True), color=C((2.2, 2.6, 3.0, 1.0))),
-        T("Glow", TX + "beam/glow.png", blend="Additive", beam=BEAM, clips=[],
-          size=K([(0, 0.26), (0.5, 0.3), (1, 0.26)], repeat=True),
-          color=K([(0, (0.45, 0.8, 1.6, 0.55)), (0.5, (0.5, 0.85, 1.7, 0.65)), (1, (0.45, 0.8, 1.6, 0.55))], repeat=True)),
-        T("Slurry", TX + "beam/shimmer.png", blend="Additive", beam=(32, (0, 0, -10), 0.02, 4.0, 6.0), clips=[],
-          size=0.42, color=C((0.6, 0.9, 1.4, 0.3))),
-        T("Muzzle", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
-          size=K([(0, 0.4), (0.5, 0.5), (1, 0.4)]), color=C((1.2, 2.0, 2.8, 0.7)), soft=0.05),
+        T("Core", TX + "beam/core.png", blend="Alpha", beam=BEAM, clips=[],
+          size=K([(0, 0.03), (0.5, 0.036), (1, 0.03)], repeat=True), color=C((0.42, 0.39, 0.35, 0.5))),
+        T("Slurry", TX + "beam/shimmer.png", blend="Alpha", beam=(32, (0, 0, -10), 0.02, 4.0, 6.0), clips=[],
+          size=0.2, color=C((0.5, 0.46, 0.41, 0.3))),
     ]
     effect("FillBeam", L, tracks, looping=True, header="""
-The terrain laser laying rock back down (FILL): a cool blue-white core in a
-soft blue glow, a slow slurry scroll. tool_belt aims it with setBeamEnd.""")
+The terrain laser laying rock back down (FILL): a stream of grit and dust
+jetted at the ground (a dusty core, a looser scrolling plume), no glow.
+tool_belt aims it with setBeamEnd.""")
 
     # CUT: a hair-thin white-hot cutting line with a faint halo and a fast
     # scroll, a pinpoint star at the barrel.
     tracks = [
         T("Core", TX + "beam/core.png", blend="Additive", beam=BEAM, clips=[],
-          size=K([(0, 0.014), (0.5, 0.017), (1, 0.014)], repeat=True), color=C((3.6, 3.5, 3.3, 1.0))),
+          size=K([(0, 0.008), (0.5, 0.01), (1, 0.008)], repeat=True), color=C((2.0, 1.9, 1.7, 0.35))),
         T("Halo", TX + "beam/glow.png", blend="Additive", beam=BEAM, clips=[],
-          size=K([(0, 0.07), (0.5, 0.085), (1, 0.07)], repeat=True),
-          color=K([(0, (1.8, 1.7, 1.5, 0.35)), (0.5, (1.9, 1.8, 1.6, 0.45)), (1, (1.8, 1.7, 1.5, 0.35))], repeat=True)),
-        T("Scroll", TX + "beam/shimmer.png", blend="Additive", beam=(32, (0, 0, -10), 0.004, 11.0, 30.0), clips=[],
-          size=0.11, color=C((1.6, 1.5, 1.3, 0.25))),
-        T("MuzzleStar", TX + "glow/star.png", blend="Additive", clips=burst(1, 0, L, cj=0),
-          size=K([(0, 0.26), (0.5, 0.2), (1, 0.26)]), rot=R((0, 0, 0), RAD), color=C((2.8, 2.7, 2.4, 0.7)), soft=0.05),
+          size=K([(0, 0.045), (0.5, 0.05), (1, 0.045)], repeat=True), color=C((1.4, 1.2, 0.9, 0.06))),
+        T("Shimmer", TX + "distort/haze.png", blend="Distortion", distortion=0.003, beam=(20, (0, 0, -10), 0.0, 0, 6.0),
+          clips=[], size=0.08, color=C((1, 1, 1, 0.7))),
     ]
     effect("CutBeam", L, tracks, looping=True, header="""
-The terrain laser's CUT (E held): a hair-thin white-hot cutting line with a
-faint halo and a fast scroll, a pinpoint star at the barrel.""")
+The terrain laser's CUT (E held): a hair of white light you barely see in
+clear air, a faint halo and heat shimmer along it. What shows is the bite
+(CutBite).""")
 
     # Where the cut bites a plant: a fan of sparks and embers thrown back up
     # the beam (the node's +Y points back at the gun), sap and leaf bits,
@@ -516,7 +511,7 @@ faint halo and a fast scroll, a pinpoint star at the barrel.""")
         T("Point", TX + "glow/core.png", blend="Additive", clips=burst(1, 0, L, cj=0),
           size=K([(0, 0.16), (0.5, 0.2), (1, 0.16)]), color=C((3.4, 3.0, 2.4, 1.0)), soft=0.08),
         T("Glow", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
-          size=K([(0, 0.7), (0.5, 0.85), (1, 0.7)]), color=C((1.6, 1.1, 0.6, 0.45)), soft=0.3),
+          size=K([(0, 0.32), (0.5, 0.38), (1, 0.32)]), color=C((1.6, 0.9, 0.4, 0.35)), soft=0.15),
         T("Sparks", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.07,
           space="World", clips=stream(70, 0.45, 0, L, 0.5), shape=cone(38, 0.03), vel=R((0, 2.5, 0), (0, 6.5, 0)),
           gravity=1.0, size=0.045, collide=SPARK_HIT,
@@ -554,11 +549,11 @@ and a white-hot point. tool_belt scales it with setIntensity.""")
           size=K([(0, 0.03), (0.5, 0.036), (1, 0.03)], repeat=True), color=C((2.4, 2.9, 3.4, 1.0))),
         T("Glow", TX + "beam/glow.png", blend="Additive", beam=(24, (0, 0, -10), 0.03, 2.5, 3.0), clips=[],
           size=K([(0, 0.18), (0.5, 0.21), (1, 0.18)], repeat=True),
-          color=K([(0, (0.5, 0.95, 1.8, 0.5)), (0.5, (0.55, 1.0, 1.9, 0.6)), (1, (0.5, 0.95, 1.8, 0.5))], repeat=True)),
+          color=K([(0, (0.5, 0.95, 1.8, 0.26)), (0.5, (0.55, 1.0, 1.9, 0.32)), (1, (0.5, 0.95, 1.8, 0.26))], repeat=True)),
         arc("ArcA", 11, 0.012, 0.9),
         arc("ArcB", 23, 0.009, 0.7),
         T("Claws", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
-          size=K([(0, 0.3), (0.5, 0.38), (1, 0.3)]), color=C((1.0, 1.9, 2.8, 0.8)), soft=0.05),
+          size=K([(0, 0.2), (0.5, 0.25), (1, 0.2)]), color=C((1.0, 1.9, 2.8, 0.45)), soft=0.05),
         T("ClawSparks", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.04,
           clips=stream(16, 0.3, 0, L, 0.4), shape=sphere(0.05), vel=R((0, 0.4, 0), (0, 1.4, 0)), drag=2.0,
           size=0.03, color=K([(0, (1.6, 2.4, 3.2, 1)), (1, (0.8, 1.4, 2.4, 0))])),
@@ -587,7 +582,7 @@ odd spark crawling across it. Rides the muzzle.""")
     L = 1.0
     tracks = [
         T("Shell", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
-          size=K([(0, 0.55), (0.5, 0.65), (1, 0.55)]), color=K([(0, (0.5, 0.9, 1.6, 0.35)), (0.5, (0.55, 1.0, 1.8, 0.45)), (1, (0.5, 0.9, 1.6, 0.35))]), soft=0.25),
+          size=K([(0, 0.5), (0.5, 0.58), (1, 0.5)]), color=K([(0, (0.5, 0.9, 1.6, 0.18)), (0.5, (0.55, 1.0, 1.8, 0.24)), (1, (0.5, 0.9, 1.6, 0.18))]), soft=0.25),
         T("Spot", TX + "glow/tight.png", blend="Additive", clips=burst(1, 0, L, cj=0),
           size=K([(0, 0.16), (0.5, 0.2), (1, 0.16)]), color=C((1.8, 2.6, 3.4, 0.9)), soft=0.05),
         T("Motes", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.06,
@@ -804,12 +799,12 @@ land and cool, heat haze and a puff of smoke.""")
 
 def step_dust():
     tracks = [
-        T("Puff", TX + "smoke/billow_b.png", forces=[wind(2.5)], clips=burst(3, 0, 1.1, 0.3), shape=sphere(0.12),
+        T("Puff", TX + "smoke/billow_b.png", lamp=0.3, forces=[wind(2.5)], clips=burst(3, 0, 1.1, 0.3), shape=sphere(0.12),
           vel=R((-0.35, 0.1, -0.35), (0.35, 0.5, 0.35)), gravity=0.04,
           size=K([(0, 0.18), (1, 0.75)]), rot=R((0, 0, 0), RAD), squash=R(0.75, 1.3),
           color=K([(0, (0.66, 0.6, 0.52, 0)), (0.1, (0.64, 0.58, 0.5, 0.62)), (1, (0.62, 0.58, 0.52, 0))]),
           soft=0.25),
-        T("Grains", TX + "debris/grit.png", clips=burst(1, 0, 0.5, 0.3, cj=0.5), shape=sphere(0.08),
+        T("Grains", TX + "debris/grit.png", lamp=0.3, clips=burst(1, 0, 0.5, 0.3, cj=0.5), shape=sphere(0.08),
           vel=R((-0.3, -0.3, -0.3), (0.3, 0.3, 0.3)), gravity=1.0, size=0.18, rot=R((0, 0, 0), RAD),
           color=K([(0, (0.45, 0.4, 0.35, 0.9)), (1, (0.45, 0.4, 0.35, 0))]), collide=(0, 0.9)),
     ]
@@ -820,73 +815,182 @@ def step_dust():
 # MINING LASER
 # =====================================================================================
 def mining_beam():
+    # A cutting beam is light you mostly cannot see: in clear air only the
+    # dust it crosses scatters a little of it, so the beam is a hair of warm
+    # light and a faint scatter, with the air shimmering along it from the
+    # heat. Nothing flares at the barrel (the muzzle's heat is LaserMuzzle).
+    # tool_belt plays it only in air and scales it by the air there (none in
+    # vacuum: the beam is invisible, the bite is what you see).
     L = 0.3
+    BEAM = (24, (0, 0, -10), 0.0, 0, 0)
     tracks = [
-        T("Core", TX + "beam/core.png", blend="Additive", beam=(24, (0, 0, -10), 0.0, 0, 0), clips=[],
-          size=K([(0, 0.05), (0.33, 0.062), (0.66, 0.046), (1, 0.05)], repeat=True),
-          color=C((3.2, 3.0, 2.7, 1.0))),
-        T("Glow", TX + "beam/glow.png", blend="Additive", beam=(24, (0, 0, -10), 0.0, 0, 0), clips=[],
-          size=K([(0, 0.24), (0.5, 0.28), (1, 0.24)], repeat=True),
-          color=K([(0, (1.7, 0.62, 0.22, 0.6)), (0.5, (1.8, 0.7, 0.26, 0.7)), (1, (1.7, 0.62, 0.22, 0.6))],
-                  repeat=True)),
-        T("Shimmer", TX + "beam/shimmer.png", blend="Additive", beam=(32, (0, 0, -10), 0.012, 7.0, 14.0),
-          clips=[], size=0.5, color=C((1.2, 0.5, 0.2, 0.2))),
-        T("Muzzle", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
-          size=K([(0, 0.45), (0.5, 0.6), (1, 0.45)]), color=C((2.4, 1.3, 0.6, 0.8)), soft=0.05),
-        T("MuzzleStar", TX + "glow/star.png", blend="Additive", clips=burst(1, 0, L, cj=0),
-          size=K([(0, 0.5), (0.5, 0.42), (1, 0.5)]), rot=R((0, 0, 0), RAD), color=C((2.4, 1.8, 1.3, 0.6)),
-          soft=0.05),
+        T("Core", TX + "beam/core.png", blend="Additive", beam=BEAM, clips=[],
+          size=K([(0, 0.009), (0.33, 0.011), (0.66, 0.008), (1, 0.009)], repeat=True),
+          color=C((1.5, 1.3, 1.05, 0.22))),
+        T("Scatter", TX + "beam/glow.png", blend="Additive", beam=BEAM, clips=[],
+          size=K([(0, 0.06), (0.5, 0.07), (1, 0.06)], repeat=True), color=C((0.9, 0.52, 0.26, 0.06))),
+        T("Shimmer", TX + "distort/haze.png", blend="Distortion", distortion=0.005, beam=(20, (0, 0, -10), 0.0, 0, 5.0),
+          clips=[], size=0.14, color=C((1, 1, 1, 0.8))),
     ]
     effect("MiningBeam", L, tracks, looping=True, header="""
-The mining laser: a white-hot core inside an orange glow, a scrolling heat
-shimmer, and the emitter flaring at the barrel. tool_belt aims it with
-setBeamEnd and scales it with setIntensity (charge, heat, focus).""")
+The Terrain Laser's dig beam, as a real cutting beam reads: nearly invisible in
+clear air (a hair of warm light, a faint scatter off the dust it crosses) with
+heat shimmer along it. tool_belt aims it with setBeamEnd and plays it only in
+air, scaled by the air and the power; in vacuum nothing of the beam shows.""")
 
 
 def mining_impact():
+    # Where the beam meets rock. The node rides the planet (vfx.laserHit
+    # parents it to the body), so its World tracks stay with the ground and
+    # fall under the world's own gravity (Field).
     L = 0.5
     tracks = [
-        T("Molten", TX + "glow/core.png", blend="Additive", clips=burst(1, 0, L, cj=0),
-          size=K([(0, 0.9), (0.3, 1.1), (0.6, 0.85), (1, 0.9)]),
-          color=K([(0, (3.2, 1.8, 0.7, 1)), (0.5, (3.4, 2.0, 0.8, 1)), (1, (3.2, 1.8, 0.7, 1))]), soft=0.15),
-        T("Glow", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
-          size=K([(0, 3.0), (0.5, 3.5), (1, 3.0)]), color=C((1.5, 0.55, 0.18, 0.55)), soft=0.4),
-        T("Sparks", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.09,
-          clips=stream(80, 0.5, 0, L, 0.5), shape=cone(70, 0.12), vel=R((0, 3, 0), (0, 8, 0)), drag=0.4,
-          forces=[push(0, -1, 0, 9.0)], size=0.08,
-          color=K([(0, (3.4, 2.5, 1.4, 1)), (0.4, (2.4, 0.9, 0.2, 1)), (1, (1.0, 0.25, 0.04, 0))])),
-        T("Spatter", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.03,
-          clips=stream(18, 0.8, 0, L, 0.4), shape=cone(45, 0.1), vel=R((0, 2, 0), (0, 5, 0)),
-          forces=[push(0, -1, 0, 9.0)], size=0.11,
-          color=K([(0, (3, 1.6, 0.5, 1)), (0.6, (1.6, 0.4, 0.05, 1)), (1, (0.3, 0.08, 0.02, 0))])),
-        T("Vapour", TX + "smoke/soft.png", clips=stream(16, 1.3, 0, L, 0.3), shape=cone(25, 0.2),
-          vel=R((0, 0.6, 0), (0, 1.5, 0)), forces=[wind(1.0), push(0, 1, 0, 0.8), turb(1.2, 0.8)],
-          size=K([(0, 0.3), (1, 1.8)]), rot=R((0, 0, 0), RAD),
-          color=K([(0, (0.62, 0.58, 0.55, 0)), (0.15, (0.58, 0.55, 0.52, 0.45)), (1, (0.55, 0.53, 0.5, 0))]),
-          soft=0.4),
-        T("Haze", TX + "distort/haze.png", blend="Distortion", distortion=0.012, clips=stream(10, 0.9, 0, L, 0.2),
-          shape=cone(15, 0.15), vel=R((0, 0.8, 0), (0, 1.6, 0)), size=K([(0, 0.4), (1, 1.4)]),
-          rot=R((0, 0, 0), RAD), color=K([(0, (1, 1, 1, 0)), (0.2, (1, 1, 1, 0.9)), (1, (1, 1, 1, 0))]), soft=0.3),
+        # the white-hot spot: small, blinding, not a fireball
+        T("Spot", TX + "glow/core.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.24), (0.3, 0.3), (0.6, 0.22), (1, 0.24)]), color=C((3.6, 3.2, 2.6, 1.0)), soft=0.04),
+        T("Halo", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.75), (0.5, 0.9), (1, 0.75)]), color=C((1.5, 0.52, 0.15, 0.3)), soft=0.12),
+        # sparks: thrown off the face, falling on the world's gravity, skipping off the ground
+        T("Sparks", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.045, space="World",
+          clips=stream(32, 0.8, 0, L, 0.5), shape=cone(70, 0.06), vel=R((0, 2.5, 0), (0, 7.5, 0)), gravity=1.0,
+          drag=0.15, size=R(0.02, 0.032), collide=SPARK_HIT,
+          color=K([(0, (3.4, 3.0, 2.2, 1)), (0.3, (2.8, 1.4, 0.4, 1)), (0.7, (1.5, 0.4, 0.06, 0.9)), (1, (0.5, 0.08, 0.01, 0))])),
+        # molten slag: drips that dribble off the cut, fall, land and cool to black
+        T("Slag", TX + "spark/dot.png", space="World", clips=stream(7, 3.0, 0, L, 0.35), shape=cone(30, 0.08),
+          vel=R((0, 0.3, 0), (0, 1.3, 0)), gravity=1.0, size=R(0.035, 0.06), collide=(0.05, 0.92), lit=False,
+          color=K([(0, (3.0, 1.5, 0.45, 1)), (0.12, (2.2, 0.75, 0.15, 1)), (0.4, (0.9, 0.18, 0.03, 1)),
+                   (0.75, (0.1, 0.06, 0.045, 1)), (1, (0.07, 0.05, 0.04, 0))])),
+        # spatter: molten bits flung further, streaking, cooling as they fly
+        T("Spatter", TX + "spark/dot.png", orient="Velocity", speed_stretch=0.02, space="World",
+          clips=stream(9, 1.5, 0, L, 0.4), shape=cone(55, 0.08), vel=R((0, 1.8, 0), (0, 4.5, 0)), gravity=1.0,
+          size=R(0.028, 0.045), collide=(0.1, 0.85), lit=False,
+          color=K([(0, (3.0, 1.6, 0.5, 1)), (0.3, (1.8, 0.5, 0.08, 1)), (0.7, (0.3, 0.09, 0.04, 1)), (1, (0.1, 0.07, 0.05, 0))])),
     ]
     effect("MiningImpact", L, tracks, looping=True, header="""
-Where the laser meets rock: molten glow, a fountain of sparks and molten
-spatter, and rock vapour. The 'Laser Impact' node is turned by vfx.lua so +Y
-is the planet's up (local gravity is a Directional force).""")
+Where the laser meets rock: a small white-hot spot in a tight orange halo,
+sparks falling on the world's gravity and skipping off the ground, molten slag
+dribbling off the cut and cooling to black where it lands, spatter. The
+'Laser Impact' node rides the planet (vfx.laserHit parents it to the body) and
+is turned so +Y is the surface normal. Smoke, dust and the glowing cut are
+one-shots (DigSmoke, LaserChips, CutGlow) so they stay where they were made.""")
 
+    # The rock knocked off, in air: chips, grit and dust that HANGS and drifts
+    # off in the wind (tinted to the world's ground by vfx.lua).
     tracks = [
         T("Chips", mesh=ROCK, space="World", inherit=1.0, clips=burst(3, 0, 1.3, 0.3, cj=0.5),
           shape=cone(50, 0.1), vel=R((0, 2.5, 0), (0, 5.5, 0)), gravity=1.0, size=R(0.04, 0.1),
           rot=R((0, 0, 0), (6.28, 6.28, 6.28)), spin=R((-14, -14, -14), (14, 14, 14)),
           color=C((0.3, 0.27, 0.25, 1)), lit=True, collide=(0.3, 0.5), land_fade=True),
-        T("Hot", TX + "chip_glow.png", space="World", enabled=False, clips=[], size=0.1),
         T("Grit", TX + "debris/chip_b.png", space="World", inherit=1.0, clips=burst(5, 0, 0.9, 0.3),
           shape=cone(55, 0.08), vel=R((0, 2.5, 0), (0, 6, 0)), gravity=1.0, size=R(0.03, 0.07),
           rot=R((0, 0, 0), RAD), spin=R((0, 0, -15), (0, 0, 15)),
           color=K([(0, (1.6, 0.7, 0.3, 1)), (0.25, (0.35, 0.3, 0.27, 1)), (1, (0.33, 0.3, 0.27, 1))]),
           collide=(0.2, 0.6), land_fade=True),
+        T("Dust", TX + "smoke/clump_a.png", lamp=0.35, forces=[wind(1.1)], gravity=0.03, clips=burst(1, 0, 5.0, 0.3, cj=0.6),
+          shape=sphere(0.15), vel=R((-0.3, 0.3, -0.3), (0.3, 1.1, 0.3)), size=K([(0, 0.25), (0.3, 0.9), (1, 2.0)]),
+          rot=R((0, 0, 0), RAD), spin=R((0, 0, -0.3), (0, 0, 0.3)),
+          color=K([(0, (0.6, 0.55, 0.48, 0)), (0.08, (0.6, 0.55, 0.48, 0.42)), (0.5, (0.62, 0.57, 0.5, 0.2)), (1, (0.62, 0.58, 0.52, 0))]),
+          soft=0.4),
     ]
-    tracks = [t for t in tracks if '"Hot"' not in t]
-    effect("LaserChips", 1.3, tracks, header="Rock chips spalled off by the laser, thrown off the surface normal (vfx.lua adds it).")
+    effect("LaserChips", 5.0, tracks, header="""
+Rock spalled off by the laser, in air: chips and grit thrown off the surface
+normal, and a puff of rock dust that hangs and drifts off in the wind (vfx.lua
+fires it, tinted to the world's ground).""")
+
+    # The same in vacuum: nothing hangs. Fines fly out on clean ballistic arcs
+    # and fall, the way regolith does under a boot on the Moon.
+    tracks = [t for t in tracks if '"Dust"' not in t]
+    tracks.append(
+        T("Fines", TX + "debris/grit.png", lamp=0.35, space="World", inherit=1.0, clips=burst(6, 0, 1.6, 0.3),
+          shape=cone(60, 0.08), vel=R((0, 1.5, 0), (0, 5.0, 0)), gravity=1.0, size=R(0.05, 0.12),
+          rot=R((0, 0, 0), RAD), color=C((0.5, 0.46, 0.41, 0.8)), collide=(0.0, 1.0), land_fade=True))
+    effect("LaserChipsVac", 1.6, tracks, header="""
+Rock spalled off by the laser in vacuum: chips, grit and fines on clean
+ballistic arcs. No dust hangs where there is no air to hold it.""")
+
+    # Fumes off the bite, in air: a wisp of rock smoke that hangs and drifts
+    # with the wind, and the heat bending the air over the cut.
+    tracks = [
+        T("Smoke", TX + "smoke/wisp.png", lamp=0.6, forces=[wind(0.9), turb(0.8, 0.4)], clips=burst(2, 0, 5.0, 0.3, cj=0.5),
+          shape=cone(25, 0.12), vel=R((0, 0.5, 0), (0, 1.3, 0)), size=K([(0, 0.22), (0.35, 1.0), (1, 2.4)]),
+          rot=R((0, 0, 0), RAD), spin=R((0, 0, -0.4), (0, 0, 0.4)),
+          color=K([(0, (0.3, 0.28, 0.26, 0)), (0.1, (0.32, 0.3, 0.28, 0.4)), (0.5, (0.4, 0.38, 0.36, 0.2)), (1, (0.44, 0.42, 0.4, 0))]),
+          soft=0.4),
+        T("Haze", TX + "distort/haze.png", blend="Distortion", distortion=0.012, clips=burst(3, 0, 0.9, 0.2),
+          shape=cone(15, 0.12), vel=R((0, 0.8, 0), (0, 1.6, 0)), size=K([(0, 0.35), (1, 1.2)]),
+          rot=R((0, 0, 0), RAD), color=K([(0, (1, 1, 1, 0)), (0.2, (1, 1, 1, 0.9)), (1, (1, 1, 1, 0))]), soft=0.3),
+    ]
+    effect("DigSmoke", 5.0, tracks, header="""
+Fumes off the laser's bite, in air only (vfx.laserHit): a wisp of rock smoke
+that hangs and drifts with the wind, and heat haze over the cut.""")
+
+    # The cut's edges glowing: spots laid round the bite that stay where they
+    # were made as the bore eats on, orange cooling to dull red to dark over
+    # seconds.
+    tracks = [
+        T("Edge", TX + "glow/soft.png", blend="Additive", space="World", clips=burst(3, 0, 6.0, 0.3, cj=0.3),
+          shape=ring(0.32), vel=(0, 0, 0), size=R(0.14, 0.26), soft=0.05,
+          color=K([(0, (2.6, 1.15, 0.3, 0.9)), (0.12, (2.0, 0.7, 0.14, 0.8)), (0.35, (1.1, 0.25, 0.05, 0.65)),
+                   (0.7, (0.4, 0.06, 0.01, 0.4)), (1, (0.15, 0.02, 0.0, 0))])),
+        T("Ember", TX + "glow/tight.png", blend="Additive", space="World", clips=burst(2, 0, 4.0, 0.3, cj=0.5),
+          shape=ring(0.22), vel=(0, 0, 0), size=R(0.03, 0.06), soft=0.02,
+          color=K([(0, (3.0, 1.6, 0.5, 1)), (0.3, (2.0, 0.6, 0.1, 0.9)), (0.7, (0.8, 0.12, 0.02, 0.6)), (1, (0.3, 0.03, 0.0, 0))])),
+    ]
+    effect("CutGlow", 6.0, tracks, header="""
+The laser's cut glowing where it has bitten (vfx.laserHit, a few a second):
+spots round the bite, orange cooling to dull red and dark over six seconds,
+left behind on the rock as the bore eats on.""")
+
+    # The muzzle's heat: a dull red-orange glow at the lens and the air
+    # shimmering over it, as strong as the laser is hot (tool_belt).
+    L = 0.6
+    tracks = [
+        T("Glow", TX + "glow/soft.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=K([(0, 0.075), (0.5, 0.085), (1, 0.075)]), color=C((1.5, 0.42, 0.1, 0.75)), soft=0.02),
+        T("Lens", TX + "glow/tight.png", blend="Additive", clips=burst(1, 0, L, cj=0),
+          size=0.022, color=C((2.6, 1.4, 0.55, 0.9)), soft=0.01),
+        T("Haze", TX + "distort/haze.png", blend="Distortion", distortion=0.006, clips=stream(6, 0.7, 0, L, 0.2),
+          shape=sphere(0.02), vel=R((-0.05, 0.25, -0.05), (0.05, 0.5, 0.05)), size=K([(0, 0.05), (1, 0.18)]),
+          rot=R((0, 0, 0), RAD), color=K([(0, (1, 1, 1, 0)), (0.2, (1, 1, 1, 0.8)), (1, (1, 1, 1, 0))]), soft=0.05),
+    ]
+    effect("LaserMuzzle", L, tracks, looping=True, header="""
+The Terrain Laser's muzzle hot from cutting: a dull red-orange glow at the
+lens and the air shimmering off it, scaled by the laser's heat (tool_belt),
+fading as it cools after the trigger comes up. +Y is the planet's up.""")
+
+
+def caves():
+    # Dust motes hanging in the air, seen only where a lamp lights them (lit:
+    # a billboard takes the lamps; underground.lua fires them with their
+    # normal turned away from the star, so the sun never lights one there).
+    tracks = [
+        T("Motes", TX + "spark/dot.png", blend="Alpha", lit=True, lamp=1.2, clips=burst(14, 0, 6.0, 0.4, cj=0.3),
+          shape=box(3.2, 2.2, 3.2), vel=R((-0.04, -0.03, -0.04), (0.04, 0.03, 0.04)), forces=[turb(0.35, 0.05)],
+          size=R(0.012, 0.026), color=K([(0, (0.9, 0.86, 0.8, 0)), (0.2, (0.9, 0.86, 0.8, 0.85)), (0.8, (0.9, 0.86, 0.8, 0.85)),
+                                          (1, (0.9, 0.86, 0.8, 0))])),
+    ]
+    effect("CaveMotes", 6.0, tracks, header="""
+Dust motes hanging in a cave's air, drifting (scripts/underground.lua fires
+them ahead of the eye). Lit only by lamps: in the dark they are not there.""")
+
+    # Cold mist lying along a cave floor: a few big, faint, slow wisps.
+    tracks = [
+        T("Mist", TX + "smoke/wisp.png", lamp=0.12, clips=burst(4, 0, 10.0, 0.3, cj=0.3), shape=box(6.0, 0.3, 6.0),
+          vel=R((-0.12, 0.0, -0.12), (0.12, 0.03, 0.12)), drag=0.05, size=K([(0, 2.2), (1, 4.2)]), squash=R(1.6, 2.4),
+          rot=R((0, 0, 0), RAD), spin=R((0, 0, -0.05), (0, 0, 0.05)),
+          color=K([(0, (0.5, 0.54, 0.58, 0)), (0.3, (0.5, 0.54, 0.58, 0.045)), (0.7, (0.5, 0.54, 0.58, 0.04)), (1, (0.5, 0.54, 0.58, 0))]),
+          soft=1.0, translucency=0.0),
+    ]
+    effect("CaveMist", 10.0, tracks, header="""
+Cold mist lying low along a cave floor on a world with damp air (scripts/
+underground.lua): a few big, faint, slow wisps. Lit by lamps only, like the motes.""")
+
+    # A drop falling from the roof and breaking on the floor.
+    tracks = [
+        T("Drop", TX + "water/droplet.png", lit=True, lamp=1.0, space="World", clips=burst(1, 0, 2.0, 0, cj=0),
+          vel=(0, -0.2, 0), gravity=1.0, size=0.025, color=C((0.75, 0.8, 0.85, 0.9)), collide=(0.0, 1.0, True)),
+    ]
+    effect("CaveDrip", 2.0, tracks, header="A drop falling from a cave's roof (scripts/underground.lua), dying where it lands.")
 
 
 def ore_break():
@@ -919,7 +1023,7 @@ def ore_break():
 # =====================================================================================
 def cutter():
     tracks = [
-        T("Chips", TX + "debris/chip_b.png", space="World", inherit=1.0, clips=burst(4, 0, 0.8, 0.3, cj=0.4),
+        T("Chips", TX + "debris/chip_b.png", lamp=0.3, space="World", inherit=1.0, clips=burst(4, 0, 0.8, 0.3, cj=0.4),
           shape=cone(60, 0.06), vel=R((0, 1.5, 0), (0, 4, 0)), gravity=1.0, size=R(0.025, 0.06),
           rot=R((0, 0, 0), RAD), spin=R((0, 0, -15), (0, 0, 15)), color=C((0.55, 0.42, 0.26, 1)), collide=(0.2, 0.7), land_fade=True),
         T("Sparks", TX + "spark/dot.png", blend="Additive", orient="Velocity", speed_stretch=0.05,
@@ -950,16 +1054,16 @@ def cutter():
 
 def dig():
     tracks = [
-        T("Clods", mesh=ROCK, space="World", inherit=1.0, clips=burst(7, 0, 1.2, 0.3), shape=cone(50, 0.3),
+        T("Clods", lamp=0.3, mesh=ROCK, space="World", inherit=1.0, clips=burst(7, 0, 1.2, 0.3), shape=cone(50, 0.3),
           vel=R((0, 2.0, 0), (0, 4.0, 0)), gravity=1.0, size=R(0.06, 0.16),
           rot=R((0, 0, 0), (6.28, 6.28, 6.28)), spin=R((-8, -8, -8), (8, 8, 8)),
           color=C((0.32, 0.26, 0.2, 1)), lit=True, collide=(0.15, 0.8), land_fade=True),
-        T("Crumbs", TX + "debris/chip_a.png", space="World", inherit=1.0, clips=burst(14, 0, 0.9, 0.3),
+        T("Crumbs", TX + "debris/chip_a.png", lamp=0.3, space="World", inherit=1.0, clips=burst(14, 0, 0.9, 0.3),
           shape=cone(55, 0.3), vel=R((0, 2, 0), (0, 4.5, 0)), gravity=1.0, size=R(0.03, 0.07),
           rot=R((0, 0, 0), RAD), spin=R((0, 0, -12), (0, 0, 12)), color=C((0.36, 0.3, 0.24, 1)),
           collide=(0.15, 0.8), land_fade=True),
 
-        T("Dust", TX + "smoke/clump_a.png", forces=[wind(2.0)], clips=burst(6, 0, 1.6, 0.3), shape=sphere(0.6),
+        T("Dust", TX + "smoke/clump_a.png", lamp=0.3, forces=[wind(2.0)], clips=burst(6, 0, 1.6, 0.3), shape=sphere(0.6),
           vel=R((0, 0.3, 0), (0, 1.2, 0)), gravity=0.03, size=K([(0, 0.6), (1, 2.2)]),
           rot=R((0, 0, 0), RAD), squash=R(0.7, 1.3),
           color=K([(0, (0.55, 0.48, 0.4, 0)), (0.1, (0.53, 0.47, 0.4, 0.72)), (1, (0.52, 0.47, 0.42, 0))]),
@@ -1063,7 +1167,7 @@ terminal velocity and a faint veil.""")
           color=K([(0, (0.92, 0.94, 0.98, 0)), (0.06, (0.92, 0.94, 0.98, 0.95)), (0.88, (0.92, 0.94, 0.98, 0.95)),
                    (1, (0.92, 0.94, 0.98, 0))])),
         # The white-out of a blizzard: snow too fine and too dense to see as flakes.
-        T("Drift", TX + "smoke/soft.png", space="World", inherit=1.0, gravity=0.12, forces=[wind(1.5)], clips=burst(2, 0, 4.0, 0.3, cj=0.5),
+        T("Drift", TX + "smoke/soft.png", lamp=0.3, space="World", inherit=1.0, gravity=0.12, forces=[wind(1.5)], clips=burst(2, 0, 4.0, 0.3, cj=0.5),
           shape=box(30, 4, 30), vel=R((0, -0.8, 0), (0, -0.3, 0)), size=R(6.0, 11.0), rot=R((0, 0, 0), RAD),
           color=K([(0, (0.85, 0.87, 0.9, 0)), (0.3, (0.85, 0.87, 0.9, 0.09)), (1, (0.85, 0.87, 0.9, 0))]),
           soft=1.5),
@@ -1132,7 +1236,7 @@ world's ground colour times the day's light.""")
     # ── ash ───────────────────────────────────────────────────────────────────
     L = 8.0
     tracks = [
-        T("Flakes", TX + "smoke/soot.png", lit=True, vary=False, space="World", inherit=1.0,
+        T("Flakes", TX + "smoke/soot.png", lamp=0.3, lit=True, vary=False, space="World", inherit=1.0,
           gravity=0.17, clips=burst(30, 0, 7.5, 0.25, pulses=3, interval=0.2), shape=box(30, 9, 30),
           vel=R((-0.2, -1.0, -0.2), (0.2, -0.45, 0.2)), forces=[wind(1.5), turb(0.4, 0.8)], size=R(0.07, 0.14),
           rot=R((0, 0, 0), RAD), spin=R((0, 0, -3), (0, 0, 3)),
@@ -1221,6 +1325,7 @@ def main():
     step_dust()
     mining_beam()
     mining_impact()
+    caves()
     ore_break()
     cutter()
     dig()

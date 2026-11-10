@@ -1,0 +1,30 @@
+// A drop falling from a cave's roof (scripts/underground.lua), dying where it lands.
+(
+    name: "CaveDrip",
+    lifetime: 2.0,
+    playback: OneShot,
+    end: Destroy,
+    tracks: [
+        (
+            name: "Drop",
+            render: Billboard(texture: Some("textures/vfx/water/droplet.png")),
+            blend: Alpha,
+            lit: true,
+            lamp_response: 1.0,
+            space: World,
+            clips: [(start: 0.0, end: 2.0, emit: Some(Burst(count: 1, count_jitter: 0.0, pulses: 1, interval: 0.0, interval_jitter: 0.2)))],
+            automation: [],
+            shape: Point,
+            velocity: Const(Vec3((0.0, -0.2, 0.0))),
+            size: Const(F32(0.025)),
+            rotation: Const(Vec3((0.0, 0.0, 0.0))),
+            angular_velocity: Const(Vec3((0.0, 0.0, 0.0))),
+            color: Const(Rgba((0.75, 0.8, 0.85, 0.9))),
+            gravity: 1.0,
+            drag: 0.0,
+            collide: Some((bounce: 0.0, friction: 1.0, die: true)),
+        ),
+    ],
+    seed: 1,
+    gravity_mode: Field,
+)

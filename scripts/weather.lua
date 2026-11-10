@@ -463,15 +463,23 @@ end
 function mistOf(o, p, sunUp, moist, seed, t, spell)
   if p.airless or o.kind == "dust" or o.kind == "ash" or not sunUp then return 0 end
   local dawn = smooth(-0.14, 0.0, sunUp) * (1 - smooth(0.1, 0.32, sunUp))
-  if dawn <= 0 then return 0 end
+  -- NIGHT FOG (2026-11-10): on a calm, damp night the ground cools and fog
+  -- pools in the low ground from dusk on, in banks (atmosphere.lua lays it
+  -- low and lumpy); the dawn's mist is the same fog lifting.
+  local night = (1 - smooth(-0.14, 0.02, sunUp)) * 0.7
+  if dawn <= 0 and night <= 0 then return 0 end
   local calm = 1 - smooth(2.5, 7.0, o.wind or 0)
   local damp = smooth(0.15, 0.6, moist or p.moist or 0)
-  -- one roll a "morning": the clock's long period, so a probe or a short
-  -- session sees the same morning throughout
+  -- a cold world's still air freezes its little moisture into ice fog
+  if (p.temp or 0.5) < 0.3 then damp = max(damp, 0.45 * smooth(0.0, 0.25, moist or p.moist or 0)) end
+  -- one roll a "morning" (and one a night): the clock's long period, so a
+  -- probe or a short session sees the same morning throughout
   local day = floor((t or 0) / ((spell or 360) * 4))
   local chance = 0.3 + 0.45 * damp + ((o.state == "clearing") and 0.3 or 0)
-  local here = hash(seed or 0, day, 21) < chance and 1 or 0.25
-  return clamp01(dawn * calm * damp * here * (1 - (o.precip or 0)) * (1 - 0.4 * smooth(0.6, 1.0, o.cover or 0)))
+  local hereD = hash(seed or 0, day, 21) < chance and 1 or 0.25
+  local hereN = hash(seed or 0, day, 23) < chance * 0.55 and 1 or 0.12
+  local when = max(dawn * hereD, night * hereN)
+  return clamp01(when * calm * damp * (1 - (o.precip or 0)) * (1 - 0.4 * smooth(0.6, 1.0, o.cover or 0)))
 end
 
 -- FOG BANKS: under a grey sky or rain the murk is not even, it thickens and

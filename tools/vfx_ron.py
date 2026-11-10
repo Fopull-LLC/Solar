@@ -124,7 +124,7 @@ def T(name, tex=None, *, blend="Alpha", clips, shape="Point", vel=(0, 0, 0), siz
       orient=None, space="Local", gravity=0.0, drag=0.0, inherit=0.0, forces=(), rot=None, spin=None,
       squash=None, aspect=None, stretch=None, speed_stretch=None, soft=None, lit=None, mesh=None,
       beam=None, trail_=None, max_alive=None, flip=None, enabled=True, distortion=None, vary=None,
-      collide=None, land_fade=False, translucency=None):
+      collide=None, land_fade=False, translucency=None, lamp=None):
     # Smoke, dust, grit, leaves and foam take the scene's light (v0.112 lit
     # billboards): they darken over the night side instead of glowing.
     if lit is None:
@@ -176,6 +176,10 @@ def T(name, tex=None, *, blend="Alpha", clips, shape="Point", vel=(0, 0, 0), siz
             L.append(f"            scroll: {fnum(scroll)},")
     if lit:
         L.append("            lit: true,")
+        # the share of a lamp's light a lit particle takes (engine lamp_response,
+        # default 1): dust by a lamp reads right at about 0.2-0.4
+        if lamp is not None:
+            L.append(f"            lamp_response: {fnum(lamp)},")
         if translucency:
             L.append(f"            translucency: {fnum(translucency)},")
     if distortion is not None:

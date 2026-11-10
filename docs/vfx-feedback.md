@@ -165,3 +165,62 @@ when it moves 0.012) and runs on every tier.
 Target: under ~0.4 ms of CPU a frame at Medium for each of: a jet at full
 throttle, a rover drifting, a reentry. See "Results" (filled from
 `tools/perf/vfxprobe.sh`).
+
+# The gritty pass: the Terrain Laser, caves and alien air (2026-11-10)
+
+Playtest of the 11-09d demo: "feel like we could make the graphics feel a
+little more gritty and realistic right now it still feels a little silly with
+the lazer effects on the dig beam … no creepy atmospheres". Same rules as
+above: nothing glows that would not glow, every effect pays its way.
+
+## The dig beam is a cutting tool
+
+| piece | where | what |
+|---|---|---|
+| the beam (`MiningBeam`, pooled `FxDigBeam`) | muzzle → bite | a hair of warm light and a faint scatter, heat shimmer (Distortion) along it. Played only in air, scaled by the air at the bite (`vfx.airAt`): in vacuum nothing of the beam shows. No orange glow tube, no starburst |
+| the bite (`MiningImpact` on `Laser Impact`) | the hit, +Y the face's normal | a small white-hot spot in a tight halo; sparks on the world's gravity skipping off the ground; molten slag dribbling off the cut and cooling to black where it lands; spatter. The node is parented to the body it cuts (vfx.laserHit), so its World tracks ride the planet |
+| spalled rock (`LaserChips` / `LaserChipsVac`) | one-shot, ~3–5 a second | chips, grit, and in air a puff of rock dust (ground-tinted) that hangs and drifts with the wind; in vacuum, fines on clean ballistic arcs instead |
+| fumes (`DigSmoke`) | one-shot, ~2–3 a second, air only | a wisp of rock smoke that hangs and drifts, heat haze over the cut. The bite's point light lights the smoke and dust round it: that is where a cutting beam is seen in real air |
+| the cut glowing (`CutGlow`) | one-shot, ~2 a second | spots round the bite, orange → dull red → dark over 6 s, left on the rock as the bore eats on |
+| scorch | decal, as before | `scorch_b` outside a bore |
+| the muzzle (`LaserMuzzle`, pooled `FxLaserMuzzle`) | the lens | a dull red-orange glow and shimmer by the laser's heat, fading as it cools |
+| the feel | tool_belt | the first-person tool buzzes in the hands (random kicks to the sway spring, frame-rate independent), on top of the old recoil ticks and `cam.shake` |
+| the sound | tool_belt `SFX.cs` | the hum (as before) + the bite's hiss and crackle (need air; in vacuum the crackle is only the tool's frame, muffled) + a rumble of the rock through the boots (always). `tools/gen_grit_audio.py` |
+
+The CUT (E) lost its starburst and most of its glow (a hair and a shimmer: the
+bite carries it), the FILL is a dusty stream of grit instead of a blue energy
+beam, and the gravity gun's tether and hold keep their look at about half the
+glow.
+
+## Caves (`scripts/underground.lua`)
+
+Enclosure from terrain rays (5 toward the sky, 6 level; two a frame), eased,
+a `cave` flag with hysteresis. Underground: the ambient falls to 7 % (the
+weather's write stays the base), the haze is darkened and lit less
+(atmosphere.lua), the helmet lamps come on whatever the hour (suit.lua) and
+cast no shadows there (a lamp's shadow map lit none of a cave's walls: engine
+card draft D in work/grit; flashlight.lua the same),
+dust motes hang ahead of the eye and show only in a lamp, cold mist lies on
+the floor of a damp world's cave, drops fall from the roof with their plink
+the fall's time later, a low room tone plays and every half minute a creak or
+a deep groan comes from somewhere. In vacuum: motes only, and only the groans,
+muffled, through the boots. The suit's breathing (easy, or hard when running)
+and fans rise as the world goes quiet (soundscape.lua).
+
+## Alien air (`atmosphere.lua` `airCharacter`)
+
+What an air is made of colours its haze and its night: methane a thick
+orange-brown smog, sulfur dioxide a yellow murk, a CO2 desert its own ground's
+dust, ammonia a green night airglow, nitrogen without oxygen a bruised
+violet-grey. Earth-like air and old records keep the old look. The haze
+thickens by the air's `haze`, the dome is pulled toward the tint.
+
+## Fog banks (`weather.lua` `mistOf`)
+
+Fog now pools in the low ground on calm, damp nights from dusk (and lifts at
+dawn as the old morning mist), and a cold world's still air makes ice fog.
+atmosphere.lua lays it in the LOW GROUND round the eye (six rays down on a
+60 m ring every 2 s while there is mist, the lowest kept: the old floor was
+the mean radius, which on ground below the radius put the layer's top under
+the ground and no bank ever showed), at a bank's own density (`mistBank`,
+0.035/m: you see tens of metres into it), lumpy in the volumetric grid.

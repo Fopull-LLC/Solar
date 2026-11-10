@@ -10,6 +10,9 @@
 | `sfx/` | `swim_stroke_1..4`, `bubbles_1..3`, `vessel_lost` | synthesized by `tools/gen_soundscape_audio.py` | the project's own |
 | `sfx/` | `surveyor_charge`, `surveyor_ready` (a seamless loop), `surveyor_fire`, `surveyor_hit`, `crew_hit` — the TL-5 Surveyor plasma rifle and the crew's HIT warning | synthesized by `tools/gen_weapon_audio.py` | the project's own |
 | `weather/` | `rain_light`, `rain_heavy`, `hail`, `dust` (seamless loops), `thunder_1..3` | synthesized by `tools/gen_weather_audio.py` | the project's own |
+| `foley/` | `laser_hiss`, `laser_crackle`, `laser_rumble` (seamless loops): the Terrain Laser's bite | synthesized by `tools/gen_grit_audio.py` | the project's own |
+| `ambience/` | `cave_tone` (seamless loop), `cave_drip_1..4`, `cave_creak_1..3`, `cave_groan_1..2`: underground.lua | synthesized by `tools/gen_grit_audio.py` | the project's own |
+| `sfx/` | `breath_calm`, `breath_heavy`, `suit_hum` (seamless loops): the suit, soundscape.lua | synthesized by `tools/gen_grit_audio.py` | the project's own |
 
 Levels (from `python3 tools/gen_soundscape_audio.py --stats`, confirmed with ffmpeg's
 `ebur128`): music ≈ −24 LUFS with peaks near −12 dBFS; ambience −25 to −29 LUFS

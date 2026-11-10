@@ -73,6 +73,26 @@
 -- flash }` and this folds it in for the world it names: thicker, greyer,
 -- darker haze under a storm, the air's colour greyed with it, and a lightning
 -- flash lighting the haze for a frame or two.
+--
+-- 3. THE AIR'S CHARACTER (2026-11-10: "creepy atmospheres"). An alien air is
+--    not a tinted copy of ours: what it is MADE of (atmo.lua's gases, on the
+--    world record) colours its haze and its night. `airCharacter(w)`:
+--      methane (Titan)        a thick orange-brown tholin smog, brown nights
+--      sulfur dioxide         a sickly yellow murk, nights the colour of bile
+--      a CO2 desert (Mars)    butterscotch dust off its own ground, thin and
+--                             cold; violet-black nights
+--      ammonia                a faint green cast, and a green airglow at night
+--      nitrogen, no oxygen    a pale, bruised violet-grey
+--      Earth-like air         nothing: the home world keeps the look it has
+--    The tint is laid over the haze (by day, scaled by the daylight) and,
+--    more gently, over the air's colour the engine draws the sky in; the
+--    haze thickens by `haze`; the night haze takes `night` instead of the
+--    blue of an Earth night. All data: a world with no air record keeps the
+--    old look exactly.
+--
+-- 4. UNDERGROUND (underground.lua `enclosed`): no sky light in a cave, so the
+--    haze there is darkened and lit less by the sun it cannot see; what is
+--    left glows in the helmet lamps' beam.
 
 defaults = {
   --- Master switch, so a scene can turn the whole effect off without unwiring.
@@ -155,6 +175,10 @@ defaults = {
   mistTop = 9.0,
   --@range 0 20
   mistThick = 7.0,
+  --- A fog bank's own density at full mist (per metre, volumetric): you see
+  --- tens of metres into it, not across the valley.
+  --@range 0 0.2
+  mistBank = 0.035,
   --- Print what the air is doing, once a second. For tuning and for `run`.
   debug = false,
 }
@@ -220,8 +244,9 @@ end
 -- the local horizon (a cosine). Dusk warms it toward the low sun; night takes
 -- it to a dim blue rather than a dim copy of the day colour.
 NIGHT = { 0.030, 0.042, 0.075 }
-function horizonColor(r, g, b, sunUp)
+function horizonColor(r, g, b, sunUp, night)
   sunUp = sunUp or 1
+  local N = night or NIGHT
   local light = 0.05 + 0.95 * smooth(-0.3, 0.25, sunUp)
   local k = 1.12 * light
   local hr, hg, hb = (r + (1 - r) * 0.22) * k, (g + (1 - g) * 0.22) * k, (b + (1 - b) * 0.22) * k
@@ -231,7 +256,7 @@ function horizonColor(r, g, b, sunUp)
   hr, hg, hb = hr + (1.0 * k - hr) * tw, hg + (0.62 * k - hg) * tw, hb + (0.38 * k - hb) * tw
   -- Night: starlight and airglow, seen by dark-adapted (blue-shifted) eyes.
   local night = 1.0 - smooth(-0.35, 0.05, sunUp)
-  return hr + NIGHT[1] * night, hg + NIGHT[2] * night, hb + NIGHT[3] * night
+  return hr + N[1] * night, hg + N[2] * night, hb + N[3] * night
 end
 
 -- The haze's extinction per metre at the ground, for a world of radius R and
@@ -252,6 +277,53 @@ function extinction(radius, atmo, horizonHaze, eyeH, farHaze, bigFrom, bigTo)
   hz = math.min(0.95, hz * clamp01(atmo or 0))
   if hz <= 0 then return 0 end
   return -math.log(1 - hz) / d
+end
+
+-- What an air is made of → how its haze looks (pure; tests/smoke_atmosphere.lua).
+-- Each gas family: { tint = haze colour by day, amt = how much of the haze it
+-- takes, haze = extinction factor, night = the night haze's colour }, weighted
+-- by how much of the air it is (a trace of methane already smogs a sky).
+AIR_LOOKS = {
+  ch4 = { tint = { 0.78, 0.5, 0.22 }, amt = 0.6, haze = 2.2, night = { 0.042, 0.026, 0.012 } },
+  so2 = { tint = { 0.8, 0.72, 0.3 }, amt = 0.55, haze = 1.8, night = { 0.034, 0.034, 0.01 } },
+  co2 = { tint = { 0.78, 0.55, 0.38 }, amt = 0.45, haze = 1.45, night = { 0.026, 0.017, 0.03 } },
+  nh3 = { tint = { 0.56, 0.72, 0.52 }, amt = 0.4, haze = 1.3, night = { 0.012, 0.04, 0.022 } },
+  n2 = { tint = { 0.64, 0.6, 0.72 }, amt = 0.25, haze = 1.15, night = { 0.024, 0.022, 0.048 } },
+}
+function airCharacter(w)
+  local air = w and w.air
+  local g = air and air.gases
+  if type(g) ~= "table" then return nil end
+  local o2 = g.O2 or 0
+  if o2 >= 0.12 then return nil end          -- an Earth-like air keeps its look
+  local wts = {
+    ch4 = math.min(1, (g.CH4 or 0) / 0.02),
+    so2 = math.min(1, (g.SO2 or 0) / 0.01),
+    co2 = smooth(0.3, 0.8, g.CO2 or 0),
+    nh3 = math.min(1, (g.NH3 or 0) / 0.0001),
+  }
+  local sum = 0
+  for _, v in pairs(wts) do sum = sum + v end
+  if sum < 0.2 then wts.n2 = 1; sum = sum + 1 end
+  local c = { tint = { 0, 0, 0 }, amt = 0, haze = 0, night = { 0, 0, 0 } }
+  for k, v in pairs(wts) do
+    if v > 0 then
+      local L = AIR_LOOKS[k]
+      local f = v / sum
+      for i = 1, 3 do
+        c.tint[i] = c.tint[i] + L.tint[i] * f
+        c.night[i] = c.night[i] + L.night[i] * f
+      end
+      c.amt = c.amt + L.amt * f
+      c.haze = c.haze + L.haze * f
+    end
+  end
+  -- a dusty CO2 desert's haze is its own ground's colour, lifted
+  if (wts.co2 or 0) > 0 and w.ground and w.ground[1] then
+    local k = 0.5 * wts.co2 / sum
+    for i = 1, 3 do c.tint[i] = c.tint[i] + (math.min(1, w.ground[i] * 1.25) - c.tint[i]) * k end
+  end
+  return c
 end
 
 -- ── the scene ───────────────────────────────────────────────────────────────
@@ -309,6 +381,21 @@ local function star()
   return star_name and space.body(star_name)
 end
 
+-- the air's character, per world, read once a second (the record can change:
+-- a probe, a reload)
+local char_cache = {}
+local function character(name, w)
+  local c = char_cache[name]
+  if c and time - c.t < 1.0 then return c.v end
+  local v = airCharacter(w)
+  char_cache[name] = { t = time, v = v }
+  return v
+end
+-- the eased character at the eye
+local chr = { r = 0, g = 0, b = 0, amt = 0, haze = 1, nr = NIGHT[1], ng = NIGHT[2], nb = NIGHT[3] }
+local ug_ref = nil
+local low = { alt = nil, t = -10, body = nil }   -- the low ground round the eye (fog banks)
+
 -- ── the air's colour, given to the engine ───────────────────────────────────
 -- name → { node, r, g, b, d } of what was last sent, so a body is written once
 -- and then only when the weather moves its colour by a visible amount.
@@ -320,6 +407,12 @@ local function send_air(name, w, grey, dim)
   if not (n and n.valid ~= false and n.setCelestial) then return end
   local r, g, b, d = skyAir(w.atmoR or 0.55, w.atmoG or 0.68, w.atmoB or 0.92, w.atmo or 0,
     params.airSat, params.airValue, params.airDensity, grey, dim)
+  local c = character(name, w)
+  if c then
+    -- the sky drawn in the air's own murk: the rolled hue pulled toward it
+    local k = 0.75 * c.amt
+    r, g, b = r + (c.tint[1] * 0.85 - r) * k, g + (c.tint[2] * 0.85 - g) * k, b + (c.tint[3] * 0.85 - b) * k
+  end
   local s = sent[name]
   if s and s.node == n and math.abs(s.r - r) + math.abs(s.g - g) + math.abs(s.b - b) < 0.004
       and math.abs(s.d - d) < 0.002 then
@@ -428,6 +521,41 @@ function follow(dt)
   -- sea, else the world's mean surface (altitudes over the body's radius)
   local mist_floor = (w and (w.sea or 0) > 0 and rad) and (w.sea - rad) or 0
   local wsky = weather_sky(dom)
+  -- the low ground round the eye (fog banks lie in it), sampled every 2 s
+  -- while there is mist: six rays down on a 60 m ring, the lowest kept
+  local low_alt = nil
+  if ((wsky and wsky.mist or 0) > 0.001 or cur.mist > 0.001) and dom and terrain and terrain.raycast then
+    if dom ~= low.body or time - low.t > 2.0 then
+      low.t, low.body = time, dom
+      local b = space.body(dom)
+      if b then
+        local ux, uy, uz = ex - b.x, ey - b.y, ez - b.z
+        local r = math.sqrt(ux * ux + uy * uy + uz * uz)
+        if r > 1 then
+          ux, uy, uz = ux / r, uy / r, uz / r
+          local ax, ay, az = 0, 1, 0
+          if math.abs(uy) > 0.9 then ax, ay, az = 1, 0, 0 end
+          local tx, ty, tz = ay * uz - az * uy, az * ux - ax * uz, ax * uy - ay * ux
+          local tl = math.sqrt(tx * tx + ty * ty + tz * tz)
+          tx, ty, tz = tx / tl, ty / tl, tz / tl
+          local sx, sy, sz = uy * tz - uz * ty, uz * tx - ux * tz, ux * ty - uy * tx
+          local best = nil
+          for k = 0, 5 do
+            local a = k * math.pi / 3
+            local ca, sa = math.cos(a) * 60, math.sin(a) * 60
+            local px, py, pz = ex + tx * ca + sx * sa + ux * 40, ey + ty * ca + sy * sa + uy * 40, ez + tz * ca + sz * sa + uz * 40
+            local ok, hh = pcall(terrain.raycast, vec3(px, py, pz), vec3(-ux, -uy, -uz), 400)
+            if ok and hh and hh.pos then
+              local alt = math.sqrt((hh.pos.x - b.x) ^ 2 + (hh.pos.y - b.y) ^ 2 + (hh.pos.z - b.z) ^ 2) - (b.radius or rad or 0)
+              if not best or alt < best then best = alt end
+            end
+          end
+          if best then low.alt = low.alt and (low.alt + (best - low.alt) * 0.35) or best end
+        end
+      end
+    end
+    low_alt = low.alt
+  end
   scan_air(dom, wsky)
 
   -- Ease toward the target. Colour eases too, so crossing an SOI from a green
@@ -443,7 +571,19 @@ function follow(dt)
     cur.r = cur.r + (r - cur.r) * k
     cur.g = cur.g + (g - cur.g) * k
     cur.b = cur.b + (b - cur.b) * k
+    local c = character(dom, w)
+    local ta, tr, tg, tb, th = 0, chr.r, chr.g, chr.b, 1
+    local nr, ng, nb = NIGHT[1], NIGHT[2], NIGHT[3]
+    if c then
+      ta, tr, tg, tb, th = c.amt, c.tint[1], c.tint[2], c.tint[3], c.haze
+      nr, ng, nb = c.night[1], c.night[2], c.night[3]
+    end
+    chr.amt = chr.amt + (ta - chr.amt) * k
+    chr.r, chr.g, chr.b = chr.r + (tr - chr.r) * k, chr.g + (tg - chr.g) * k, chr.b + (tb - chr.b) * k
+    chr.haze = chr.haze + (th - chr.haze) * k
+    chr.nr, chr.ng, chr.nb = chr.nr + (nr - chr.nr) * k, chr.ng + (ng - chr.ng) * k, chr.nb + (nb - chr.nb) * k
     local sig = extinction(rad, atmo, params.horizonHaze, params.eyeHeight, params.farHaze, params.bigFrom, params.bigTo)
+    sig = sig * chr.haze
     cur.sig = cur.sig + (sig - cur.sig) * k
   end
   -- The weather's part, eased slowly: a front's murk rolls in over tens of
@@ -481,7 +621,13 @@ function follow(dt)
 
   -- The haze's colour: the horizon's, then the weather's grey and gloom, and
   -- a lightning flash lighting it for an instant.
-  local fr, fg, fb = horizonColor(cur.r, cur.g, cur.b, cur.sun)
+  local fr, fg, fb = horizonColor(cur.r, cur.g, cur.b, cur.sun, { chr.nr, chr.ng, chr.nb })
+  if chr.amt > 0.003 then
+    -- the air's own murk, lit as the day is (its night colour is above)
+    local lt = 0.05 + 0.95 * smooth(-0.3, 0.25, cur.sun)
+    local a = chr.amt
+    fr, fg, fb = fr + (chr.r * 1.05 * lt - fr) * a * lt, fg + (chr.g * 1.05 * lt - fg) * a * lt, fb + (chr.b * 1.05 * lt - fb) * a * lt
+  end
   if cur.grey > 0 or cur.dim > 0 or cur.cover > 0 then
     -- Under a closing deck the horizon is the CLOUD's colour: the engine
     -- draws its deck as a quarter the air's colour and three quarters the
@@ -512,6 +658,13 @@ function follow(dt)
     local lt = 0.08 + 0.92 * smooth(-0.3, 0.25, cur.sun)
     local a = clamp01(tint[4])
     fr, fg, fb = fr + (tint[1] * lt - fr) * a, fg + (tint[2] * lt - fg) * a, fb + (tint[3] * lt - fb) * a
+  end
+  -- Underground (underground.lua): no sky light reaches the air in a cave.
+  if not ug_ref or not ug_ref.valid then ug_ref = findScript and findScript("underground") or nil end
+  local enc = (ug_ref and ug_ref.enclosed) or 0
+  if enc > 0.001 then
+    local kd = 1 - 0.85 * enc
+    fr, fg, fb = fr * kd, fg * kd, fb * kd
   end
   local flash = wsky and wsky.flash or 0
   if flash > 0 then
@@ -544,6 +697,7 @@ function follow(dt)
 
   l.fog = true
   l.fogColorR, l.fogColorG, l.fogColorB = fr, fg, fb
+  if enc > 0.001 then far = far / math.max(0.15, 1 - 0.85 * enc) end
   l.fogStart, l.fogEnd = near, far
   -- The horizon band the flat fog takes: more under overcast (the whole sky
   -- is the cloud's grey then), all of it fading with the air.
@@ -576,12 +730,25 @@ function follow(dt)
     -- mean surface (the body's radius; its sea where it has one), so it lies
     -- in the low ground wherever you stand. The haze above it thins away.
     if cur.mist > 0.001 then
-      local mt = (params.mistTop or 9.0) + (mist_floor or 0)
+      -- (2026-11-10) The floor is the LOW GROUND round the eye, sampled
+      -- (low_ground), not only the mean radius: on ground below the radius
+      -- the old floor put the layer's top under the ground and its falloff
+      -- negative, and a fog bank never showed. Its depth is held to the
+      -- layer, never below 4 m of falloff; and it is a bank you cannot see
+      -- far into, not a thicker haze.
+      local floor = mist_floor or 0
+      if low_alt then floor = math.min(floor, low_alt) end
+      if low_alt and (w and (w.sea or 0) <= 0) then floor = low_alt end
+      local top = params.mistTop or 9.0
+      local mt = top + floor
       local m = smooth(0.0, 0.6, cur.mist)
       fh = fh + (mt - fh) * m
-      ff = ff + (mt * 0.9 + 4 - ff) * m
-      dens = dens * (1 + ((params.mistThick or 7.0) - 1) * m)
+      ff = ff + (math.max(4, top * 0.9 + 4) - ff) * m
+      dens = math.max(dens * (1 + ((params.mistThick or 7.0) - 1) * m), (params.mistBank or 0.035) * m)
     end
+    -- a cave's air is still and clear: the haze shell the cave lies in is
+    -- not in it (the darkness is the cave's, not a black fog's)
+    if enc > 0.001 then dens = dens * (1 - 0.85 * enc) end
     l.fogHeight = fh
     l.fogFalloff = ff
     -- The march's fence: far enough to cross the shell along the ground,
@@ -595,7 +762,7 @@ function follow(dt)
     l.fogNoiseScale = 24 + 36 * lump
     l.fogAnisotropy = (params.anisotropy or 0.3) * (1 - 0.7 * ovc)
     -- Overcast: no direct beam to scatter, only the sky's diffuse light.
-    l.fogLight = (params.fogLight or 0.75) * (1 - 0.5 * ovc)
+    l.fogLight = (params.fogLight or 0.75) * (1 - 0.5 * ovc) * (1 - 0.6 * enc)
     l.fogShafts = (params.shafts ~= false) and gx_shafts and ovc < 0.3
   else
     l.fogVolumetric = false

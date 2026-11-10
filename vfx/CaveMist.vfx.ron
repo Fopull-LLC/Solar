@@ -1,0 +1,32 @@
+// Cold mist lying low along a cave floor on a world with damp air (scripts/
+// underground.lua): a few big, faint, slow wisps. Lit by lamps only, like the motes.
+(
+    name: "CaveMist",
+    lifetime: 10.0,
+    playback: OneShot,
+    end: Destroy,
+    tracks: [
+        (
+            name: "Mist",
+            render: Billboard(texture: Some("textures/vfx/smoke/wisp.png")),
+            blend: Alpha,
+            lit: true,
+            lamp_response: 0.12,
+            soft: 1.0,
+            space: Local,
+            clips: [(start: 0.0, end: 10.0, lifetime_jitter: 0.3, emit: Some(Burst(count: 4, count_jitter: 0.3, pulses: 1, interval: 0.0, interval_jitter: 0.2)))],
+            automation: [],
+            shape: Box(size: (6.0, 0.3, 6.0)),
+            velocity: Range(Vec3((-0.12, 0.0, -0.12)), Vec3((0.12, 0.03, 0.12))),
+            size: CurveRange((keys: [(t: 0.0, v: F32(2.2), interp: Linear), (t: 1.0, v: F32(4.2), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: F32(1.43), interp: Linear), (t: 1.0, v: F32(2.73), interp: Linear)], extrapolate: Clamp)),
+            squash: Range(F32(1.6), F32(2.4)),
+            rotation: Range(Vec3((0.0, 0.0, 0.0)), Vec3((0.0, 0.0, 6.283))),
+            angular_velocity: Range(Vec3((0.0, 0.0, -0.05)), Vec3((0.0, 0.0, 0.05))),
+            color: CurveRange((keys: [(t: 0.0, v: Rgba((0.5, 0.54, 0.58, 0.0)), interp: Linear), (t: 0.3, v: Rgba((0.5, 0.54, 0.58, 0.045)), interp: Linear), (t: 0.7, v: Rgba((0.5, 0.54, 0.58, 0.04)), interp: Linear), (t: 1.0, v: Rgba((0.5, 0.54, 0.58, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.41, 0.4428, 0.4756, 0.0)), interp: Linear), (t: 0.3, v: Rgba((0.41, 0.4428, 0.4756, 0.045)), interp: Linear), (t: 0.7, v: Rgba((0.41, 0.4428, 0.4756, 0.04)), interp: Linear), (t: 1.0, v: Rgba((0.41, 0.4428, 0.4756, 0.0)), interp: Linear)], extrapolate: Clamp)),
+            gravity: 0.0,
+            drag: 0.05,
+        ),
+    ],
+    seed: 1,
+    gravity_mode: Field,
+)
