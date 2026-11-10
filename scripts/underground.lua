@@ -35,7 +35,8 @@
 --               later, as a 3D source (real recordings; see DRIPS below).
 --   SOUND       a cave's room tone (low, close), and every half minute or so a
 --               creak of rock settling or a deep groan of the mountain with a
---               trickle of grit, off to one side. In vacuum there is no air to
+--               trickle of grit, from a spot on the rock a ray finds (a 3D
+--               source; see CREAKS below). In vacuum there is no air to
 --               carry any of it: only the groans, faint and muffled, through
 --               the boots. (The suit's breathing and fans rise as the world
 --               goes quiet: soundscape.lua.)
@@ -241,9 +242,12 @@ local function effects(ex, ey, ez, ux, uy, uz, name, b, air, w)
 end
 
 -- ── the sound ──────────────────────────────────────────────────────────────
--- Real recordings (tools/build_cave_audio.py, audio/SOURCES.md): the drops are
--- cut from a field recording in the Ledyanaya cave, the room tone from a cave
--- in Kent; the creaks and groans are still tools/gen_grit_audio.py's.
+-- Real recordings (audio/SOURCES.md): the drops are cut from a field
+-- recording in the Ledyanaya cave, the room tone from a cave in Kent
+-- (tools/build_cave_audio.py); the creaks from heavy old timbers under load,
+-- the groans from lake ice under stress and the ground itself through a
+-- geophone, with real grit trickling after them (tools/build_grit_audio.py).
+-- See CREAKS below.
 local TONE = "audio/ambience/cave_tone.ogg"
 local DRIPS = { "audio/ambience/cave_drip_1.ogg", "audio/ambience/cave_drip_2.ogg", "audio/ambience/cave_drip_3.ogg",
                 "audio/ambience/cave_drip_4.ogg", "audio/ambience/cave_drip_5.ogg", "audio/ambience/cave_drip_6.ogg" }
@@ -267,18 +271,6 @@ local function sounds(dt, air)
   elseif snd.tone then
     snd.tone:stop(); snd.tone = nil
   end
-  if cave then
-    if not snd.next_creak then snd.next_creak = time + 8 + math.random() * 14 end
-    if time >= snd.next_creak then
-      snd.next_creak = time + 18 + math.random() * 32
-      local groan = vac or math.random() < 0.4
-      local list = groan and GROANS or CREAKS
-      play(list[math.random(1, #list)], { track = "SFX", mode = "Flat", pan = (math.random() * 2 - 1) * 0.8,
-        volume = (params.creakGain or 0.5) * (vac and 0.35 or (0.6 + 0.4 * math.random())), lowpass = vac and 380 or 0 })
-    end
-  else
-    snd.next_creak = nil
-  end
 end
 
 -- ── DRIPS: drops from the roof, heard where they land ──────────────────────
@@ -298,7 +290,7 @@ end
 DRIP_SPOTS = 4
 DRIP_KEEP = 16.0
 local spots = {}       -- { body, lx,ly,lz (landing), rx,ry,rz (roof), tf, clip, pitch, vol, period, next, shown }
-local ringing = {}     -- drops still sounding: { h, body, lx,ly,lz, till }
+local ringing = {}     -- drops and creaks still sounding: { h, body, lx,ly,lz, till }
 local find_t = -10
 dripLog = { found = 0, played = 0, last = nil }   -- for probes: what the last drop was
 
@@ -398,6 +390,66 @@ local function drips(ex, ey, ez, ux, uy, uz, name, b, vac, dm)
   end
 end
 
+-- ── CREAKS: the rock settling, heard from somewhere in it ───────────────────
+-- Every half minute or so a creak of the rock (a heavy timber's stick-slip
+-- under load) or a deep groan of the mountain with grit trickling after it.
+-- It comes from the rock: one ray from the eye, tipped 20-80 degrees off up
+-- toward a random side, finds the roof or a wall within 14 m (a groan looks
+-- out to 30 m: it is farther off and deeper), and the sound plays there as a
+-- 3D source held in the planet's frame while it rings (the planet moves
+-- metres a tick: docs/positions-and-frames.md rule 1). A groan's minDistance
+-- is large: low sound carries through rock and a far groan is still felt.
+-- No rock found that way: off to one side, flat, as before. In vacuum there
+-- is no air to carry a creak: only the groans, faint, muffled and flat,
+-- through the boots.
+creakLog = { played = 0, spatial = 0, last = nil }   -- for probes and tests
+
+local function creak_spot(ex, ey, ez, ux, uy, uz, reach)
+  if not (terrain and terrain.raycast) then return nil end
+  local tx, ty, tz, sx, sy, sz = tangents(ux, uy, uz)
+  local a = math.random() * 6.283
+  local th = math.rad(20 + 60 * math.random())
+  local c, sn = math.cos(th), math.sin(th)
+  local dx = ux * c + (tx * math.cos(a) + sx * math.sin(a)) * sn
+  local dy = uy * c + (ty * math.cos(a) + sy * math.sin(a)) * sn
+  local dz = uz * c + (tz * math.cos(a) + sz * math.sin(a)) * sn
+  local ok, h = pcall(terrain.raycast, vec3(ex, ey, ez), vec3(dx, dy, dz), reach)
+  if not (ok and h and h.pos and (h.distance or 0) > 0.5) then return nil end
+  -- a hand's breadth out of the rock, so the source is in the air of the cave
+  return h.pos.x - dx * 0.15, h.pos.y - dy * 0.15, h.pos.z - dz * 0.15, h.distance
+end
+
+local function creaks(ex, ey, ez, ux, uy, uz, name, b, vac)
+  if params.sound == false or not (cave and ex) then snd.next_creak = nil; return end
+  if not snd.next_creak then snd.next_creak = time + 8 + math.random() * 14 end
+  if time < snd.next_creak then return end
+  snd.next_creak = time + 18 + math.random() * 32
+  local groan = vac or math.random() < 0.4
+  local list = groan and GROANS or CREAKS
+  local clip = list[math.random(1, #list)]
+  local gain = params.creakGain or 0.5
+  local h, d
+  if not vac then
+    local x, y, z, dist = creak_spot(ex, ey, ez, ux, uy, uz, groan and 30 or 14)
+    if x then
+      d = dist
+      h = play(clip, x, y, z, { track = "SFX", mode = "Spatial", falloff = "Inverse",
+        minDistance = groan and 8 or 5, maxDistance = groan and 80 or 45,
+        volume = gain * (0.6 + 0.4 * math.random()), pitch = 0.92 + 0.16 * math.random() })
+      if h then
+        ringing[#ringing + 1] = { h = h, body = name, lx = x - b.x, ly = y - b.y, lz = z - b.z, till = time + 6 }
+        creakLog.spatial = creakLog.spatial + 1
+      end
+    end
+  end
+  if not d then
+    h = play(clip, { track = "SFX", mode = "Flat", pan = (math.random() * 2 - 1) * 0.8,
+      volume = gain * (vac and 0.35 or (0.5 + 0.3 * math.random())), lowpass = vac and 380 or 0 })
+  end
+  creakLog.played = creakLog.played + 1
+  creakLog.last = { clip = clip, groan = groan, dist = d, spatial = d ~= nil, handle = h ~= nil, vac = vac }
+end
+
 function start(node)
   if audio and audio.preload then
     local list = { TONE }
@@ -439,6 +491,7 @@ function update(node, dt)
   if cave and ex then effects(ex, ey, ez, ux, uy, uz, name, b, air, w) end
   sounds(dt, air)
   drips(ex, ey, ez, ux, uy, uz, name, b, air < 0.03, params.dripsAlways and 1.0 or damp(w))
+  creaks(ex, ey, ez, ux, uy, uz, name, b, air < 0.03)
   if params.debug and time - dbg_t > 1 then
     dbg_t = time
     print(string.format("underground: enclosed %.2f (sky %.2f walls %.2f) cave %s air %.2f", enclosed, sky, walls, tostring(cave), air))

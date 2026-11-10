@@ -278,7 +278,7 @@ colour through `surfaceGap`, and surf that rolls in and runs up the beach where
 the water shallows — over a hidden engine **Water Volume** of the same radius.
 `scripts/ocean.lua` feeds it the star's direction and the world's air colour,
 fires `SeaSpray` along shores near you and places a surf loop at the nearest one
-(`audio/water/`, synthesized by `tools/gen_surf_audio.py`). The volume's
+(`audio/water/`, real CC0 recordings cut by `tools/build_weather_audio.py`). The volume's
 density is **1.03, in tonnes per m³**, because every mass in this game is in
 tonnes: craft float low, tanks sink, and the crew floats at swimming depth.
 

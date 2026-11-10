@@ -9,7 +9,7 @@ encode).
 
     audio/ambience/wind_low.ogg     40 s seamless loop: the body of the wind
     audio/ambience/wind_gust.ogg    40 s seamless loop: whistling gusts, for thick air
-    audio/ambience/underwater.ogg   30 s seamless loop: the sea, from inside it
+    audio/ambience/underwater.ogg   (no longer written: a real recording, tools/build_weather_audio.py)
     audio/music/drift.ogg           ~2 min calm pad pieces, faded both ends,
     audio/music/far_shore.ogg       meant to be played one at a time with long
     audio/music/low_orbit.ogg       silences between them (soundscape.lua)
@@ -407,7 +407,7 @@ def stats(path):
 FILES = {
     "ambience/wind_low.ogg": wind_low,
     "ambience/wind_gust.ogg": wind_gust,
-    "ambience/underwater.ogg": underwater,
+    # ambience/underwater.ogg is a real recording now: tools/build_weather_audio.py
     "music/drift.ogg": drift,
     "music/far_shore.ogg": far_shore,
     "music/low_orbit.ogg": low_orbit,

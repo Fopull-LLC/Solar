@@ -16,6 +16,9 @@ placed modulo the length), so they repeat without a seam.
     audio/weather/thunder_1..3.ogg a crack and the long roll after it; the
                                    game lowpasses and quietens them by distance
 
+Since 2026-11-10 only dust.ogg is written: the rain, hail and thunder are cut
+from real recordings by tools/build_weather_audio.py (audio/SOURCES.md).
+
 Nobody should audition these through speakers to check them: `--stats` prints
 duration, sample peak, RMS, an approximate loudness and the spectral centroid.
 
@@ -133,12 +136,12 @@ def thunder(seed):
     return level(fade(wet, 0.0, 1.2), peak_db=-1.5)
 
 
+# Only the dust storm is still made here: the rain, the hail and the thunder are
+# real recordings now (2026-11-10, Ty: "find real sound effects instead of
+# synthesizing ones"), cut by tools/build_weather_audio.py. rain_light,
+# rain_heavy, hail and thunder above are kept for reference, not written.
 FILES = {
-    "weather/rain_light.ogg": rain_light,
-    "weather/rain_heavy.ogg": rain_heavy,
-    "weather/hail.ogg": hail,
     "weather/dust.ogg": dust,
-    **{f"weather/thunder_{i}.ogg": (lambda i=i: thunder(800 + i)) for i in (1, 2, 3)},
 }
 
 

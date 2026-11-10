@@ -159,6 +159,21 @@ do
     if math.abs((m.x - m.bx) - (m.rec.x - m.rec.bx)) > 1e-6 then rode = false end
   end
   ok(rode, "a drop still sounding moves with the planet (" .. #moves .. " moves)")
+  -- the creaks and groans (real recordings) come from the rock, as 3D sources
+  local cr, crsp, crnear = 0, 0, 0
+  for _, p in ipairs(plays) do
+    if p.clip:find("cave_creak_") or p.clip:find("cave_groan_") then
+      cr = cr + 1
+      if p.x and p.o and p.o.mode == "Spatial" and p.o.track == "SFX" and (p.o.minDistance or 0) > 0 then crsp = crsp + 1 end
+      if p.x then
+        local ex, ey, ez = p.x - p.bx, p.y - (R + 1.6), p.z
+        if math.sqrt(ex * ex + ey * ey + ez * ez) < 30 then crnear = crnear + 1 end
+      end
+    end
+  end
+  ok(cr >= 1 and G.creakLog.played == cr, "the cave creaks or groans within a minute (" .. cr .. ")")
+  ok(cr >= 1 and crsp == cr, "every creak is a 3D source on the rock (" .. crsp .. "/" .. cr .. ")")
+  ok(cr >= 1 and crnear == cr, "within reach of the eye (" .. crnear .. "/" .. cr .. ")")
   ok(G.dripRadius(0) >= 1.5 and G.dripRadius(1) <= 11.0, "drip spots 1.5 to 11 m out")
   ok(G.dripPeriod(0.8, 0) > 1.5 and G.dripPeriod(0.35, 1) < 15, "each drips every few seconds")
   -- a dry world: no drips
@@ -169,6 +184,30 @@ do
   local dry = 0
   for i = n0 + 1, #plays do if plays[i].clip:find("cave_drip_") then dry = dry + 1 end end
   ok(dry == 0, "a dry cave does not drip (" .. dry .. ")")
+  -- an airless cave: no creaks, only groans, flat and muffled (through the boots)
+  local G3 = load("solar/scripts/underground.lua", api)
+  G3.params.effects = false
+  api.findScript = function(k)
+    if k == "planet_walker" then return { valid = true, onFoot = true } end
+    if k == "vfx" then return { valid = true, airAt = function() return 0.0 end } end
+  end
+  n0 = #plays
+  for step = 1, 1200 do api.time = 200 + step * 0.05; G3.update({}, 0.05) end
+  local vg, vbad = 0, 0
+  for i = n0 + 1, #plays do
+    local p = plays[i]
+    if p.clip:find("cave_creak_") then vbad = vbad + 1 end
+    if p.clip:find("cave_groan_") then
+      vg = vg + 1
+      if p.x or not (p.o and p.o.mode == "Flat" and (p.o.lowpass or 0) > 0) then vbad = vbad + 1 end
+    end
+  end
+  ok(vg >= 1 and vbad == 0, "in vacuum only muffled groans, through the boots (" .. vg .. " groans, " .. vbad .. " wrong)")
+end
+for _, f in ipairs({ "cave_creak_1", "cave_creak_2", "cave_creak_3", "cave_groan_1", "cave_groan_2" }) do
+  local h = io.open("solar/audio/ambience/" .. f .. ".ogg", "rb")
+  ok(h ~= nil, "missing audio/ambience/" .. f .. ".ogg")
+  if h then h:close() end
 end
 for i = 1, 6 do
   local h = io.open("solar/audio/ambience/cave_drip_" .. i .. ".ogg", "rb")

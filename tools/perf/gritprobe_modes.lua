@@ -403,6 +403,12 @@ function GR.run_cave()
   -- the same views later, and with the helmet beam's shadows off (diagnostic)
   wait(15)
   st("late")
+  -- the creaks and groans (real recordings, 3D on the rock a ray found)
+  local cl = ug and ug.creakLog or {}
+  local cr = cl.last or {}
+  P("GR CREAKS: played %d, spatial %d; last: %s, groan %s, %s m off, spatial %s, handle %s",
+    cl.played or -1, cl.spatial or -1, tostring(cr.clip), tostring(cr.groan), cr.dist and string.format("%.1f", cr.dist) or "-",
+    tostring(cr.spatial), tostring(cr.handle))
   look(t, -0.1, "cave_late_deep")
   local hb = find("Helmet Lamp Beam")
   local hl = hb and hb:getcomponent("PointLight")

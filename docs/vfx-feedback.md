@@ -185,7 +185,7 @@ above: nothing glows that would not glow, every effect pays its way.
 | scorch | decal, as before | `scorch_b` outside a bore |
 | the muzzle (`LaserMuzzle`, pooled `FxLaserMuzzle`) | the lens | a dull red-orange glow and shimmer by the laser's heat, fading as it cools |
 | the feel | tool_belt | the first-person tool buzzes in the hands (random kicks to the sway spring, frame-rate independent), on top of the old recoil ticks and `cam.shake` |
-| the sound | tool_belt `SFX.cs` | the hum (as before) + the bite's hiss and crackle (need air; in vacuum the crackle is only the tool's frame, muffled) + a rumble of the rock through the boots (always). `tools/gen_grit_audio.py` |
+| the sound | tool_belt `SFX.cs` | the hum (as before) + the bite's hiss and crackle (need air; in vacuum the crackle is only the tool's frame, muffled) + a rumble of the rock through the boots (always). real recordings, `tools/build_grit_audio.py` |
 
 The CUT (E) lost its starburst and most of its glow (a hair and a shimmer: the
 bite carries it), the FILL is a dusty stream of grit instead of a blue energy
@@ -203,7 +203,7 @@ card draft D in work/grit; flashlight.lua the same),
 dust motes hang ahead of the eye and show only in a lamp, cold mist lies on
 the floor of a damp world's cave, drops fall from the roof with their plink
 the fall's time later, a low room tone plays and every half minute a creak or
-a deep groan comes from somewhere. In vacuum: motes only, and only the groans,
+a deep groan comes from a spot on the rock a ray finds, as a 3D source. In vacuum: motes only, and only the groans,
 muffled, through the boots. The suit's breathing (easy, or hard when running)
 and fans rise as the world goes quiet (soundscape.lua).
 
