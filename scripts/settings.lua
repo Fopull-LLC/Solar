@@ -82,14 +82,19 @@ local function onoff() return { { label = "On", value = true }, { label = "Off",
 GFX_OPTIONS = {
   -- resolution
   { key = "render_scale", group = "res", label = "Render scale", store = "render_scale", cost = "the strongest lever",
-    opts = { { label = "Auto", value = "auto" }, { label = "100%", value = 1.0 }, { label = "90%", value = 0.9 },
-             { label = "75%", value = 0.75 }, { label = "67%", value = 0.67 }, { label = "50%", value = 0.5 } },
+    -- engine 0.117.1-dev.1462: the upscale is FSR 1 (project.ron upscale Fsr1), so the
+    -- steps are its Quality 0.77, Balanced 0.67, Performance 0.5 (the names overflow a
+    -- button, so they live in the description); a scale saved from the old list
+    -- (90 %, 75 %) still applies, it just lights no button
+    opts = { { label = "Auto", value = "auto" }, { label = "100%", value = 1.0 }, { label = "77%", value = 0.77 },
+             { label = "67%", value = 0.67 }, { label = "50%", value = 0.5 } },
     -- Auto: each level draws a set number of lines whatever the screen
     -- (graphics.lua AUTO_LINES: Low 720, Medium 900, High 1080, Ultra native)
     preset = { Low = "auto", Medium = "auto", High = "auto", Ultra = "auto" },
     desc = "The share of the screen the world is drawn at, then sharpened up; the interface stays sharp. "
       .. "Auto draws each level at the same detail on any screen (High: 1080 lines, so 75% on a 1440p screen). "
-      .. "75% cuts the GPU's work by about 40%, 50% by three quarters." },
+      .. "Below 100% the frame is brought up through FSR 1, edge-aware and sharpened: 77% (Quality) is close to native, "
+      .. "67% (Balanced) cuts the GPU's work by about half, 50% (Performance) by three quarters." },
   { key = "sharpen", group = "res", label = "Upscale sharpening", cost = "free",
     opts = { { label = "Auto", value = "auto" }, { label = "Off", value = 0.0 }, { label = "Soft", value = 0.25 },
              { label = "Firm", value = 0.5 }, { label = "Strong", value = 0.75 } },

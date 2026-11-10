@@ -383,9 +383,9 @@ envs.graphics.setScale = function(v) gx_scale = v end
 stw.showTab("graphics")
 local rsc = find_el(stw.rows(580), "g_render_scale")
 local b67
-walk(rsc, function(e) if e.text == "75%" then b67 = e end end)
+walk(rsc, function(e) if e.text == "77%" then b67 = e end end)
 b67.onClicked()
-ok(gx_scale == 0.75 and stw.get("render_scale") == 0.75, "Render scale 75% reaches graphics.setScale")
+ok(gx_scale == 0.77 and stw.get("render_scale") == 0.77, "Render scale Quality (77%) reaches graphics.setScale")
 ok(stw.gfxCustom() == true, "...and makes the preset read Custom")
 walk(find_el(stw.rows(580), "g_render_scale"), function(e) if e.text == "Auto" then e.onClicked() end end)
 ok(gx_scale == nil and stw.get("render_scale") == nil, "the level's own scale (every level: Auto) gives it back to the level")
