@@ -246,4 +246,11 @@ return {
   KitLgHopper_steel = { lo = { -1.020, 0.000, -1.020 }, hi = { 1.020, 2.620, 1.030 }, colliders = 2, tris = 876, children = {  } },
   KitLgSilo_steel = { lo = { -1.100, 0.000, -1.100 }, hi = { 1.100, 6.600, 1.100 }, colliders = 1, tris = 1928, children = {  } },
   KitLgChute_steel = { lo = { -0.500, 0.000, -0.600 }, hi = { 0.400, 3.285, 2.400 }, colliders = 2, tris = 840, children = {  } },
+  KitMcCrusher_steel = { lo = { -1.000, 0.000, -1.000 }, hi = { 1.000, 2.400, 1.000 }, colliders = 4, tris = 1152, children = {  } },
+  KitMcFurnace_steel = { lo = { -1.000, 0.000, -1.000 }, hi = { 1.000, 3.000, 1.000 }, colliders = 3, tris = 1360, children = {  } },
+  KitMcKiln_steel = { lo = { -1.000, 0.000, -1.000 }, hi = { 1.000, 2.400, 1.000 }, colliders = 2, tris = 540, children = {  } },
+  KitMcMixer_steel = { lo = { -1.000, 0.000, -0.500 }, hi = { 0.950, 1.600, 0.500 }, colliders = 2, tris = 624, children = {  } },
+  KitMcElectro_steel = { lo = { -0.750, 0.000, -0.450 }, hi = { 0.750, 2.000, 0.450 }, colliders = 1, tris = 912, children = {  } },
+  KitMcFab_steel = { lo = { -1.010, 0.000, -1.000 }, hi = { 1.010, 2.400, 1.000 }, colliders = 3, tris = 468, children = {  } },
+  KitMcJacket_steel = { lo = { -1.070, 0.000, -0.150 }, hi = { 1.070, 3.400, 0.150 }, colliders = 1, tris = 660, children = {  } },
 }

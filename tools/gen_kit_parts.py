@@ -1280,6 +1280,10 @@ PIECES.update(gen_kit_survey.pieces(sys.modules[__name__]))
 import gen_kit_quarry  # noqa: E402
 MATS.update(gen_kit_quarry.MATERIALS)
 PIECES.update(gen_kit_quarry.pieces(sys.modules[__name__]))
+# ── X6: the refineries and the Fabricator (tools/gen_kit_refinery.py) ──
+import gen_kit_refinery  # noqa: E402
+MATS.update(gen_kit_refinery.MATERIALS)
+PIECES.update(gen_kit_refinery.pieces(sys.modules[__name__]))
 
 # ── S4: PAINT SURFACES. node:setTint tints everything a node draws, so what
 # paint must not touch, and a wall's second face, are split into children of

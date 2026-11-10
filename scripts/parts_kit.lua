@@ -166,7 +166,7 @@ PIPE_Y = 0.6
 --             { kind = "station" } (the Survey Station: weather, seismometer,
 --             magnetometer; fills its body's layers while it stands there)
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGISTICS", "LOGIC", "NUCLEAR", "SCIENCE", "FITTINGS", "PROPS", "DECALS" }
+SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGISTICS", "REFINERY", "LOGIC", "NUCLEAR", "SCIENCE", "FITTINGS", "PROPS", "DECALS" }
 EXTERIOR = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
 FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true,
            porthole = true, airlockWall = true, openFrame = true, ventWall = true, leadWall = true, gable = true,
@@ -985,6 +985,67 @@ do
   -- a belt's RUN terminal on its stringer (S8): off stops its whole line
   for _, k in ipairs({ "cvBelt2", "cvBelt1", "cvCorner", "cvMerge", "cvRamp", "tbBlower" }) do
     devpins(k, "belt", { { "run", "in", 0.36, 0.7, 0 } })
+  end
+end
+
+-- ── REFINERY (expansion X6: the crusher, the furnace, the kiln, the mixer, the
+-- electrolyser and the Fabricator; scripts/machines.lua (the rules),
+-- item_net.lua (a machine is its inlet and its outlet), refinery.lua (the
+-- scene), fab_panel.lua (the RECIPE panel); tools/gen_kit_refinery.py;
+-- docs/base-building.md §24) ───────────────────────────────────────────────
+--   it = { kind = "machine", m = machines.MACH key } | { kind = "fab" }:
+--   belt ports at BELT_Y with `side` "in" (its inlet) or "out" (its outlet);
+--   a hot machine's heat port (no bore: DN100, at PIPE_Y) takes Radiator
+--   Panels, Jacket Radiators, coolant pipes, a Cooling Tower; a mixer's and an
+--   electrolyser's water nozzle is a fluid consumer (DN25), the electrolyser's
+--   fuel nozzle a source into the Fuel Tanks piped to it.
+do
+  local function bp(name, x, z, nx, nz, side) return { name = name, x = x, y = BELT_Y, z = z, nx = nx, nz = nz, bore = "BELT", role = "any", side = side } end
+  local function tp(name, x, z, nx, nz, side) return { name = name, x = x, y = BELT_Y, z = z, nx = nx, nz = nz, bore = "DN150", role = "any", side = side } end
+  local function hp(name, x, z, nx, nz) return { name = name, x = x, z = z, nx = nx, nz = nz, loop = "c", heat = true } end
+  local function R(t)
+    t.section = "REFINERY"
+    t.mats = { "steel" }
+    t.fill = "solid"
+    t.vol = t.vol or 0.5
+    if t.kw then t.power = { kind = "aux", use = t.kw } end
+    return t
+  end
+  for k, t in pairs({
+    mcCrusher = { label = "Crusher", order = 1, snap = "block", box = B(-1, 1, 0, 2.4, -1, 1), tech = "refinery",
+                mass = { steel = 2.8 }, cost = 18000, vol = 1.6, kw = 4, it = { kind = "machine", m = "crusher" },
+                ports = { bp("in", 0, -1, 0, -1, "in"), bp("out", 0, 1, 0, 1, "out"), bp("spoil", 1, 0, 1, 0, "out"), tp("tin", -1, 0, -1, 0, "in") },
+                desc = "a jaw crusher over a magnetic drum and a jig: bulk rock and ore in at its hopper (−Z), iron ore, copper ore, silica and regolith out (+Z, +X) · 2 kg/s at 4 kW · the furnace's line takes its ore first, a line to a hopper the rest" },
+    mcFurnace = { label = "Furnace", order = 2, snap = "block", box = B(-1, 1, 0, 3.0, -1, 1), tech = "refinery",
+                mass = { steel = 4.5 }, cost = 32000, vol = 2.4, kw = 12, it = { kind = "machine", m = "furnace" },
+                ports = { bp("in", 0, -1, 0, -1, "in"), bp("out", 0, 1, 0, 1, "out"), bp("out2", 1, 0, 1, 0, "out"), hp("heat", -1, 0.5, -1, 0) },
+                desc = "an induction furnace with its ladle and caster: iron ore → Steel (65 %), kamacite → Alloy Steel, copper ore → Copper Wire · 12 kW, and 10 kW of heat to shed through its heat port (−X): chain radiators to it or it runs at 20 %" },
+    mcKiln    = { label = "Kiln", order = 3, snap = "block", box = B(-1, 1, 0, 2.4, -1, 1), tech = "ceramics",
+                mass = { steel = 2.6 }, cost = 16000, vol = 1.8, kw = 9, it = { kind = "machine", m = "kiln" },
+                ports = { bp("in", 0, -1, 0, -1, "in"), bp("out", 0, 1, 0, 1, "out"), hp("heat", -1, 0.5, -1, 0) },
+                desc = "an electric kiln: silica → Glass, regolith → sintered Regocrete (no water needed) · 9 kW, 6 kW of heat through its heat port (−X)" },
+    mcMixer   = { label = "Regocrete Mixer", order = 4, snap = "block", box = B(-1, 1, 0, 1.6, -0.5, 0.5), tech = "ceramics",
+                mass = { steel = 0.9 }, cost = 7500, vol = 0.8, kw = 2, it = { kind = "machine", m = "mixer" },
+                ports = { bp("in", 0, -0.5, 0, -1, "in"), bp("out", 0, 0.5, 0, 1, "out"),
+                          { name = "water", x = -1, z = 0, nx = -1, nz = 0, fluid = true, role = "consumer", loop = "w" } },
+                desc = "a twin-shaft paddle mixer: regolith (−Z) and water (its −X nozzle, 1 kg for every 5) → Regocrete (+Z) · 1 kg/s at 2 kW" },
+    mcElectro = { label = "Electrolyser", order = 5, snap = "block", box = B(-0.75, 0.75, 0, 2.0, -0.5, 0.5), tech = "electrolysis",
+                mass = { steel = 1.4 }, cost = 28000, vol = 1.0, kw = 20, it = { kind = "electro", m = "electrolyser" },
+                ports = { { name = "water", x = -0.75, z = 0, nx = -1, nz = 0, fluid = true, role = "consumer", loop = "w" },
+                          { name = "fuel", x = 0.75, z = 0, nx = 1, nz = 0, fluid = true, role = "src", loop = "f", sub = "fuel" } },
+                desc = "a PEM electrolysis stack with its liquefier: water (−X) → Propellant into the Fuel Tanks piped to its fuel nozzle (+X) · 20 kW: 1 g/s of water, 2.8 kg of propellant an hour · the FUEL base's source" },
+    mcFab     = { label = "Fabricator", order = 6, snap = "block", box = B(-1, 1, 0, 2.4, -1, 1), tech = "fabrication",
+                mass = { steel = 3.0 }, cost = 42000, vol = 2.0, kw = 3, it = { kind = "fab", kg = 2000 },
+                ports = { bp("in", 0, -1, 0, -1, "in"), tp("tin", -1, 0, -1, 0, "in") },
+                desc = "a gantry mill, a press brake, a wire bonder: refined kg in its store (−Z) → crated parts in its store · 10 s + 20 s a tonne, 3 kW, a queue of four (its RECIPE panel) · a crate in its store is in an Engineer's reach" },
+    mcJacket  = { label = "Jacket Radiator 2 × 3 m", order = 10, snap = "block", box = B(-1, 1, 0, 3.4, -0.15, 0.15), tech = "refinery",
+                mass = { steel = 0.18 }, cost = 2400, vol = 0.5, reject = { kind = "rad", area = 12, eps = 0.9 },
+                ports = { { name = "in", x = -1, z = 0, nx = -1, nz = 0, loop = "c" }, { name = "out", x = 1, z = 0, nx = 1, nz = 0, loop = "c" } },
+                desc = "a 2 × 3 m finned panel for a machine's jacket water, 12 m² both faces · ~2.3 kW in vacuum at 57 °C (day and night), ~4 kW in air · rows chain end to end onto a furnace's or a kiln's heat port" },
+  }) do PIECES[k] = R(t) end
+  for _, k in ipairs({ "mcCrusher", "mcFurnace", "mcKiln", "mcMixer", "mcElectro", "mcFab" }) do
+    local bx = PIECES[k].box
+    devpins(k, "refinery", { { "run", "in", bx[2] - 0.35, 1.2, bx[6] + 0.01 }, { "busy", "out", bx[2] - 0.2, 1.2, bx[6] + 0.01 } })
   end
 end
 

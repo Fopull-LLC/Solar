@@ -48,6 +48,18 @@
 --   advance(net, st, dt, opts)    → rep { flows, moved = { "u|d|mat" = kg }, made = { [i] = { mat = kg } }, segs, ff }
 --   limitedBy(net, st, rep, i)    → plain words, or nil
 --   nodeOf(net, key)              → i
+--
+-- MACHINES (expansion X6; scripts/machines.lua). A piece of kind "machine" is
+-- TWO nodes: its inlet (key; a store that takes only what it works, `accept`)
+-- and its outlet (key .. ">"; a store). Each of its ports says which (`side`
+-- "in" or "out"). Between them, a CONVERSION: `conv` = { [mat] = { outs = {
+-- mat = kg a kg }, tot, e (kJ a kg of input) } }, on `kw` of power (the
+-- scene sets it from the machine's duty: power, cooling, water), so a kg of
+-- ore takes e / kw seconds of the whole machine. The inlet works its
+-- materials in name order, as a store drains; a full outlet slows it to what
+-- leaves. A plain store can take `accept` too (a Fabricator's store takes the
+-- refined solids only). rep.conv = { [i] = { [mat] = kg worked } } and
+-- rep.made carries the outputs into the outlet.
 
 EPS = 1e-9
 JOIN = 0.12              -- m: ports this near are one joint
@@ -75,13 +87,30 @@ end
 function build(pieces)
   local net = { nodes = {}, lines = {}, order = {}, cyc = {}, byKey = {}, why = {} }
   local conv, nodeIdx = {}, {}
+  local outIdx = {}
   for pi, p in ipairs(pieces) do
     if p.kind == "store" or p.kind == "chute" then
       local n = { key = p.key, kind = p.kind, cap = p.cap or INF, one = p.one, mat = p.mat, label = p.label, src = p.src, slack = p.slack or 0,
-                  ups = {}, downs = {}, piece = pi }
+                  ups = {}, downs = {}, piece = pi, accept = p.accept }
       net.nodes[#net.nodes + 1] = n
       net.byKey[p.key] = #net.nodes
       nodeIdx[pi] = #net.nodes
+    elseif p.kind == "machine" then
+      -- (X6) its inlet and its outlet, the conversion between them
+      local tot, emin = 0, INF
+      for _, c in pairs(p.conv or {}) do tot = math.max(tot, c.tot or 1); emin = math.min(emin, c.e or 1) end
+      local ni = { key = p.key, kind = "store", cap = p.capIn or 200, label = p.label, slack = p.slack or 0, ups = {}, downs = {}, piece = pi,
+                   accept = p.accept, conv = p.conv or {}, kw = p.kw or 0, totMax = math.max(tot, 1e-9), emin = (emin < INF) and emin or 1, mach = true }
+      net.nodes[#net.nodes + 1] = ni
+      net.byKey[p.key] = #net.nodes
+      nodeIdx[pi] = #net.nodes
+      local no = { key = p.key .. ">", kind = "store", cap = p.capOut or 200, label = (p.label or "machine") .. " outlet", slack = p.slack or 0,
+                   ups = {}, downs = {}, piece = pi, machOut = true }
+      net.nodes[#net.nodes + 1] = no
+      net.byKey[no.key] = #net.nodes
+      outIdx[pi] = #net.nodes
+      ni.out = #net.nodes
+      no.inl = nodeIdx[pi]
     else
       conv[#conv + 1] = pi
     end
@@ -89,7 +118,8 @@ function build(pieces)
   -- the ports, flat; joints by distance (snapped pieces meet exactly)
   local ports = {}
   for pi, p in ipairs(pieces) do
-    for k, pt in ipairs(p.ports or {}) do ports[#ports + 1] = { pi = pi, k = k, x = pt.x, y = pt.y, z = pt.z, bore = pt.bore or "BELT", role = pt.role or "any" } end
+    for k, pt in ipairs(p.ports or {}) do ports[#ports + 1] = { pi = pi, k = k, x = pt.x, y = pt.y, z = pt.z, bore = pt.bore or "BELT", role = pt.role or "any",
+                                                              ni = (pt.side == "out" and outIdx[pi]) or nodeIdx[pi] } end
   end
   local joint = {}
   local nj = 0
@@ -153,7 +183,7 @@ function build(pieces)
     local cport, nport = {}, {}
     for _, a in ipairs(list) do
       local P = ports[a]
-      if lineOf[P.pi] then cport[#cport + 1] = P elseif nodeIdx[P.pi] then nport[#nport + 1] = P end
+      if lineOf[P.pi] then cport[#cport + 1] = P elseif P.ni then nport[#nport + 1] = P end
     end
     if #cport >= 2 then
       local outs, ins = 0, 0
@@ -166,7 +196,7 @@ function build(pieces)
     for _, P in ipairs(cport) do
       local L = net.lines[lineOf[P.pi]]
       for _, Q in ipairs(nport) do
-        local ni = nodeIdx[Q.pi]
+        local ni = Q.ni
         local list2 = (P.role == "out") and L.downs or ((P.role == "in") and L.ups or nil)
         if list2 then
           local seen = false
@@ -180,6 +210,10 @@ function build(pieces)
     table.sort(L.ups); table.sort(L.downs)
     for _, u in ipairs(L.ups) do table.insert(net.nodes[u].downs, li) end
     for _, d in ipairs(L.downs) do table.insert(net.nodes[d].ups, li) end
+    -- (X6) a line to a store that takes only some materials (a machine, a
+    -- Fabricator's store, a silo) is offered first: a crusher's outlet feeds
+    -- the furnace its ore, the spoil line takes what is left
+    for _, d in ipairs(L.downs) do if net.nodes[d].accept or net.nodes[d].one then L.picky = true end end
     if L.ok and (#L.ups == 0 or #L.downs == 0) then
       L.idle = (#L.ups == 0 and #L.downs == 0) and "it joins nothing yet" or ((#L.ups == 0) and "nothing feeds it: its tail meets no hopper, silo or quarry drive" or "it delivers nowhere: its head meets no hopper, silo or chute")
     end
@@ -188,6 +222,13 @@ function build(pieces)
         if u == d and L.ok then L.ok, L.why = false, "it runs from a store back into the same store" end
       end
     end
+  end
+  for _, n in ipairs(net.nodes) do
+    table.sort(n.downs, function(x, y)
+      local px, py = net.lines[x].picky and 0 or 1, net.lines[y].picky and 0 or 1
+      if px ~= py then return px < py end
+      return x < y
+    end)
   end
   -- the stores in the order the lines feed them (Kahn); what's left loops
   local indeg = {}
@@ -199,6 +240,9 @@ function build(pieces)
         if u ~= d then edges[#edges + 1] = { u, d, li }; indeg[d] = indeg[d] + 1 end
       end end
     end
+  end
+  for i, n in ipairs(net.nodes) do
+    if n.out then edges[#edges + 1] = { i, n.out, 0 }; indeg[n.out] = indeg[n.out] + 1 end
   end
   local ready = {}
   for i = 1, #net.nodes do if indeg[i] == 0 then ready[#ready + 1] = i end end
@@ -266,6 +310,8 @@ function rates(net, st)
           out = out + math.min(L.cap, a)
         end
       end
+      -- (X6) a machine's full inlet takes what it works
+      if n.conv then out = out + math.min((n.kw or 0) / n.emin, (acc[n.out] or 0) / n.totMax) end
       acc[i] = out
     end
   end
@@ -282,7 +328,7 @@ function rates(net, st)
       siloMat[i] = siloMat[i] or n.mat
     end
   end
-  local flows = {}
+  local flows, convs = {}, {}
   for _, i in ipairs(net.order) do
     local n = nodes[i]
     -- what this store's quarry makes, at full pace (scaled below when it can't discharge)
@@ -299,13 +345,31 @@ function rates(net, st)
       if (st.x[i][m] or 0) > EPS then avail[m] = INF else avail[m] = (inflow[i][m] or 0) + (pk[m] or 0) end
     end
     if n.kind ~= "chute" then
+      -- (X6) what a picky store downstream (a machine, a Fabricator) still
+      -- takes is kept for it: a line to a plain store passes it by until that
+      -- store is full (the crusher's iron ore waits for the furnace, the
+      -- spoil line takes the regolith)
+      local keep = nil
+      for _, li in ipairs(n.downs) do
+        local L = lines[li]
+        if L.ok and L.picky then
+          for _, d in ipairs(L.downs) do
+            if nodes[d].accept and not full[d] then
+              keep = keep or {}
+              for m in pairs(nodes[d].accept) do keep[m] = true end
+            end
+          end
+        end
+      end
       for _, li in ipairs(n.downs) do
         local L = lines[li]
         if L.ok then
           for _, d in ipairs(L.downs) do
             for _, m in ipairs(mlist) do
               local ok = true
-              if nodes[d].one then
+              if nodes[d].accept and not nodes[d].accept[m] then ok = false
+              elseif keep and keep[m] and not nodes[d].accept and not nodes[d].one then ok = false
+              elseif nodes[d].one then
                 if siloMat[d] == nil then siloMat[d] = m end
                 ok = siloMat[d] == m
               end
@@ -321,6 +385,28 @@ function rates(net, st)
                 end
               end
             end
+          end
+        end
+      end
+    end
+    -- (X6) a machine works what its inlet holds, in name order, at its rate,
+    -- as fast as its outlet takes it
+    if n.conv and (n.kw or 0) > EPS then
+      local o = n.out
+      local rem = n.kw
+      for _, m in ipairs(mlist) do
+        local c = n.conv[m]
+        if c and rem > EPS and avail[m] > EPS then
+          local e = c.e or 1
+          local q = math.min(avail[m], rem / e)
+          if accRem[o] < INF then q = math.min(q, accRem[o] / math.max(c.tot, 1e-9)) end
+          if q > EPS and q < INF then
+            avail[m] = avail[m] - q
+            rem = math.max(0, rem - q * e)
+            outflow[i][m] = (outflow[i][m] or 0) + q
+            for om, r in pairs(c.outs) do inflow[o][om] = (inflow[o][om] or 0) + q * r end
+            if accRem[o] < INF then accRem[o] = math.max(0, accRem[o] - q * c.tot) end
+            convs[#convs + 1] = { i = i, o = o, mat = m, q = q, outs = c.outs }
           end
         end
       end
@@ -352,13 +438,13 @@ function rates(net, st)
       for m in pairs(ms) do r[i][m] = (inflow[i][m] or 0) + (prod[i][m] or 0) - (outflow[i][m] or 0) end
     end
   end
-  return { flows = flows, r = r, prod = prod, f = f, inflow = inflow, outflow = outflow, full = full, acc = acc }
+  return { flows = flows, r = r, prod = prod, f = f, inflow = inflow, outflow = outflow, full = full, acc = acc, convs = convs }
 end
 
 -- ── ADVANCE (event to event, exact) ─────────────────────────────────────────
 function advance(net, st, dt, opts)
   opts = opts or {}
-  local rep = { moved = {}, made = {}, segs = 0, ff = false, events = {} }
+  local rep = { moved = {}, made = {}, segs = 0, ff = false, events = {}, conv = {} }
   local left = dt
   local R
   local nevents = 0
@@ -405,6 +491,12 @@ function advance(net, st, dt, opts)
     for _, fl in ipairs(R.flows) do
       local key = fl.u .. "|" .. fl.d .. "|" .. fl.mat
       rep.moved[key] = (rep.moved[key] or 0) + fl.q * h
+    end
+    for _, cv in ipairs(R.convs) do
+      rep.conv[cv.i] = rep.conv[cv.i] or {}
+      rep.conv[cv.i][cv.mat] = (rep.conv[cv.i][cv.mat] or 0) + cv.q * h
+      rep.made[cv.o] = rep.made[cv.o] or {}
+      for om, r in pairs(cv.outs) do rep.made[cv.o][om] = (rep.made[cv.o][om] or 0) + cv.q * r * h end
     end
     for i, n in ipairs(net.nodes) do
       if n.kind == "chute" then
@@ -533,4 +625,47 @@ function lineFlow(rep, li)
   local q = 0
   for _, fl in ipairs(rep and rep.flows or {}) do if fl.l == li then q = q + fl.q end end
   return q
+end
+
+-- (X6) kg/s machine i (its inlet's index) works now, and what of
+function convFlow(rep, i)
+  local q, mat = 0, nil
+  for _, cv in ipairs((rep and rep.R and rep.R.convs) or {}) do if cv.i == i then q = q + cv.q; mat = mat or cv.mat end end
+  return q, mat
+end
+
+-- (X6) Why machine i (its inlet) works less than its rate, in item terms
+-- (the scene names power, cooling and water first). → words | nil
+function machineWhy(net, st, rep, i, label)
+  label = label or function(j) return net.nodes[j].label or ("store " .. j) end
+  local n = net.nodes[i]
+  if not (n and n.conv) then return nil end
+  local R = rep and rep.R or rates(net, st)
+  local q = 0
+  for _, cv in ipairs(R.convs or {}) do if cv.i == i then q = q + cv.q * ((n.conv[cv.mat] and n.conv[cv.mat].e) or 1) end end
+  if (n.kw or 0) <= EPS or q >= (n.kw or 0) - 1e-9 then return nil end
+  local o = net.nodes[n.out]
+  local workable = false
+  for m, v in pairs(st.x[i] or {}) do if v > EPS and n.conv[m] then workable = true end end
+  if R.full[n.out] then
+    local stuck = {}
+    for m, v in pairs(st.x[n.out] or {}) do if v > EPS then stuck[#stuck + 1] = m end end
+    table.sort(stuck)
+    if #o.downs == 0 then return string.format("its outlet is full (%s): lay a belt or tube from its outlet to a hopper", table.concat(stuck, ", ")) end
+    for _, li in ipairs(o.downs) do local L = net.lines[li]; if not L.ok then return string.format("its outlet is full: its line is stopped (%s)", L.why or "off") end end
+    return string.format("its outlet is full: what takes from it won't take %s (lay a line to a hopper for what the next machine doesn't use)", table.concat(stuck, ", "))
+  end
+  if not workable then
+    if q > EPS then
+      return string.format("its feed: what comes in keeps it at %d %% of what it could work", math.floor(100 * q / math.max(EPS, n.kw) + 0.5))
+    end
+    if #n.ups == 0 then return "nothing feeds it: lay a belt or tube to its inlet (or put ore in by hand)" end
+    for _, li in ipairs(n.ups) do local L = net.lines[li]; if not L.ok then return string.format("its feed line is stopped (%s)", L.why or "off") end end
+    local names = {}
+    for m in pairs(n.conv) do names[#names + 1] = m end
+    table.sort(names)
+    local what = (#names > 6) and "rock and ore" or table.concat(names, ", ")
+    return string.format("waiting for feed: it works %s, and none comes in", what)
+  end
+  return nil
 end

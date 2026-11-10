@@ -683,7 +683,7 @@ function build(rec, defs, ext)
     for i, P in ipairs(pc.ports) do
       pn[i] = node_of(n, P.k)
       -- (an O2 Generator's unpiped hydrogen port vents by design: no open end)
-      if not partner[P.k] and kind ~= "h2" then n.open[#n.open + 1] = P; out.open[#out.open + 1] = P end
+      if not partner[P.k] and kind ~= "h2" and kind ~= "src" then n.open[#n.open + 1] = P; out.open[#out.open + 1] = P end
     end
     local cx, cy, cz = p.x or 0, (p.y or 0) + PIPE_Y, p.z or 0
     local ent = { net = n, kind = kind, part = p, def = d, ports = pn, port = pc.port }
@@ -695,6 +695,8 @@ function build(rec, defs, ext)
       out.byUid[p.uid] = ent
     end
     if kind == "h2" then ent.node = pn[1]; n.h2 = n.h2 or {}; n.h2[#n.h2 + 1] = ent end
+    -- (X6) a machine's product into the network's tanks (the electrolyser's fuel nozzle): fluid_net couples it
+    if kind == "src" then ent.node = pn[1]; n.src = n.src or {}; n.src[#n.src + 1] = ent end
     local function add_el(e) n.els[#n.els + 1] = e; e.uid = p.uid; return #n.els end
     local function add_node(N) n.nodes[#n.nodes + 1] = N; N.uid = p.uid; N.x, N.y, N.z = cx, cy, cz; return #n.nodes end
     local bore = fl.bore or "DN25"

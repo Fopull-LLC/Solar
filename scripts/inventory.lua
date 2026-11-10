@@ -166,7 +166,11 @@ local function bag(cid)
   return save.get("inv." .. cid) or {}
 end
 
+-- (X6) counts every write to any bag: a settled logistics network skips its
+-- step while this stands still (logistics.step_world)
+bagVer = 0
 local function put(cid, b)
+  bagVer = bagVer + 1
   -- Empty slots are removed rather than kept at zero: a bag is a small save
   -- value (≤1 KB), and zero rows would pad both the file and every panel.
   local out = {}
@@ -630,6 +634,7 @@ local function gear_bag(cid)
 end
 
 local function gear_put(cid, b)
+  bagVer = bagVer + 1
   local out = {}
   for k, v in pairs(b) do if (v or 0) > 0 then out[k] = math.floor(v) end end
   save.set("inv.gear." .. cid, out)

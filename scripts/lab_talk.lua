@@ -624,7 +624,7 @@ local function list_tree(W, H)
       text = S.page == "bodies" and "WORLDS ON RECORD  ·  click one for its survey" or "MATERIALS STUDIED  ·  click one to ask about it",
       textValign = "end" },
   }
-  local sc = { "scroll", key = "list", w = "100%", h = "fit", maxH = math.max(120, H - 380), gap = 2, pad = 0, dir = "column" }
+  local sc = { "scroll", key = "list", w = "100%", h = "fit", maxH = math.max(90, H - 590), gap = 2, pad = 0, dir = "column" }
   if S.page == "bodies" then
     bodies_rows(sc, H)
     list = {}
@@ -645,12 +645,35 @@ local function list_tree(W, H)
   end
   rows[#rows + 1] = sc
   rows[#rows + 1] = { "box", key = "rule1", style = "panel/rule", w = "100%", h = 1 }
-  rows[#rows + 1] = { "row", key = "tree", style = "panel/row", w = "100%", h = 26, dir = "row", gap = 6, pad = 4, align = "center",
-    opacity = 0.55,
-    { "text", key = "n", style = "panel/cell", w = "grow", h = 18, text = "Research tree", textValign = "center" },
-    { "text", key = "s", style = "panel/keys", w = "fit", h = 18, text = "COMING SOON", textValign = "center" } }
-  local th = "Points will open research milestones: the tree that spends them is still being drawn up."
-  rows[#rows + 1] = { "text", key = "treeh", style = "panel/hint", w = "100%", h = wrapH(th, 62, 15.5), wrap = true, text = th }
+  -- (X6, PLAN §7.4) WHAT RP BUYS: the research that costs points as well as
+  -- money. A row's button researches it (two clicks: the first arms it).
+  local tree = rs and rs.rpTree and rs.rpTree() or {}
+  rows[#rows + 1] = { "text", key = "treel", style = "panel/label", w = "100%", h = 16, textValign = "end",
+    text = string.format("WHAT RP BUYS  ·  %d RP spent", rs and rs.rpSpent and rs.rpSpent() or 0) }
+  local co = ref("company")
+  local tr = { "scroll", key = "tree", w = "100%", h = "fit", maxH = 190, gap = 2, pad = 0, dir = "column" }
+  for i, t in ipairs(tree) do
+    local price = (rs.priceText and rs.priceText(t.id, co and co.money)) or (t.rp .. " RP")
+    local armed = S.armed and S.armed.id == t.id and (time or 0) - S.armed.t < 5
+    local btn
+    if t.done then
+      btn = { "text", key = "s", style = "panel/keys", w = 96, h = 18, text = "✓ RESEARCHED", textAlign = "end", textValign = "center" }
+    elseif t.why then
+      btn = { "text", key = "s", style = "panel/cellMuted", w = 96, h = 18, text = "LOCKED", textAlign = "end", textValign = "center" }
+    else
+      btn = { "button", key = "s", name = "LabTree" .. t.id, style = armed and "panel/action" or "panel/secondary", w = 96, h = 22,
+        text = armed and "Confirm" or "Research", textAlign = "center", textValign = "center",
+        onClicked = function() researchRow(t.id) end }
+    end
+    local sub = t.done and price or (t.why or price)
+    tr[#tr + 1] = { "col", key = "t" .. i, style = "panel/row", w = "100%", h = "fit", gap = 1, pad = 4,
+      { "row", key = "a", w = "100%", h = 22, gap = 6, pad = 0, align = "center",
+        { "text", key = "n", style = "panel/cell", w = "grow", h = 18, text = t.label, textValign = "center", maxLines = 1, overflow = "ellipsis" },
+        btn },
+      { "text", key = "b", style = "panel/hint", w = "100%", h = wrapH(sub, 62, 15.5), wrap = true, text = sub } }
+  end
+  if #tree == 0 then tr[#tr + 1] = { "text", key = "none", style = "panel/hint", w = "100%", h = 16, text = "Nothing costs RP yet." } end
+  rows[#rows + 1] = tr
   rows[#rows + 1] = { "row", key = "foot", w = "100%", h = 26, gap = 6, pad = 0,
     { "text", key = "k", style = "panel/hint", w = "grow", h = 22, text = "ESC  close", textValign = "center" },
     { "button", key = "close", style = "panel/secondary", w = 90, h = 24, text = "Close", textAlign = "center", textValign = "center",
@@ -744,6 +767,7 @@ local function redraw(force)
   local rs = ref("research")
   local sv = ref("survey")
   local v = table.concat({ tostring(S.open), tostring(S.mat), tostring(rs and rs.points and rs.points() or 0),
+    tostring(rs and rs.rpSpent and rs.rpSpent() or 0), tostring(S.armed and S.armed.id), tostring(S.armed and math.floor(((time or 0) - S.armed.t) / 5)),
     math.floor(W), math.floor(H), tostring(S.page), tostring(S.body), tostring(sv and sv.version or 0) }, "|")
   if v == S.last_v and not force then return end
   S.last_v = v
@@ -754,6 +778,24 @@ local function redraw(force)
     return
   end
   ui.make(self_node, { (S.body and detail_body(W, H)) or (S.mat and detail_tree(W, H)) or list_tree(W, H) })
+end
+
+-- (X6) a WHAT RP BUYS row's button: the first click arms it, the second researches
+function researchRow(id)
+  local rs = ref("research")
+  if not (rs and rs.unlock) then return false end
+  if not (S.armed and S.armed.id == id and (time or 0) - S.armed.t < 5) then
+    S.armed = { id = id, t = time or 0 }
+    redraw(true)
+    return false
+  end
+  S.armed = nil
+  local ok, why = rs.unlock(id)
+  local sfx = ref("sfx")
+  if sfx and sfx.play then pcall(sfx.play, ok and "open" or "denied") end
+  if caption then pcall(caption, ok and ("RESEARCH COMPLETE · " .. tostring(why)) or (rs.labelOf(id) .. ": " .. tostring(why)), 4) end
+  redraw(true)
+  return ok, why
 end
 
 -- ── opening and closing ─────────────────────────────────────────────────────

@@ -2999,3 +2999,211 @@ are in `work/expansion_x5/NOTES.md` and `shots/`.
   the cost; a run loading from a silo through the chute.
 - `tools/perf/quarryprobe.sh <engine>` (PATCHES=funds.patch): the whole slice
   in the engine; `QX PASS|FAIL` lines, pictures in `save/user/quarryshots/`.
+
+## 24. Expansion X6: refineries, the Fabricator, and RP as a currency
+
+Built 2026-11-09 (`work/expansion/PLAN.md` §3.4, N4/N7, §7.4; Ty 11-09: "RP is
+a currency on the expansion TECH"). The rules are `scripts/machines.lua` (pure,
+luajit-tested) and machine nodes in `scripts/item_net.lua`; the scene half is
+`scripts/refinery.lua` (hooked into logistics' build and step), the RECIPE
+panel is `scripts/fab_panel.lua`. The pieces are the kit's REFINERY section
+(`tools/gen_kit_refinery.py`).
+
+### What a player can do
+
+- **Research them with RP.** The Refinery (Crusher, Furnace, Jacket
+  Radiator) costs $6,000 + 40 RP and an iron sample; Kiln and Mixer $3,500 +
+  30 RP (a silica sample); the Electrolyser $9,000 + 120 RP; the Fabricator
+  $12,000 + 150 RP, both after the Refinery. The Orbital Scanner now also
+  costs 80 RP and the Space Telescope 200 RP. The points are spent. A locked
+  REFINERY card says "unlock $6,000 + 40 RP"; its click arms it and a second
+  click researches it, as in the VAB. The Research Lab's page lists WHAT RP
+  BUYS, with a Research button on each row (two clicks). Short of points,
+  the lock says how many are needed and how many the lab has. Nothing already
+  researched changes, and a sandbox has everything.
+- **Crush.** A **Crusher** takes what a quarry digs at 2 kg/s (4 kW: 2 kJ a kg)
+  and splits the bulk rock into its minerals: Hematite Earth gives 45 % iron
+  ore, Rust Rock 25 %, basalt 10 % iron ore and 10 % silica, granite 30 %
+  silica, sand 85 % silica, veinstone 15 % copper ore; the rest is regolith.
+  Ore passes through. Its outlet feeds every line it meets, the picky ones
+  first: a furnace's line takes the ore, a line to a hopper takes the rest.
+- **Smelt.** A **Furnace** makes Steel from iron ore (65 % by mass), Alloy Steel
+  from kamacite (90 %) and Copper Wire from copper ore (30 %), at 1.5 MJ a kg
+  of steel (an induction or arc melt) and 3 MJ a kg of copper. It draws 12 kW
+  and sheds 10 kW of heat through its heat port. At full duty that is 8 g/s of
+  Steel, 29 kg an hour.
+- **Cool it.** The furnace and the **Kiln** run at `min(1, 0.2 + C/H)`. H is
+  the heat of every hot machine on the loop, and C is what the loop's sinks
+  shed at the jacket water's 330 K (57 °C). The sinks are Jacket Radiators
+  (new, 2 × 3 m, 12 m²), the S6 Radiator Panels and a Cooling Tower Cell in
+  air, joined by coolant pipes. A radiator sheds εσAη(T⁴ − T_sky⁴), 35 % less
+  in sun (the day-night mean is used), plus convection in air. A Jacket
+  Radiator sheds 2.3 kW in vacuum and about 4 kW in air at home; a Radiator
+  Panel 3.1 / 5.2 kW. With nothing on its port a hot machine runs at 20 %.
+  Three Jacket Radiators in air put a furnace at 100 % (11.9 kW measured);
+  two put it at 99 %. A kiln on the same row shares them. A loop with a
+  reactor's piece on it is the reactor's.
+- **Glass and Regocrete.** The **Kiln** makes Glass from silica (95 %, 2.8 MJ a
+  kg) and sintered Regocrete from regolith (95 %, 1 MJ a kg, no water); 9 kW,
+  6 kW of heat. The **Regocrete Mixer** makes Regocrete from regolith and water
+  at 5:1 (1.2 kg a kg of regolith) at 1 kg/s and 2 kW. Its water is piped to
+  its −X nozzle from a Water Tank (a consumer on the fluid network). With no
+  water it stops ("no water: pipe water to its water nozzle").
+- **Make fuel.** The **Electrolyser** turns water piped to its −X nozzle into
+  Propellant. It gives 0.78 kg a kg: 2 H₂O → 2 H₂ + O₂ at LOX/LH₂'s O/F of 6,
+  the spare oxygen vented. It uses 20 MJ a kg of water, which is 55 kWh a kg
+  of H₂, a PEM stack's real figure. At 20 kW that is 1 g/s of water and
+  2.8 kg of propellant an hour. The propellant goes into the Fuel Tanks piped
+  to its +X fuel nozzle. That is the FUEL base: the Fuel Hose Stand fills a
+  craft from those tanks as before. With no tank room it stops.
+- **Fabricate.** A **Fabricator**'s store (2,000 kg, 4,000 L) takes the
+  refined solids from a belt or a tube: Steel, Alloy, Wire, Glass and
+  Regocrete. Right-click → **RECIPE panel**: every part the kit's catalogue
+  holds that can be made off-world, searchable. Each row shows the part's
+  mass and a ✓ when the store holds its materials. Picking a part shows its
+  materials (need / have), the fittings in money, and the time: 10 s + 20 s a
+  tonne, at the duty now. **Queue 1 / Queue 5** adds it; the queue holds four
+  jobs. A job takes its materials and fittings when it starts and runs at the
+  Fabricator's duty (3 kW). Its crate goes into the store, where the Build
+  Kit's reach finds it (§22: the Fabricator's store is a container in the
+  Engineer's reach), so a part made off-world is placed off-world. ✕ cancels
+  a job; a started job's materials go back to the store.
+- **Wire them.** Every machine has a RUN terminal and a BUSY output (S8),
+  and Running in its menu. Off stops it, and LIMITED BY says so.
+- **See them.** Menus: State (duty %, the kg/s worked and of what, kW),
+  Inlet, Outlet, Cooling (sinks against heat, and the duty), "Take its outlet
+  into your pack", LIMITED BY. LIMITED BY names power, cooling, water or tank
+  room first, then the belts: "its outlet is full (regolith): lay a belt or
+  tube from its outlet to a hopper", "nothing feeds it", "waiting for feed".
+  F8's LOGISTICS overlay labels each machine with its duty, rate and LIMITED
+  BY.
+
+### The rules
+
+- `machines.convOf(kind)` gives each input's outputs (kg a kg), their total,
+  and `e` (kJ a kg of input). The machine has `kw` × duty of power, so a kg
+  of input takes e / kw seconds of the whole machine.
+- `item_net`: a machine is two nodes, its inlet (`accept`: what it works) and
+  its outlet. Each port has a `side`. The inlet works its materials in name
+  order, as fast as the outlet takes them (a full outlet slows it; the
+  backward pass carries it). It is piecewise constant like a store's drain.
+  So `advance` stays exact: a day of hopper → crusher → furnace → Fabricator
+  in one call equals 86,400 one-second calls to 1e-6. Any store can take
+  `accept`; lines to picky stores are offered first.
+  `machineWhy(net, st, rep, i)` is the item-side LIMITED BY.
+- `machines.coolLoops(pieces)` is a union-find over the heat ports (the
+  coolant side: ports with no bore, meeting within 0.06 m and facing).
+  `rejectKW` is the radiator and tower law. `duty(kind, ctx)` combines the
+  switch, the grid (`base_grid.partServed`), cooling, water and tank room.
+- `machines.fabAdvance(F, dt, duty, env)`: the queue event to event. It waits
+  for materials, takes them and the fittings, runs, and puts the crate (or
+  waits for room).
+
+### The scene
+
+- logistics builds the machines into the world's network: the inlet
+  `mach:<sid>.<uid>.in` and outlet `mach:<sid>.<uid>.out` as real containers
+  (the machine's buffer: 200–400 kg), a Fabricator's `fab:<sid>.<uid>`.
+- Before each step, `refinery.prepare` sets each machine's power from its
+  duty. After it, what was worked comes out of the inlet in whole units, and
+  what was made goes into the outlet (logistics' unit accumulators). Then
+  `refinery.after` runs the Fabricators' queues on the same clock: 5 Hz while
+  anything moves, 1 Hz idle, one call on load. Away, all of it runs in closed
+  form on the agency clock, as the quarry does.
+- The cooling loops are found when the network is built and refreshed every
+  30 s (each structure's air and temperature: room_air's outside, else the
+  world's traits).
+- **The electrolyser is not on the belts.** fluid_net drains its water cell at
+  the rate it asks (`waterDraw`) and reports what it drew (`waterServed`). It
+  then puts the propellant made into the Fuel Tanks on its fuel nozzle, a new
+  fluid role `src` (`takeMade`). `fluid_net.srcRoom` is the room left. The
+  closed form is fluid_net's.
+- The grid: a machine is an `aux` load of its rated kW while switched on (a
+  Fabricator while its queue holds a job). A short grid stops it.
+
+### Save keys and old saves
+
+- `fabq.<sid>.<uid>` = JSON { q } (the queue). A machine's `off` is in its
+  part state. `res.rpSpent` is the RP spent; `res.pts` goes down by what is
+  spent.
+- The containers are ordinary (`mach:`, `fab:`), with caps set by
+  `inventory.setCap`.
+- Nothing old changes. An old save has none of these keys and no refinery
+  pieces. Researched techs stay researched (the RP prices apply only to what
+  is still locked).
+
+### Cost
+
+Measured in `tools/perf/refineryprobe.sh` (engine 0.117.1-dev.1463, its Lua
+without the JIT; ms a frame unless said):
+
+- **Nothing built:** logistics 0.016 (X5's 0.012–0.013 plus the X6 hooks).
+  `refinery`, `machines` and `fab_panel` have no update of their own, so
+  they cost 0: logistics registers the refinery's menus and ticks an open
+  panel.
+- **Running** (six machines, two hoppers, four belts, three tanks): logistics
+  0.07–0.11. A 5 Hz step is 0.64–0.77 ms. Of that, the closed form is
+  0.05–0.08 ms, `refinery.prepare` 0.06–0.07 ms and `after` 0.01–0.02 ms. The
+  cooling loops cost 0.17–0.20 ms when the network is built and every 30 s.
+  fluid_net, with the mixer's and the electrolyser's water and the fuel tank,
+  is 0.04–0.065.
+- **Idle** (the machines off, the lines dry): logistics 0.032–0.076 over two
+  runs. A settled network skips its step (28 skips in 30 s; the check is
+  0.1 ms a second).
+  The step is skipped when its last step moved, worked and made nothing, no
+  container has changed since (`inventory.bagVer`, a new counter on every
+  bag write), and the machines' power and the quarries' state are as they
+  were.
+- **The overlay on** (the kit open and F8 only): 0.76, of which the overlay
+  is 0.62.
+- **In luajit**, a day of hopper → crusher → furnace → Fabricator in one call
+  takes 0.8–1.3 ms over 7 segments; a 5 Hz step takes 0.012–0.015 ms.
+
+The numbers and pictures are in `work/expansion_x6/NOTES.md` and `shots/`.
+
+### Balance numbers for Ty
+
+- The rates are the physics: Steel at 29 kg an hour a furnace (the plan's
+  sketch said 0.4 kg/s, which is about 200 times the energy a real melt
+  needs), Glass at 12 kg an hour a kiln, propellant at 2.8 kg an hour an
+  electrolyser.
+- `machines.SPEED` (1) is one knob on every machine's rate if that is too
+  slow.
+- The power: the six machines draw about 50 kW (the probe ran them on 26
+  Isotope Skids). A real refinery base wants a reactor (S6) or a big solar
+  field.
+- The Furnace's 65 % (iron ore to Steel) and the Electrolyser's 0.78 replace
+  the plan's 1:1 and 0.9.
+- The RP prices: 40 / 30 / 120 / 150, plus the Scanner's 80 and the Space
+  Telescope's 200.
+- Not gated, though the plan prices them in RP: the Quarry (X5) and the 1 m
+  Telescope (X1) shipped open, and gating them now would lock what saves
+  already use. Ty decides.
+
+### Left for later
+
+- Alloy from iron ore + ilmenite (3:1: a two-input recipe); clathrate and
+  ammonia ice → Propellant Gas; an electrolyser fed ice from a belt.
+- The Rod Press as a piece; the tower's THROUGHPUT card.
+- A furnace's heat into a sealed room (`room_air`'s heat term).
+- Sorting on a belt: the crusher's picky-first order and a silo set to one
+  material are the only sorters.
+- Dust, sound and glow on the machines; the Fabricator's crate doesn't ride a
+  belt out (it waits in the store, in reach).
+- The panel is opened from the menu (no E key at the machine yet).
+
+### Tests and the probe
+
+- `tests/smoke_machines.lua` (luajit): each machine's rate from its energy,
+  the crusher's split conserves mass, a radiator's kW in vacuum and air, a
+  tower only in air, loops (alone 20 %, three panels 100 %, a kiln sharing,
+  a reactor's loop), the duty's order, the chain in item_net (the
+  Fabricator's store takes no regolith, the spoil line, 20 % duty), a day in
+  one call against 86,400, a full outlet's LIMITED BY, the Fabricator's
+  queue, the cost.
+- `tests/smoke_research_rp.lua` (luajit): refused short of RP, spent when
+  bought, the lock line and price, money-only entries unchanged, rpTree, the
+  sandbox, an old save's research kept.
+- `tools/perf/refineryprobe.sh <engine>` (PATCHES=funds.patch): the whole
+  slice in the engine. `RX PASS|FAIL` lines, pictures in
+  `save/user/refineryshots/`.

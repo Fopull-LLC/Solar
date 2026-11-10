@@ -3479,6 +3479,37 @@
                 order: 9,
             )),
         ),
+        // A Fabricator's RECIPE panel (scripts/fab_panel.lua; expansion X6): a
+        // full-screen layer for its two plates, hidden until it opens.
+        (
+            name: "Fab Panel",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "fab_panel",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(656),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: TopLeft,
+                    offset: (0.0, 0.0),
+                ),
+                size: (Fixed(1280.0), Fixed(720.0)),
+                visible: false,
+                opacity: 1.0,
+                order: 9,
+            )),
+        ),
         // the injury screen: blood loss, a hit's flash, the heartbeat (scripts/injury_fx.lua), under every other HUD element
         (
             name: "Injury FX",
@@ -3557,6 +3588,9 @@
                 ( kind: "quarry", enabled: true, params: [] ),
                 ( kind: "item_net", enabled: true, params: [] ),
                 ( kind: "logistics", enabled: true, params: [] ),
+                // refineries and the Fabricator: the rulebook and the scene (machines, refinery; X6)
+                ( kind: "machines", enabled: true, params: [] ),
+                ( kind: "refinery", enabled: true, params: [] ),
                 ( kind: "base_shield", enabled: true, params: [] ),
                 ( kind: "craft_orient", enabled: true, params: [] ),
                 ( kind: "ghost", enabled: true, params: [] ),

@@ -21,6 +21,12 @@
 --     rs.isUnlocked("dockPort")      false
 --     rs.lockLine("dockPort")        "LOCKED · $900 · needs Copper Ore"
 --     rs.unlock("dockPort")          → true, or false + the reason
+--
+-- RP AS A CURRENCY (expansion X6, PLAN §7.4; Ty 11-09: "RP is a currency on
+-- the expansion TECH"). A TECH entry with `rp` costs research points beside
+-- its money: the lab's points (below) are spent when it is researched, and a
+-- lock short of them says how many more ("needs 40 RP: the lab has 12").
+-- Nothing already researched changes; entries without `rp` cost money only.
 
 defaults = {}
 
@@ -84,8 +90,16 @@ TECH = {
   -- THE SURVEY PARTS (expansion X1; scripts/parts_survey.lua): the scanner
   -- after the probe core (it rides a satellite), the telescope wants silica
   -- (its mirror). RP prices join in X6.
-  telescopeS   = { cost = 3200, label = "Space Telescope", mat = "silica" },
-  scanner      = { cost = 4500, label = "Orbital Scanner", after = "probe" },
+  telescopeS   = { cost = 3200, label = "Space Telescope", mat = "silica", rp = 200 },
+  scanner      = { cost = 4500, label = "Orbital Scanner", after = "probe", rp = 80 },
+  -- THE REFINERIES (expansion X6; scripts/machines.lua, parts_kit REFINERY):
+  -- money and research points. The crusher, the furnace and its radiators
+  -- first; the kiln and the mixer want a silica sample; the electrolyser and
+  -- the Fabricator come after the refinery.
+  refinery     = { cost = 6000,  label = "Refinery (Crusher, Furnace)", mat = "iron", rp = 40 },
+  ceramics     = { cost = 3500,  label = "Kiln and Mixer", mat = "silica", after = "refinery", rp = 30 },
+  electrolysis = { cost = 9000,  label = "Electrolyser", after = "refinery", rp = 120 },
+  fabrication  = { cost = 12000, label = "Fabricator", after = "refinery", rp = 150 },
   -- THE BUILD KIT (deep-space M3): not bought, GIVEN: the Relay Network's
   -- first goal (10 % of the ground linked) grants it (missions.lua), and from
   -- then the Depot stocks it and every Engineer is issued one at the base
@@ -168,6 +182,12 @@ function costOf(id)
   return t and t.cost or 0
 end
 
+-- (X6) research points it costs (0: money only)
+function rpOf(id)
+  local t = TECH[tid(id)]
+  return t and t.rp or 0
+end
+
 function labelOf(id)
   local t = TECH[tid(id)]
   return t and t.label or id
@@ -202,7 +222,19 @@ function blockedBy(id)
         st and (" (" .. st.name .. ")") or "")
     end
   end
+  -- (X6) research points: spent, so the lab must hold them
+  if (t.rp or 0) > 0 and points() < t.rp then
+    return string.format("needs %d RP (the lab has %d: study samples at the Research Lab)", t.rp, points())
+  end
   return nil
+end
+-- "$6,000 + 40 RP" (or the money alone)
+function priceText(id, money)
+  local c = costOf(id)
+  local m = money and money(c) or ("$" .. tostring(c))
+  local rp = rpOf(id)
+  if rp > 0 then return m .. " + " .. rp .. " RP" end
+  return m
 end
 
 -- The one line a locked catalogue card shows. Reads as an instruction, never as
@@ -211,7 +243,7 @@ function lockLine(id)
   id = tid(id)
   if isUnlocked(id) then return nil end
   local co = findScript("company")
-  local money = co and co.money(costOf(id)) or ("$" .. costOf(id))
+  local money = priceText(id, co and co.money)
   local why = blockedBy(id)
   if why then return "LOCKED · " .. why end
   local afford = (not co) or co.afford(costOf(id))
@@ -226,15 +258,22 @@ function unlock(id)
   if why then return false, why end
   local co = findScript("company")
   local cost = costOf(id)
+  local rp = rpOf(id)
+  if rp > 0 and points() < rp then return false, string.format("needs %d RP", rp) end
   if co and not co.spend(cost, "research: " .. labelOf(id)) then
     return false, "not enough funds"
+  end
+  if rp > 0 then
+    -- (X6) the points are spent: the lab's tally goes down, the spend is kept
+    save.set("res.pts", points() - rp)
+    save.set("res.rpSpent", (save.get("res.rpSpent") or 0) + rp)
   end
   local d = done()
   d[id] = true
   save.set("res.done", d)
   save.set("res.spent", (save.get("res.spent") or 0) + cost)
   spent = save.get("res.spent")
-  log("RESEARCH COMPLETE: " .. labelOf(id))
+  log("RESEARCH COMPLETE: " .. labelOf(id) .. (rp > 0 and string.format(" (%d RP spent, %d left)", rp, points()) or ""))
   -- No reputation for research any more: standing that money can buy is a
   -- price, and it would let a rich company skip the contract tiers.
   return true, labelOf(id)
@@ -306,6 +345,19 @@ local function mats_ref()
 end
 
 function points() return save.get("res.pts") or 0 end
+-- (X6) points spent on research, and the list of what RP buys:
+-- { { id, label, cost, rp, done, why } } by RP
+function rpSpent() return save.get("res.rpSpent") or 0 end
+function rpTree()
+  local out = {}
+  for id, t in pairs(TECH) do
+    if (t.rp or 0) > 0 then
+      out[#out + 1] = { id = id, label = t.label, cost = t.cost, rp = t.rp, done = isUnlocked(id), why = blockedBy(id) }
+    end
+  end
+  table.sort(out, function(a, b) if a.rp ~= b.rp then return a.rp < b.rp end return a.id < b.id end)
+  return out
+end
 function studied() return save.get("res.studied") or {} end
 
 -- (pure, for tests: m = the materials script or nil)

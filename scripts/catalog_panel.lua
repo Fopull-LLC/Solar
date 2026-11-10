@@ -527,13 +527,18 @@ local function card(B, rs, co, it)
   local id = it.id
   local def = B.partInfo(id)
   def = (B.liveDef and B.liveDef(id)) or def
-  local locked = (rs and rs.isUnlocked and not rs.isUnlocked(id)) or false
+  -- (X6) a kit piece behind a research (`tech`: the refineries, the reactor's
+  -- components) shows that research's lock and price, as its click does
+  local rid = (def and def.kit and (def.vab or def.tech)) or id
+  local locked = (rs and rs.isUnlocked and not rs.isUnlocked(rid)) or false
   local function money(v) return (co and co.money) and co.money(v) or ("$" .. tostring(v or 0)) end
-  local price = locked and ((rs and rs.costOf and rs.costOf(id)) or 0) or def.cost
-  local needs = locked and rs and rs.blockedBy and rs.blockedBy(id) or nil
+  local price = locked and ((rs and rs.costOf and rs.costOf(rid)) or 0) or def.cost
+  local needs = locked and rs and rs.blockedBy and rs.blockedBy(rid) or nil
   local armed = locked and B.researchPending and B.researchPending(id) or false
-  local price_text = locked and ("unlock " .. money(price)) or money(price)
-  if armed then price_text = "confirm " .. money(price) .. "?" end
+  -- (X6) a research that costs RP says so: "unlock $6,000 + 40 RP"
+  local ptxt = (locked and rs and rs.priceText) and rs.priceText(rid, money) or money(price)
+  local price_text = locked and ("unlock " .. ptxt) or money(price)
+  if armed then price_text = "confirm " .. ptxt .. "?" end
   local role_text = needs and ("locked · " .. needs) or role(def)
   if B.cardLines and not locked then
     local p, r = B.cardLines(id, def, locked)

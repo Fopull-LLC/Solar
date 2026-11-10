@@ -614,6 +614,10 @@ local function apply(c)
   elseif dev == "machine" then
     local RA = ref("room_air")
     if RA and RA.setMachine then RA.setMachine(sid, uid, on) end
+  elseif dev == "refinery" then
+    -- (X6) a refinery machine's or a Fabricator's RUN
+    local RF = ref("refinery")
+    if RF and RF.setRun then RF.setRun(sid, uid, on) end
   end
 end
 
@@ -783,6 +787,10 @@ local function device_outs(key, m)
   elseif dev == "rxconsole" then
     local _, e = plant_key(m.sid, m.uid)
     o.tripped = (e and e.S and e.S.scram) and true or false
+  elseif dev == "refinery" then
+    -- (X6) BUSY: the machine is working (power, feed and room all there)
+    local RF = ref("refinery")
+    o.busy = (RF and RF.isBusy and RF.isBusy(m.sid, m.uid)) == true
   end
   return o
 end

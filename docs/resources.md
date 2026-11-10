@@ -342,15 +342,15 @@ What a refinery makes out of the ore, and what a Fabricator makes parts from
 - **They teach the lab nothing**: `researchValue` is 0 for a refined
   material. The depot buys them at `value`.
 
-| id | Name | kg/m³ | $/kg | Made from (N3; the machines are X6) |
+| id | Name | kg/m³ | $/kg | Made from (N3), and by (X6; docs/base-building.md §24) |
 |---|---|---|---|---|
-| steel | Steel | 7,850 | 3 | iron ore |
-| alloy | Alloy Steel | 7,900 | 9 | kamacite, or iron ore with ilmenite (3:1) |
-| wiring | Copper Wire | 8,960 | 11 | copper ore |
-| glass | Glass | 2,500 | 5 | silica |
-| regocrete | Regocrete | 2,200 | 1 | regolith with water (5:1) |
-| propellant | Propellant (LOX/LH2) | 360 | 2 | water |
-| gas | Propellant Gas | 230 | 6 | ammonia ice or methane clathrate |
+| steel | Steel | 7,850 | 3 | iron ore: the Furnace, 65 % at 1.5 MJ/kg |
+| alloy | Alloy Steel | 7,900 | 9 | kamacite (the Furnace, 90 %), or iron ore with ilmenite (3:1; not built yet) |
+| wiring | Copper Wire | 8,960 | 11 | copper ore: the Furnace, 30 % at 3 MJ/kg |
+| glass | Glass | 2,500 | 5 | silica: the Kiln, 95 % at 2.8 MJ/kg |
+| regocrete | Regocrete | 2,200 | 1 | regolith with water (5:1): the Mixer; or sintered dry in the Kiln |
+| propellant | Propellant (LOX/LH2) | 360 | 2 | water: the Electrolyser, 0.78 kg/kg at 20 MJ/kg, into Fuel Tanks |
+| gas | Propellant Gas | 230 | 6 | ammonia ice or methane clathrate (not built yet) |
 
 Each has a codex entry with real facts (in `ORE_CODEX`, which codex.lua lists;
 `codexInto` still copies only the ores). What a part is made of is

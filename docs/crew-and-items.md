@@ -1737,7 +1737,8 @@ shows its number; below that a band as wide as what is not known.
 atmo 25, comp 40, mag 30, res 60), × 2 off the home world, × the Scientist's
 `study_mult` on a kit sweep; `research.addPoints` adds whole points to the
 lab's tally (the fraction carried per body; `res.survey` totals them). A body
-full in every layer is SURVEYED (a caption). Spending RP is X6.
+full in every layer is SURVEYED (a caption). RP are spent on research (X6:
+the refineries' TECH costs money and RP; docs/base-building.md §24).
 
 **Where it shows**: the Tracking Station's WORLDS group and BODY card
 (`docs/tracking-station.md` §6) and the lab's **BODIES** page (`lab_talk`):

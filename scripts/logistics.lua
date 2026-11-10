@@ -48,6 +48,15 @@
 -- quarry (its frame and survey, prog, dug, paid, floor). Part states: a belt's
 -- `rev` and `off`, a silo's `mat`, a drive's `off` (paused) and `floor`.
 --
+-- MACHINES (X6; scripts/machines.lua, refinery.lua): a crusher, a furnace, a
+-- kiln or a mixer is two of the network's nodes, its inlet "mach:<sid>.<uid>.in"
+-- and its outlet "mach:<sid>.<uid>.out" (real containers of the machine's
+-- buffer kg); a Fabricator's store "fab:<sid>.<uid>" takes refined solids.
+-- refinery.prepare sets each machine's power before a step (its duty: the
+-- grid, cooling, water, its switch); what it worked comes out of its inlet in
+-- whole units and what it made goes into its outlet; refinery.after runs the
+-- Fabricators' queues on the same clock.
+--
 -- Probes: worlds, worldOf(body), quarryOf(sid, uid), stepNow(), readout(sid, uid),
 -- setRun, setRev, setSiloMat, setPaused, overlay, overlayAlways, drawn, PROF.
 
@@ -115,8 +124,11 @@ end
 local function keyOf(sid, uid) return tostring(sid) .. "." .. tostring(uid) end
 local function cidOf(it, sid, uid)
   if it.kind == "silo" then return "silo:" .. keyOf(sid, uid) end
+  if it.kind == "fab" then return "fab:" .. keyOf(sid, uid) end
+  if it.kind == "machine" then return "mach:" .. keyOf(sid, uid) .. ".in", "mach:" .. keyOf(sid, uid) .. ".out" end
   return "hopper:" .. keyOf(sid, uid)
 end
+storeCid = cidOf
 
 -- ── what a piece is, body-relative ──────────────────────────────────────────
 local function frame_of(rec)
@@ -135,6 +147,22 @@ end
 -- the stores' labels ("Hopper 2", "Silo 1 · Iron Ore"), and whether one stands
 local labels = {}
 function storeLabel(cid) return labels[cid] end
+-- (X6) the stores within `reach` m of world point (x, y, z) on body `bname`:
+-- the Fabricators' stores (their crates are in an Engineer's reach) → { { id, d, label } }
+function storesNear(bname, x, y, z, reach)
+  local w = W[bname]
+  local b = space and space.body and space.body(bname)
+  local out = {}
+  if not (w and b) then return out end
+  for _, P in ipairs(w.pieces or {}) do
+    local function add(cid, lbl)
+      local d = math.sqrt((b.x + P.gx - x) ^ 2 + (b.y + P.gy - y) ^ 2 + (b.z + P.gz - z) ^ 2)
+      if d <= reach then out[#out + 1] = { id = cid, d = d, label = lbl } end
+    end
+    if P.cid and P.fab then add(P.cid, P.label) end
+  end
+  return out
+end
 function storeExists(cid) return labels[cid] ~= nil end
 
 -- ── BUILD a world's network from the records ───────────────────────────────
@@ -161,8 +189,12 @@ local function build_world(body, recs)
     if type(sv) == "table" then w.a = tonumber(sv.a) end
   end
   w.pieces, w.recs = {}, {}
+  w.settled = nil
   local posts, drives, chutes, belts = {}, {}, {}, {}
   local n_hop, n_silo, n_chute = 0, 0, 0
+  local n_mach, n_fab = {}, 0
+  w.machines = {}
+  local MC = ref("machines")
   for _, rec in ipairs(recs) do
     local fr = frame_of(rec)
     w.recs[rec.id] = rec
@@ -179,7 +211,7 @@ local function build_world(body, recs)
           local x, y, z = piece_point(fr, p, pt.x, pt.y or 0.8, pt.z)
           local role = pt.role or "any"
           if rev then role = (role == "in") and "out" or ((role == "out") and "in" or role) end
-          ports[#ports + 1] = { x = x, y = y, z = z, bore = pt.bore, role = role, name = pt.name }
+          ports[#ports + 1] = { x = x, y = y, z = z, bore = pt.bore, role = role, name = pt.name, side = pt.side }
         end
         local P = { key = key, sid = rec.id, uid = p.uid, def = d, it = it, ports = ports, gx = gx, gy = gy, gz = gz, rec = rec, part = p }
         if it.kind == "post" then posts[#posts + 1] = P
@@ -211,6 +243,37 @@ local function build_world(body, recs)
           P.label = "Quarry Drive " .. (#drives + 1)
           drives[#drives + 1] = P
           w.pieces[#w.pieces + 1] = P
+        elseif it.kind == "machine" and MC and MC.MACH[it.m] then
+          -- (X6) its inlet (this piece's key) and its outlet (key .. ">")
+          local M = MC.MACH[it.m]
+          P.kind = "machine"
+          P.m = it.m
+          P.capIn, P.capOut = M.capIn or 200, M.capOut or 200
+          P.conv, P.accept = MC.convOf(it.m), MC.acceptOf(it.m)
+          P.cid, P.ocid = cidOf(it, rec.id, p.uid)
+          n_mach[it.m] = (n_mach[it.m] or 0) + 1
+          P.label = M.label .. " " .. n_mach[it.m]
+          P.cap = P.capIn
+          w.pieces[#w.pieces + 1] = P
+          w.machines[#w.machines + 1] = P
+        elseif it.kind == "fab" then
+          -- (X6) a Fabricator's store: refined solids in, its crates kept in it
+          P.kind = "store"
+          P.cap = it.kg or 2000
+          P.cid = cidOf(it, rec.id, p.uid)
+          P.accept = MC and MC.FAB_TAKES or nil
+          n_fab = n_fab + 1
+          P.label = "Fabricator " .. n_fab
+          P.fab = true
+          w.pieces[#w.pieces + 1] = P
+          w.machines[#w.machines + 1] = P
+        elseif it.kind == "electro" then
+          -- (X6) not on the belts: water in and propellant out are fluid_net's (refinery.lua)
+          n_mach[it.m] = (n_mach[it.m] or 0) + 1
+          P.kind = "electro"
+          P.m = it.m
+          P.label = ((MC and MC.MACH[it.m] and MC.MACH[it.m].label) or "Electrolyser") .. " " .. n_mach[it.m]
+          w.machines[#w.machines + 1] = P
         elseif it.kind == "chute" then
           n_chute = n_chute + 1
           P.kind = "chute"
@@ -230,6 +293,12 @@ local function build_world(body, recs)
     if P.cid then
       labels[P.cid] = P.label
       if inv and inv.setCap and P.it.kind == "drive" and (inv.cap(P.cid) or 0) ~= P.cap then inv.setCap(P.cid, P.cap) end
+      -- (X6) a machine's buffers
+      if inv and inv.setCap and P.kind == "machine" then
+        if (inv.cap(P.cid) or 0) ~= P.capIn then inv.setCap(P.cid, P.capIn) end
+        if (inv.cap(P.ocid) or 0) ~= P.capOut then inv.setCap(P.ocid, P.capOut) end
+        labels[P.ocid] = P.label .. " outlet"
+      end
     end
   end
   -- QUARRIES: posts grouped by distance (a side ≤ 32 m), each group of four a rectangle
@@ -306,10 +375,15 @@ local function build_world(body, recs)
   local NP = {}
   for _, P in ipairs(w.pieces) do
     NP[#NP + 1] = { key = P.key, kind = P.kind, ports = P.ports, cap = P.cap, ok = P.ok, why = P.why, len = P.len, one = P.one, mat = P.mat,
-                    label = P.label, src = P.quarry ~= nil, slack = (P.kind == "store") and 8 or nil }   -- (whole units: a store within a unit of its cap is full)
+                    label = P.label, src = P.quarry ~= nil, slack = (P.kind == "store" or P.kind == "machine") and 8 or nil,   -- (whole units: a store within a unit of its cap is full)
+                    accept = P.accept, conv = P.conv, capIn = P.capIn, capOut = P.capOut, kw = 0 }
   end
   w.byKey = {}
-  for _, P in ipairs(w.pieces) do w.byKey[P.key] = P end
+  for _, P in ipairs(w.pieces) do
+    w.byKey[P.key] = P
+    -- (X6) a machine's outlet node reads and fills its outlet container
+    if P.kind == "machine" then w.byKey[P.key .. ">"] = { key = P.key .. ">", cid = P.ocid, label = P.label .. " outlet", outlet = P, it = P.it, rec = P.rec, part = P.part } end
+  end
   local net = N.build(NP)
   -- keep what the old state held for its quarries (progress lives in the quarry entry)
   w.net = net
@@ -319,7 +393,9 @@ local function build_world(body, recs)
   w.rep = nil
   if not w.a then w.a = agency_now() end
   W[body] = w
-  if #w.pieces == 0 and #posts == 0 then W[body] = nil end
+  if #w.pieces == 0 and #posts == 0 and #w.machines == 0 then W[body] = nil end
+  local RF = ref("refinery")
+  if RF and RF.built then RF.built(w) end
   if w0 then PROF.build_ms = (wall() - w0) * 1000 end
   local BG = ref("base_grid")
   if BG and BG.markDirty then BG.markDirty() end
@@ -463,6 +539,34 @@ local function step_world(w, a, obs)
   local dt = math.min(a - w.a, CATCH_MAX)
   if dt <= 0 then w.a = math.max(w.a, a - CATCH_MAX); return end
   local net, st = w.net, w.st
+  local RF = ref("refinery")
+  if RF and RF.prepare then RF.prepare(w, dt) end
+  -- (X6) A SETTLED network: its last step moved, worked and made nothing, no
+  -- container anywhere has changed since (inventory.bagVer), and every
+  -- machine's power and quarry's state is as it was: nothing can move now
+  -- either, so the step is skipped (the clock still advances). A chute's
+  -- craft can come and go unseen, so a network with a chute always steps.
+  local sig = nil
+  if #w.chutes == 0 and inv.bagVer then
+    local parts = {}
+    for _, n in ipairs(net.nodes) do if n.conv then parts[#parts + 1] = string.format("%.6g", n.kw or 0) end end
+    for _, P in ipairs(w.machines or {}) do
+      local s0 = P.fab and RF and RF.stateOf and RF.stateOf(P.sid, P.uid)
+      if s0 then parts[#parts + 1] = string.format("%.4g", s0.duty or -1) end
+    end
+    for k, e in pairs(w.quarries) do
+      local i = N.nodeOf(net, k)
+      parts[#parts + 1] = tostring(i and net.nodes[i].blocked) .. tostring(e.q ~= nil)
+    end
+    sig = table.concat(parts, "|")
+    local S0 = w.settled
+    if S0 and S0.ver == inv.bagVer and S0.sig == sig and not (RF and RF.busy and RF.busy(w)) then
+      w.a = a
+      PROF.skips = (PROF.skips or 0) + 1
+      return
+    end
+  end
+  w.settled = nil
   -- the stores as the containers hold them now (a hand or a run may have moved some)
   for i, n in ipairs(net.nodes) do
     local P = w.byKey[n.key]
@@ -517,6 +621,27 @@ local function step_world(w, a, obs)
       end
       w.made[k] = math.min(acc, ku * 0.999)
     end
+  end
+  -- (X6) what the machines worked comes out of their inlets, whole units
+  for i, worked in pairs(rep.conv or {}) do
+    local P = w.byKey[net.nodes[i].key]
+    for m, kg in pairs(worked) do
+      local k = i .. "|conv|" .. m
+      local acc = (w.made[k] or 0) + kg
+      local ku = kg_of(m)
+      local nunits = math.floor(acc / ku + 1e-9)
+      if nunits > 0 and P and P.cid then
+        local got = inv.remove(P.cid, m, nunits)
+        acc = acc - (got or 0) * ku
+        if (got or 0) < nunits then acc = 0 end
+      end
+      w.made[k] = math.min(acc, ku * 0.999)
+    end
+  end
+  if RF and RF.after then RF.after(w, rep, dt) end
+  -- (X6) settled? (nothing flowed, worked or was made: the next step can be skipped)
+  if sig and #(rep.flows or {}) == 0 and #((rep.R and rep.R.convs) or {}) == 0 and next(rep.made) == nil then
+    w.settled = { ver = inv.bagVer, sig = sig }
   end
   -- the quarries' progress; away, what they claimed is paid by the estimate
   for key, e in pairs(w.quarries) do
@@ -600,6 +725,15 @@ end
 function gridAux(sid, uid)
   local d = nil
   local ST = ref("structures")
+  -- (X6) a refinery machine or a Fabricator: refinery.lua's answer
+  do
+    local p0 = ST and ST.getPart and ST.getPart(sid, uid)
+    local d0 = p0 and defs(p0.id)
+    if d0 and d0.it and (d0.it.kind == "machine" or d0.it.kind == "fab" or d0.it.kind == "electro") then
+      local RF = ref("refinery")
+      return RF and RF.gridAux and RF.gridAux(sid, uid) or 0
+    end
+  end
   local p = ST and ST.getPart and ST.getPart(sid, uid)
   d = p and defs(p.id)
   local it = d and d.it
@@ -689,6 +823,11 @@ function readout(sid, uid)
     end
     if n.kind == "chute" then o.chute = { craft = P and P.craft, target = n.target, room = st.room[i] } end
     o.lim = N.limitedBy(net, st, rep, i, function(j) local Pj = w.byKey[net.nodes[j].key]; return Pj and Pj.label or "a store" end)
+  end
+  local RF = ref("refinery")
+  if RF and RF.machineReadout and P and (P.kind == "machine" or P.fab or P.kind == "electro") then o.machine = RF.machineReadout(w, P) end
+  if not P and RF and RF.machineReadout then
+    for _, M in ipairs(w.machines or {}) do if M.key == key then o.machine = RF.machineReadout(w, M) end end
   end
   local e = w.quarries[key]
   if e then
@@ -913,9 +1052,11 @@ function drawOverlay()
     end
   end
   -- the stores and chutes
+  local RF = ref("refinery")
+  if RF and RF.overlayLabels then RF.overlayLabels(w, b, label, L) end
   for i, n in ipairs(net.nodes) do
     local P = w.byKey[n.key]
-    if P then
+    if P and not P.outlet and P.kind ~= "machine" and not P.fab then
       local top = (P.it.kind == "silo") and 6.9 or ((P.it.kind == "chute") and 3.6 or 2.9)
       local fr = frame_of(P.rec)
       local x, y, z = piece_point(fr, P.part, 0, top, 0)
@@ -1120,6 +1261,11 @@ function update(node, dt)
     local reg = ref("context_registry")
     if reg and reg.register then reg.register("prop", provider, { id = "logistics", order = 9 }); reg_on = true end
   end
+  -- (X6) the refinery's menus and an open RECIPE panel, from here: neither has an update of its own
+  local RF = ref("refinery")
+  if RF and RF.tick then RF.tick() end
+  local FP = ref("fab_panel")
+  if FP and FP.tick and FP.isOpen and FP.isOpen() then FP.tick(dt or 0) end
   local ST = ref("structures")
   if not (ST and libs()) then return end
   local t = now()
@@ -1170,7 +1316,9 @@ function update(node, dt)
   -- the clock
   local busy = false
   for _, ww in pairs(W) do
-    if ww.rep and #(ww.rep.flows or {}) > 0 then busy = true end
+    if ww.rep and (#(ww.rep.flows or {}) > 0 or (ww.rep.R and #(ww.rep.R.convs or {}) > 0)) then busy = true end
+    local RF = ref("refinery")
+    if RF and RF.busy and RF.busy(ww) then busy = true end
     for _, e in pairs(ww.quarries) do if e.q and not e.refused then busy = true end end
   end
   if t - tick_t >= (busy and EVERY or IDLE_EVERY) then

@@ -302,7 +302,16 @@ function heldId() return heldBp or heldPart end
 function holding() return heldPart and "part" or nil end
 local function is_tool(id) local d = id and toolDef(id); return d ~= nil and (d.tool == "paint" or d.tool == "pick") end
 isTool = is_tool
-function researchPending() return false end
+-- (X6) a locked kit piece's click is its research, two clicks as in the VAB
+-- (builder.pick): the refineries' research has no VAB card to click.
+RESEARCH_CONFIRM = 5.0
+researchArmed = nil
+function researchPending(id)
+  local a = researchArmed
+  local d0 = id and partInfo(id)
+  local rid = d0 and (d0.vab or d0.tech) or id
+  return a ~= nil and (a.id == rid or a.id == id) and now() - a.t <= RESEARCH_CONFIRM
+end
 subAssemblies = nil
 noSubAssy = true
 function hint(text, secs) if text then say(text) end end
@@ -425,6 +434,11 @@ function reachScan(force)
   local sc = ref("supply_crates")
   for _, c in ipairs((sc and sc.list) and sc.list() or {}) do
     if c.node and c.node.valid ~= false and a.distanceTo then add(c.cid, a:distanceTo(c.node), c.name or "supply crate") end
+  end
+  -- (X6) a Fabricator's store: the crates it made
+  local LX = ref("logistics")
+  if LX and LX.storesNear and st.body then
+    for _, c in ipairs(LX.storesNear(st.body, a.x, a.y, a.z, REACH)) do add(c.id, c.d, c.label) end
   end
   local sv = ref("salvage")
   if sv and sv.list and sv.containerOf then
@@ -639,8 +653,24 @@ function hold(id)
   local d0 = partInfo(id)
   local rid = d0 and (d0.vab or d0.tech) or id   -- (a VAB part placed live: its own research; S6: a reactor component its tech's)
   if rs and rs.isUnlocked and not rs.isUnlocked(rid) then
-    play("denied"); say((rs.labelOf and rs.labelOf(rid) or rid) .. ": " .. tostring(rs.lockLine and rs.lockLine(rid) or "locked"))
-    return false
+    local why_not = rs.blockedBy and rs.blockedBy(rid)
+    if why_not or not rs.unlock then
+      researchArmed = nil
+      play("denied"); say((rs.labelOf and rs.labelOf(rid) or rid) .. ": " .. tostring(rs.lockLine and rs.lockLine(rid) or "locked"))
+      return false
+    end
+    if not (researchArmed and researchArmed.id == rid and now() - researchArmed.t <= RESEARCH_CONFIRM) then
+      researchArmed = { id = rid, t = now() }
+      local co = ref("company")
+      play("pick", 0.3)
+      say(string.format("RESEARCH %s for %s?  ·  click it again to confirm", rs.labelOf(rid),
+        rs.priceText and rs.priceText(rid, co and co.money) or ("$" .. tostring(rs.costOf(rid)))))
+      return false
+    end
+    researchArmed = nil
+    local ok, why = rs.unlock(rid)
+    if not ok then play("denied"); say(rs.labelOf(rid) .. ": " .. tostring(why)); return false end
+    say("RESEARCH COMPLETE  ·  " .. tostring(why))
   end
   if heldPart ~= id then
     heldPart = id; play("pick", 0.35)

@@ -113,6 +113,12 @@ local function ext_for(e)
       if d.fl and d.fl.hose then
         return { x = e.content[p.uid], r = e.hoseRate and e.hoseRate[p.uid] or 0 }
       end
+      -- (X6) a mixer's or an electrolyser's water cell: its draw is the machine's (refinery.lua)
+      if d.it and (d.it.kind == "machine" or d.it.kind == "electro") then
+        local RF, MC = ref("refinery"), ref("machines")
+        local M = MC and MC.MACH and MC.MACH[d.it.m]
+        return { x = e.content[p.uid] or 0, cap = (M and M.cell) or 40, r = RF and RF.waterDraw and RF.waterDraw(sid, p.uid) or 0 }
+      end
       local RA = ref("room_air")
       local w, cap = nil, nil
       if RA and RA.cellOf then w, cap = RA.cellOf(sid, p.uid) end
@@ -244,6 +250,11 @@ local function couple(e, E, dt)
         e.content[node.uid] = st.x[i]
         e.hoseServed = e.hoseServed or {}
         e.hoseServed[node.uid] = (rep.served and rep.served[i] or 0)
+      elseif d and d.it and (d.it.kind == "machine" or d.it.kind == "electro") then
+        -- (X6) what the machine drew from its cell this step
+        e.content[node.uid] = st.x[i]
+        local RF = ref("refinery")
+        if RF and RF.waterServed then RF.waterServed(e.sid, node.uid, rep.served and rep.served[i] or 0, dt, st.x[i]) end
       elseif RA and RA.fillCell then
         -- what came in = what it holds more + what the generator drew meanwhile
         local x0 = E.x0 and E.x0[i] or st.x[i]
@@ -270,6 +281,23 @@ local function couple(e, E, dt)
       RA.setInject(e.sid, rid, net.sub == "o2" and q or 0, net.sub == "n2" and q or 0)
     end
     E.inj = nil
+  end
+  -- (X6) what a machine made into this network (the electrolyser's propellant): into its tanks
+  local RF = ref("refinery")
+  if RF and RF.takeMade then
+    for _, h in ipairs(net.src or {}) do
+      local made = RF.takeMade(e.sid, h.part.uid)
+      if made > 0 then
+        local left = made
+        for j, node in ipairs(net.nodes) do
+          if node.kind == "tank" and node.tk == "tank" and node.sub == "fuel" and left > 0 then
+            local put = math.min(left, (node.cap or 0) - (st.x[j] or 0))
+            if put > 0 then st.x[j] = st.x[j] + put; left = left - put; e.content[node.uid] = st.x[j]; if st.tm[j] ~= "N" then st.tm[j] = "N" end end
+          end
+        end
+        if left > 1e-9 and RF.noteLost then RF.noteLost(e.sid, h.part.uid, left) end
+      end
+    end
   end
   -- the hydrogen the generators made: into the bottles on their H2 line, else vented
   if RA and RA.takeH2 then
@@ -513,6 +541,25 @@ local reg_on = false
 
 -- ── the fuel hose: the nearest craft within reach (not one held on a stand,
 -- which the stand fuels) ────────────────────────────────────────────────────
+-- (X6) kg of room in the Fuel Tanks on a machine's source nozzle (the
+-- electrolyser's), or 0 when none is piped to it
+function srcRoom(sid, uid)
+  local e = N[sid]
+  if not e then return 0 end
+  for _, E in ipairs(e.nets or {}) do
+    for _, h in ipairs(E.net.src or {}) do
+      if h.part.uid == uid then
+        if E.net.sub ~= "fuel" or E.net.mixed then return 0 end
+        local room = 0
+        for j, node in ipairs(E.net.nodes) do
+          if node.kind == "tank" and node.tk == "tank" and node.sub == "fuel" then room = room + math.max(0, (node.cap or 0) - (E.st.x[j] or 0)) end
+        end
+        return room
+      end
+    end
+  end
+  return 0
+end
 function hoseTarget(sid, uid)
   local ST = ref("structures")
   local rec = ST and ST.get(sid)
