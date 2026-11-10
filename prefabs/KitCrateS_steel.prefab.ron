@@ -16,7 +16,7 @@
     (
         name: "Mesh",
         transform: (
-            translation: (0.0000, 0.2250, 0.0060),
+            translation: (0.0000, 0.2260, 0.0050),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),

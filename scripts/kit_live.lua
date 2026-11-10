@@ -245,9 +245,26 @@ local function step_door(e, dt, pts)
           if ok and lp then
             local dx, dy, dz = lp.x - d.rest.x, lp.y - d.rest.y, lp.z - d.rest.z
             local vert = D.vertical
+            -- WALKING UP TO IT (playtest 2026-11-10: "barely squeezing
+            -- through doors"): a door opened only once the crew was `near`,
+            -- and a leaf that takes `secs` to slide was 40 % open when a
+            -- walker's shoulder reached it (a sprinter's, 25 %), so the
+            -- 0.62 m capsule rubbed past the leaf's edge. Coming toward it,
+            -- the reach grows by how far the crew closes in the time the
+            -- leaf takes (the planet-relative speed, in the door's frame).
+            local near = vert and (D.near or 1.6) or (D.near or 2.2)
+            local vx, vz = a.vx or 0, a.vz or 0
+            if (vx ~= 0 or vz ~= 0 or (a.vy or 0) ~= 0) then
+              local ok2, lv = pcall(e.node.toLocal, e.node, vec3(a.x + (a.vx or 0), a.y + (a.vy or 0), a.z + (a.vz or 0)))
+              local hd = math.sqrt(dx * dx + dz * dz)
+              if ok2 and lv and hd > 1e-3 then
+                local closing = -((lv.x - lp.x) * dx + (lv.z - lp.z) * dz) / hd
+                if closing > 0.5 then near = math.min(near + 4.0, near + closing * (D.secs or 1.0) * 0.9) end
+              end
+            end
             if vert then
-              if dx * dx + dz * dz < (D.near or 1.6) ^ 2 and math.abs(dy) < vert then want = 1 end
-            elseif dx * dx + dz * dz < (D.near or 2.2) ^ 2 and dy > -1.6 and dy < 2.8 then want = 1 end
+              if dx * dx + dz * dz < near ^ 2 and math.abs(dy) < vert then want = 1 end
+            elseif dx * dx + dz * dz < near ^ 2 and dy > -1.6 and dy < 2.8 then want = 1 end
           end
         end
       end

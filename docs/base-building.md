@@ -4048,3 +4048,74 @@ no faces inside them.
 - `tools/perf/kitprobe.sh <engine> habjoin` (PATCHES=funds.patch;
   `tools/perf/habjoinprobe_modes.lua`). Pictures
   `save/user/buildshots/hj*.png`; numbers in `work/habjoin/NOTES.md`.
+
+## 30. Playtest 11-10: z-fighting pass 2, gas racks, steps, doorways, plants under decks
+
+Ty, 11-10: "please fix all the zfighting on base parts ... incomplete pipes
+where they're not properly connected", "barely squeezing through doors",
+"abandoned bases have too tight of doorways and things blocking them, and like
+the stairs going up to the entrance doorway I had to get on it and crouch to
+get inside". The engine's depth is not the cause (E: Depth32Float, near
+0.05, ~0.02 mm at 4 m): coplanar or near-coplanar faces are, and on a turning
+planet their winner re-rolls every frame, so they shimmer standing still.
+
+**Every kit piece is clean.** §29 fixed the hab and wall pieces; this pass the
+rest (props, trusses, machines, the plant, fluids, logic, conveyors, lasers):
+zall 3,299 pairs → only the undersides at y = 0 that stand on a floor. A
+stricter check (planes within 1.2 mm, across zcheck's bucket edges; inside-
+solid per primitive) found 87 more (heavy door chevrons 1 mm off the kick
+plate, crate posts, cable-tray clips, screen bracket) → 0. The rules used:
+trim 2–3 mm proud, members ending 2–3 mm inside what they butt into, caps
+offset, hidden faces buried. Bounds move ≤ 5 mm, ports never.
+
+**Between pieces.** A slab's edge strips stop 2 mm inside its edge (their ends
+lay in the end faces of walls standing on that edge); the Open Frame's opening
+is 1.72 m (a 1.8 m hole put its jambs in the faces of the walls either side at
+a room's corner). Ruins: the shack's workbench 5 mm off the back wall (its
+pegboard lay in the wall's face), the mine's cross beams 3 mm over the long
+ones, crates apart. Left: where two walls meet at a corner their top faces
+overlap in a 0.1 m square outside the roof, seen only from above.
+
+**Gas racks.** The Air Tank Rack's manifold sat tangent on the cylinder necks
+and stopped short of the regulator: each valve now has a pigtail into a boss
+on the header, the header is capped at one end and runs into the regulator,
+which hangs on the right post, its outlet to a wall plate; the straps are
+bands bolted to back rails (they were rods through the cylinders). The fluids
+bottle racks (O2, N2, H2) the same, down to their port nozzle; the riser's
+high nozzle had no flange (a missing `y`), the charge pump's header floated;
+the O2 Generator's back stands 15 mm in so its nozzles' flanges show.
+
+**Doors.** The capsule is 1.9 × 0.62 m. The Airlock Wall's and the Pressure
+Bulkhead's openings are 2.08 m (were 1.95: 5 cm over the head). A door used
+to start opening at `near` (2.2 m) and take `secs` (1 s), so a walker met a
+leaf 39 % open. `kit_live` now adds to a door's reach the distance you close
+in the time it takes to open, while you walk toward it (the first-person
+pass's proposal), and the pocket doors slide faster (Door Wall 0.7 s, Double
+0.9 s, hab door 1.2 s): walking up, a Door Wall's leaf is ~90 % open when
+you reach it. `near` itself is unchanged: a longer one held an outside door
+open while you stood in a small room, and an airlock's inner door with it
+(kitprobe rooms). Not changed: the hab door and a junction's port are 1.8 m
+(the can's 2.0 m inside height leaves no room).
+
+**Stairs.** The handrail colliders of Stairs, Steps and the Ship's Ladder
+stand square to the slope; full length, their ends reached ~0.4 m past the
+foot and the top and fenced off the way on (a ladder by a wall couldn't be
+reached at all). They are 0.8 m shorter.
+
+**Steps and ruins.** Steps 0.8 m are for a hab's deck; at a slab's 0.2 m sill
+they stood on the ground with their top 0.6 m over it. The Hab Block ruin's
+steps now have their top tread flush with the slab, butted to its edge under
+the door (the lower treads in the ground). Its airlock receiver stood across
+the path between the two doors (now beside it); the ladder came up through a
+0.9 m hatch (too short to climb standing, and its top went through the floor):
+an open well x 1..3, z -3..0 with a rail, the ladder topping out at its edge.
+The shack's drum is outside, the power hall's shield blocks west of the
+double door. smoke_ruins checks every doorway clear a metre each side and
+steps flush with the sill. (Graveyard's own steps: a patch for its scenario.)
+
+**Plants under decks.** `flora_field`'s structure clear now counts hab pieces
+(their deck is 0.8 m up), kit floors and slabs up to a storey over the ground
+(rooted down to 1.5 m under them), and blocks standing on the ground. Same
+budgeted job; no per-frame work.
+
+Probe: `tools/perf/kitprobe.sh <engine> zfight` (`zfprobe_modes.lua`).

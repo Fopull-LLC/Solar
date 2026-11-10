@@ -67,7 +67,7 @@ def pieces(K):
         for z in (-0.16, 0.12):
             tb(m, "Steel", MEMBRANE, (0.24, 0.10, z), (0.24, 1.22, z), 0.075, segs=16)
             for y in (0.12, 1.20):
-                tb(m, "Steel", GREY, (0.24, y - 0.02, z), (0.24, y + 0.02, z), 0.085, segs=16)
+                tb(m, "Steel", GREY, (0.24, y - 0.023, z), (0.24, y + 0.023, z), 0.085, segs=16)
             tb(m, "Steel", LIGHT, (0.24, 1.22, z), (0.24, 1.28, z), 0.018, segs=8)
         tb(m, "Steel", LIGHT, (0.24, 1.28, -0.16), (0.24, 1.28, 0.12), 0.016, segs=8)    # the product header
         tb(m, "Steel", LIGHT, (0.24, 1.28, 0.12), (0.46, 1.28, 0.12), 0.016, segs=8)
@@ -75,7 +75,7 @@ def pieces(K):
         sh.add((0.24, 0.66, -0.02), (0.18, 1.12, 0.46))
         # the receiver bottle, black (nitrogen), on its cradle at the back
         tb(m, "Steel", (0.10, 0.10, 0.11), (0.06, 0.20, -0.28), (0.42, 0.20, -0.28), 0.06, segs=14)
-        tb(m, "Steel", GREY, (0.06, 0.20, -0.28), (0.10, 0.20, -0.28), 0.062, segs=14)
+        tb(m, "Steel", GREY, (0.057, 0.20, -0.28), (0.10, 0.20, -0.28), 0.066, segs=14)
         # the gauge and the lamp on the cabinet's face
         tb(m, "Steel", PAINT, (-0.10, 0.88, 0.33), (-0.10, 0.88, 0.35), 0.035, segs=14)
         lamp(m, -0.30, 0.88, 0.33)
@@ -224,7 +224,7 @@ def pieces(K):
         # the solar panel, tilted toward -Z
         M = K.rot_x(math.radians(-50))
         K.rbox(m, "Steel", PANEL_BLUE, (0.0, 1.30, -0.20), (0.62, 0.02, 0.46), M)
-        K.rbox(m, "Steel", ALU, (0.0, 1.29, -0.205), (0.65, 0.012, 0.49), M)
+        K.rbox(m, "Steel", ALU, tuple(np.array((0.0, 1.30, -0.20)) - M[:, 1] * 0.012), (0.65, 0.012, 0.49), M)
         tb(m, "Steel", ALU, (0.0, 1.15, -0.02), (0.0, 1.22, -0.12), 0.012, segs=6)
         # the temperature screen: louvred white box
         for k in range(7):
@@ -239,7 +239,7 @@ def pieces(K):
             e = (0.13 * math.cos(a), 2.58, 0.13 * math.sin(a))
             tb(m, "Steel", ALU, hub, e, 0.005, segs=5)
             tb(m, "Steel", BLACK, (e[0], e[1] - 0.03, e[2]), (e[0], e[1] + 0.03, e[2]), 0.03, segs=10)
-        tb(m, "Steel", ALU, (0.0, 2.30, 0.0), (0.0, 2.30, 0.30), 0.006, segs=5)
+        tb(m, "Steel", ALU, (0.0, 2.30, 0.0), (0.0, 2.30, 0.24), 0.006, segs=5)
         bx(m, "Steel", BLACK, -0.004, 0.004, 2.25, 2.37, 0.24, 0.34)
         # the magnetometer on its boom (fibreglass: no iron near the sensor)
         tb(m, "Steel", (0.85, 0.80, 0.60), (0.0, 2.05, 0.0), (-0.82, 2.05, 0.0), 0.012, segs=6)

@@ -127,7 +127,7 @@ def pieces(K):
         m, sh = CModel(seed=1921), Shell()
         skid(m, sh, -0.5, 0.5, -0.75, 0.75)
         bx(m, "Steel", OLIVE, -0.42, 0.42, 0.12, 1.12, -0.68, 0.62, sh=sh)
-        bx(m, "Steel", DARKC, -0.44, 0.44, 1.1, 1.15, -0.7, 0.64)
+        bx(m, "Steel", DARKC, -0.44, 0.44, 1.1, 1.15, -0.7, 0.645)
         # diode-stack heat sinks on top
         for k in range(9):
             z = -0.6 + k * 0.14
@@ -140,7 +140,7 @@ def pieces(K):
         nozzle(m, 0.5, 0.0, 1, 0.1, 0.06, COOL)
         tb(m, "Steel", COOL, (0.44, PIPE_Y, 0.0), (0.44, 1.05, -0.3), 0.03, segs=8)
         # the access panel, the interlock lamp, the stencil
-        bx(m, "Steel", DARKC, -0.425, -0.42, 0.35, 0.95, -0.4, 0.3)
+        bx(m, "Steel", DARKC, -0.428, -0.42, 0.35, 0.95, -0.4, 0.3)
         bx(m, "Steel", RED, 0.2, 0.28, 0.98, 1.06, 0.62, 0.64)
         stripe(m, -0.4, 0.0, 0.2, 0.28, 0.62)
         return m, sh, []
@@ -202,8 +202,8 @@ def pieces(K):
         lathe(y, "Steel", [(0.46, 1.32), (0.46, 1.38)], segs=32)
         for s in (-1, 1):
             bx(y, "Steel", OLIVE, s * 0.40 - 0.04, s * 0.40 + 0.04, 1.38, PIV + 0.08, -0.14, 0.14)
-            tb(y, "Steel", DARKC, (s * 0.36, PIV, 0), (s * 0.46, PIV, 0), 0.08, segs=14)
-        bx(y, "Steel", OLIVE, -0.40, 0.40, 1.38, 1.46, -0.14, 0.14)
+            tb(y, "Steel", DARKC, (s * 0.363, PIV, 0), (s * 0.46, PIV, 0), 0.08, segs=14)
+        bx(y, "Steel", OLIVE, -0.40, 0.40, 1.383, 1.46, -0.137, 0.137)
         # the head: the mirror's housing along +Z, centred on its trunnions (box-symmetric about the pivot)
         h = CModel(seed=1953)
         hb = CModel(seed=1954)
@@ -251,7 +251,7 @@ def pieces(K):
         sh.add((0, 0.7, 0), (0.6, 1.2, 0.6))
         for s in (-1, 1):
             bx(m, "Steel", OLIVE, s * 0.55 - 0.04, s * 0.55 + 0.04, 1.35, 1.75, -0.12, 0.12)
-        bx(m, "Steel", OLIVE, -0.55, 0.55, 1.35, 1.42, -0.12, 0.12)
+        bx(m, "Steel", OLIVE, -0.55, 0.55, 1.353, 1.42, -0.117, 0.117)
         d = CModel(seed=1972)
         d.color = PORC
         prof = [(0.05 + r, 0.32 * (r / 0.9) ** 2) for r in np.linspace(0.0, 0.9, 10)]

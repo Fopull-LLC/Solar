@@ -240,7 +240,8 @@ def door_leaf(w, h, heavy=False, window=True, t=0.05):
             # (z-fight, playtest 11-10: the top chevron ended on the leaf's top face; they now stop 5 mm under it)
             ch = (h - 0.125) / 8
             y = 0.12 + k * ch
-            bx(m, "Steel", SAFETY if k % 2 == 0 else DARK, -w / 2 - 0.004, -w / 2 + 0.05, y, y + ch, -t / 2 - 0.003, t / 2 + 0.003)
+            # (3 mm proud of the kick plate they cross)
+            bx(m, "Steel", SAFETY if k % 2 == 0 else DARK, -w / 2 - 0.004, -w / 2 + 0.05, y, y + ch, -t / 2 - 0.007, t / 2 + 0.007)
     return m, sh
 
 
@@ -252,9 +253,11 @@ def p_slab2(mat):
     m, sh = CModel(seed=11), Shell()
     surf, col = look(mat)
     bx(m, "Concrete", col, -1, 1, -0.10, 0.20, -1, 1, sh=sh)
+    # (z-fight: the edge strips stop 2 mm inside the slab's edge, so their ends and outer faces never share a
+    # plane with the end of a wall or post standing on that edge, or with the next slab's strips)
     for s in (-1, 1):
-        bx(m, "Steel", GREY, -1, 1, 0.20, 0.206, s * 0.965 - 0.035, s * 0.965 + 0.035)
-        bx(m, "Steel", GREY, s * 0.965 - 0.035, s * 0.965 + 0.035, 0.20, 0.206, -0.93, 0.93)
+        bx(m, "Steel", GREY, -0.998, 0.998, 0.20, 0.206, s * 0.964 - 0.034, s * 0.964 + 0.034)
+        bx(m, "Steel", GREY, s * 0.964 - 0.034, s * 0.964 + 0.034, 0.20, 0.206, -0.93, 0.93)
     for sx in (-1, 1):
         bx(m, "Steel", DARK, sx * 0.6 - 0.06, sx * 0.6 + 0.06, 0.20, 0.205, -0.06, 0.06)
     return m, sh, []
@@ -321,7 +324,7 @@ def p_stairs(mat, rise=2.4, run=3.6, width=1.6):
             for k in range(0, n + 1, 3):
                 q = a + d * (k / n)
                 tb(m, "Steel", SAFETY, q + (0, 0.04, 0), q + (0, 1.0, 0), 0.022, segs=6)
-            sh.add(tuple(a + d / 2 + (0, 0.6, 0)), (0.06, 1.1, np.linalg.norm(d)), quat_from_basis(Mr))
+            sh.add(tuple(a + d / 2 + (0, 0.6, 0)), (0.06, 1.1, max(0.2, np.linalg.norm(d) - 0.8)), quat_from_basis(Mr))
     return m, sh, []
 
 
@@ -352,7 +355,9 @@ def kit_stair(m, sh, rise, run, width):
         for k in range(0, n + 1, max(1, n // 4)):
             q = a + d * (k / n)
             tb(m, "Steel", SAFETY, q + (0, 0.1, 0), q + (0, 1.0, 0), 0.022, segs=6)
-        sh.add(tuple(a + d / 2 + (0, 0.55, 0)), (0.06, 1.0, L), quat_from_basis(Mr))
+        # (Ty 11-10, "improper connections for stairs": the rail's box stands square to the slope, so
+        # a full-length one reached ~0.4 m past the foot and the top and fenced the way on; 0.8 m shorter)
+        sh.add(tuple(a + d / 2 + (0, 0.55, 0)), (0.06, 1.0, max(0.2, L - 0.8)), quat_from_basis(Mr))
 
 
 def p_steps(mat):
@@ -512,29 +517,33 @@ def p_porthole(mat):
 
 def p_airlockWall(mat):
     m, sh = CModel(seed=26), Shell()
-    wall_body(m, sh, mat, -1, 1, 0, WH, holes=[(-0.92, 0.0, 0.0, 1.95)], trims=False)
+    # (Ty 11-10, "barely squeezing through doors": a 1.95 m opening left the 1.9 m capsule 5 cm; 2.08 m
+    # leaves 18 cm, the frame's head still under the wall's top channel)
+    wall_body(m, sh, mat, -1, 1, 0, WH, holes=[(-0.92, 0.0, 0.0, 2.08)], trims=False)
     # a heavy pressure frame proud of both faces, hazard-striped, with its seal
     for s in (-1, 1):
         z0, z1 = s * WT / 2, s * (WT / 2 + 0.06)
         # (z-fight, playtest 11-10: the jambs overlapped the head and lay in the wall's cut edges
         # and its end stud; now 3 mm into the opening, 3 mm in from the wall's end, jambs under the head)
-        for (a, b, c, d) in ((-0.997, -0.917, 0.002, 1.947), (-0.003, 0.08, 0.002, 1.947), (-0.997, 0.08, 1.947, 2.13)):
+        for (a, b, c, d) in ((-0.997, -0.917, 0.002, 2.077), (-0.003, 0.08, 0.002, 2.077), (-0.997, 0.08, 2.077, 2.197)):
             bx(m, "Steel", (0.55, 0.50, 0.32), a, b, c, d, min(z0, z1) - s * 0.004, max(z0, z1))
         for k in range(9):
             y = k * 0.22
             if k % 2 == 0:
-                bx(m, "Steel", DARK, 0.0, 0.08, y, min(1.95, y + 0.22), min(z0, z1) - 0.003 if s < 0 else max(z0, z1) - 0.002,
+                bx(m, "Steel", DARK, 0.0, 0.08, y, min(2.074, y + 0.22), min(z0, z1) - 0.003 if s < 0 else max(z0, z1) - 0.002,
                    min(z0, z1) + 0.002 if s < 0 else max(z0, z1) + 0.003)
         # the indicator lamp and the cycle panel beside the door
         bx(m, "Steel", DARK, 0.18, 0.38, 1.25, 1.55, s * (WT / 2) - 0.002, s * (WT / 2 + 0.04))
         bx(m, "Lamp", (0.25, 1.0, 0.35), 0.24, 0.32, 1.45, 1.5, s * (WT / 2 + 0.04) - 0.004, s * (WT / 2 + 0.04) + 0.004)
-    lm, lsh = door_leaf(0.96, 1.95, heavy=True, t=0.07)
+    lm, lsh = door_leaf(0.96, 2.08, heavy=True, t=0.07)
     return m, sh, [("Door", "door", (lm, lsh, (-0.46, 0.0, 0.0)))]
 
 
 def p_openFrame(mat):
     m, sh = CModel(seed=27), Shell()
-    wall_body(m, sh, mat, -1, 1, 0, WH, holes=[(-0.9, 0.9, 0.0, 2.05)])
+    # (z-fight, Ty 11-10: a 1.8 m hole put its cut edges and jambs in the inner faces of the walls
+    # either side when it closed a room's corner; 1.72 m keeps the frame 3.6 cm proud of them)
+    wall_body(m, sh, mat, -1, 1, 0, WH, holes=[(-0.86, 0.86, 0.0, 2.05)])
     return m, sh, []
 
 
@@ -667,11 +676,12 @@ def p_truss(mat, L):
     w = 0.22
     for sx in (-1, 1):
         for sz in (-1, 1):
-            tb(m, "Steel", GREY, (sx * w, 0, sz * w), (sx * w, L, sz * w), 0.03, segs=8)
+            # (the chords end 3 mm inside the end plates: a free end shows the plate, not two faces)
+            tb(m, "Steel", GREY, (sx * w, 0.003, sz * w), (sx * w, L - 0.003, sz * w), 0.03, segs=8)
     bays = max(1, int(round(L / 0.5)))
     for k in range(bays + 1):
         y = L * k / bays
-        y = min(max(y, 0.015), L - 0.015)
+        y = min(max(y, 0.018), L - 0.018)
         for (a, b) in (((-w, -w), (w, -w)), ((w, -w), (w, w)), ((w, w), (-w, w)), ((-w, w), (-w, -w))):
             tb(m, "Steel", GREY, (a[0], y, a[1]), (b[0], y, b[1]), 0.015, segs=6)
     for k in range(bays):
@@ -679,7 +689,8 @@ def p_truss(mat, L):
         f = 1 if k % 2 == 0 else -1
         for (a, b) in (((-w, -w), (w, -w)), ((w, -w), (w, w)), ((w, w), (-w, w)), ((-w, w), (-w, -w))):
             p0 = (a[0], y0 if f > 0 else y1, a[1]); p1 = (b[0], y1 if f > 0 else y0, b[1])
-            tb(m, "Steel", GREY, p0, p1, 0.012, segs=5)
+            # (alternate bays' diagonals 1.5 mm thinner: two meeting at a node share no facet plane)
+            tb(m, "Steel", GREY, p0, p1, 0.012 if k % 2 == 0 else 0.0105, segs=5)
     for y in (0.0, L):
         bx(m, "Steel", DARK, -0.25, 0.25, y - 0.008 if y > 0 else 0, y if y > 0 else 0.008, -0.25, 0.25)
     sh.add((0, L / 2, 0), (0.5, L, 0.5))
@@ -1282,7 +1293,7 @@ def p_wallScreen(mat):
     m, sh = CModel(seed=83), Shell()
     m.ground = False
     bx(m, "Steel", DARK, -0.45, 0.45, 0, 0.045, -0.28, 0.28)
-    bx(m, "Steel", GREY, -0.08, 0.08, -0.0, 0.01, -0.28, -0.25)
+    bx(m, "Steel", GREY, -0.08, 0.08, -0.0, 0.01, -0.277, -0.25)
     sm = CModel(seed=84); sm.ground = False
     # the face: one quad facing +Y, UV 0..1 over it (kit_live paints it)
     sm.color = (1, 1, 1)
@@ -1302,7 +1313,7 @@ def p_wallTray(mat):
     for k, (z, r) in enumerate(((-0.05, 0.016), (0.0, 0.02), (0.05, 0.014), (-0.02, 0.012))):
         tb(m, "Rubber", RUBBER, (-1, 0.004 + r + (0.03 if k == 3 else 0), z), (1, 0.004 + r + (0.03 if k == 3 else 0), z), r, segs=6)
     for x in (-0.7, 0.0, 0.7):
-        bx(m, "Steel", DARK, x - 0.02, x + 0.02, 0, 0.1, -0.11, 0.11)
+        bx(m, "Steel", DARK, x - 0.02, x + 0.02, 0, 0.103, -0.11, 0.11)
     return m, sh, []
 
 
@@ -1350,8 +1361,10 @@ def p_o2gen(mat):
     """An electrolyser: a white cabinet with a stack window, its water tank on
     the side, a gas manifold and the O2 line, hazard placards."""
     m, sh = CModel(seed=92), Shell()
-    bx(m, "Clad", STEELWALL, -0.45, 0.30, 0.0, 1.55, -0.30, 0.30, sh=sh)
-    bx(m, "Steel", DARK, -0.43, 0.28, 0.0, 0.07, -0.28, 0.28)
+    # (the back stands 15 mm in from the box's -0.30, so the water and H2 nozzles' flanges, whose
+    # faces end on the ports at -0.30, stand proud of it: a pipe is seen to meet them)
+    bx(m, "Clad", STEELWALL, -0.45, 0.30, 0.0, 1.55, -0.285, 0.30, sh=sh)
+    bx(m, "Steel", DARK, -0.43, 0.28, 0.0, 0.07, -0.27, 0.28)
     # the cell stack behind its window
     bx(m, "Steel", DARK, -0.36, 0.20, 0.55, 1.25, 0.30, 0.31)
     for k in range(10):
@@ -1372,24 +1385,46 @@ def p_o2gen(mat):
 
 def p_airTank(mat):
     """Three 200 bar air cylinders strapped in a rack, a manifold, a regulator
-    with its gauge."""
+    with its gauge. (Ty 11-10: the manifold floated on the necks and stopped
+    short of the regulator.) Each cylinder valve's pigtail rises into a boss on
+    the header; the header is capped at one end and runs INTO the regulator,
+    which hangs on the right post by a bracket; the outlet goes back to a wall
+    plate. The straps are bands round each cylinder, bolted to two back rails.
+    The frame posts stand 3 mm proud of the base and the top bar; nothing
+    shares a face."""
     m, sh = CModel(seed=93), Shell()
+    GREEN = (0.18, 0.34, 0.22)
     bx(m, "Steel", DARK, -0.6, 0.6, 0.0, 0.06, -0.25, 0.25, sh=sh)
     for x in (-0.58, 0.58):
-        bx(m, "Steel", GREY, x - 0.02, x + 0.02, 0.0, 1.75, -0.24, -0.20)
-    bx(m, "Steel", GREY, -0.6, 0.6, 1.70, 1.75, -0.24, -0.20)
+        bx(m, "Steel", GREY, x - 0.023, x + 0.023, 0.0, 1.753, -0.243, -0.197)
+    bx(m, "Steel", GREY, -0.597, 0.597, 1.70, 1.75, -0.24, -0.20)
+    for y in (0.4, 1.1):     # the strap rails between the posts
+        bx(m, "Steel", GREY, -0.58, 0.58, y - 0.02, y + 0.02, -0.236, -0.204)
     for k, x in enumerate((-0.38, 0.0, 0.38)):
-        tb(m, "Steel", (0.18, 0.34, 0.22), (x, 0.06, 0.0), (x, 1.42, 0.0), 0.17, segs=18)
-        m.color = (0.18, 0.34, 0.22)
+        tb(m, "Steel", GREEN, (x, 0.06, 0.0), (x, 1.42, 0.0), 0.17, segs=18)
+        m.color = GREEN
         tube(m, "Steel", (x, 1.42, 0.0), (x, 1.52, 0.0), 0.17, segs=18, uv_m=UVM["Steel"], r1=0.06)
-        tb(m, "Steel", LIGHT, (x, 1.52, 0.0), (x, 1.60, 0.0), 0.035, segs=8)
+        # the neck ring and the valve: a block, its handwheel, the pigtail up into the header's boss
+        tb(m, "Steel", LIGHT, (x, 1.50, 0.0), (x, 1.60, 0.0), 0.035, segs=10)
+        bx(m, "Steel", DARK, x - 0.03, x + 0.03, 1.595, 1.655, -0.03, 0.03)
+        tb(m, "Steel", SAFETY, (x, 1.625, 0.03), (x, 1.625, 0.07), 0.008, segs=6)
+        tb(m, "Steel", SAFETY, (x, 1.625, 0.07), (x, 1.625, 0.078), 0.028, segs=12)
+        tb(m, "Steel", LIGHT, (x, 1.65, 0.0), (x, 1.725, 0.0), 0.009, segs=8)
+        tb(m, "Steel", LIGHT, (x - 0.026, 1.725, 0.0), (x + 0.026, 1.725, 0.0), 0.022, segs=10)
         for y in (0.4, 1.1):
-            tb(m, "Steel", DARK, (x - 0.18, y, 0.0), (x + 0.18, y, 0.0), 0.01, segs=5)
-        bx(m, "Steel", PAINT, x - 0.06, x + 0.06, 1.0, 1.2, 0.165, 0.175)
+            tb(m, "Steel", DARK, (x, y - 0.015, 0.0), (x, y + 0.015, 0.0), 0.174, segs=18)
+            bx(m, "Steel", DARK, x - 0.02, x + 0.02, y - 0.015, y + 0.015, -0.21, -0.16)
+        bx(m, "Steel", PAINT, x - 0.06, x + 0.06, 1.0, 1.2, 0.165, 0.176)
         sh.add((x, 0.8, 0), (0.34, 1.5, 0.34))
-    tb(m, "Steel", LIGHT, (-0.38, 1.62, 0.0), (0.38, 1.62, 0.0), 0.02, segs=8)
-    bx(m, "Steel", DARK, 0.42, 0.56, 1.52, 1.68, -0.05, 0.08)
-    tb(m, "Steel", PAINT, (0.49, 1.60, 0.08), (0.49, 1.60, 0.10), 0.05, segs=14)
+    # the header: a cap at the left, into the regulator on the right
+    tb(m, "Steel", LIGHT, (-0.42, 1.725, 0.0), (0.46, 1.725, 0.0), 0.016, segs=10)
+    tb(m, "Steel", DARK, (-0.43, 1.725, 0.0), (-0.41, 1.725, 0.0), 0.02, segs=10)
+    # the regulator on its bracket off the right post, its gauge and the outlet to the wall plate
+    bx(m, "Steel", DARK, 0.44, 0.56, 1.64, 1.80, -0.05, 0.07)
+    bx(m, "Steel", GREY, 0.50, 0.57, 1.66, 1.70, -0.21, -0.045)
+    tb(m, "Steel", PAINT, (0.50, 1.76, 0.065), (0.50, 1.76, 0.09), 0.045, segs=14)
+    tb(m, "Steel", LIGHT, (0.47, 1.67, -0.04), (0.47, 1.67, -0.247), 0.012, segs=8)
+    bx(m, "Steel", GREY, 0.42, 0.52, 1.62, 1.72, -0.25, -0.244)
     return m, sh, []
 
 
@@ -1414,8 +1449,9 @@ def breaker_panel(w, h, d, amps, seed):
             x = -w / 2 + 0.08 + k * (w - 0.2) / max(1, n - 1)
             bx(m, "Steel", (0.12, 0.12, 0.13) if k else SAFETY, x - 0.012, x + 0.012, d * 0.87, d * 0.9, h / 2 - 0.2, h / 2 - 0.12)
         # the rating plate and the hazard flash
-        bx(m, "Steel", LIGHT, -w / 2 + 0.05, -w / 2 + 0.18, d * 0.86, d * 0.865, -h / 2 + 0.05, -h / 2 + 0.11)
-        bx(m, "Steel", SAFETY, -0.03, 0.03, d * 0.86, d * 0.865, -0.03, 0.03)
+        # (2.5 mm proud of the door: thinner fights it)
+        bx(m, "Steel", LIGHT, -w / 2 + 0.05, -w / 2 + 0.18, d * 0.86, d * 0.86 + 0.0025, -h / 2 + 0.05, -h / 2 + 0.11)
+        bx(m, "Steel", SAFETY, -0.03, 0.03, d * 0.86, d * 0.86 + 0.0025, -0.045, 0.012)
         # the glands under it
         for k in range(2):
             x = -w / 4 + k * w / 2

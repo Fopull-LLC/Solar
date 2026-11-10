@@ -115,7 +115,13 @@ def pieces(K):
     def belt_frame(m, sh, path, legs, width=BW):
         """Stringers, idlers and legs along a path of (x, z) points at the belt's height."""
         P = [np.array([p[0], BELT_Y, p[1]], float) for p in path]
-        for a, b in zip(P[:-1], P[1:]):
+        up = np.array([0.0, 1.0, 0.0])
+        sides = [np.cross(up, (b - a) / np.linalg.norm(b - a)) for a, b in zip(P[:-1], P[1:])]
+        # each vertex's side: the mean of its segments' (a stringer's ends sit on it, so a curve's inner
+        # stringers are as long as the inner chord and only their ends overlap)
+        vside = [sides[0]] + [(sides[k - 1] + sides[k]) / np.linalg.norm(sides[k - 1] + sides[k]) for k in range(1, len(sides))] + [sides[-1]]
+        for si, (a, b) in enumerate(zip(P[:-1], P[1:])):
+            e = 0.003 * (si % 2)   # (a curve's neighbouring segments overlap: every other one stands 3 mm proud)
             d = b - a
             L = float(np.linalg.norm(d))
             ax = d / L
@@ -125,12 +131,16 @@ def pieces(K):
             M = K.rot_y(yaw)
             c = (a + b) / 2
             for s in (-1, 1):
-                q = c + side * s * (width / 2 + 0.05)
-                rbox(m, "Steel", STRUCT, (q[0], BELT_Y - 0.09, q[2]), (0.05, 0.16, L + 0.01), M)
-                rbox(m, "Steel", DARK, (q[0], BELT_Y - 0.01, q[2]), (0.07, 0.012, L + 0.01), M)
+                off = s * (width / 2 + 0.05)
+                qa, qb = a + vside[si] * off, b + vside[si + 1] * off
+                q = (qa + qb) / 2
+                Ls = float(np.linalg.norm(qb - qa))
+                Ms = K.rot_y(math.atan2(qb[0] - qa[0], qb[2] - qa[2]))
+                rbox(m, "Steel", STRUCT, (q[0], BELT_Y - 0.09, q[2]), (0.05 + 2 * e, 0.16 + 2 * e, Ls + 0.01), Ms)
+                rbox(m, "Steel", DARK, (q[0], BELT_Y - 0.01 + e, q[2]), (0.07 + 2 * e, 0.012, Ls + 0.016), Ms)
             # the belt's carcass under its surface, and its return run
-            rbox(m, "Rubber", RUBBER, (c[0], BELT_Y - 0.012, c[2]), (width, 0.02, L), M)
-            rbox(m, "Rubber", RUBBER, (c[0], BELT_Y - 0.22, c[2]), (width * 0.95, 0.012, L), M)
+            rbox(m, "Rubber", RUBBER, (c[0], BELT_Y - 0.012 - e, c[2]), (width, 0.02, L), M)
+            rbox(m, "Rubber", RUBBER, (c[0], BELT_Y - 0.22 - e, c[2]), (width * 0.95, 0.012, L), M)
             n = max(1, int(round(L / 0.5)))
             for k in range(n):
                 f = (k + 0.5) / n
@@ -210,7 +220,7 @@ def pieces(K):
         c = (a + b) / 2
         for s in (-1, 1):
             rbox(m, "Steel", STRUCT, (s * (BW / 2 + 0.05), c[1] - 0.09, c[2]), (0.05, 0.16, L), M)
-        rbox(m, "Rubber", RUBBER, (0, c[1] - 0.012, c[2]), (BW, 0.02, L), M)
+        rbox(m, "Rubber", RUBBER, (0, c[1] - 0.014, c[2]), (BW, 0.02, L), M)
         for k in range(4):
             f = (k + 0.5) / 4
             p = a + d * f
@@ -316,10 +326,10 @@ def pieces(K):
         bx(m, "Steel", DARK, -0.25, 0.25, 0.92, 1.0, -0.25, 0.25)
         # the discharge feeder: the outlet onto a short apron to the +Z belt port
         bx(m, "Steel", FRAME_Y, -0.3, 0.3, BELT_Y + 0.02, 0.92, -0.25, 0.25)
-        bx(m, "Steel", FRAME_Y, -0.32, 0.32, BELT_Y - 0.02, BELT_Y + 0.25, 0.25, 1.0)
+        bx(m, "Steel", FRAME_Y, -0.32, 0.32, BELT_Y - 0.02, BELT_Y + 0.25, 0.25, 0.997)
         bx(m, "Steel", DARK, -0.28, 0.28, BELT_Y + 0.03, BELT_Y + 0.22, 0.99, 1.0)
         # the inlet: a belt delivering at −Z rides a casing up the bin's side to its top
-        bx(m, "Steel", FRAME_Y, -0.32, 0.32, BELT_Y - 0.02, BELT_Y + 0.25, -1.0, -0.6)
+        bx(m, "Steel", FRAME_Y, -0.32, 0.32, BELT_Y - 0.02, BELT_Y + 0.25, -0.997, -0.6)
         bx(m, "Steel", DARK, -0.28, 0.28, BELT_Y + 0.03, BELT_Y + 0.22, -1.0, -0.995)
         bx(m, "Steel", GREY, -0.2, 0.2, BELT_Y + 0.25, 2.62, -0.98, -0.62)
         bx(m, "Steel", GREY, -0.2, 0.2, 2.5, 2.62, -0.62, -0.1)
@@ -352,8 +362,8 @@ def pieces(K):
         lathe(m, "Steel", [(R + 0.01, 4.5), (R + 0.01, 4.53)], segs=40)
         sh.add((0, 3.1, 0), (2 * R, 6.2, 2 * R))
         # the outlet under the cone, its slide gate and the spout to the +Z belt port
-        bx(m, "Steel", DARK, -0.2, 0.2, 0.85, 0.95, -0.2, 0.2)
-        bx(m, "Steel", FRAME_Y, -0.3, 0.3, BELT_Y - 0.02, BELT_Y + 0.25, -0.2, 1.1)
+        bx(m, "Steel", DARK, -0.2, 0.2, 0.85, 0.95, -0.203, 0.2)
+        bx(m, "Steel", FRAME_Y, -0.3, 0.3, BELT_Y - 0.02, BELT_Y + 0.25, -0.2, 1.097)
         bx(m, "Steel", DARK, -0.27, 0.27, BELT_Y + 0.03, BELT_Y + 0.22, 1.095, 1.1)
         # the bucket elevator: from the inlet boot at −Z up the side to the roof
         bx(m, "Steel", FRAME_Y, -0.32, 0.32, BELT_Y - 0.02, BELT_Y + 0.35, -1.1, -0.75)
@@ -385,7 +395,7 @@ def pieces(K):
         tb(m, "Steel", GREY, (0.0, 2.5, 2.2), (0.0, 2.1, 2.2), 0.13, segs=16)
         tb(m, "Rubber", RUBBER, (0.0, 2.12, 2.2), (0.0, 1.85, 2.2), 0.15, segs=16)
         # the inlet hopper at the foot (−Z belt port) and the inclined screw up to the boom
-        bx(m, "Steel", FRAME_Y, -0.32, 0.32, BELT_Y - 0.02, BELT_Y + 0.3, -0.6, -0.15)
+        bx(m, "Steel", FRAME_Y, -0.32, 0.32, BELT_Y - 0.02, BELT_Y + 0.3, -0.597, -0.15)
         bx(m, "Steel", DARK, -0.28, 0.28, BELT_Y + 0.03, BELT_Y + 0.26, -0.6, -0.595)
         tb(m, "Steel", GREY, (0.0, BELT_Y + 0.2, -0.3), (0.0, 3.05, 0.2), 0.11, segs=14)
         tb(m, "Steel", MOTOR, (0.0, 3.05, 0.2), (0.0, 3.2, 0.35), 0.12, segs=12)
@@ -434,8 +444,8 @@ def pieces(K):
         bx(m, "Steel", DARK, 0.06, 0.94, 2.46, 2.52, -0.94, -0.06)
         tb(m, "Steel", FRAME_Y, (0.5, 1.6, -0.5), (0.5, 1.2, -0.5), 0.18, segs=14)
         bx(m, "Steel", FRAME_Y, 0.2, 0.8, BELT_Y - 0.02, 1.2, -0.75, -0.25)
-        bx(m, "Steel", FRAME_Y, -0.3, 0.3, BELT_Y - 0.02, BELT_Y + 0.25, -0.25, 1.0)
-        bx(m, "Steel", FRAME_Y, 0.2, 0.8, BELT_Y - 0.02, BELT_Y + 0.25, -0.25, 0.25)
+        bx(m, "Steel", FRAME_Y, -0.3, 0.3, BELT_Y - 0.02, BELT_Y + 0.25, -0.25, 0.997)
+        bx(m, "Steel", FRAME_Y, 0.203, 0.797, BELT_Y - 0.023, BELT_Y + 0.253, -0.253, 0.253)
         bx(m, "Steel", DARK, -0.27, 0.27, BELT_Y + 0.03, BELT_Y + 0.22, 0.995, 1.0)
         # the head's cable runs out of the winch house toward the pit (−X)
         tb(m, "Steel", BLACK, (-0.95, 1.0, -0.42), (-1.0, 1.3, -0.42), 0.012, segs=6)

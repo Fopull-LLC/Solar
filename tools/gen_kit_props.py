@@ -441,13 +441,14 @@ def pieces(K):
         e = 0.04
         for sx in (-1, 1):
             for sz in (-1, 1):
-                bx(m, "Steel", GREY, sx * w / 2 - (e if sx > 0 else 0), sx * w / 2 + (0 if sx > 0 else e), 0, h,
-                   sz * d / 2 - (e if sz > 0 else 0), sz * d / 2 + (0 if sz > 0 else e))
+                # (the corner posts stand 2 mm proud of the rails, sides and top: no shared faces)
+                bx(m, "Steel", GREY, sx * (w / 2 + 0.002) - ((e + 0.002) if sx > 0 else 0), sx * (w / 2 + 0.002) + (0 if sx > 0 else (e + 0.002)), 0, h + 0.002,
+                   sz * (d / 2 + 0.002) - ((e + 0.002) if sz > 0 else 0), sz * (d / 2 + 0.002) + (0 if sz > 0 else (e + 0.002)))
         for y in (0.0, h - e):
             for sz in (-1, 1):
-                bx(m, "Steel", GREY, -w / 2, w / 2, y, y + e, sz * d / 2 - (e if sz > 0 else 0), sz * d / 2 + (0 if sz > 0 else e))
+                bx(m, "Steel", GREY, -w / 2, w / 2, y, y + e, sz * d / 2 - ((e - 0.002) if sz > 0 else 0), sz * d / 2 + (0 if sz > 0 else (e - 0.002)))
             for sx in (-1, 1):
-                bx(m, "Steel", GREY, sx * w / 2 - (e if sx > 0 else 0), sx * w / 2 + (0 if sx > 0 else e), y, y + e, -d / 2, d / 2)
+                bx(m, "Steel", GREY, sx * (w / 2 - 0.002) - (e if sx > 0 else 0), sx * (w / 2 - 0.002) + (0 if sx > 0 else e), y + 0.002, y + e - 0.002, -d / 2 + 0.002, d / 2 - 0.002)
         # the latches and a stencil plate on the front
         for x in (-w / 4, w / 4):
             bx(m, "Steel", DARK, x - 0.04, x + 0.04, h - 0.16, h - 0.08, d / 2 - 0.01, d / 2 + 0.012)
@@ -476,7 +477,7 @@ def pieces(K):
                 bx(m, "Steel", GREY, sx * (w / 2 - 0.02) - 0.02, sx * (w / 2 - 0.02) + 0.02, 0, h, sz * (d / 2 - 0.02) - 0.02, sz * (d / 2 - 0.02) + 0.02)
         rng = np.random.default_rng(535)
         for i, y in enumerate((0.1, 0.55, 1.0, 1.45, 1.9)):
-            bx(m, "Steel", LIGHT, -w / 2, w / 2, y, y + 0.025, -d / 2, d / 2)
+            bx(m, "Steel", LIGHT, -w / 2 + 0.003, w / 2 - 0.003, y, y + 0.025, -d / 2 + 0.003, d / 2 - 0.003)
             if y > 1.85:
                 continue
             x = -w / 2 + 0.05
@@ -489,7 +490,7 @@ def pieces(K):
                 c = [(0.55, 0.45, 0.32), (0.32, 0.36, 0.30), (0.62, 0.60, 0.55), (0.25, 0.27, 0.30)][int(rng.integers(0, 4))]
                 bx(m, "Clad", c, x, x + bw, y + 0.025, y + 0.025 + bh, -bd / 2, bd / 2)
                 x += bw + float(rng.uniform(0.02, 0.08))
-        bx(m, "Steel", GREY, -w / 2, w / 2, 0.9, 0.93, -d / 2 + 0.005, -d / 2 + 0.015)
+        bx(m, "Steel", GREY, -w / 2 + 0.003, w / 2 - 0.003, 0.9, 0.93, -d / 2 + 0.005, -d / 2 + 0.015)
         sh.add((0, h / 2, 0), (w, h, d))
         return m, sh, []
     out["shelf"] = (p_shelf, ["steel"])
@@ -529,13 +530,13 @@ def pieces(K):
                 bx(m, "Steel", GREY, sx * (L / 2) - (0.04 if sx > 0 else 0), sx * (L / 2) + (0 if sx > 0 else 0.04), 0, 1.75,
                    sz * (W / 2) - (0.04 if sz > 0 else 0), sz * (W / 2) + (0 if sz > 0 else 0.04))
         for y in (0.35, 1.25):
-            bx(m, "Steel", DARK, -L / 2, L / 2, y - 0.04, y, -W / 2, W / 2)
+            bx(m, "Steel", DARK, -L / 2 + 0.003, L / 2 - 0.003, y - 0.04, y, -W / 2 + 0.003, W / 2 - 0.003)
             bx(m, "Cloth", (0.40, 0.44, 0.40), -L / 2 + 0.05, L / 2 - 0.05, y, y + 0.13, -W / 2 + 0.04, W / 2 - 0.04)
             bx(m, "Cloth", (0.82, 0.80, 0.74), L / 2 - 0.45, L / 2 - 0.08, y + 0.13, y + 0.22, -W / 2 + 0.12, W / 2 - 0.12)
             # a folded blanket at the foot
             bx(m, "Cloth", (0.30, 0.33, 0.42), -L / 2 + 0.1, -L / 2 + 0.55, y + 0.13, y + 0.2, -W / 2 + 0.06, W / 2 - 0.06)
             for sz in (-1, 1):
-                bx(m, "Steel", GREY, -L / 2, L / 2, y + 0.14, y + 0.17, sz * W / 2 - 0.02, sz * W / 2 + 0.02) if sz < 0 else None
+                bx(m, "Steel", GREY, -L / 2 + 0.003, L / 2 - 0.003, y + 0.14, y + 0.17, sz * W / 2 - 0.02, sz * W / 2 + 0.02) if sz < 0 else None
         # the ladder at the foot
         for k in range(4):
             yy = 0.5 + k * 0.25
@@ -608,7 +609,7 @@ def pieces(K):
         K.tube(m, "Concrete", (0, 0, 0), (0, 0.34, 0), 0.15, segs=16, uv_m=K.UVM["Concrete"], r1=0.19)
         tb(m, "Steel", DARK, (0, 0.3, 0), (0, 0.33, 0), 0.17, segs=16)
         # soil, then two crossed cards of the flora atlas's leafy shrub (its tile 0,0)
-        tb(m, "Rubber", (0.12, 0.09, 0.07), (0, 0.3, 0), (0, 0.32, 0), 0.165, segs=16)
+        tb(m, "Rubber", (0.12, 0.09, 0.07), (0, 0.305, 0), (0, 0.32, 0), 0.165, segs=16)
         m.color = (0.42, 0.62, 0.36)
         u0, v0, u1, v1 = 0.0, 0.0, 0.25, 0.25
         hgt, wid = 0.62, 0.62
@@ -647,8 +648,8 @@ def pieces(K):
                  (0.0, 0.05, 0.3, DARK), (0.12, 0.08, 0.22, (0.85, 0.65, 0.15)), (0.28, 0.05, 0.36, LIGHT), (0.42, 0.09, 0.28, (0.25, 0.30, 0.38))]
         for x, w, ln, col in tools:
             tb(m, "Steel", DARK, (x, 0.02, -0.33), (x, 0.07, -0.33), 0.006, segs=5)
-            bx(m, "Steel", col, x - w / 4, x + w / 4, 0.03, 0.055, -0.32, -0.32 + ln)
-            bx(m, "Steel", col, x - w / 2, x + w / 2, 0.03, 0.06, -0.32 + ln - 0.06, -0.32 + ln)
+            bx(m, "Steel", col, x - w / 4, x + w / 4, 0.03, 0.055, -0.32, -0.32 + ln - 0.003)
+            bx(m, "Steel", col, x - w / 2, x + w / 2, 0.032, 0.06, -0.32 + ln - 0.06, -0.32 + ln)
         return m, sh, []
     out["toolRack"] = (p_toolRack, ["steel"])
 

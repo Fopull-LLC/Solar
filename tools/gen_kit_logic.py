@@ -59,7 +59,7 @@ def pieces(K):
         bx(m, "Steel", DARK, x0, x1, 0.0, 0.006, z0, z1)
         bx(m, "Steel", col, x0 + 0.004, x1 - 0.004, 0.006, d, z0 + 0.004, z1 - 0.018)
         # the lid's seam and its four screws
-        bx(m, "Steel", (col[0] * 0.8, col[1] * 0.8, col[2] * 0.8), x0 + 0.006, x1 - 0.006, d - 0.004, d + 0.001, z0 + 0.006, z0 + 0.010)
+        bx(m, "Steel", (col[0] * 0.8, col[1] * 0.8, col[2] * 0.8), x0 + 0.009, x1 - 0.009, d - 0.004, d + 0.003, z0 + 0.008, z0 + 0.012)
         for sx in (x0 + 0.014, x1 - 0.014):
             for sz in (z0 + 0.016, z1 - 0.03):
                 tb(m, "Steel", GREY, (sx, d, sz), (sx, d + 0.003, sz), 0.004, segs=6)
@@ -111,8 +111,8 @@ def pieces(K):
     def press_head(m, b, d):
         tb(m, "Steel", (0.62, 0.62, 0.60), (0, 0.05, -0.015), (0, b[3], -0.015), 0.05, segs=18)
         m.color = (1.0, 1.0, 1.0)
-        disk(m, "Pane", 0.045, b[3] + 0.001, segs=18, up=True, cz=-0.015)
-        bx(m, "Steel", DARK, -0.002, 0.002, b[3], b[3] + 0.003, -0.05, -0.015)
+        disk(m, "Pane", 0.045, b[3] + 0.003, segs=18, up=True, cz=-0.015)
+        bx(m, "Steel", DARK, -0.002, 0.002, b[3], b[3] + 0.006, -0.05, -0.015)
 
     def grille(m, b, d):
         for k in range(6):
@@ -131,16 +131,14 @@ def pieces(K):
         tb(m, "Steel", (0.70, 0.71, 0.70), (0.0, d, -0.03), (0.0, d, 0.02), 0.02, segs=10)
 
     def meter(m, b, d):
-        bx(m, "Pane", (1, 1, 1), -0.045, 0.045, d, d + 0.002, b[4] + 0.02, b[4] + 0.07)
-        bx(m, "Steel", (0.95, 0.92, 0.8), -0.04, 0.04, d - 0.002, d, b[4] + 0.025, b[4] + 0.065)
+        bx(m, "Pane", (1, 1, 1), -0.045, 0.045, d + 0.0045, d + 0.008, b[4] + 0.02, b[4] + 0.07)
+        bx(m, "Steel", (0.95, 0.92, 0.8), -0.04, 0.04, d - 0.002, d + 0.0035, b[4] + 0.025, b[4] + 0.065)
 
     def dose_face(m, b, d):
-        m.color = RAL7016
-        disk(m, "Steel", 0.04, d + 0.001, segs=20, up=True, cz=-0.02)
-        tb(m, "Steel", RAL7016, (0, d, -0.02), (0, d + 0.002, -0.02), 0.04, segs=20)
+        tb(m, "Steel", RAL7016, (0, d, -0.02), (0, d + 0.003, -0.02), 0.04, segs=20)
         for k in range(3):
             a = math.radians(90 + k * 120)
-            bx(m, "Steel", YELLOW, 0.012 * math.cos(a) - 0.008, 0.012 * math.cos(a) + 0.008, d + 0.002, d + 0.004,
+            bx(m, "Steel", YELLOW, 0.012 * math.cos(a) - 0.008, 0.012 * math.cos(a) + 0.008, d + 0.003, d + 0.006,
                -0.02 + 0.022 * math.sin(a) - 0.008, -0.02 + 0.022 * math.sin(a) + 0.008)
 
     def p_prox(mat):
@@ -262,8 +260,8 @@ def pieces(K):
         bx(m, "Steel", SAFETY, 0.43, 0.53, 0.84, 0.845, 0.20, 0.24)
         # the CRT's housing at the back, its stand
         bx(m, "Steel", DARK, -0.56, 0.56, 0.80, 1.45, -0.40, -0.30, sh=sh)
-        bx(m, "Steel", (0.30, 0.32, 0.33), -0.56, 0.56, 1.42, 1.45, -0.40, -0.28)
-        bx(m, "Steel", (0.30, 0.32, 0.33), -0.56, 0.56, 0.80, 0.84, -0.40, -0.28)
+        bx(m, "Steel", (0.30, 0.32, 0.33), -0.557, 0.557, 1.42, 1.453, -0.397, -0.28)
+        bx(m, "Steel", (0.30, 0.32, 0.33), -0.557, 0.557, 0.797, 0.84, -0.397, -0.28)
         # the terminal rail at its back: X1-X8 grey, Y1-Y8 blue (parts_kit's pins)
         bx(m, "Steel", GREY, -0.56, 0.56, 0.53, 0.57, -0.395, -0.38)
         for k in range(16):

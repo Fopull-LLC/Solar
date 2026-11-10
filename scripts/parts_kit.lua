@@ -249,6 +249,10 @@ PIECES = {
                 door = { slide = { 0.95, 0, 0 }, secs = 2.2, near = 1.6, vertical = 2.6, heavy = true, eq = 0.4, seal = 0.4 }, sym = "z",
                 desc = "a floor with a heavy 0.9 m pressure hatch and its equalising valve · storeys of a station sealed apart" },
   -- ── WALL ──
+-- (Ty 11-10, "barely squeezing through doors": a door began to open at `near` and took `secs`, so a
+-- walker's shoulder met a leaf 40 % open. kit_live now reaches further the faster you close on a door,
+-- and the pocket doors slide faster; `near` is unchanged, so standing in a small room doesn't hold an
+-- outside door open, nor an airlock's inner door. The airlock's and bulkhead's openings are 2.08 m)
   wall      = { label = "Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete", "glass" }, vol = 0.88, fill = "panel", cost = 600, seals = "z",
                 desc = "2 x 2.2 m wall panel" },
@@ -260,16 +264,16 @@ PIECES = {
                 desc = "1 x 2.2 m · closes an odd metre" },
   doorWall  = { label = "Door Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete" }, vol = 0.88, fill = "panel", cost = 1100, seals = "door",
-                door = { slide = { 0.92, 0, 0 }, secs = 1.0, near = 2.2 }, mirror = "doorWallM",
+                door = { slide = { 0.92, 0, 0 }, secs = 0.7, near = 2.2 }, mirror = "doorWallM",
                 desc = "0.9 x 2.05 m pocket door · opens as you come near" },
   -- (its mirrored variant: the door at the other end; G places it, the column doesn't list it)
   doorWallM = { label = "Door Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete" }, vol = 0.88, fill = "panel", cost = 1100, seals = "door",
-                door = { slide = { -0.92, 0, 0 }, secs = 1.0, near = 2.2 }, mirror = "doorWall", hidden = true,
+                door = { slide = { -0.92, 0, 0 }, secs = 0.7, near = 2.2 }, mirror = "doorWall", hidden = true,
                 desc = "0.9 x 2.05 m pocket door, handed the other way · opens as you come near" },
   doubleDoor = { label = "Double Door Wall", section = "WALL", snap = "wall", box = B(-2, 2, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete" }, vol = 1.76, fill = "panel", cost = 2000, seals = "door",
-                door = { slide = { 0.9, 0, 0 }, pair = true, secs = 1.3, near = 3.0 },
+                door = { slide = { 0.9, 0, 0 }, pair = true, secs = 0.9, near = 3.0 },
                 desc = "4 m wall · 1.8 m opening, two pocket leaves · a rover fits a bike through" },
   windowWall = { label = "Window Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete" }, vol = 0.88, fill = "panel", cost = 900, seals = "z",
@@ -289,7 +293,7 @@ PIECES = {
   openFrame = { label = "Open Frame", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel", "concrete", "regocrete" }, vol = 0.88, fill = "panel", cost = 380,
                 fillk = { steel = 0.006, concrete = 0.3, regocrete = 0.3 },
-                desc = "a 1.8 x 2.05 m doorway with no door" },
+                desc = "a 1.7 x 2.05 m doorway with no door" },
   ventWall  = { label = "Vent Louvre Wall", section = "WALL", snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2),
                 mats = { "steel" }, vol = 0.88, fill = "panel", cost = 700,
                 desc = "a wall with a 1 m louvre · lets air through by design" },
@@ -352,7 +356,7 @@ PIECES = {
                 desc = "a closed dome for a can's end" },
   habBulkhead = { label = "Hab Door Bulkhead", section = "HAB", snap = "hab", box = B(-1.35, 1.35, 0, 2.9, -0.2, 0.2),
                 mats = { "steel" }, vol = 0.2, fill = "solid", cost = 2600, fillk = { steel = 0.2548 }, seals = "door",
-                door = { slide = { 0.86, 0, 0 }, secs = 1.6, near = 2.2, heavy = true }, sym = "z",
+                door = { slide = { 0.86, 0, 0 }, secs = 1.2, near = 2.2, heavy = true }, sym = "z",
                 desc = "a flat end with a 0.8 x 1.8 m door at deck level (Steps 0.8 m reach it)" },
   -- ── SHIELD ──
   shieldBlock = { label = "Shield Block 1 × 1", section = "SHIELD", snap = "block", box = B(-0.5, 0.5, 0, 1, -0.25, 0.25),

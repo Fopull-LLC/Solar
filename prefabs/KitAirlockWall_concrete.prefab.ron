@@ -79,7 +79,7 @@
     (
         name: "Wall 2",
         transform: (
-            translation: (-0.4600, 2.0750, 0.0000),
+            translation: (-0.4600, 2.1400, 0.0000),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -92,7 +92,7 @@
             mode: Static,
             radius: 0.5,
             height: 1.0,
-            half_extents: (0.4600, 0.1250, 0.1000),
+            half_extents: (0.4600, 0.0600, 0.1000),
             restitution: 0.0,
             friction: 0.9,
             gravity: false,
@@ -127,7 +127,7 @@
     (
         name: "Door",
         transform: (
-            translation: (-0.4620, 0.9775, 0.0000),
+            translation: (-0.4620, 1.0425, 0.0000),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -176,7 +176,7 @@
             mode: Static,
             radius: 0.5,
             height: 1.0,
-            half_extents: (0.4800, 0.9750, 0.0350),
+            half_extents: (0.4800, 1.0400, 0.0350),
             restitution: 0.0,
             friction: 0.9,
             gravity: false,

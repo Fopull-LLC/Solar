@@ -54,7 +54,7 @@ def pieces(K):
     def stand(m, sh, x, z, top=PIPE_Y - PR):
         """A pipe stand: a foot plate, a post and a U-bolt saddle."""
         bx(m, "Steel", DARK, x - 0.06, x + 0.06, 0.0, 0.01, z - 0.06, z + 0.06)
-        bx(m, "Steel", GREY, x - 0.02, x + 0.02, 0.01, top, z - 0.02, z + 0.02)
+        bx(m, "Steel", GREY, x - 0.02, x + 0.02, 0.01, top - 0.004, z - 0.02, z + 0.02)
         bx(m, "Steel", GREY, x - 0.05, x + 0.05, top - 0.012, top, z - 0.025, z + 0.025)
         sh.add((x, top / 2, z), (0.05, top, 0.05))
 
@@ -102,8 +102,9 @@ def pieces(K):
         # a bend off each port into the vertical run at z = 0
         y0, y1 = PIPE_Y, PIPE_Y + 2.4
         for y in (y0, y1):
-            nozzle(m, 0, -0.5, 0, -1, (0, y, -0.1))
+            nozzle(m, 0, -0.5, 0, -1, (0, y, -0.1), y=y)
             tb(m, "Steel", STAIN, (0, y, -0.1), (0, y, 0.0), PR, segs=10)
+            tb(m, "Steel", STAIN, (0, y, -0.03), (0, y, 0.021), PR + 0.006, segs=10)
         tb(m, "Steel", STAIN, (0, y0 - 0.02, 0.0), (0, y1 + 0.02, 0.0), PR, segs=10)
         # wall clamps up the run, a foot stand
         stand(m, sh, 0, 0.0, top=y0 - PR)
@@ -131,6 +132,8 @@ def pieces(K):
             tb(m, "Steel", GREY, (0.2, 2.2, 0.0), (0.2, 2.30, 0.0), 0.12, segs=14)
             tb(m, "Steel", LIGHT, (-0.25, 2.22, 0.1), (-0.25, 2.30, 0.1), 0.03, segs=8)
             tb(m, "Steel", DARK, (0.58, 0.45, 0.25), (0.58, 1.95, 0.25), 0.022, segs=8)
+            for yy in (0.55, 1.85):
+                tb(m, "Steel", GREY, (0.54, yy, 0.233), (0.58, yy, 0.25), 0.011, segs=6)
             bx(m, "Pane", (1, 1, 1), 0.60, 0.62, 0.5, 1.9, 0.235, 0.265)
             # a band of the substance's colour, the stencil plate
             m.color = label_col
@@ -147,22 +150,31 @@ def pieces(K):
             m, sh = CModel(seed=seed), Shell()
             bx(m, "Steel", DARK, -0.6, 0.6, 0.0, 0.06, -0.25, 0.25, sh=sh)
             for x in (-0.58, 0.58):
-                bx(m, "Steel", GREY, x - 0.02, x + 0.02, 0.0, 1.75, -0.24, -0.20)
-            bx(m, "Steel", GREY, -0.6, 0.6, 1.70, 1.75, -0.24, -0.20)
+                bx(m, "Steel", GREY, x - 0.02 - (0.003 if x < 0 else 0), x + 0.02 + (0.003 if x > 0 else 0), 0.0, 1.75, -0.24, -0.20)
+            bx(m, "Steel", GREY, -0.597, 0.597, 1.70, 1.748, -0.238, -0.202)
+            # two back rails the cylinders' straps are bolted to
+            for y in (0.4, 1.0):
+                bx(m, "Steel", GREY, -0.57, 0.57, y, y + 0.03, -0.238, -0.202)
             for x in (-0.38, 0.0, 0.38):
                 tb(m, "Steel", (0.30, 0.31, 0.32), (x, 0.06, 0.0), (x, 1.30, 0.0), 0.115, segs=16)
                 m.color = col
                 tube(m, "Steel", (x, 1.30, 0.0), (x, 1.46, 0.0), 0.115, segs=16, uv_m=UVM["Steel"], r1=0.04)
                 tb(m, "Steel", BRASS, (x, 1.46, 0.0), (x, 1.54, 0.0), 0.025, segs=8)
                 for y in (0.4, 1.0):
-                    tb(m, "Steel", DARK, (x - 0.12, y, 0.0), (x + 0.12, y, 0.0), 0.008, segs=5)
+                    tb(m, "Steel", DARK, (x, y, 0.0), (x, y + 0.03, 0.0), 0.119, segs=12)
+                    bx(m, "Steel", DARK, x - 0.015, x + 0.015, y + 0.005, y + 0.025, -0.21, -0.11)
+                tb(m, "Steel", STAIN, (x, 1.535, 0.0), (x, 1.60, 0.0), 0.008, segs=6)
+                tb(m, "Steel", STAIN, (x, 1.585, 0.0), (x, 1.615, 0.0), 0.02, segs=10)
                 sh.add((x, 0.75, 0), (0.24, 1.4, 0.24))
-            # the manifold, down to the port at the back
-            tb(m, "Steel", STAIN, (-0.38, 1.56, 0.0), (0.38, 1.56, 0.0), 0.012, segs=8)
-            tb(m, "Steel", STAIN, (0.0, 1.56, 0.0), (0.0, 1.56, -0.3), 0.012, segs=8)
-            tb(m, "Steel", STAIN, (0.0, 1.56, -0.3), (0.0, PIPE_Y, -0.3), PR, segs=10)
+            # the header over the valves, its branch back into the down-run, the elbow into the port's nozzle
+            tb(m, "Steel", STAIN, (-0.40, 1.60, 0.0), (0.40, 1.60, 0.0), 0.014, segs=8)
+            tb(m, "Steel", STAIN, (0.0, 1.60, 0.0), (0.0, 1.60, -0.3), 0.014, segs=8)
+            tb(m, "Steel", STAIN, (0.0, 1.62, -0.3), (0.0, PIPE_Y, -0.3), PR, segs=10)
+            tb(m, "Steel", STAIN, (0.0, PIPE_Y, -0.32), (0.0, PIPE_Y, -0.28), PR + 0.006, segs=10)
             nozzle(m, 0, -0.5, 0, -1, (0, PIPE_Y, -0.3))
-            tb(m, "Steel", LIGHT, (0.0, 1.62, 0.0), (0.0, 1.68, 0.0), 0.04, segs=12)
+            # the contents gauge on the middle boss
+            tb(m, "Steel", STAIN, (0.0, 1.61, 0.0), (0.0, 1.645, 0.0), 0.006, segs=6)
+            tb(m, "Steel", LIGHT, (0.0, 1.64, 0.0), (0.0, 1.68, 0.0), 0.04, segs=12)
             return m, sh, []
         return fn
 
@@ -180,12 +192,12 @@ def pieces(K):
                     x = -0.2 + 0.2 * k
                     tb(m, "Steel", STAIN, (x, 0.52, 0.0), (x, 0.82, 0.0), 0.06, segs=10)
                     tb(m, "Steel", GREY, (x, 0.82, 0.0), (x, 0.90, 0.0), 0.075, segs=10)
-                tb(m, "Steel", STAIN, (-0.25, PIPE_Y, -0.1), (0.25, PIPE_Y, -0.1), 0.03, segs=8)
+                bx(m, "Steel", STAIN, -0.27, 0.27, PIPE_Y - 0.04, PIPE_Y + 0.04, -0.075, 0.075)
                 tb(m, "Steel", PUMP_GREEN, (-0.42, 0.30, 0.45), (0.42, 0.30, 0.45), 0.2, segs=16)
                 sh.add((0, 0.3, 0.45), (0.84, 0.4, 0.4))
                 tb(m, "Steel", DARK, (0.42, 0.30, 0.45), (0.44, 0.30, 0.45), 0.08, segs=10)
-                nozzle(m, 0, -L, 0, -1, (0, PIPE_Y, -0.25))
-                nozzle(m, 0, L, 0, 1, (0, PIPE_Y, 0.25))
+                nozzle(m, 0, -L, 0, -1, (0, PIPE_Y, -0.06))
+                nozzle(m, 0, L, 0, 1, (0, PIPE_Y, 0.06))
                 bx(m, "Steel", (0.75, 0.15, 0.12), -0.12, 0.12, 0.9, 1.08, -0.06, 0.06)
             else:
                 # a close-coupled end-suction pump: the volute, the motor behind it
@@ -203,12 +215,14 @@ def pieces(K):
                 nozzle(m, 0, -0.5, 0, -1, (0, PIPE_Y, -0.12))
                 tb(m, "Steel", STAIN, (0, PIPE_Y + 0.25, 0.04), (0, PIPE_Y + 0.25, 0.2), PR, segs=10)
                 tb(m, "Steel", STAIN, (0, PIPE_Y + 0.25, 0.2), (0, PIPE_Y, 0.2), PR, segs=10)
+                for yy in (PIPE_Y + 0.25, PIPE_Y):
+                    tb(m, "Steel", STAIN, (0, yy, 0.175), (0, yy, 0.222), PR + 0.006, segs=10)
                 nozzle(m, 0, 0.5, 0, 1, (0, PIPE_Y, 0.2))
                 tb(m, "Steel", DARK, (0, PIPE_Y + 0.25, 0.04), (0, 0.9, 0.04), 0.012, segs=6)
             # the flow arrow on the skid, in → out (−Z → +Z)
             bx(m, "Steel", SAFETY, w - 0.06, w - 0.02, 0.08, 0.086, -L + 0.18, L - 0.25)
             for s in (-1, 1):
-                rbox(m, "Steel", SAFETY, (w - 0.04 + s * 0.025, 0.084, L - 0.22), (0.022, 0.006, 0.1), K.rot_y(s * math.radians(35)))
+                rbox(m, "Steel", SAFETY, (w - 0.04 + s * 0.025, 0.085 + (0.003 if s > 0 else 0.0), L - 0.22), (0.022, 0.008, 0.1), K.rot_y(s * math.radians(35)))
             return m, sh, []
         return fn
 
@@ -259,9 +273,9 @@ def pieces(K):
         disk(sub, "Steel", 0.055, 0.0, segs=20, up=True)
         lathe(sub, "Steel", [(0.055, 0.0), (0.055, -0.03)], segs=20)
         m.merge(sub, M=K.rot_x(-math.pi / 2), t=(0, PIPE_Y + 0.18, 0.015))
-        bx(m, "Pane", (1, 1, 1), -0.048, 0.048, PIPE_Y + 0.135, PIPE_Y + 0.225, 0.016, 0.018)
-        bx(m, "Steel", LIGHT, -0.045, 0.045, PIPE_Y + 0.138, PIPE_Y + 0.222, 0.014, 0.0155)
-        bx(m, "Steel", (0.75, 0.15, 0.12), -0.002, 0.03, PIPE_Y + 0.178, PIPE_Y + 0.182, 0.0165, 0.017)
+        bx(m, "Pane", (1, 1, 1), -0.038, 0.038, PIPE_Y + 0.142, PIPE_Y + 0.218, 0.0225, 0.0245)
+        bx(m, "Steel", LIGHT, -0.037, 0.037, PIPE_Y + 0.143, PIPE_Y + 0.217, 0.0175, 0.0195)
+        bx(m, "Steel", (0.75, 0.15, 0.12), -0.002, 0.03, PIPE_Y + 0.178, PIPE_Y + 0.182, 0.0200, 0.0215)
         sh.add((0, PIPE_Y + 0.08, 0), (0.12, 0.3, 0.1))
 
     # ── terminals ──
@@ -301,6 +315,7 @@ def pieces(K):
         sh.add((0, 0.35, -0.2), (0.5, 0.34, 0.34))
         tb(m, "Steel", STAIN, (0, PIPE_Y, -0.2), (0, PIPE_Y, -0.3), PR, segs=8)
         tb(m, "Steel", STAIN, (0, 0.35, -0.2), (0, PIPE_Y, -0.2), PR, segs=8)
+        tb(m, "Steel", STAIN, (0, PIPE_Y, -0.222), (0, PIPE_Y, -0.178), PR + 0.006, segs=8)
         nozzle(m, 0, -0.5, 0, -1, (0, PIPE_Y, -0.3))
         for x in (-0.3, 0.3):
             bx(m, "Steel", GREY, x - 0.03, x + 0.03, 0.05, 1.35, 0.12, 0.18)
@@ -316,8 +331,8 @@ def pieces(K):
     def p_receiver(mat):
         m, sh = CModel(seed=841), Shell()
         bx(m, "Steel", DARK, -0.42, 0.42, 0.0, 0.05, -0.42, 0.42)
-        for x, z in ((-0.3, -0.3), (0.3, -0.3), (-0.3, 0.3), (0.3, 0.3)):
-            bx(m, "Steel", GREY, x - 0.03, x + 0.03, 0.05, 0.3, z - 0.03, z + 0.03)
+        for x, z in ((-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)):
+            bx(m, "Steel", GREY, x - 0.03, x + 0.03, 0.05, 0.36, z - 0.03, z + 0.03)
         m.color = (0.30, 0.42, 0.33)
         lathe(m, "Steel", [(0.0, 0.25), (0.25, 0.28), (0.4, 0.38), (0.4, 1.65), (0.25, 1.76), (0.0, 1.80)], segs=26, uv_m=UVM["Steel"])
         sh.add((0, 1.0, 0), (0.8, 1.55, 0.8))
@@ -345,21 +360,22 @@ def pieces(K):
     def p_bulkhead(mat):
         m, sh = CModel(seed=843), Shell()
         WT, WH = K.WT, K.WH
-        K.wall_body(m, sh, mat, -1, 1, 0, WH, holes=[(-0.92, 0.0, 0.0, 1.95)], trims=False)
+        # (Ty 11-10: 2.08 m, not 1.95: the 1.9 m capsule walks through with 18 cm over its head)
+        K.wall_body(m, sh, mat, -1, 1, 0, WH, holes=[(-0.92, 0.0, 0.0, 2.08)], trims=False)
         for s in (-1, 1):
             z0, z1 = s * WT / 2, s * (WT / 2 + 0.07)
-            for (a, b, c, d) in ((-1.0, -0.92, 0, 2.05), (0.0, 0.08, 0, 2.05), (-1.0, 0.08, 1.95, 2.13)):
-                bx(m, "Steel", FRAME, a, b, c, d, min(z0, z1), max(z0, z1))
+            for (a, b, c, d, pr) in ((-0.998, -0.918, 0, 2.082, 0.0), (-0.002, 0.08, 0, 2.082, 0.0), (-0.996, 0.082, 2.08, 2.197, 0.002)):
+                bx(m, "Steel", FRAME, a, b, c, d, min(z0, z1) - (pr if s < 0 else 0), max(z0, z1) + (pr if s > 0 else 0))
             # dogs round the frame
             for y in (0.4, 1.0, 1.6):
-                bx(m, "Steel", DARK, 0.02, 0.07, y, y + 0.08, min(z0, z1) - 0.01 * s if s < 0 else max(z0, z1), (min(z0, z1) if s < 0 else max(z0, z1) + 0.02))
+                bx(m, "Steel", DARK, 0.02, 0.07, y, y + 0.08, min(z0, z1) - 0.02 if s < 0 else max(z0, z1), (min(z0, z1) if s < 0 else max(z0, z1) + 0.02))
             # the equalising valve and its gauge beside the door
             zf = s * (WT / 2 + 0.01)
-            tb(m, "Steel", STAIN, (0.3, 1.2, zf), (0.3, 1.2, s * (WT / 2 + 0.07)), 0.02, segs=8)
+            tb(m, "Steel", STAIN, (0.3, 1.2, s * (WT / 2 - 0.005)), (0.3, 1.2, s * (WT / 2 + 0.07)), 0.02, segs=8)
             tb(m, "Steel", (0.75, 0.15, 0.12), (0.3, 1.2, s * (WT / 2 + 0.07)), (0.42, 1.24, s * (WT / 2 + 0.07)), 0.01, segs=6)
-            bx(m, "Steel", DARK, 0.22, 0.38, 1.36, 1.52, zf - 0.01 * s if s < 0 else zf, zf if s < 0 else zf + 0.02)
-            bx(m, "Lamp", (1.0, 0.75, 0.25), 0.27, 0.33, 1.42, 1.46, s * (WT / 2 + 0.025) - 0.003, s * (WT / 2 + 0.025) + 0.003)
-        lm, lsh = K.door_leaf(0.96, 1.95, heavy=True, t=0.08)
+            bx(m, "Steel", DARK, 0.22, 0.38, 1.36, 1.52, zf - 0.02 if s < 0 else zf, zf if s < 0 else zf + 0.02)
+            bx(m, "Lamp", (1.0, 0.75, 0.25), 0.27, 0.33, 1.42, 1.46, s * (WT / 2 + 0.03), s * (WT / 2 + 0.0325))
+        lm, lsh = K.door_leaf(0.96, 2.08, heavy=True, t=0.08)
         return m, sh, [("Door", "door", (lm, lsh, (-0.46, 0.0, 0.0)))]
 
     def p_pressHatch(mat):
@@ -368,7 +384,7 @@ def pieces(K):
         hole = (-0.95, -0.05, -0.45, 0.45)
         K.floor_body(m, sh, mat, -1, 1, -1, 1, holes=[hole])
         # a heavy coaming round the hatch, the equalising valve at its side
-        for (a, b, c, d) in ((-1.0, -0.95, -0.5, 0.5), (-0.05, 0.0, -0.5, 0.5), (-1.0, 0.0, -0.5, -0.45), (-1.0, 0.0, 0.45, 0.5)):
+        for (a, b, c, d) in ((-0.998, -0.948, -0.5, 0.5), (-0.052, -0.002, -0.5, 0.5), (-0.948, -0.052, -0.498, -0.448), (-0.948, -0.052, 0.448, 0.498)):
             bx(m, "Steel", FRAME, a, b, 0.2, 0.26, c, d)
         tb(m, "Steel", STAIN, (0.15, 0.2, 0.3), (0.15, 0.27, 0.3), 0.02, segs=8)
         tb(m, "Steel", (0.75, 0.15, 0.12), (0.15, 0.27, 0.3), (0.27, 0.275, 0.3), 0.01, segs=6)

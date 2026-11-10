@@ -56,7 +56,7 @@
             mode: Static,
             radius: 0.5,
             height: 1.0,
-            half_extents: (1.0000, 1.7750, 0.0150),
+            half_extents: (0.9980, 1.7750, 0.0150),
             restitution: 0.0,
             friction: 0.9,
             gravity: false,

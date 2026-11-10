@@ -160,7 +160,7 @@ def pieces(K):
             if heavy:
                 # the heavy-water band and the marking stripe under it
                 bx(m, "Steel", SAFETY, -0.235, 0.235, 1.95, 2.10, -0.235, 0.235)
-                bx(m, "Steel", BLACKPAINT, -0.20, 0.20, 2.00, 2.05, 0.235, 0.238)
+                bx(m, "Steel", BLACKPAINT, -0.20, 0.20, 2.00, 2.047, 0.235, 0.238)
                 bx(m, "Steel", BLACKPAINT, 0.235, 0.238, 2.00, 2.05, -0.20, 0.20)
             else:
                 bx(m, "Steel", (0.30, 0.48, 0.66), -0.235, 0.235, 1.95, 2.02, -0.235, 0.235)
@@ -175,7 +175,7 @@ def pieces(K):
         for (x, z) in ((-0.21, -0.21), (0.21, -0.21), (-0.21, 0.21), (0.21, 0.21)):
             bx(m, "Steel", GREY, x - 0.025, x + 0.025, 0.06, 2.40, z - 0.025, z + 0.025)
         for y in (0.45, 1.05, 1.65, 2.25):
-            bx(m, "Steel", GREY, -0.235, 0.235, y, y + 0.04, -0.235, 0.235)
+            bx(m, "Steel", GREY, -0.238, 0.238, y, y + 0.04, -0.238, 0.238)
         sh.add((0, 1.23, 0), (0.48, 2.34, 0.48))
         # the drive on top: its housing, the stepper motor, the position indicator
         bx(m, "Steel", (0.55, 0.57, 0.56), -0.22, 0.22, 2.40, 2.66, -0.22, 0.22, sh=sh)
@@ -186,7 +186,7 @@ def pieces(K):
         tb(m, "Steel", DARK, (0, 2.92, 0), (0, 3.0, 0), 0.08, segs=12)
         bx(m, "Steel", DARK, 0.12, 0.22, 2.46, 2.60, 0.22, 0.226)
         bx(m, "Lamp", (0.35, 1.0, 0.45), 0.15, 0.19, 2.55, 2.58, 0.226, 0.229)
-        bx(m, "Steel", SAFETY, -0.22, 0.22, 2.40, 2.43, -0.222, 0.222)
+        bx(m, "Steel", SAFETY, -0.222, 0.222, 2.403, 2.43, -0.222, 0.222)
         # its cable out of the side
         tb(m, "Rubber", RUBBER, (-0.13, 2.8, 0), (-0.24, 2.6, 0), 0.015, segs=6)
         return m, sh, []
@@ -252,7 +252,7 @@ def pieces(K):
         # the skid
         bx(m, "Steel", DARK, -0.5, 0.5, 0.0, 0.12, -0.75, 0.75, sh=sh)
         for s in (-1, 1):
-            bx(m, "Steel", GREY, s * 0.5 - 0.04 * s, s * 0.5, 0.0, 0.14, -0.75, 0.75)
+            bx(m, "Steel", GREY, s * 0.5 - 0.04 * s, s * 0.503, 0.0, 0.14, -0.752, 0.752)
         # the volute casing: a vertical-axis case, its suction and discharge nozzles
         tb(m, "Steel", PUMP_BLUE, (0, 0.30, 0), (0, 0.86, 0), 0.34, segs=20)
         tb(m, "Steel", GREY, (0, 0.86, 0), (0, 0.92, 0), 0.36, segs=20)
@@ -276,7 +276,7 @@ def pieces(K):
         bx(m, "Steel", SAFETY, 0.36, 0.42, 0.12, 0.128, -0.55, 0.35)
         for s in (-1, 1):
             M = K.rot_y(s * math.radians(35))
-            rbox(m, "Steel", SAFETY, (0.39 + s * 0.04, 0.124, 0.40), (0.035, 0.008, 0.16), M)
+            rbox(m, "Steel", SAFETY, (0.39 + s * 0.04, 0.125 + (0.003 if s > 0 else 0.0), 0.40), (0.035, 0.010, 0.16), M)
         bx(m, "Steel", LIGHT, -0.20, 0.20, 0.55, 0.70, -0.345, -0.34)
         return m, sh, []
 
@@ -350,13 +350,13 @@ def pieces(K):
         # the skid and its rails
         bx(m, "Steel", DARK, -1.75, 1.75, 0.0, 0.18, -0.70, 0.70, sh=sh)
         for s in (-1, 1):
-            bx(m, "Steel", GREY, -1.75, 1.75, 0.10, 0.20, s * 0.70 - s * 0.06, s * 0.70)
+            bx(m, "Steel", GREY, -1.752, 1.752, 0.10, 0.20, s * 0.70 - s * 0.06, s * 0.702)
         # the turbine: casing along X, its pedestals, the steam chest and governor valve
         m.color = LIGHT
         tube(m, "Steel", (-1.55, 0.85, 0), (-0.15, 0.85, 0), 0.40, segs=20, uv_m=UVM["Steel"], r1=0.48)
         tb(m, "Steel", GREY, (-1.62, 0.85, 0), (-1.55, 0.85, 0), 0.22, segs=16)
         tb(m, "Steel", GREY, (-0.15, 0.85, 0), (-0.05, 0.85, 0), 0.30, segs=16)
-        bx(m, "Steel", LIGHT, -1.55, -0.15, 0.84, 0.88, -0.44, 0.44)
+        bx(m, "Steel", LIGHT, -1.553, -0.147, 0.84, 0.88, -0.44, 0.44)
         for x in (-1.60, -0.10):
             bx(m, "Steel", GREY, x - 0.1, x + 0.1, 0.18, 0.62, -0.25, 0.25)
         sh.add((-0.85, 0.85, 0), (1.5, 0.96, 0.96))
@@ -399,13 +399,13 @@ def pieces(K):
             bx(m, "Steel", DARK, x - 0.06, x + 0.06, 0.0, 0.03, -0.30, 0.30)
             rbox(m, "Steel", GREY, (x, 0.35, -0.16), (0.04, 0.04, 0.42), rot_x(math.radians(-55)))
             rbox(m, "Steel", GREY, (x, 0.35, 0.16), (0.04, 0.04, 0.42), rot_x(math.radians(55)))
-        bx(m, "Steel", GREY, -1.07, 1.07, 4.36, 4.40, -0.04, 0.04)
+        bx(m, "Steel", GREY, -1.07, 1.07, 4.36, 4.397, -0.038, 0.038)
         # the panel: high-emissivity black, heat pipes up both faces
-        bx(m, "Steel", BLACKPAINT, -1.0, 1.0, 0.70, 4.25, -0.015, 0.015, sh=sh)
+        bx(m, "Steel", BLACKPAINT, -0.998, 0.998, 0.70, 4.25, -0.015, 0.015, sh=sh)
         for s in (-1, 1):
             for k in range(20):
                 x = -0.95 + k * 0.1
-                tb(m, "Steel", (0.10, 0.10, 0.11), (x, 0.70, s * 0.022), (x, 4.25, s * 0.022), 0.011, segs=5)
+                tb(m, "Steel", (0.10, 0.10, 0.11), (x, 0.703, s * 0.022), (x, 4.247, s * 0.022), 0.011, segs=5)
         # the headers: steam in at the top (its riser from the inlet), condensate out at the bottom
         tb(m, "Steel", STAIN, (-1.0, 4.30, 0), (1.0, 4.30, 0), 0.055, segs=12)
         tb(m, "Steel", STAIN, (-1.0, PIPE_Y, 0), (1.0, PIPE_Y, 0), 0.055, segs=12)
@@ -430,9 +430,9 @@ def pieces(K):
                 bx(m, "Steel", DARK, s * 1.42, s * 1.46, y, y + 0.05, -1.30, 1.30)
         for x in (-1.45, 1.45):
             for z in (-1.45, 1.45):
-                bx(m, "Steel", GREY, x - 0.05, x + 0.05, 0.35, 4.25, z - 0.05, z + 0.05)
+                bx(m, "Steel", GREY, x - 0.05, x + 0.05, 0.35, 4.22, z - 0.05, z + 0.05)
         # the fan deck, the shroud, the fan and its guard
-        bx(m, "Steel", GREY, -1.5, 1.5, 4.20, 4.30, -1.5, 1.5)
+        bx(m, "Steel", GREY, -1.503, 1.503, 4.20, 4.30, -1.503, 1.503)
         m.color = col
         lathe(m, "Clad", [(1.25, 4.30), (1.15, 4.70), (1.25, 5.20)], segs=28, uv_m=UVM["Clad"])
         lathe(m, "Clad", [(1.21, 5.20), (1.11, 4.70), (1.19, 4.30)], segs=28, uv_m=UVM["Clad"])
@@ -443,15 +443,16 @@ def pieces(K):
                  K.rot_y(-a) @ rot_x(0.25))
         for k in range(8):
             a = k * math.tau / 8
-            tb(m, "Steel", GREY, (0, 5.15, 0), (1.14 * math.cos(a), 5.15, 1.14 * math.sin(a)), 0.01, segs=4)
+            tb(m, "Steel", GREY, (0.04 * math.cos(a), 5.15, 0.04 * math.sin(a)), (1.14 * math.cos(a), 5.15, 1.14 * math.sin(a)), 0.01, segs=4)
+        tb(m, "Steel", GREY, (0, 5.13, 0), (0, 5.17, 0), 0.05, segs=10)
         sh.add((0, 4.75, 0), (2.4, 0.9, 2.4))
         # the supply and return to their ports (−Z), a ladder up the side
         for x in (-0.5, 0.5):
             nozzle(m, x, -2.0, 0, -1, (x, PIPE_Y, -1.42))
         for y in [0.4 + 0.3 * k for k in range(13)]:
-            bx(m, "Steel", SAFETY, 1.46, 1.49, y, y + 0.025, 0.55, 0.95)
+            bx(m, "Steel", SAFETY, 1.462, 1.488, y, y + 0.025, 0.55, 0.95)
         for z in (0.55, 0.95):
-            bx(m, "Steel", SAFETY, 1.46, 1.49, 0.35, 4.3, z - 0.02, z + 0.02)
+            bx(m, "Steel", SAFETY, 1.46, 1.49, 0.35, 4.33, z - 0.02, z + 0.02)
         bx(m, "Steel", LIGHT, -0.4, 0.4, 2.6, 2.9, -1.47, -1.465)
         return m, sh, []
 
@@ -479,7 +480,7 @@ def pieces(K):
         bx(m, "Steel", SAFETY, 0.59, 0.73, 0.88, 0.89, -0.11, 0.03)
         # the screen's housing at the back, its stand
         bx(m, "Steel", DARK, -0.64, 0.64, 0.82, 1.45, -0.45, -0.35, sh=sh)
-        bx(m, "Steel", (0.30, 0.32, 0.33), -0.64, 0.64, 1.42, 1.45, -0.45, -0.33)
+        bx(m, "Steel", (0.30, 0.32, 0.33), -0.643, 0.643, 1.42, 1.453, -0.453, -0.33)
         sm = CModel(seed=702)
         sm.ground = False
         sm.color = (1, 1, 1)
@@ -508,7 +509,7 @@ def pieces(K):
         for x in (-0.3, 0.3):
             tb(m, "Steel", DARK, (x - 0.06, 1.0, 0), (x - 0.06, 1.05, 0), 0.012, segs=6)
             tb(m, "Steel", DARK, (x + 0.06, 1.0, 0), (x + 0.06, 1.05, 0), 0.012, segs=6)
-            tb(m, "Steel", DARK, (x - 0.06, 1.05, 0), (x + 0.06, 1.05, 0), 0.012, segs=6)
+            tb(m, "Steel", DARK, (x - 0.06, 1.05, 0), (x + 0.06, 1.05, 0), 0.014, segs=6)
         bx(m, "Concrete", SAFETY, -0.15, 0.15, 0.85, 0.92, 0.5, 0.503)
         return m, sh, []
 

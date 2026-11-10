@@ -91,7 +91,7 @@
     (
         name: "Glass",
         transform: (
-            translation: (0.0000, 0.7800, 0.0170),
+            translation: (0.0000, 0.7800, 0.0235),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),

@@ -62,7 +62,9 @@ def pieces(K):
 
     def apron(m, x0, x1, z0, z1, face=None):
         """A belt apron at belt height, its dark mouth on the face it meets."""
-        bx(m, "Steel", FRAME_Y, x0, x1, BELT_Y - 0.02, BELT_Y + 0.25, z0, z1)
+        # (the casing stops 3 mm short of the face its dark mouth is on: the mouth is the port's face)
+        bx(m, "Steel", FRAME_Y, x0, x1 - (0.003 if face == "+x" else 0), BELT_Y - 0.02, BELT_Y + 0.25,
+           z0 + (0.003 if face == "-z" else 0), z1 - (0.003 if face == "+z" else 0))
         if face == "+z":
             bx(m, "Steel", DARK, x0 + 0.04, x1 - 0.04, BELT_Y + 0.03, BELT_Y + 0.22, z1 - 0.005, z1)
         elif face == "-z":
@@ -112,7 +114,7 @@ def pieces(K):
         bx(m, "Steel", GREY, -0.2, 0.2, BELT_Y + 0.25, 2.3, -1.0, -0.8)
         # the discharge apron to +Z, the spoil apron to +X (the magnetic drum's split)
         apron(m, -0.32, 0.32, 0.45, 1.0, "+z")
-        tb(m, "Steel", GREY, (0.45, 0.62, 0.1), (0.45, 0.62, 0.45), 0.16, segs=16)
+        tb(m, "Steel", GREY, (0.45, 0.62, 0.1), (0.45, 0.62, 0.447), 0.16, segs=16)
         apron(m, 0.6, 1.0, -0.3, 0.3, "+x")
         # the tube stub at −X
         tube_stub(m, (-1.0, BELT_Y, 0.0), (-1, 0, 0), (-0.7, BELT_Y, 0.0))
@@ -134,7 +136,7 @@ def pieces(K):
         for y in (0.6, 0.9, 1.2, 1.5, 1.8):
             m.color = COIL
             lathe(m, "Steel", [(0.715, y), (0.715, y + 0.08)], segs=32)
-        tb(m, "Steel", SHELL, (0.0, 2.45, 0.0), (0.0, 3.0, 0.0), 0.18, segs=16)
+        tb(m, "Steel", SHELL, (0.0, 2.45, 0.0), (0.0, 2.97, 0.0), 0.18, segs=16)
         tb(m, "Steel", DARK, (0.0, 2.92, 0.0), (0.0, 3.0, 0.0), 0.22, segs=16)
         sh.add((0, 1.25, 0), (1.4, 2.2, 1.4))
         # the feed screw from the −Z inlet up into the hood
@@ -244,7 +246,7 @@ def pieces(K):
     def p_jacket(mat):
         m, sh = CModel(seed=1761), Shell()
         for x in (-0.95, 0.95):
-            bx(m, "Steel", STRUCT, x - 0.05, x + 0.05, 0.0, 3.4, -0.06, 0.06)
+            bx(m, "Steel", STRUCT, x - 0.047, x + 0.047, 0.0, 3.4, -0.06, 0.06)
             bx(m, "Steel", DARK, x - 0.12, x + 0.12, 0.0, 0.015, -0.12, 0.12)
         # the headers at the pipe height, flanged end to end
         tb(m, "Steel", COOL, (-0.98, PIPE_Y, 0.0), (0.98, PIPE_Y, 0.0), 0.05, segs=12)

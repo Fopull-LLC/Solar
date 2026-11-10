@@ -1373,7 +1373,7 @@ end
 -- structure's frame, from its records) is taken off as the audit takes one.
 -- It comes back on a redeclaration and is taken again here. The near
 -- queries are a job worked off under STRUCT_CLEAR.ms a frame, never a burst.
-STRUCT_CLEAR = { every = 3.0, radius = 60.0, low = 0.35, ms = 0.25 }
+STRUCT_CLEAR = { every = 3.0, radius = 60.0, low = 0.35, raised = 2.6, ms = 0.25 }
 structClearRemoved = 0
 local sc_t = -1e9
 local sc_first = nil     -- (11-09) when this scene's first pass ran: the first 30 s go every second
@@ -1414,11 +1414,18 @@ local function struct_clear(obs)
               -- (11-09: a slab or floor set on the terrain — `gnd`, joined to a
               -- structure at the ground's own height — is at the ground wherever
               -- its height in the frame)
-              local floorish = d and d.half and ((d.kit and (d.snap == "slab" or d.snap == "floor") and ((p.y or 0) <= STRUCT_CLEAR.low or p.gnd))
+              -- (Ty 11-10, habjoin shots hj4c/hj5: plants grew up through hab decks, which are 0.8 m
+              -- over the ground, and through raised kit floors: a hab piece (`deckTop`, snap "hab"), a
+              -- floor or slab up to a storey over the ground, and a block standing on the ground clear
+              -- what is rooted under them, up to their own height plus a metre)
+              local py = p.y or 0
+              local floorish = d and d.half and ((d.kit and (d.snap == "slab" or d.snap == "floor") and (py <= STRUCT_CLEAR.raised or p.gnd))
+                                                 or (d.kit and (d.snap == "hab" or d.deckTop ~= nil) and py <= STRUCT_CLEAR.raised)
+                                                 or (d.kit and d.snap == "block" and py <= STRUCT_CLEAR.low)
                                                  or d.hull ~= nil or d.deck ~= nil)
               if floorish then
-                boxes[#boxes + 1] = { x = p.x or 0, y = p.y or 0, z = p.z or 0, c = math.cos(p.yaw or 0), s = math.sin(p.yaw or 0),
-                                      hx = d.half.x + 0.05, hz = d.half.z + 0.05 }
+                boxes[#boxes + 1] = { x = p.x or 0, y = py, z = p.z or 0, c = math.cos(p.yaw or 0), s = math.sin(p.yaw or 0),
+                                      hx = d.half.x + 0.05, hz = d.half.z + 0.05, lo = (py > STRUCT_CLEAR.low) and -1.5 - py or -1.0 }
                 local r = math.sqrt((p.x or 0) ^ 2 + (p.z or 0) ^ 2) + math.sqrt(d.half.x ^ 2 + d.half.z ^ 2)
                 if r > reach then reach = r end
               end
@@ -1457,7 +1464,7 @@ local function struct_clear(obs)
               local px, pz = ox * b.c - oz * b.s, ox * b.s + oz * b.c
               -- (rooted within a metre under or over that floor; still dropping: up to 3 m over it)
               local dy = ly - (b.y or 0)
-              if math.abs(px) <= b.hx and math.abs(pz) <= b.hz and dy > -1.0 and dy < ((h.settled == false) and 3.0 or 1.0) then
+              if math.abs(px) <= b.hx and math.abs(pz) <= b.hz and dy > (b.lo or -1.0) and dy < ((h.settled == false) and 3.0 or 1.0) then
                 audit_take(it.sid, { id = h.id })
                 structClearRemoved = structClearRemoved + 1
                 break

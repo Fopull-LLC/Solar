@@ -123,6 +123,45 @@ do
     check(k .. ": one tower, one terminal, crates", towers == 1 and cores == 1 and loot >= 1, string.format("%d/%d/%d", towers, cores, loot))
     check(k .. ": a piece hangs only on one placed before it", depok)
     check(k .. ": 20–150 pieces (the S11 budget)", #P >= 20 and #P <= 150, #P)
+    -- (Ty 11-10: "abandoned bases have too tight of doorways and things blocking them") every
+    -- doorway's opening, a metre out on both sides, is clear of the loose things and fittings
+    -- standing on its storey (its own steps, ladders and rails aside)
+    local OPEN = { doorWall = { -0.92, 0 }, doorWallM = { 0, 0.92 }, airlockWall = { -0.92, 0 }, bulkhead = { -0.92, 0 },
+                   doubleDoor = { -0.9, 0.9 }, openFrame = { -0.86, 0.86 } }
+    local PATH = { steps = true, ladder = true, stairs = true, rail = true, ramp = true }
+    local blocked = {}
+    for _, dp in ipairs(P) do
+      local o = OPEN[dp.id:match("^[^.]+")]
+      if o then
+        local c, s = math.cos(dp.yaw or 0), math.sin(dp.yaw or 0)
+        for _, q in ipairs(P) do
+          local d = def(q.id)
+          local name = q.id:match("^[^.]+")
+          if d and d.box and not q.dep and not PATH[name] and (q.rl == "prop" or q.rl == "loot" or q.rl == "fix" or q.rl == "core"
+              or q.rl == "silo" or q.rl == "power" or q.rl == "array") and math.abs((q.y or 0) - dp.y) < 0.6 then
+            local b = d.box
+            local qc, qs = math.cos(q.yaw or 0), math.sin(q.yaw or 0)
+            local lo, hi = { 1e9, 1e9 }, { -1e9, -1e9 }
+            for _, cx in ipairs({ b[1], b[2] }) do for _, cz in ipairs({ b[5], b[6] }) do
+              -- the corner in the site's frame (local +x → (cos, -sin), +z → (sin, cos)), then the door's
+              local wx, wz = q.x + cx * qc + cz * qs - dp.x, q.z - cx * qs + cz * qc - dp.z
+              local lx, lz = wx * c - wz * s, wx * s + wz * c
+              lo[1], hi[1] = math.min(lo[1], lx), math.max(hi[1], lx)
+              lo[2], hi[2] = math.min(lo[2], lz), math.max(hi[2], lz)
+            end end
+            if hi[1] > o[1] + 0.03 and lo[1] < o[2] - 0.03 and hi[2] > -1.0 and lo[2] < 1.0 then
+              blocked[#blocked + 1] = q.id .. " at " .. dp.id
+            end
+          end
+        end
+      end
+      -- steps: their top tread is the slab's top (0.2 m), not a step up into a doorway
+      if dp.id:match("^steps") then
+        local top = dp.y + def(dp.id).h
+        if math.abs(top - 0.2) > 0.01 then blocked[#blocked + 1] = string.format("steps top %.2f m, the sill 0.20", top) end
+      end
+    end
+    check(k .. ": every doorway clear a metre each side, steps flush with the sill", #blocked == 0, table.concat(blocked, "; "))
   end
 end
 
