@@ -1222,4 +1222,63 @@
         pressed: ( scale: (0.995, 0.96) ),
         transition: ( duration: 0.05, ease: OutQuad ),
     ),
+
+    // ── SCENARIOS (scripts/menu_scenarios.lua, scenario_ui.lua) ──────────────
+    // A medal is a struck disc (●) in its metal's colour; the word beside it
+    // is printed ink. The three metals are enamel paints, warm and matt, not
+    // shine: gold is a deep chrome yellow, silver a pale aluminium, bronze a
+    // brown copper. They mean only "which medal", never state.
+    "scn/medalGold": (
+        base: ( text_color: (0.93, 0.74, 0.30, 1.0), text_size: 28.0, font: "label",
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "scn/medalSilver": (
+        base: ( text_color: (0.80, 0.81, 0.78, 1.0), text_size: 28.0, font: "label",
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "scn/medalBronze": (
+        base: ( text_color: (0.76, 0.50, 0.31, 1.0), text_size: 28.0, font: "label",
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // No medal: the run failed. A red cross, the warning colour (state).
+    "scn/medalFail": (
+        base: ( text_color: "danger", text_size: 28.0, font: "label",
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.6), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A debrief number inside its par: a done tick.
+    "scn/ok": (
+        base: ( text_color: "done", text_size: "caption", font: "label" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A cutscene's letterbox: plain black bars (scenario_stage.lua).
+    "scn/letterbox": (
+        base: ( fill: (0.0, 0.0, 0.0, 1.0) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A speaker with no picture: the role letter stencilled on the CRT glass.
+    "scn/glyph": (
+        base: ( text_color: "phosDim", text_size: 44.0, font: "stencil" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A cutscene caption in the lower bar: stencil title, body line under it.
+    "scn/capTitle": (
+        base: ( text_color: "ink", text_size: 20.0, font: "stencil", case: Upper, tracking: 3.0,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.8), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "scn/capSub": (
+        base: ( text_color: "soft", text_size: "caption", line_height: 1.3,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.8), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // An alarm: a red edge round the whole screen (scenario_stage.lua). Static:
+    // a warning lamp that is on, not a flashing one.
+    "scn/alarm": (
+        base: ( fill: (0.0, 0.0, 0.0, 0.0), border: 6.0, border_color: (0.97, 0.34, 0.25, 0.85) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
 }

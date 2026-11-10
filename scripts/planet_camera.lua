@@ -478,6 +478,9 @@ local function panel_open()
   -- …and so does a talk with a scientist (lab_talk.lua: its rows are clicked)
   local lt = script_ref("lab_talk")
   if lt and lt.isOpen and lt.isOpen() then return true end
+  -- …and a scenario's dialogue plate (scenario_stage.lua: choices are clicked)
+  local sg = script_ref("scenario_stage")
+  if sg and sg.isOpen and sg.isOpen() then return true end
   return false
 end
 

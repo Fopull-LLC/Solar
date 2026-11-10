@@ -159,7 +159,7 @@
             parent: Some(3),
             ui: Some((
                 place: Pin(anchor: Top, offset: (0.0, 258.0)),
-                size: (Fixed(520.0), Fixed(280.0)),
+                size: (Fixed(520.0), Fixed(324.0)),
                 shape: Some((
                     fill: (0.03, 0.055, 0.08, 0.9),
                     radius: 16.0,
@@ -653,7 +653,7 @@
             ],
             parent: Some(3),
             ui: Some((
-                place: Pin(anchor: Top, offset: (98.0, 560.0)),
+                place: Pin(anchor: Top, offset: (98.0, 604.0)),
                 size: (Fixed(180.0), Fixed(38.0)),
                 shape: Some((
                     fill: (0.03, 0.06, 0.08, 0.8),
@@ -2317,7 +2317,7 @@
             ],
             parent: Some(3),
             ui: Some((
-                place: Pin(anchor: Top, offset: (-98.0, 560.0)),
+                place: Pin(anchor: Top, offset: (-98.0, 604.0)),
                 size: (Fixed(180.0), Fixed(38.0)),
                 shape: Some((
                     fill: (0.03, 0.06, 0.08, 0.8),
@@ -2396,6 +2396,52 @@
                     ],
                 ),
             ],
+        ),
+        // ── Scenarios (scripts/menu_scenarios.lua) ──────────────────────────
+        //
+        // The fourth row of the menu card, under the slots (the card grew 44 to
+        // 324, QUIT and SETTINGS moved down with it), and the SCENARIOS page it
+        // turns to, described by menu_scenarios.lua. Appended LAST: `parent`
+        // is positional (7 = Menu Card, 2 = Menu UI).
+        (
+            name: "Scenarios Row",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "menu_scenarios",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            parent: Some(7),
+            ui: Some((
+                place: Free(pos: (24.0, 264.0)),
+                size: (Fixed(472.0), Fixed(40.0)),
+                button: true,
+                style: "menu/slot",
+            )),
+        ),
+        (
+            name: "Scenarios Panel",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [],
+            parent: Some(2),
+            ui: Some((
+                place: Pin(anchor: Center, offset: (0.0, 0.0)),
+                size: (Fixed(960.0), Fixed(600.0)),
+                visible: false,
+                opacity: 1.0,
+            )),
         ),
     ],
 )

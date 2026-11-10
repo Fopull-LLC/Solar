@@ -90,6 +90,13 @@ local CONTROLS = {
     { keys = { "escape" }, shown = "ESC", what = "back out of whatever is in front of you" },
     { keys = {}, shown = "RIGHT CLICK", what = "tap (don't drag) on your crew, a part of a craft or a crate: what you can do with it  ·  pad Y at the crosshair" },
   } },
+  -- (scenario_ui.lua, ops_strip.lua, menu_scenarios.lua)
+  { group = "Scenarios", col = 1, rows = {
+    { keys = {}, shown = "CLICK THE STRIP", what = "the Ops line at the bottom: finish it, then on to the next" },
+    { keys = { "space" }, shown = "SPACE", what = "in a briefing or debrief: print the brief whole  ·  finish the Ops line" },
+    { keys = { "enter" }, shown = "⏎", what = "briefing: GO  ·  debrief: the lit key" },
+    { keys = { "up", "down" }, shown = "↑ ↓  ⏎", what = "main menu ▸ Scenarios: choose one  ·  Enter twice plays it" },
+  } },
   { group = "Flying", col = 2, rows = {
     { keys = { "shift", "ctrl" }, shown = "SHIFT / CTRL", what = "throttle up / down" },
     { keys = { "z", "x" }, shown = "Z  /  X", what = "full throttle  /  cut" },
@@ -203,6 +210,9 @@ local function something_else_is_up()
   for _, panel in ipairs({ fm, ob, ip, pp }) do
     if panel and panel.escTakenAt == time then return true end
   end
+  -- A scenario cutscene: Esc is held to skip it (scenario_stage.lua).
+  local sg = ref("scenario_stage")
+  if sg and sg.holdsEsc and sg.holdsEsc() then return true end
   return false
 end
 

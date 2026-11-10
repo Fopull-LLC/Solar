@@ -3751,5 +3751,100 @@
             parent_id: Some(600),
             parent: Some(108),
         ),
+        // ── Scenarios: the Ops strip and the scenario panels ────────────────
+        // ops_strip.lua (the comms line) and scenario_ui.lua (the curtain
+        // line, BRIEFING, the SCENARIO chip, DEBRIEF), each describing its own
+        // full-screen element under the Ship HUD (16). Both stand down outside
+        // the scenario slot. Appended LAST: `parent` is positional (15).
+        (
+            name: "Ops Strip",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "ops_strip",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(7101),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
+                ),
+                size: (Pct(1.0), Pct(1.0)),
+                visible: false,
+                opacity: 1.0,
+                order: 4,
+            )),
+        ),
+        (
+            name: "Scenario UI",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "scenario_ui",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(7102),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
+                ),
+                size: (Pct(1.0), Pct(1.0)),
+                visible: false,
+                opacity: 1.0,
+                order: 5,
+            )),
+        ),
+        // The scenario's story layer (scenario_stage.lua): dialogue plates and a
+        // cutscene's letterbox and captions. Its own layer above the Ship HUD
+        // (z 130), so it stays up while a cutscene switches the HUD off.
+        (
+            name: "Scenario Stage",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "scenario_stage",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(7103),
+            ui_layer: Some((
+                design_height: 720.0,
+                reference_width: 1280.0,
+                scale_mode: MatchHeight,
+                match_wh: 0.5,
+                z: 130,
+                enabled: true,
+                space: Screen,
+                canvas_scale: 0.009,
+            )),
+        ),
     ],
 )
