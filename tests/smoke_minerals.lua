@@ -493,6 +493,116 @@ do
   M.setPalette(nil)
 end
 
+-- WORLDS W3: ores and crystals that look like the minerals they are.
+do
+  local M = envs.materials
+  local G = load_script("solar/scripts/geology.lua", "geology")
+  local cx = load_script("solar/scripts/codex.lua", "codex")
+  local function exists(p) local f = io.open("solar/" .. p, "rb"); if f then f:close() return true end return false end
+  -- the palette lines' pictures (a wildcard line names none: a layer gives it one)
+  local pic = {}
+  local i = 0
+  for line in io.lines("solar/terrain/system.palette") do
+    i = i + 1
+    local p = line:match("^([^|]+%.png)")
+    if p and exists(p) then pic[i] = p end
+  end
+  local function has(list, s) for _, x in ipairs(list or {}) do if x == s then return true end end return false end
+  local ores, bad = 0, {}
+  for ore in pairs(M.ORE) do
+    ores = ores + 1
+    -- a vein slot with a picture: a fixed palette line, or its own library layer
+    local slots = M.VEIN_SLOTS[ore]
+    local textured = false
+    for _, s in ipairs(slots or {}) do if pic[s] then textured = true end end
+    local L = M.ORE_LAYERS[ore]
+    if L then
+      local f = G.filesOf(L)
+      if not (f and exists(f.texture) and exists(f.normalMap) and exists(f.roughnessMap) and G.materialOf(L) == ore) then
+        bad[#bad + 1] = ore .. ": its layer " .. L .. "'s files or material"
+      end
+    end
+    if not textured then bad[#bad + 1] = ore .. ": no textured vein slot" end
+    -- a look: seam, stain, float colour, outcrop model and float kind on disk
+    local lk = mf.oreLookOf(ore)
+    local fm = lk.floatModels
+    if not (lk.out and lk.out.model and exists(lk.out.model)) then bad[#bad + 1] = ore .. ": outcrop model" end
+    if not (fm and exists(fm[1]) and exists(fm[2])) then bad[#bad + 1] = ore .. ": float kind " .. tostring(lk.fk) end
+    if ore ~= "crystal" and not (lk.seam and lk.stain and lk.float) then bad[#bad + 1] = ore .. ": seam/stain/float colour" end
+    -- a codex entry with real facts (or the fiction's)
+    local e = cx.entry(ore)
+    if not (e and #e.facts >= 3 and not e.summary:match("Not yet characterised")) then bad[#bad + 1] = ore .. ": codex" end
+  end
+  check("every ore has a textured vein slot, a look, a float kind on disk and a codex entry (" .. ores .. " ores)",
+    #bad == 0, table.concat(bad, "; "))
+  check("galena is an ore with a layer, a vein list and its own look", M.REG.galena and M.isOre("galena")
+    and M.ORE.galena and G.LAYER.galena == 61 and M.ORE_LAYERS.galena == 61 and mf.floatKindOf("galena") == "cube")
+  check("the new rock models are on disk, two LODs each", exists("models/flora/rock_nodule_l1.gltf") and exists("models/flora/rock_shard_l1.gltf")
+    and exists("models/flora/rock_crust_l1.gltf") and exists("models/flora/rock_cube_l1.gltf"))
+  -- realism: only magma and the declared fictions glow
+  local glow = {}
+  for ore, o in pairs(M.ORE) do
+    local out = o.look and o.look.out or {}
+    if out.e or out.glow then glow[#glow + 1] = ore end
+  end
+  table.sort(glow)
+  check("only the fictional ores glow (uranite does not)", table.concat(glow, ",") == "cryovolt,crystal,phasite", table.concat(glow, ","))
+  check("uranite looks like pitchblende: black nodules, a yellow-green stain", mf.floatKindOf("uranium") == "nodule"
+    and M.ORE.uranium.look.seam[1] < 0.15 and M.ORE.uranium.look.stain[1] > 0.5 and M.ORE.uranium.look.out.model:match("nodule"))
+  -- slot 6 by generation
+  M.setPalette({ gen = 4, layer = {}, mat = {}, wild = {} })
+  check("material generation 4: slot 6 is magma rock (bulk)", M.ofSlot(6) == "magma" and M.grade("magma") == "bulk"
+    and not has(M.VEIN_SLOTS.uranium, 6))
+  local P = { gen = 4, layer = {}, mat = {}, wild = { 4, 10, 11, 12, 21, 29, 31, 32 } }
+  for s = 1, 32 do P.layer[s] = s; P.mat[s] = M.SLOT_BASE[s] end
+  P.layer[29], P.mat[29] = 43, "uranium"   -- pitchblende holds a wildcard
+  P.layer[4], P.mat[4] = 61, "galena"
+  M.setPalette(P)
+  check("…uranite's veins go in the pitchblende layer first, galena's in its own", M.VEIN_SLOTS.uranium[1] == 29
+    and M.ofSlot(29) == "uranium" and M.VEIN_SLOTS.galena[1] == 4 and M.ofSlot(4) == "galena")
+  P.gen = 3
+  M.setPalette(P)
+  check("an older save (generation 3): slot 6 still pays uranite, its veins still go there", M.ofSlot(6) == "uranium"
+    and M.VEIN_SLOTS.uranium[1] == 6 and #M.VEIN_SLOTS.uranium == 1 and M.legacyOres())
+  M.setPalette({ gen = 4, layer = {}, mat = {}, wild = {} })
+  -- an old save's painted uranite vein in slot 6 pays uranite on its world, whatever the generation
+  store["veinslots." .. BODY.name] = { ["6"] = "uranium" }
+  check("…and a vein an old save painted in slot 6 still pays uranite (no deposit lost)",
+    mf.slotMaterial(6, BODY.name) == "uranium" and mf.slotMaterial(6, "Other") == "magma")
+  store["veinslots." .. BODY.name] = nil
+  M.setPalette(nil)
+  -- the dosimeter
+  local bg = mf.DOSE_BG
+  local c0, c20, c45 = mf.doseFrom(0.5, 2), mf.doseFrom(20, 2), mf.doseFrom(45, 2)
+  check("the dosimeter: a pitchblende face reads hundreds of times background", c0 / bg > 100, string.format("%.1f µSv/h", c0))
+  check("…a vein 20 m under the surface reads a faint rise, 45 m nothing", c20 > mf.DOSE_SHOW and c45 < mf.DOSE_SHOW and c0 > c20,
+    string.format("%.2f / %.3f", c20, c45))
+  check("…thorium ores read a little, ores without uranium none", (mf.DOSE_ORE.monazite or 0) > 0 and mf.DOSE_ORE.uranium == 1
+    and mf.DOSE_ORE.iron == nil)
+  -- bodyOres: generation 4 adds galena at home and reads the formation
+  local home = store["world." .. BODY.name]
+  local saved_mg = store.g_matGen
+  store["base.body"] = BODY.name
+  home.bio = home.bio or {}
+  home.bio.formation = { id = "redbeds", layers = { seam = 27, band = 15, cliff = 44, strata = 15, cave = 15 } }
+  local function oresOf()
+    local list = M.bodyOres(BODY.name)
+    local set = {}
+    for _, e in ipairs(list) do set[e.mat] = e.w end
+    return set
+  end
+  store.g_matGen = 3
+  local o3 = oresOf()
+  store.g_matGen = 4
+  local o4 = oresOf()
+  check("generation 3 keeps its ores (no galena), generation 4 adds galena at home", not o3.galena and o4.galena ~= nil)
+  check("…and reads the formation: a hematite seam makes more iron, red beds some uranite",
+    (o4.iron or 0) > (o3.iron or 0) and (o4.uranium or 0) > (o3.uranium or 0))
+  store.g_matGen = saved_mg
+  store["base.body"] = nil
+  home.bio.formation = nil
+end
+
 local bad = {}
 for _, c in ipairs(checks) do
   if not c.ok then bad[#bad + 1] = "  ✗ " .. c.desc .. (c.detail and ("   [" .. tostring(c.detail) .. "]") or "") end

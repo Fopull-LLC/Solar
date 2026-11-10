@@ -531,7 +531,16 @@ GEO_SLOT.soil, GEO_SLOT.flagstone, GEO_SLOT.gravelregolith, GEO_SLOT.bandedice =
 -- library through the palette's wildcard slots. The draws are version 2's,
 -- one for one (rollFormation), so shapes, seas and caves stay where they
 -- were; tests/smoke_geology.lua checks it over 50 seeds.
-MAT_GEN = 3
+--
+-- Version 4 (2026-11-10, worlds plan W3: ores that look like their mineral)
+-- rolls exactly what version 3 rolls. What changes is what the ground PAYS
+-- and how ore looks: slot 6 (the glowing magma) is magma rock, not uranite;
+-- uranite is black pitchblende, painted in the pitchblende layer; the
+-- wildcards no world claimed go to the ore layers (publishPalette,
+-- geology.oreClaims); each world's ores follow its formation and galena
+-- joins them (materials.bodyOres). A save made before keeps version 3, its
+-- slot 6 paying uranite and its veins where they were.
+MAT_GEN = 4
 -- Probes and tests may pin the version (nil = the save's).
 MAT_GEN_FORCE = nil
 -- The version the roll in progress runs (set by rollGeology).
@@ -621,6 +630,31 @@ local function commit(o, g)
   end
 end
 
+-- The ores whose look a wildcard may hold (geology.ORE_LAYERS), by what the
+-- home system's worlds are: every home world carries uranite and galena;
+-- sulfur and obsidian where a world is volcanic or sulfurous, or its
+-- formation lays them. Read from the world records (published as each world
+-- was rolled); { [ore] = true }.
+function oreNeeds()
+  local need = { uranium = true, galena = true }
+  local h = save and save.get and save.get("system.home")
+  for _, b in ipairs(type(h) == "table" and h.bodies or {}) do
+    local w = save.get("world." .. tostring(b.name))
+    if type(w) == "table" then
+      local ty = type(w.geo) == "table" and w.geo.type or nil
+      if w.kind == "lava" or w.kind == "dune" or ty == "sulfur" or ty == "volcanic" then need.sulfur = true end
+      if w.kind == "lava" or ty == "volcanic" then need.obsidian = true end
+      local f = type(w.bio) == "table" and w.bio.formation
+      local L = type(f) == "table" and f.layers or {}
+      for _, k in ipairs({ "band", "cliff", "strata", "seam", "cave" }) do
+        if GEO and L[k] == GEO.LAYER.obsidian then need.obsidian = true end
+        if GEO and L[k] == GEO.LAYER.sulfurvein then need.sulfur = true end
+      end
+    end
+  end
+  return need
+end
+
 -- The home system is rolled: freeze its assignment (neighbours read it) and
 -- publish it. Before version 3 (or with no geology) every wildcard holds its
 -- own layer.
@@ -628,6 +662,9 @@ function publishPalette()
   local G = geoLib()
   if not G then PALETTE = nil return nil end
   local a = (geo3() and ASSIGN) or G.newAssign()
+  -- version 4: the wildcards left free go to the ore layers the system's
+  -- worlds need (worlds W3)
+  if geo3() and matGen >= 4 and G.oreClaims and not a.frozen then G.oreClaims(a, oreNeeds()) end
   a:freeze()
   ASSIGN = a
   PALETTE = a:publish(geo3() and matGen or math.min(matGen, 2))
@@ -3490,6 +3527,9 @@ local function roll(p)
   -- without geology never asks the save, so an old save gains no key)
   matGen = scale.geology and matGenFor() or 0
   ASSIGN = geoLib() and GEO.newAssign() or nil
+  -- version 4: uranite's pitchblende holds a wildcard before any world
+  -- claims its ground (every home world carries uranite; worlds W3)
+  if ASSIGN and geo3() and matGen >= 4 and GEO.reserveOres then GEO.reserveOres(ASSIGN) end
   homeStar = buildSystem(r, p, { home = true, idBase = 1, taken = homeTaken })
   print("bodies placed — the spawn planet is generating in the background (Console shows progress); every other world streams in from its genspec when you first approach it. Save the scene once the spawn planet lands.")
 end

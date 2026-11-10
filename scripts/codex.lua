@@ -159,11 +159,22 @@ CODEX = {
     "Obsidian slowly absorbs water at its surfaces, and the thickness of that rind is used to date artefacts.",
   } },
   uranium = { summary = "Uraninite (pitchblende): the main ore of uranium.", facts = {
+    "Pitchblende is massive uraninite, UO2: black with a greasy, pitch-like lustre, often in rounded botryoidal crusts. It does not glow. Prospectors find it by its radiation with a Geiger counter or scintillometer, the way your suit's dosimeter does.",
+    "Where it weathers it grows bright secondary minerals: yellow-green autunite and torbernite, orange gummite. A yellow stain on dark rock was the classic sign of a uranium showing.",
+    "It is one of the densest common minerals, about 10.6 grams per cubic centimetre as pure crystal, and its decay chain fills fractures round it with radon, which rock gas surveys sniff for.",
+    "Marie and Pierre Curie found polonium and radium in 1898 by working through tonnes of pitchblende waste from the mines of Joachimsthal (Jachymov), in Bohemia.",
     "Natural uranium is only about 0.72% fissile U-235; reactor fuel is enriched to a few percent.",
     "SNAP-10A in 1965 is still the only US fission reactor operated in orbit. The Soviet Union flew dozens of reactors on its RORSAT radar satellites.",
     "NASA's KRUSTY test in 2018 ran a small uranium-235 reactor for 28 hours, the basis of the Kilopower design for surface power on the Moon and Mars.",
     "A nuclear thermal rocket such as NERVA reached a specific impulse of about 850 s, nearly twice that of the best chemical engines.",
     "Radioisotope generators like Curiosity's MMRTG burn plutonium-238, not uranium: they need heat from decay, not a chain reaction.",
+  } },
+  magma = { summary = "Molten rock from a magma pocket or seam, quenched glassy and vesicular as it is cut.", facts = {
+    "Basaltic magma erupts at about 1100 to 1200 degrees C and glows orange-yellow; it is the only rock on these worlds that gives off its own light, and only because it is hot.",
+    "Cooled in seconds it freezes to glass and froth (scoria, pumice) instead of crystals; cooled over years in a sill it becomes ordinary basalt or gabbro.",
+    "Volcanic gases come out of it as it rises and the pressure drops: water, carbon dioxide and sulfur dioxide, which is why sulfur crusts gather round vents.",
+    "Iceland drills into magma's heat for power; in 2009 the IDDP-1 well hit rhyolite magma at about 2.1 km and briefly ran as the world's hottest geothermal well.",
+    "Molten regolith electrolysis, proposed for the Moon, makes its own magma on purpose: melted rock conducts, and a current through it frees oxygen and leaves metal.",
   } },
   ice = { summary = "Frozen water: air, drink, radiation shield and rocket fuel.", facts = {
     "Split water by electrolysis and you get hydrogen and oxygen, rocket propellant. That is why polar ice is the most valuable resource on the Moon.",

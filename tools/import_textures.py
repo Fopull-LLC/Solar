@@ -70,7 +70,7 @@ TERRAIN entries 33 and up are the LIBRARY (worlds plan W1): layers baked and com
 same way but on no palette line (PALETTE_SLOTS); each entry has a `role` (HEIGHT_ROLES). A
 re-sourced slot's grade can `hold` its old mean colour (linear rgb) so far_bodies PAL and
 the mining tints keep it. Recipes beside the plain bake: veins/magma, copper, crystal,
-patchy, and (W1) soot, gossan, sulfurvein, pitchblende, columnar (RECIPES).
+patchy, and (W1) soot, gossan, sulfurvein, pitchblende, columnar, (W3) galena (RECIPES).
 
 Idempotent: each output folder holds a `.import` stamp (the source's size and
 time, the recipe, this file's IMPORTER_VERSION); a set whose stamp matches is
@@ -316,6 +316,9 @@ TERRAIN = [
          cc0=("rock_05", G(make="sulfurvein", cover=0.35))),
     dict(slot=60, name="quartzdruzy", role="crystal", mat="quartz", scale=1.3, blend=0.8, rough=0.9, rfloor=0.12,
          cc0=("Rock048", G(make="crystal", tint=(0.80, 0.80, 0.78), pale=(0.86, 0.86, 0.84), seed=60))),
+    # worlds W3: the lead-zinc ore (materials.lua galena), galena cubes and sphalerite in limestone
+    dict(slot=61, name="galena", role="ore", mat="galena", scale=1.4, blend=0.8, rough=0.7, rfloor=0.25,
+         cc0=("Rock051", G(make="galena", cover=0.55))),
 ]
 # Palette lines: slots 1..PALETTE_SLOTS go to terrain/system.palette; the rest are the library.
 PALETTE_SLOTS = 32
@@ -1155,8 +1158,78 @@ def make_columnar(alb, n, ao, g):
     return np.clip(c, 0, 1)
 
 
+def make_galena(alb, n, ao, g):
+    """Galena with sphalerite (lead-zinc ore, library layer 61; worlds W3): a Mississippi-Valley
+    replacement body in grey carbonate host. Galena grows as CUBES: each crystal is a square
+    (a rotated Chebyshev cell) of lead-grey metal whose three visible faces take three shades, the
+    lit one bright with a metallic sheen and fine stepped cleavage lines; resinous yellow-brown to
+    black sphalerite fills between clusters, and white sparry calcite gangue rims each cube. The
+    host (the set's own limestone) is graded to a cool grey. Ore covers `cover` of the tile."""
+    N = alb.shape[0]
+    rng = np.random.default_rng(61)
+    host = grade(alb, n, ao, dict(sat=0.15, flatten=0.6)) * 0.95
+    grain = _grain(host)
+    body = _noise(N, rng, N / 14) * 0.7 + _noise(N, rng, N / 40) * 0.5 + (1 - ao) * 0.6
+    thr = np.percentile(body, 100 * (1 - g.get("cover", 0.55)))
+    ore = np.clip((body - thr) * 1.4, 0, 1)
+    # cubes: one seed per grid cell, each a square turned by its own angle, the nearest square
+    # (Chebyshev distance in its own frame) owning the pixel
+    cells = int(g.get("cells", 22))
+    cs = N / cells
+    jit = rng.random((cells, cells, 2))
+    ang = rng.uniform(0, np.pi / 2, (cells, cells))
+    size = (rng.uniform(0.22, 0.6, (cells, cells)) ** 1.3 / 0.6 ** 0.3) * cs
+    yy, xx = np.mgrid[0:N, 0:N].astype(np.float32) + 0.5
+    ci, cj = np.floor(yy / cs).astype(int), np.floor(xx / cs).astype(int)
+    best = np.full((N, N), np.inf, np.float32)
+    face = np.zeros((N, N), int)
+    edge = np.zeros((N, N), np.float32)
+    step = np.zeros((N, N), np.float32)
+    for di in (-1, 0, 1):
+        for dj in (-1, 0, 1):
+            gi, gj = ci + di, cj + dj
+            wi, wj = gi % cells, gj % cells
+            sy = (gi + jit[wi, wj, 0]) * cs
+            sx = (gj + jit[wi, wj, 1]) * cs
+            dy, dx = yy - sy, xx - sx
+            a = ang[wi, wj]
+            u = dx * np.cos(a) + dy * np.sin(a)
+            v = -dx * np.sin(a) + dy * np.cos(a)
+            d = np.maximum(np.abs(u), np.abs(v)) / size[wi, wj]
+            closer = d < best
+            best = np.where(closer, d, best)
+            # a cube seen from above and a little aside: its top face, and two strips of
+            # side face along two edges (one lit, one in shade), `k` of its width
+            k = 0.18 + 0.22 * jit[wi, wj, 0]
+            un, vn = u / size[wi, wj], v / size[wi, wj]
+            f = np.where(un > 1 - 2 * k, 2, np.where(vn < -1 + 2 * k, 1, 0))
+            face = np.where(closer, f, face)
+            st = np.abs(np.sin((u + v) * 0.9 + a * 7.0))
+            step = np.where(closer, st, step)
+            edge = np.where(closer, np.clip((d - 0.86) / 0.14, 0, 1), edge)
+    cube = (best < 1.0) & (ore > 0.25)
+    rim = ((best >= 1.0) & (best < 1.25) & (ore > 0.25)).astype(np.float32)
+    tones = srgb_to_lin(np.array([[0.58, 0.59, 0.62], [0.44, 0.45, 0.48], [0.24, 0.25, 0.28]], np.float32))
+    lit = (0.85 + 0.3 * rng.random((cells, cells)))[ci % cells, cj % cells]
+    gal = tones[face] * (0.9 + 0.12 * (step > 0.96))[..., None] * lit[..., None]
+    gal = gal * (1 - 0.55 * edge)[..., None]
+    sph_mix = np.clip(_noise(N, rng, N / 24) * 0.5 + 0.5, 0, 1)[..., None]
+    sph = srgb_to_lin(np.array([0.27, 0.19, 0.10], np.float32)) * (1 - sph_mix) + \
+        srgb_to_lin(np.array([0.10, 0.08, 0.06], np.float32)) * sph_mix
+    cal = srgb_to_lin(np.array([0.86, 0.85, 0.80], np.float32))
+    c = host.copy()
+    o3 = ore[..., None]
+    c = c * (1 - o3) + sph * grain * o3
+    c = c * (1 - rim[..., None] * 0.6) + cal * grain * rim[..., None] * 0.6
+    c = np.where(cube[..., None], gal, c)
+    return np.clip(c, 0, 1)
+
+
 RECIPES = {"soot": make_soot, "gossan": make_gossan, "sulfurvein": make_sulfurvein,
-           "pitchblende": make_pitchblende, "columnar": make_columnar}
+           "pitchblende": make_pitchblende, "columnar": make_columnar, "galena": make_galena}
+# Recipes stamped by their own code alone (layer_job), not in RECIPE_HASH: adding one
+# must not re-bake every other layer (worlds W3 added galena).
+OWN_HASH = ("galena",)
 
 
 def slot_mapped(t):
@@ -1423,6 +1496,9 @@ def layer_job(args):
     if src[1].get("make") == "copper":
         import inspect
         extra.append(hashlib.sha1(inspect.getsource(make_copper).encode()).hexdigest()[:12])
+    if src[1].get("make") in OWN_HASH:
+        import inspect
+        extra.append(hashlib.sha1(inspect.getsource(RECIPES[src[1]["make"]]).encode()).hexdigest()[:12])
     st = stamp_of(s, extra)
     stf = p + ".import" if which == "local" else os.path.join(ROOT, root, "terrain", ".import-%02d" % t["slot"])
     if not force and os.path.exists(p) and os.path.exists(stf) and open(stf).read().strip() == st:
@@ -1442,7 +1518,7 @@ def RECIPE_HASH():
     """The layer recipes' own code, so changing one re-bakes its layers."""
     import inspect
     src = "".join(inspect.getsource(f) for f in (grade, ripple_field, make_veins, make_crystal, crystal_fields, _worley, make_patchy, _bake_colour, bake_layer, load_for_layer, convert_set,
-                                                 _noise, _streak, _grain) + tuple(RECIPES.values()))
+                                                 _noise, _streak, _grain) + tuple(f for k, f in RECIPES.items() if k not in OWN_HASH))
     return hashlib.sha1(src.encode()).hexdigest()[:12]
 
 

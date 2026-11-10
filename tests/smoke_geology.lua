@@ -493,7 +493,7 @@ local w2 = {}
 do
   local G = env.geoLib()
   check(G ~= nil, "geology.lua loads beside the generator")
-  check(env.MAT_GEN == 3, "a fresh save rolls material generation 3")
+  check(env.MAT_GEN == 4, "a fresh save rolls material generation 4 (worlds W3: ores)")
   -- Every type has 2–3 formations; every layer one names is a library layer
   -- with its picture and maps on disk.
   local nform, nlayers, seenL = 0, 0, {}
@@ -639,7 +639,7 @@ do
   for seed = 1, 60 do
     local st = roll(seed)
     local P = env.PALETTE
-    check(P and P.gen == 3 and #P.layer == 32, seed .. ": the system's palette is published")
+    check(P and P.gen == env.MAT_GEN and #P.layer == 32, seed .. ": the system's palette is published")
     check(store["system.palette"] == P, "…to the save")
     maxClaim = math.max(maxClaim, P.claimed)
     w2.sumClaim, w2.sumFell, w2.nsys = (w2.sumClaim or 0) + P.claimed, (w2.sumFell or 0) + P.fell, (w2.nsys or 0) + 1
@@ -718,6 +718,64 @@ do
   local P0 = ser(env.PALETTE.layer)
   env.buildNeighbour(99173, 4e6, 1.0, 2e5, 500, "galaxysystem")
   check(ser(env.ASSIGN:publish(3).layer) == P0, "a neighbour system claims no wildcard")
+
+  -- ── MATERIAL GENERATION 4 (worlds W3): ores ──────────────────────────────
+  -- Version 4 rolls version 3's shapes; uranite's pitchblende holds a
+  -- wildcard in every system; other ore layers take only wildcards left free;
+  -- a version-3 system claims no ore layer.
+  local w3 = { same = 0, pitch = 0, n = 0, extra = { galena = 0, sulfur = 0, obsidian = 0 } }
+  for seed = 1, 30 do
+    env.MAT_GEN_FORCE = 3
+    local a = shapeOf(roll(seed * 11 + 5))
+    local P3 = env.PALETTE
+    local has3 = false
+    for s = 1, 32 do if P3.layer[s] == G.LAYER.pitchblende or P3.layer[s] == G.LAYER.galena then has3 = true end end
+    check(not has3, seed .. ": a version-3 system holds no ore layer")
+    env.MAT_GEN_FORCE = 4
+    local st4 = roll(seed * 11 + 5)
+    local b = shapeOf(st4)
+    local P4 = env.PALETTE
+    -- the home world (rolled first) still gets every layer it names
+    local hw = st4["world." .. st4["system.home"].bodies[1].name]
+    local hf = hw and hw.bio and hw.bio.formation
+    if hf then
+      w3.homes = (w3.homes or 0) + 1
+      local ok = true
+      for _, k in ipairs({ "cliff", "band", "cave" }) do
+        local L, sl = hf.layers[k], hw.bio.mats[k]
+        if L and P4.layer[sl] ~= L then ok = false end
+      end
+      if ok then w3.homeOk = (w3.homeOk or 0) + 1 end
+    end
+    check(P4.gen == 4, "a version-4 palette says so")
+    if a == b then w3.same = w3.same + 1 end
+    w3.n = w3.n + 1
+    local held = {}
+    for _, s in ipairs(G.WILD) do held[P4.layer[s]] = s end
+    if held[G.LAYER.pitchblende] then w3.pitch = w3.pitch + 1 end
+    for ore, k in pairs(w3.extra) do if held[G.LAYER[G.ORE_LAYERS[ore]]] then w3.extra[ore] = k + 1 end end
+    for s = 1, 32 do
+      if not G.IS_WILD[s] then check(P4.layer[s] == s, "version 4: fixed slots hold their own layer") end
+    end
+  end
+  env.MAT_GEN_FORCE = nil
+  check(w3.same == w3.n, string.format("versions 3 and 4 roll the same shapes: %d of %d", w3.same, w3.n))
+  check(w3.pitch == w3.n, string.format("pitchblende holds a wildcard in every version-4 system: %d of %d", w3.pitch, w3.n))
+  check((w3.homes or 0) > 0 and w3.homeOk == w3.homes, string.format("the home world keeps every layer it names: %s of %s", tostring(w3.homeOk), tostring(w3.homes)))
+  -- claimFree never displaces a claimed layer and never falls back
+  do
+    local a = G.newAssign()
+    for _, n in ipairs({ "chalk", "tuff", "redbeds", "gneiss", "schist", "marble", "loess", "firn" }) do a:claim(G.LAYER[n]) end
+    local before = ser(a.layer)
+    check(a:claimFree(G.LAYER.galena) == nil and ser(a.layer) == before, "a full palette gives an ore layer nothing")
+    local b = G.newAssign()
+    G.reserveOres(b)
+    local got = G.oreClaims(b, { uranium = true, galena = true })
+    check(got.uranium and G.IS_WILD[got.uranium] and got.galena and got.galena ~= got.uranium,
+      "an empty palette gives pitchblende and galena wildcards of their own")
+    check(G.oreClaims(b, { sulfur = true }).obsidian == nil, "…and only for the ores asked for")
+  end
+  w2.w3 = w3
 end
 
 if #failures == 0 then
@@ -727,8 +785,11 @@ if #failures == 0 then
   print(string.format("GEOLOGY SMOKE OK — %d worlds over %d seeds, %d/%d types (%s), %d spawn types, %d/%d same-type pairs differ; layers on %d/%d/%d/%d/%d/%d/%d bodies (mountains/warp/plateau/terrace/overhangs/ravines/rivers), %d biome rules",
     worlds, SEEDS, nseen, ntypes, table.concat(list, " "), nspawn, pairs_ - twins, pairs_,
     nlayer.mountains, nlayer.warp, nlayer.plateau, nlayer.terrace, nlayer.overhangs, nlayer.ravines, nlayer.rivers, nlayer.rules))
-  print(string.format("  FORMATIONS (matGen 3): %d formations over %d library layers; shapes equal to matGen 2 on %d/50 seeds; %d/%d same-type pairs differ in rock; at most %d of 8 wildcards claimed (mean %.1f); %.1f library layers a system fell back to a look-alike",
+  print(string.format("  FORMATIONS (matGen 3+): %d formations over %d library layers; shapes equal to matGen 2 on %d/50 seeds; %d/%d same-type pairs differ in rock; at most %d of 8 wildcards claimed (mean %.1f); %.1f library layers a system fell back to a look-alike",
     w2.forms, w2.layers, w2.same, w2.pairs - w2.twins, w2.pairs, w2.claim, w2.sumClaim / w2.nsys, w2.sumFell / w2.nsys))
+  local w3 = w2.w3
+  print(string.format("  ORES (matGen 4): shapes equal to matGen 3 on %d/%d seeds; pitchblende held in %d/%d systems; free wildcards gave galena %d, native sulfur %d, obsidian %d",
+    w3.same, w3.n, w3.pitch, w3.n, w3.extra.galena, w3.extra.sulfur, w3.extra.obsidian))
   os.exit(0)
 else
   print("GEOLOGY SMOKE FAILURES:")

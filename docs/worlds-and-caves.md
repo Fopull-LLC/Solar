@@ -1,8 +1,8 @@
 # Worlds and caves: what planets are made of
 
 The plan behind this is `work/worlds/PLAN.md` (the worlds planner, 2026-11-10). This doc holds
-what has shipped. Section 1 is the geology provinces (slice W2). Cave kinds (W4) and their hooks
-will get their own sections when they land.
+what has shipped. Section 1 is the geology provinces (slice W2), section 2 the ores and crystals
+(slice W3). Cave kinds (W4) and their hooks will get their own sections when they land.
 
 ## 1. Geology provinces (material generation 3)
 
@@ -113,3 +113,139 @@ All of this runs at generation time:
 first world of its system at material generation 3 (`MATGEN=2` gives the same world as it was),
 gives the probe its palette, and with `AP_PARAMS='("pit", 1.0)'` digs a 10 m pit and shoots its
 rim and wall plus the steepest face 30 m off (`_pitrim`, `_pitwall`, `_cliff`).
+
+## 2. Ores and crystals that look like their minerals (material generation 4)
+
+Slice W3 (`work/worlds/PLAN.md` §3.4, §5.1). Every ore reads as the mineral it is, realistic
+except the declared fictions (Resonant Crystal, phasite, cryovolt glass), which alone glow. Only
+magma glows otherwise, and only because it is hot.
+
+### 2.1 Version 4
+
+`MAT_GEN = 4` (`system_generator.lua`). Version 4 rolls exactly what version 3 rolls: the same
+draws, shapes, seas, caves and formations (`smoke_geology`: 30/30 seeds equal). What changes:
+
+- **Slot 6 pays magma rock** (`materials.REG.magma`, bulk, 2.7 kg/L, $3), not uranite. The slot
+  keeps its glowing magma picture: the hot worlds' magma pockets and seams and every world's
+  core paint.
+- **Uranite is pitchblende**: black, pitchy, botryoidal, with an autunite-yellow stain. It does
+  not glow; the dosimeter finds it (§2.5).
+- **Galena** (`materials.REG.galena`, lead-zinc ore, 5.0 kg/L, $30, tier 2) is a new ore id with
+  library layer 61. A renamed off-world ore would have kept the id count down, but it would also
+  have changed what every save's existing stock of that ore *is*, so it is a new id.
+- The wildcards no world claimed go to **ore layers** (§2.2).
+- Each world's ores follow its **formation** (§2.3).
+
+A save made before keeps version 3 (`g_matGen` is written once, for fresh saves only). Its
+published palette says `gen = 3`, and `materials.setPalette` then gives slot 6 back to uranite and
+uranite's veins their old slot 6 (`VEIN_LEGACY`). `bodyOres` adds nothing (`oreGen4()` is false),
+so every vein is laid with the ore it always had. A vein an old save painted in slot 6 is recorded
+in `veinslots.<body>` and pays uranite on that world whatever the generation
+(`mineral_field.slotMaterial`). No deposit is lost.
+
+### 2.2 Ore layers in the palette
+
+`geology.ORE_LAYERS`: uranite → pitchblende (43), galena → galena (61), sulfur → native sulfur
+vein (59), obsidian → obsidian glass (48). `materials.ORE_LAYERS` holds the same numbers.
+
+- **Pitchblende is reserved**: at version 4, `regenerate` gives it a wildcard before any world
+  claims ground (`geology.reserveOres`). Every home world carries uranite, and a black vein in
+  borrowed slate reads as slate. It costs the system's last-rolled world a look-alike fallback,
+  typically a moon's: 4.0 → 4.9 fallbacks per system, while the home world keeps every layer it
+  names (`smoke_geology`).
+- The **others take leftovers**: after the home system's worlds have claimed their ground,
+  `publishPalette` hands the free wildcards (`Assign:claimFree`, never displacing, never falling
+  back) to galena, sulfur and obsidian, for the ores the system's worlds carry
+  (`system_generator.oreNeeds`). Over 30 seeds: galena 3, sulfur 2, obsidian 7 systems.
+- `materials.setPalette` puts an ore's own layer first in its `VEIN_SLOTS` where the palette holds
+  it. Elsewhere a vein is painted in a fixed look-alike and recoloured to its mineral (uranite in
+  slate, basalt or flagstone; galena in flagstone, slate or granite).
+- `materials.veinSlots(ore)` reads the save's palette first, so an old save's uranite gets slot 6
+  even before the generator republishes. `mineral_field.vein_slot` uses it.
+
+### 2.3 Ores reconciled with the formation
+
+W2's formations named deposits that the ore table did not know about: quartz druzy pockets (paying
+silica), hematite, gossan and sulfur-vein seams (replacing the copper veinstone seam), and obsidian
+as a band rock. At version 4, `materials.bodyOres` reads the world's `bio.formation.layers`
+through `LAYER_ORE` (`formationOres`):
+
+- A deposit layer is its ore: a hematite or gossan seam means iron, a sulfur-vein seam or band
+  means sulfur, an obsidian band means obsidian.
+- The country rock carries the ores that form in it: galena in limestone, chalk, marble, cave
+  limestone and shales (Mississippi-Valley type); uranite in granite, gneiss and red-bed sandstone
+  (roll fronts); copper in basalt.
+- A cold or airless body keeps its own ices and impact metals.
+- The home world adds galena (0.7) beside its iron, copper, sulfur, crystal and uranite.
+
+The deposits' own materials are unchanged: a quartz-druzy pocket pays silica, a hematite or
+gossan seam pays hematite earth, and a sulfur-vein seam pays sulfur. A hematite seam that an iron
+vein also uses pays iron on that world (`veinslots`).
+
+### 2.4 The looks (`materials.ORE[*].look`, `mineral_field`)
+
+| Ore | Vein slot (layer first) | Seam / stain | Outcrop | Float |
+|---|---|---|---|---|
+| iron | hematite 27 | rust black / ochre-red gossan stain | rusted boulder | red scree (stone) |
+| copper | veinstone 5 | verdigris / green wash | green-stained stone | malachite chips (nodule) |
+| sulfur | sulfur vein 59, sulfur 26 | yellow / pale efflorescence | crust slab | yellow crust flakes |
+| obsidian | obsidian 48, onyx 4, basalt 13 | glass black / grey | glass blades (rough 0.12) | blades (shard) |
+| galena | galena 61, flagstone 3, slate 9 | lead grey / grey-white | metallic cubes | little cubes |
+| uranite | pitchblende 43, slate 9, basalt 13 | pitch black / autunite lemon-green | black botryoidal nodules, cluster | nodules |
+| crystal | amethyst 7, blue crystal 8 | the world's crystal hue | glowing crystal cluster | crystals |
+| ilmenite | basalt 13 … | black | dark boulder | platy blades (shard) |
+| kamacite | slate 9 … | steel / rust | metallic nodules | nodules |
+| sperrylite | slate 9 … | tin white | metallic cubes | cubes |
+| tholin, clathrate | peat 31 / glacier 23 … | orange-brown / white | crust slab | crust flakes |
+
+- `look.fk` names the float's shape (`mineral_field.FLOAT_MODELS`: stone, nodule, shard, crust,
+  cube, gem). `mineral_field.floatKindOf(ore)` and `oreLookOf(ore)` gather it all.
+  `OUT_LOOK`, `SEAM_COLOUR`, `STAIN_COLOUR`, `FLOAT_COLOUR` and `FLOAT_KIND` hold the home ores'
+  own looks as fallbacks behind the registry's.
+- The new rock models, `tools/gen_flora.py write_minerals` (`python3 tools/gen_flora.py minerals`):
+  - `rock_nodule`: botryoidal lobes, 814/250 triangles.
+  - `rock_shard`: plane-broken glass blades, flat-shaded, 602/170.
+  - `rock_crust`: a blistered plate with a broken edge, 548/128.
+  - `rock_cube`: interpenetrating cubes on a matrix, 266/170.
+  - They share one neutral mineral picture (`textures/flora/rock_mineral_{l0,n,mr}.png`),
+    box-projected at 2.5 repeats a metre. Its mean is 0.80, not the rocks' 0.42: a node or
+    scatter tint only multiplies (it is clamped at 1), so on the rock picture sulfur yellow or
+    clathrate white could never come out brighter than mid-grey. `mineral_field.neutralOf(model)`
+    gives the neutral a model's tint is worked out against (`MINERAL_NEUTRAL` 0.80 or
+    `ROCK_NEUTRAL` 0.42).
+- Library layer 61 `galena`: `tools/import_textures.py make_galena` (CC0 Rock051 limestone host;
+  lead-grey cubes, each a turned square with a lit top and two side strips, sphalerite between,
+  calcite rims). It is stamped by its own code (`OWN_HASH`), so adding it re-bakes nothing else.
+- Codex: galena (`materials.ORE_CODEX`); pitchblende facts in uranite's entry; magma rock
+  (`codex.lua`).
+
+Open question: in the veinlook pictures, outcrop and float tints barely show. A sulfur slab or a
+pitchblende nodule renders sky-lit blue-grey, and this happens on the old rock model too. The
+seams, stains and paint carry the looks. The probe's `vl_nofloat`, `vl_mat` and `vl_oldmodel`
+switches reproduce it (`work/worlds_w3/NOTES.md`).
+
+### 2.5 The dosimeter
+
+`mineral_field` samples a ground-gamma reading with its 0.2 s tick (no per-frame work): `dose`
+(µSv/h), `doseOre` (the veins' share), `doseRising` and `doseT`. The reading is a background of
+0.12 µSv/h plus each radioactive vein's share, `DOSE_A · k · min(1.5, width/2) · e^(-d/4.5 m)`,
+where `d` is the distance to the vein's line. `k` is 1 for uranite, 0.06 for monazite and 0.03
+for KREEP; `DOSE_A` is 28 µSv/h.
+
+Real gamma is stopped by a metre of rock. The 4.5 m length stands for the radon that seeps up
+fractures from a uranium body, which carries its signal further. At the face of a rich vein the
+reading is about 28 µSv/h, a few hundred times background. From the surface over a vein 20 m down
+it is a faint rise of about 0.3 µSv/h; at 45 m it is nothing.
+
+`status_hud` shows a **Dose** chip while the veins' share is at least 0.15 µSv/h: `0.84 µSv/h ▲`,
+in caution yellow from 2.5 µSv/h. `mineral_field.doseAt(x, y, z)` is for probes. The radiation
+does not harm the crew yet: that is W5.
+
+### 2.6 Probes
+
+`tools/perf/veinlook.sh <engine>` (`veinlook_modes.lua`, with `WORK` and `LOCK` as for `bench.sh`)
+starts a fresh save. It lays every ore in `ores` (a string param; default the home ores and five off-world
+ones) as a 12 m seam on a 260 m ring round the base, painted as `mineral_field` paints one, with
+its outcrops and float. It shoots each one from 5 m and 20 m at eye height and from 60 m at 4 m
+(`veinlook_<ore>_{5m,20m,60m}.png`). It then walks out to a real uranite vein and reads the
+dosimeter over it, 15 m off and 40 m off.

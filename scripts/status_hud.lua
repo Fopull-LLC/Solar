@@ -83,6 +83,16 @@ local function readouts()
                       value = pw.downed and "—" or string.format("%d s", math.floor((pw.o2Left or 0) + 0.5)),
                       frac = o, warn = pw.downed or o < 0.25, gauge = "air" }
   end
+  -- DOSE (worlds W3): the suit's dosimeter, only while the ground reads over
+  -- background (mineral_field's veins: uranite is black pitchblende, found by
+  -- this, not by a glow). Caution yellow past 2.5 µSv/h; ▲ while it climbs.
+  local mf = ref("mineral_field")
+  if mf and mf.doseT and mf.doseT >= 0 and (time or 0) - mf.doseT < 1.0 and (mf.doseOre or 0) >= (mf.DOSE_SHOW or 0.15) then
+    local d = mf.dose or 0
+    out[#out + 1] = { key = "dose", label = "Dose",
+                      value = string.format(d < 10 and "%.2f µSv/h%s" or "%.0f µSv/h%s", d, mf.doseRising and " ▲" or ""),
+                      warn = d >= 2.5 }
+  end
   if co and co.money then
     out[#out + 1] = { key = "funds", label = "Funds", value = co.money(co.balance()) }
     out[#out + 1] = { key = "rep", label = "Rep", value = (co.isSandbox and co.isSandbox()) and "MAX" or string.format("%+d", co.rep()) }
@@ -123,6 +133,7 @@ local function text_of(rs)
   local parts = {}
   for _, r in ipairs(rs) do
     if r.key == "o2" then parts[#parts + 1] = "air " .. r.value
+    elseif r.key == "dose" then parts[#parts + 1] = "dose " .. r.value
     elseif r.key == "rep" then parts[#parts + 1] = "rep " .. r.value
     elseif r.key == "rp" then parts[#parts + 1] = "research " .. r.value
     elseif r.warn then parts[#parts + 1] = "PACK FULL  " .. r.value

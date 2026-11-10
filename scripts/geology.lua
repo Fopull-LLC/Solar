@@ -42,7 +42,8 @@ defaults = {}
 -- ── THE LIBRARY ─────────────────────────────────────────────────────────────
 -- [layer] = { name, role, material, normal, orm, height } (map files under
 -- textures/env/terrain/maps/). The material is what a dig of it pays
--- (materials.lua REG); 60 quartz druzy pays silica. Generated from
+-- (materials.lua REG); 60 quartz druzy pays silica; 6 magma pays magma rock
+-- (worlds W3; an older save's palette makes it uranite again: materials.setPalette). Generated from
 -- tools/import_textures.py TERRAIN; tests/smoke_geology.lua checks every file.
 LIB = {
   [1] = { "rust", "rock", "rustrock", "Rocks011_normal.png", "Rocks011_orm.png", "Rocks011_height.png" },
@@ -50,7 +51,7 @@ LIB = {
   [3] = { "flagstone", "rock", "slate", "Rock023_normal.png", "Rock023_orm.png", "Rock023_height.png" },
   [4] = { "onyx", "rock", "onyx", "Onyx006_normal.png", "Onyx006_orm.png", "Onyx006_height.png" },
   [5] = { "veinstone", "ore", "veinstone", "Rock058_normal.png", "Rock058_orm.png", "Rock058_height.png" },
-  [6] = { "magma", "glow", "uranium", nil, nil, nil },
+  [6] = { "magma", "glow", "magma", nil, nil, nil },
   [7] = { "amethyst", "crystal", "crystal", "07_amethyst_normal.png", "07_amethyst_orm.png", "07_amethyst_height.png" },
   [8] = { "bluecrystal", "crystal", "crystal", "08_bluecrystal_normal.png", "08_bluecrystal_orm.png", "08_bluecrystal_height.png" },
   [9] = { "slate", "rock", "slate", "dark_rock_normal.png", "dark_rock_orm.png", "dark_rock_height.png" },
@@ -105,8 +106,10 @@ LIB = {
   [58] = { "firn", "snow", "ice", "snow_02_normal.png", "snow_02_orm.png", "snow_02_height.png" },
   [59] = { "sulfurvein", "ore", "sulfur", "rock_05_normal.png", "rock_05_orm.png", "rock_05_height.png" },
   [60] = { "quartzdruzy", "crystal", "silica", "60_quartzdruzy_normal.png", "60_quartzdruzy_orm.png", "60_quartzdruzy_height.png" },
+  -- worlds W3: the lead-zinc ore (galena cubes and sphalerite in limestone)
+  [61] = { "galena", "ore", "galena", "61_galena_normal.png", "61_galena_orm.png", "61_galena_height.png" },
 }
-LIB_COUNT = 60
+LIB_COUNT = 61
 TERRAIN_DIR = "textures/env/terrain/"
 MAPS_DIR = "textures/env/terrain/maps/"
 
@@ -160,6 +163,7 @@ FALLBACK = {
   halite = 18, clearice = 23, gossan = 27, pitchblende = 9, redbeds = 15, mudstone = 30, chalk = 25,
   clinker = 13, obsidian = 13, scoria = 13, schist = 9, gneiss = 14, marble = 25, blacksand = 16,
   redregolith = 17, loess = 2, laggravel = 24, dirtyice = 23, firn = 22, sulfurvein = 26, quartzdruzy = 7,
+  galena = 3,
 }
 function isFixed(n) return n ~= nil and n >= 1 and n <= 32 and not IS_WILD[n] end
 function fallbackOf(n)
@@ -247,6 +251,62 @@ function Assign:restore(s)
   for k, v in pairs(s.taken) do self.taken[k] = v end
 end
 function Assign:freeze() self:settle(); self.frozen = true end
+
+-- A FREE wildcard for layer `n`, or nil: never one a world claimed, never a
+-- fallback (an ore's look is a bonus, not a ground layer to displace). Its
+-- class's wildcards first. (worlds W3: oreClaims)
+function Assign:claimFree(n)
+  if n == nil then return nil end
+  local s = self:peek(n)
+  if s then return s end
+  if self.frozen then return nil end
+  local pick
+  local cls = classOf(n)
+  for _, w in ipairs(WILD) do
+    if not self.taken[w] and WILD_CLASS[w] == cls then pick = w break end
+  end
+  if not pick then
+    for _, w in ipairs(WILD) do if not self.taken[w] then pick = w break end end
+  end
+  if not pick then return nil end
+  local old = self.layer[pick]
+  if self.slotOf[old] == pick then self.slotOf[old] = nil end
+  self.layer[pick] = n
+  self.slotOf[n] = pick
+  self.taken[pick] = true
+  return pick
+end
+
+-- ── ORE LAYERS (worlds W3, material generation 4) ──────────────────────────
+-- The layer an ore's vein looks like (materials.lua ORE_LAYERS keeps the same
+-- numbers). After a system's worlds have claimed their ground, the wildcards
+-- left over go to these in this order, for the ores the system's worlds
+-- carry: uranite's pitchblende first (every home world carries it), then
+-- galena, native sulfur and obsidian glass. A vein whose layer found no
+-- wildcard is painted in a fixed look-alike slot (materials.VEIN_SLOTS) and
+-- recoloured to its mineral.
+ORE_LAYERS = { uranium = "pitchblende", galena = "galena", sulfur = "sulfurvein", obsidian = "obsidian" }
+ORE_ORDER = { "uranium", "galena", "sulfur", "obsidian" }
+-- Uranite matters too much to be left to whatever is free (the fuel chain
+-- starts at it, and a black vein in borrowed slate reads as slate): its layer
+-- holds a wildcard before any world claims ground, which costs the system's
+-- last-rolled world one look-alike fallback, typically a moon's.
+RESERVED_ORES = { "uranium" }
+function reserveOres(a)
+  for _, ore in ipairs(RESERVED_ORES) do a:claimFree(LAYER[ORE_LAYERS[ore]]) end
+end
+-- `needs`: { [ore] = true } the system's worlds carry (nil: all).
+-- → { [ore] = wildcard slot } claimed now or already holding the layer.
+function oreClaims(a, needs)
+  local out = {}
+  for _, ore in ipairs(ORE_ORDER) do
+    if not needs or needs[ore] then
+      local s = a:claimFree(LAYER[ORE_LAYERS[ore]])
+      if s and IS_WILD[s] then out[ore] = s end
+    end
+  end
+  return out
+end
 
 -- The published form: layer and material per slot (dense, 1..32), the
 -- wildcards, and how many were claimed.

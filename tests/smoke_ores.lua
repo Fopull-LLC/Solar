@@ -56,7 +56,8 @@ check("the exotic ores are flagged fictional, the real ones are not",
 check("codexInto adds the ore entries a codex lacks and keeps its own", (function()
   local cx = { CODEX = { ilmenite = { summary = "theirs" } } }
   local n = M.codexInto(cx)
-  return cx.CODEX.ilmenite.summary == "theirs" and cx.CODEX.he3 ~= nil and n == 10
+  -- (11: the off-world ores less ilmenite, and galena, worlds W3)
+  return cx.CODEX.ilmenite.summary == "theirs" and cx.CODEX.he3 ~= nil and n == 11
 end)())
 
 -- ── worlds ──────────────────────────────────────────────────────────────────

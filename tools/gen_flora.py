@@ -4,6 +4,7 @@ library table inside scripts/flora_gen.lua.
 
     python3 tools/gen_flora_tex.py     # the textures (textures/flora/)
     python3 tools/gen_flora.py         # the meshes, one .bin per shape
+    python3 tools/gen_flora.py minerals   # only the ore shapes (worlds W3)
 
 WHAT THIS IS. A plant generator that runs OFFLINE, because the engine cannot
 build a mesh or a texture from Lua at runtime (0.116). Every shape below is
@@ -1346,6 +1347,296 @@ def write_rocks():
     return n
 
 
+# ── minerals (worlds W3: the ore outcrops and float that look like their mineral) ──
+# Four shapes beside the rocks, each a mineral's habit, all on one neutral
+# "mineral" picture (rock_mineral_*, written below: fine-grained, mottled, mean
+# MINERAL_NEUTRAL 0.80, so that a tint, which can only darken, still reaches
+# sulfur yellow and clathrate white: mineral_field MINERAL_NEUTRAL) that
+# materials.ORE[*].look tints to the ore and patches with its sheen:
+#   nodule  botryoidal: grape-like lobes on a knobbly body (pitchblende,
+#           malachite, kidney hematite, kamacite)
+#   shard   conchoidal glass: blades broken along flat planes with sharp
+#           edges, flat-shaded (obsidian; rough 0.15 by its look)
+#   crust   a crust slab: a thin plate with a lumpy, blistered top and broken
+#           edges (native sulfur, tholin, clathrate crust)
+#   cube    interpenetrating cubes on a little matrix (galena, sperrylite)
+# Box-projected UVs (2.5 repeats a metre), so the grain never stretches.
+MINERAL_UV = 2.5
+
+
+def _box_uv(P, N):
+    a = np.abs(N)
+    u = np.where(a[:, 0] >= np.maximum(a[:, 1], a[:, 2]), P[:, 2], P[:, 0])
+    v = np.where(a[:, 1] >= np.maximum(a[:, 0], a[:, 2]), P[:, 2], P[:, 1])
+    return np.column_stack([u, -v]) * MINERAL_UV
+
+
+def _norm_rows(a):
+    return a / np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-12)
+
+
+def _flat_add(m, mat, P, I):
+    """Triangles with their own face normals (hard edges)."""
+    P = np.asarray(P, np.float64)
+    I = np.asarray(I, np.int64).reshape(-1, 3)
+    T = P[I.reshape(-1)]
+    fn = _norm_rows(np.cross(T[1::3] - T[0::3], T[2::3] - T[0::3]))
+    N = np.repeat(fn, 3, axis=0)
+    m.add(mat, T, N, _box_uv(T, N), np.arange(len(T)).reshape(-1, 3))
+
+
+def _outward(P, I, center):
+    fa, fb, fc = P[I[:, 0]], P[I[:, 1]], P[I[:, 2]]
+    fn = np.cross(fb - fa, fc - fa)
+    flip = (fn * ((fa + fb + fc) / 3 - center)).sum(1) < 0
+    I = I.copy()
+    I[flip] = I[flip][:, [0, 2, 1]]
+    return I
+
+
+def _smooth_add(m, mat, P, I, center):
+    P = np.asarray(P, np.float64)
+    I = _outward(P, np.asarray(I, np.int64).reshape(-1, 3), center)
+    fa, fb, fc = P[I[:, 0]], P[I[:, 1]], P[I[:, 2]]
+    fn = np.cross(fb - fa, fc - fa)
+    N = np.zeros_like(P)
+    for k in range(3):
+        np.add.at(N, I[:, k], fn)
+    N = _norm_rows(N)
+    m.add(mat, P, N, _box_uv(P, N), I)
+
+
+def _sphere(rings, segs):
+    """Welded lat-long sphere directions (no seam column, poles single points)
+    and their triangles."""
+    D = [np.array([0.0, 1.0, 0.0])]
+    for i in range(1, rings):
+        ph = math.pi * i / rings
+        for j in range(segs):
+            th = TAU * j / segs + (0.5 * TAU / segs if i % 2 else 0)
+            D.append(np.array([math.sin(ph) * math.cos(th), math.cos(ph), math.sin(ph) * math.sin(th)]))
+    D.append(np.array([0.0, -1.0, 0.0]))
+    D = np.asarray(D)
+    I = []
+    last = len(D) - 1
+    for j in range(segs):
+        I.append([0, 1 + (j + 1) % segs, 1 + j])
+    for i in range(rings - 2):
+        a0, b0 = 1 + i * segs, 1 + (i + 1) * segs
+        for j in range(segs):
+            j1 = (j + 1) % segs
+            I += [[a0 + j, a0 + j1, b0 + j1], [a0 + j, b0 + j1, b0 + j]]
+    a0 = 1 + (rings - 2) * segs
+    for j in range(segs):
+        I.append([last, a0 + j, a0 + (j + 1) % segs])
+    return D, np.asarray(I)
+
+
+def _nodule(m, rng, center, size, lod, squash=0.75):
+    big = size >= 0.4
+    D, I = _sphere(*(((12, 18), (9, 13)), ((7, 10), (5, 8)))[lod][0 if big else 1])
+    lobes = _norm_rows(rng.normal(size=(26, 3)))
+    th = rng.uniform(0.38, 0.62, len(lobes))
+    amp = rng.uniform(0.22, 0.36, len(lobes))
+    c = D @ lobes.T
+    cth = np.cos(th)
+    bump = np.sqrt(np.clip((c - cth) / (1 - cth), 0, 1)) * amp
+    r = 0.66 + bump.max(1) + 0.03 * np.sin(D[:, 0] * 9 + D[:, 2] * 7)
+    P = D * r[:, None]
+    P[:, 1] *= squash
+    P[:, 1] = np.maximum(P[:, 1], -0.35 * squash)
+    _smooth_add(m, "mineral", center + P * size, I, center)
+
+
+def _shard(m, rng, center, size, lod, length):
+    """A blade of glass: a sphere stretched up a tilted axis and cut by planes,
+    so nearly all of it lies on flat conchoidal breaks; flat-shaded."""
+    D, I = _sphere(*((7, 10), (5, 7))[lod])
+    r = np.ones(len(D))
+    for _ in range(9):
+        n_ = norm(rng.normal(size=3) * np.array([1.0, 0.35, 1.0]))
+        k = rng.uniform(0.3, 0.55)
+        cth = D @ n_
+        r = np.where(cth > 1e-3, np.minimum(r, k / np.maximum(cth, 1e-3)), r)
+    P = D * r[:, None]
+    P[:, 1] *= length
+    ax = norm(np.array([rng.uniform(-1, 1), 0.0, rng.uniform(-1, 1)]) + 1e-6)
+    ang = rng.uniform(0.15, 0.65)
+    P = np.array([rot_axis(p, ax, ang) for p in P])
+    _flat_add(m, "mineral", center + P * size, _outward(P, I, np.zeros(3)))
+
+
+def _cube(m, center, half, axes):
+    ex, ey, ez = axes
+    C = np.asarray([center + (ex * sx + ey * sy + ez * sz) * half
+                    for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+    quads = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    I = []
+    for a, b, c_, d in quads:
+        I += [[a, b, c_], [a, c_, d]]
+    _flat_add(m, "mineral", C, _outward(C, np.asarray(I), center))
+
+
+def _rand_axes(rng, tilt):
+    ey = norm(np.array([0.0, 1.0, 0.0]) + rng.normal(size=3) * tilt)
+    ex, ez = perp(ey)
+    a = rng.uniform(0, TAU)
+    return ex * math.cos(a) + ez * math.sin(a), ey, -ex * math.sin(a) + ez * math.cos(a)
+
+
+def _crust(m, rng, size, lod, thick=0.16, off=(0.0, 0.0, 0.0)):
+    """A crust slab: an irregular plate, blistered on top, broken at its edge."""
+    nr, na = ((7, 28), (4, 14))[lod]
+    t = np.arange(na) / na * TAU
+    rad = 1.0 + 0.22 * np.sin(t * 3 + rng.uniform(0, TAU)) + 0.12 * np.sin(t * 7 + rng.uniform(0, TAU)) \
+        + rng.uniform(-0.08, 0.08, na)
+    s3 = rng.uniform(0, 100, 4)
+
+    def top(x, z):
+        return thick * (1.0 + 0.45 * math.sin(x * 9 + s3[0]) * math.cos(z * 8 + s3[1])
+                        + 0.25 * math.sin(x * 23 + z * 19 + s3[2]) + 0.15 * math.sin(z * 31 + s3[3]))
+    P, I = [[0.0, top(0.0, 0.0), 0.0]], []
+    for i in range(1, nr + 1):
+        f = i / nr
+        for j in range(na):
+            x, z = math.cos(t[j]) * rad[j] * f, math.sin(t[j]) * rad[j] * f
+            P.append([x, top(x, z) * (1 - 0.35 * f ** 3), z])
+    for j in range(na):
+        I.append([0, 1 + (j + 1) % na, 1 + j])
+    for i in range(nr - 1):
+        a0, b0 = 1 + i * na, 1 + (i + 1) * na
+        for j in range(na):
+            j1 = (j + 1) % na
+            I += [[a0 + j, a0 + j1, b0 + j1], [a0 + j, b0 + j1, b0 + j]]
+    P = np.asarray(P, np.float64) * size + np.asarray(off)
+    _smooth_add(m, "mineral", P, np.asarray(I), np.asarray(off) + np.array([0.0, -10.0, 0.0]))
+    # the broken edge, flat-shaded: the rim down to a ragged bed under it
+    rim0 = 1 + (nr - 1) * na
+    E, EI = [], []
+    o = np.asarray(off)
+    for j in range(na):
+        p = P[rim0 + j] - o
+        E.append(p + o)
+        E.append(np.array([p[0] * 0.96, -thick * size * rng.uniform(0.6, 1.0), p[2] * 0.96]) + o)
+    E = np.asarray(E)
+    for j in range(na):
+        j1 = (j + 1) % na
+        a, b, c_, d = 2 * j, 2 * j1, 2 * j1 + 1, 2 * j + 1
+        EI += [[a, c_, b], [a, d, c_]]
+    EI = np.asarray(EI)
+    fa, fb, fc = E[EI[:, 0]], E[EI[:, 1]], E[EI[:, 2]]
+    fn = np.cross(fb - fa, fc - fa)
+    flip = (fn * (((fa + fb + fc) / 3 - o) * np.array([1, 0, 1]))).sum(1) < 0
+    EI[flip] = EI[flip][:, [0, 2, 1]]
+    _flat_add(m, "mineral", E, EI)
+
+
+def mineral_shape(kind, seed, lod):
+    rng = np.random.default_rng(seed)
+    m = Mesh()
+    if kind == "nodule":
+        _nodule(m, rng, np.array([0.0, 0.18, 0.0]), 0.55, lod)
+        _nodule(m, rng, np.array([0.48, 0.05, 0.22]), 0.3, lod)
+        _nodule(m, rng, np.array([-0.36, 0.02, -0.3]), 0.24, lod)
+    elif kind == "shard":
+        for i in range(5 if lod == 0 else 3):
+            a, r = rng.uniform(0, TAU), rng.uniform(0.0, 0.35) * (i > 0)
+            _shard(m, rng, np.array([math.cos(a) * r, 0.0, math.sin(a) * r]),
+                   rng.uniform(0.3, 0.5) * (1.0 if i == 0 else 0.75), lod, rng.uniform(1.6, 2.6))
+    elif kind == "crust":
+        _crust(m, rng, 0.9, lod)
+        if lod == 0:
+            _crust(m, rng, 0.45, 1, thick=0.12, off=(0.55, 0.1, -0.35))
+    elif kind == "cube":
+        # a little matrix, then cubes grown through each other on it
+        _nodule(m, rng, np.array([0.0, -0.1, 0.0]), 0.42, 1, squash=0.45)
+        for i in range(7 if lod == 0 else 4):
+            a, r = rng.uniform(0, TAU), rng.uniform(0.0, 0.42) * (i > 0)
+            h = rng.uniform(0.12, 0.3) * (1.35 if i == 0 else 1.0)
+            c = np.array([math.cos(a) * r, h * rng.uniform(0.3, 0.8), math.sin(a) * r])
+            _cube(m, c, h, _rand_axes(rng, 0.45))
+            # a growth step: a small cube on the big one's face
+            if lod == 0 and rng.random() < 0.5:
+                _cube(m, c + np.array([0, h * 0.9, 0]) + rng.normal(size=3) * h * 0.3, h * 0.35, _rand_axes(rng, 0.3))
+    m.anchor(every=True)
+    return m
+
+
+MINERALS = ["nodule", "shard", "crust", "cube"]
+MINERAL_NEUTRAL = 0.80
+
+
+def write_mineral_textures():
+    """rock_mineral_l0/_n/_mr.png: a neutral fine-grained mineral surface,
+    mottled (noise octaves), pitted (small dark pocks with a pale rim) and
+    threaded with hairline fractures; mean MINERAL_NEUTRAL (0.80: a node or
+    scatter tint only multiplies, so a bright ore needs a bright picture;
+    mineral_field divides by the same number). Roughness 0.55-0.95 (pits rough,
+    fractures smoother); the normal from the same height; metal 0 (an ore's
+    look patches metal on: galena, kamacite, sperrylite)."""
+    from PIL import Image
+    N = 512
+    rng = np.random.default_rng(4203)
+    ky = np.fft.fftfreq(N)[:, None]
+    kx = np.fft.fftfreq(N)[None, :]
+
+    def noise(sig):
+        f = np.fft.fft2(rng.standard_normal((N, N))) * np.exp(-(kx * kx + ky * ky) * (sig * math.pi) ** 2 * 2)
+        a = np.real(np.fft.ifft2(f))
+        return (a - a.mean()) / (a.std() + 1e-9)
+    h = noise(24) * 0.5 + noise(6) * 0.3 + noise(1.5) * 0.12
+    yy, xx = np.mgrid[0:N, 0:N]
+    for _ in range(260):
+        cy, cx, r = rng.uniform(0, N), rng.uniform(0, N), rng.uniform(1.5, 6.0)
+        dy = (yy - cy + N / 2) % N - N / 2
+        dx = (xx - cx + N / 2) % N - N / 2
+        d = np.sqrt(dx * dx + dy * dy) / r
+        h -= np.clip(1 - d, 0, 1) ** 2 * 0.9
+        h += np.clip(1 - np.abs(d - 1.15) * 3, 0, 1) * 0.15
+    crack = np.clip(1 - np.abs(noise(18) + noise(40) * 0.4) * 14, 0, 1)
+    h -= crack * 0.35
+    lum_ = 0.42 + 0.075 * h - 0.05 * crack
+    lum_ = lum_ * (MINERAL_NEUTRAL / lum_.mean())
+    alb = np.clip(np.stack([lum_ * 1.0, lum_ * 0.99, lum_ * 0.97], -1), 0, 1)
+    tex = os.path.join(ROOT, "textures", "flora")
+    Image.fromarray((alb * 255 + 0.5).astype(np.uint8)).save(os.path.join(tex, "rock_mineral_l0.png"))
+    gy, gx = np.gradient(h)
+    nrm = np.stack([-gx * 2.2, gy * 2.2, np.ones_like(h)], -1)
+    nrm /= np.linalg.norm(nrm, axis=2, keepdims=True)
+    Image.fromarray(((nrm * 0.5 + 0.5) * 255 + 0.5).astype(np.uint8)).save(os.path.join(tex, "rock_mineral_n.png"))
+    rough = np.clip(0.75 - 0.08 * h - 0.25 * crack, 0.55, 0.95)
+    mr = np.stack([np.ones_like(h), rough, np.zeros_like(h)], -1)
+    Image.fromarray((mr * 255 + 0.5).astype(np.uint8)).save(os.path.join(tex, "rock_mineral_mr.png"))
+
+
+def write_minerals():
+    write_mineral_textures()
+    n = 0
+    for kind in MINERALS:
+        sid = f"rock_{kind}"
+        seed = sum(ord(c) * (i + 1) for i, c in enumerate(sid))
+        blob_all = bytearray()
+        packed = []
+        for lod in range(2):
+            data, prims = pack(mineral_shape(kind, seed, lod), colors=False)
+            while len(blob_all) % 4:
+                blob_all.extend(b"\0")
+            base = len(blob_all)
+            blob_all.extend(data)
+            for pr in prims:
+                for k in ("P", "N", "UV", "I"):
+                    pr[k] = (pr[k][0] + base, pr[k][1])
+            packed.append(prims)
+        with open(os.path.join(OUT, sid + ".bin"), "wb") as f:
+            f.write(bytes(blob_all))
+        for lod, prims in enumerate(packed):
+            write_gltf(sid + ".bin", len(blob_all), prims, {"mineral": f"{TEXREL}rock_mineral_l0.png"}, f"{sid}_l{lod}",
+                       normals={"mineral": f"{TEXREL}rock_mineral_n.png"}, mr={"mineral": f"{TEXREL}rock_mineral_mr.png"})
+            n += 1
+        print(f"{sid:16s} tris {[sum(p['icount'] for p in pr) // 3 for pr in packed]}")
+    return n
+
+
 def twin(meta):
     """A tree's trunk is its own file (and its own tinted source at runtime)."""
     return meta["form"] == "tree" and bool(meta["bark"])
@@ -1358,6 +1649,10 @@ def write_gltf(bin_name, bin_len, prims, images, name, glow=None, **maps):
 
 def main(only=None):
     os.makedirs(OUT, exist_ok=True)
+    if only == {"minerals"}:
+        # (worlds W3) the four mineral shapes and their picture alone
+        write_minerals()
+        return
     meta_rows = []
     total_files = 0
     for sid, fn, kw, meta in LIB:
@@ -1413,6 +1708,7 @@ def main(only=None):
         print(f"{sid:16s} tris {tris}  bin {len(blob_all) // 1024} KB{'  (twin)' if twin(meta) else ''}")
     if not only:
         total_files += write_rocks()
+        total_files += write_minerals()
     # The per-palette files (and their filter sidecars) an older run wrote.
     gone = 0
     for f in os.listdir(OUT):

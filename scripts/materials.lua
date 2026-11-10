@@ -79,6 +79,11 @@ REG = {
   hematite  = { name = "Hematite Earth",   kg = 3.0, value = 5,   tier = 0, class = "ore", grade = "bulk" },
   salt      = { name = "Rock Salt",        kg = 2.1, value = 3,   tier = 0, class = "ore", grade = "bulk" },
   onyx      = { name = "Banded Onyx",      kg = 2.6, value = 8,   tier = 1, class = "ore", grade = "bulk" },
+  -- (worlds W3) the glowing slot 6: hot rock from a magma pocket, seam or
+  -- core, quenched to a vesicular basalt glass as it is cut (sulfur in its
+  -- vesicles); bulk spoil. Before material generation 4 the slot paid
+  -- uranite, and an older save still does (setPalette).
+  magma     = { name = "Magma Rock",       kg = 2.7, value = 3,   tier = 0, class = "ore", grade = "bulk" },
 
   timber   = { name = "Timber",           kg = 1.2, value = 4,   tier = 1, class = "flora" },
   fiber    = { name = "Plant Fiber",      kg = 0.3, value = 1,   tier = 1, class = "flora" },
@@ -100,6 +105,10 @@ REG = {
   ammonia_ice = { name = "Ammonia Ice",          kg = 0.82, value = 16,  tier = 2, class = "ore" },
   clathrate   = { name = "Methane Clathrate",    kg = 0.9, value = 26,  tier = 2, class = "ore" },
   tholin      = { name = "Tholin Tar",           kg = 1.3, value = 50,  tier = 3, class = "ore" },
+  -- (worlds W3) lead-zinc: galena with sphalerite in limestone and shale, a
+  -- new id rather than a renamed off-world ore, so nobody's stock of an
+  -- existing ore changes what it is. A rich ore at ~65 % of galena's 7.6.
+  galena      = { name = "Galena",               kg = 5.0, value = 30,  tier = 2, class = "ore" },
   -- (fictional, under scripts/codex.lua's rules of this universe)
   phasite     = { name = "Phasite",              kg = 2.1, value = 220, tier = 4, class = "ore" },
   cryovolt    = { name = "Cryovolt Glass",       kg = 1.4, value = 180, tier = 4, class = "ore" },
@@ -334,15 +343,18 @@ end
 --
 -- Slots 5–8 are what the generator lays as DEPOSITS: veinstone seams (a low
 -- copper-bearing rock) and the slots its ore pockets and seams are painted in (6 magma veins,
--- self-lit: uranite; 7 amethyst, 8 blue crystal: resonant crystal, druzy crystal in its host
--- rock, lit like stone since the 2026-11-06 playtest). Everything else is
+-- self-lit: magma rock, bulk (worlds W3: it is hot, so it glows; an older save's slot 6
+-- still pays uranite, setPalette); 7 amethyst, 8 blue crystal: resonant crystal, druzy
+-- crystal in its host rock, lit like stone since the 2026-11-06 playtest). Uranite is
+-- pitchblende now: black, found by the dosimeter (mineral_field.doseAt), its veins painted
+-- in the pitchblende layer where a wildcard holds it (ORE_LAYERS). Everything else is
 -- the country rock and soil. The ore veins mineral_field paints near the
 -- surface use the slots in `VEIN_SLOTS`; a slot shared with a world's own
 -- ground (hematite deserts, sulfur plains) reads as that ground everywhere
 -- except inside a vein (mineral_field.veinAt), where it is the vein's ore.
 SLOT = {
   [1] = "rustrock", [2] = "soil", [3] = "slate", [4] = "onyx", [5] = "veinstone",
-  [6] = "uranium", [7] = "crystal", [8] = "crystal", [9] = "slate", [10] = "regolith",
+  [6] = "magma", [7] = "crystal", [8] = "crystal", [9] = "slate", [10] = "regolith",
   [11] = "regolith", [12] = "ice", [13] = "basalt", [14] = "granite", [15] = "sandstone",
   [16] = "sand", [17] = "regolith", [18] = "salt", [19] = "clay", [20] = "soil",
   [21] = "ash", [22] = "ice", [23] = "ice", [24] = "gravel", [25] = "limestone",
@@ -358,10 +370,28 @@ SLOT = {
 -- and VEIN_SLOTS drops a wildcard that no longer holds the layer an ore's
 -- vein was meant to look like. A save made before material generation 3
 -- assigns every wildcard its own layer, so nothing it digs pays differently.
+--
+-- MATERIAL GENERATION 4 (worlds W3): slot 6 (the glowing magma) pays magma
+-- rock, and uranite is pitchblende. A palette published by an older
+-- generation (`gen` < 4: every save made before) keeps slot 6 as uranite and
+-- uranite's veins in it, so the deposits an old save has, dug or not, pay
+-- what they always did. From generation 4 the system's roll also hands its
+-- FREE wildcards to ore layers (geology.ORE_LAYERS: pitchblende, galena,
+-- native sulfur, obsidian glass), and an ore's veins are painted in its own
+-- layer first where a wildcard holds it.
 SLOT_BASE = {}
 for k, v in pairs(SLOT) do SLOT_BASE[k] = v end
 VEIN_BASE = nil   -- VEIN_SLOTS as written (copied on the first setPalette)
+-- the vein slots an older generation used where they differ (slot 6 was uranite's)
+VEIN_LEGACY = { uranium = { 6 } }
+-- the library layer an ore's vein looks like (geology.lua LIB; a wildcard holds it this run or not)
+ORE_LAYERS = { uranium = 43, galena = 61, sulfur = 59, obsidian = 48 }
+PALETTE_GEN = nil   -- the generation of the palette in force (nil: none seen)
 local palette_seen = false
+local function legacy_gen(gen)
+  if gen == nil and save and save.get then gen = tonumber(save.get("g_matGen")) end
+  return gen ~= nil and gen < 4
+end
 function setPalette(p)
   palette_seen = true
   if not VEIN_BASE then
@@ -369,11 +399,16 @@ function setPalette(p)
     for k, v in pairs(VEIN_SLOTS) do VEIN_BASE[k] = v end
   end
   for k, v in pairs(SLOT_BASE) do SLOT[k] = v end
+  local gen = type(p) == "table" and tonumber(p.gen) or nil
+  PALETTE_GEN = gen
+  local legacy = legacy_gen(gen)
+  if legacy then SLOT[6] = "uranium" end
   local held = {}   -- wildcard slot → the layer it holds, where that is not its own
+  local oreAt = {}  -- library layer → the wildcard holding it
   if type(p) == "table" and type(p.layer) == "table" then
     for _, s in ipairs(p.wild or {}) do
       local n = p.layer[s]
-      if n and n ~= s then held[s] = n end
+      if n and n ~= s then held[s] = n; oreAt[n] = s end
     end
     for s, n in pairs(held) do
       local m = type(p.mat) == "table" and p.mat[s] or nil
@@ -382,14 +417,24 @@ function setPalette(p)
   end
   for ore, base in pairs(VEIN_BASE) do
     local list = {}
-    for _, s in ipairs(base) do if not held[s] then list[#list + 1] = s end end
+    local own = not legacy and ORE_LAYERS[ore] and oreAt[ORE_LAYERS[ore]]
+    if own then list[1] = own end
+    for _, s in ipairs((legacy and VEIN_LEGACY[ore]) or base) do
+      if not held[s] then list[#list + 1] = s end
+    end
     VEIN_SLOTS[ore] = list
   end
 end
 local function palette_pull()
   palette_seen = true
   local p = save and save.get and save.get("system.palette")
-  if type(p) == "table" then setPalette(p) end
+  if type(p) == "table" then setPalette(p)
+  elseif legacy_gen(nil) then setPalette({ gen = tonumber(save.get("g_matGen")) }) end
+end
+-- Is this save's ground on the old (pre-W3) slot meanings? (probes, the dosimeter)
+function legacyOres()
+  if not palette_seen then palette_pull() end
+  return SLOT[6] == "uranium"
 end
 
 -- The material of a palette slot (nil / 0 = untextured ground: regolith).
@@ -409,6 +454,7 @@ HARD = {
   silica = 1.0, iron = 1.45, copper = 1.4, sulfur = 1.3, uranium = 1.55, crystal = 1.65, geode = 1.7,
   ilmenite = 1.5, he3 = 0.8, kreep = 1.3, kamacite = 1.6, sperrylite = 1.75, monazite = 1.5,
   ammonia_ice = 0.75, clathrate = 0.85, tholin = 0.9, phasite = 1.8, cryovolt = 1.7,
+  magma = 1.1, galena = 1.3,
 }
 function hardness(id)
   return HARD[id] or HARD_GRADE[grade(id)] or 1.0
@@ -429,14 +475,27 @@ function isOre(id) return grade(id) == "ore" end
 -- the ore's look (hematite for iron, the orange veinstone for copper, sulfur,
 -- the glow crystal and magma slots for crystal and uranite). mineral_field
 -- takes the first slot that is not the ground the vein crops out of.
+-- (Worlds W3: uranite is black pitchblende, painted where no wildcard holds
+-- its layer in the dark slate, basalt or flagstone, its core recoloured
+-- pitch-black with an autunite-yellow stain: mineral_field SEAM_COLOUR;
+-- galena in the grey flagstone or slate. setPalette puts an ore's own layer
+-- first where this run's palette holds it, and gives an older save's uranite
+-- its slot 6 back.)
 VEIN_SLOTS = {
   iron = { 27, 4, 9, 1 }, copper = { 5, 1 }, sulfur = { 26, 5 }, obsidian = { 4, 13 },
-  crystal = { 7, 8 }, uranium = { 6 },
+  crystal = { 7, 8 }, uranium = { 9, 13, 3 }, galena = { 3, 9, 14 },
   ilmenite = { 13, 4, 9, 29 }, he3 = { 11, 10, 17, 18 }, kreep = { 29, 13, 3 },
   kamacite = { 9, 27, 4, 14 }, sperrylite = { 9, 14, 4, 3 }, monazite = { 15, 1, 5, 25 },
   ammonia_ice = { 12, 23, 22 }, clathrate = { 23, 12, 18, 22 }, tholin = { 31, 21, 19, 2 },
   phasite = { 8, 7 }, cryovolt = { 8, 12, 7 },
 }
+
+-- An ore's vein slots for this save (the palette read first, so an older
+-- save's uranite gets slot 6 even before the generator publishes).
+function veinSlots(ore)
+  if not palette_seen then palette_pull() end
+  return VEIN_SLOTS[ore]
+end
 
 -- The ores a world of archetype `kind` carries in its veins, with weights:
 -- BANDS without the bulk fillers, the deep-gated ones rarer by their gate.
@@ -462,62 +521,78 @@ end
 --   rarity              1 common … 5 exotic; rarer ores lie deeper and are
 --                       picked less often
 --   look                seam (core tint), stain (the colour it bleeds into the
---                       rock round it), float (its broken bits), out (the
---                       outcrop's model, tint c, emissive e, glow, cluster)
+--                       rock round it), float (its broken bits' colour), fk
+--                       (the float's shape: mineral_field FLOAT_MODELS), out
+--                       (the outcrop's model, tint c, emissive e, glow,
+--                       metallic, rough, cluster)
 -- Which ores a world carries is `bodyOres(name)`: read from the world's own
 -- makeup (its type, air, temperature, density and whether it is a moon), so
 -- the home world has its familiar ores and every other body its own.
+--
+-- WHAT EACH LOOKS LIKE (worlds W3, docs/worlds-and-caves.md §2): the mineral
+-- it is, realistic but for the declared fictions (Resonant Crystal, phasite,
+-- cryovolt), which alone glow. Iron: kidney hematite in a rusted gossan
+-- stain, red scree float. Copper: malachite-green stained stone, botryoidal
+-- green chips. Sulfur: yellow crust slabs in a pale efflorescence bloom.
+-- Obsidian: black glass blades, glossy. Galena: lead-grey metallic cubes,
+-- hardly any stain. Uranite: black, pitchy botryoidal pitchblende with an
+-- autunite yellow-green stain; it does NOT glow (the dosimeter finds it).
 local BOULDER, STONE, GEM = "models/flora/rock_boulder_l0.gltf", "models/flora/rock_stone_l0.gltf", "models/flora/rock_crystal_l0.gltf"
+local NODULE, SHARD = "models/flora/rock_nodule_l0.gltf", "models/flora/rock_shard_l0.gltf"
+local CRUST, CUBE = "models/flora/rock_crust_l0.gltf", "models/flora/rock_cube_l0.gltf"
 ORE = {
   iron = { minDepth = 0, maxDepth = 30, surface = true, rarity = 1, look = {
-    seam = { 0.30, 0.15, 0.11 }, stain = { 0.66, 0.32, 0.16 }, float = { 0.64, 0.30, 0.14 },
+    seam = { 0.30, 0.15, 0.11 }, stain = { 0.66, 0.32, 0.16 }, float = { 0.64, 0.30, 0.14 }, fk = "stone",
     out = { model = BOULDER, c = { 0.42, 0.13, 0.08 }, s = { 0.45, 0.85 }, sink = 0.3 } } },
   copper = { minDepth = 0, maxDepth = 35, surface = true, rarity = 1, look = {
-    seam = { 0.24, 0.56, 0.44 }, stain = { 0.34, 0.60, 0.48 }, float = { 0.22, 0.58, 0.42 },
+    seam = { 0.24, 0.56, 0.44 }, stain = { 0.34, 0.60, 0.48 }, float = { 0.18, 0.52, 0.40 }, fk = "nodule",
     out = { model = STONE, c = { 0.12, 0.50, 0.38 }, s = { 0.55, 1.0 }, sink = 0.3 } } },
   sulfur = { minDepth = 0, maxDepth = 25, surface = true, rarity = 2, look = {
-    seam = { 0.86, 0.76, 0.26 }, stain = { 0.84, 0.76, 0.36 }, float = { 0.92, 0.80, 0.22 },
-    out = { model = STONE, c = { 0.95, 0.80, 0.12 }, s = { 0.5, 0.95 }, sink = 0.3 } } },
+    seam = { 0.86, 0.76, 0.26 }, stain = { 0.86, 0.83, 0.62 }, float = { 0.92, 0.80, 0.22 }, fk = "crust",
+    out = { model = CRUST, c = { 0.95, 0.80, 0.12 }, s = { 0.55, 1.0 }, sink = 0.1 } } },
   obsidian = { minDepth = 0, maxDepth = 25, surface = true, rarity = 2, look = {
-    seam = { 0.16, 0.15, 0.18 }, stain = { 0.30, 0.28, 0.30 }, float = { 0.09, 0.08, 0.10 },
-    out = { model = STONE, c = { 0.07, 0.06, 0.08 }, rough = 0.15, s = { 0.35, 0.7 }, sink = 0.3 } } },
-  crystal = { minDepth = 14, maxDepth = 45, rarity = 3, look = {
+    seam = { 0.10, 0.09, 0.11 }, stain = { 0.30, 0.28, 0.30 }, float = { 0.07, 0.065, 0.08 }, fk = "shard",
+    out = { model = SHARD, c = { 0.06, 0.055, 0.07 }, rough = 0.12, s = { 0.4, 0.8 }, sink = 0.15 } } },
+  galena = { minDepth = 0, maxDepth = 40, surface = true, rarity = 2, look = {
+    seam = { 0.28, 0.29, 0.32 }, stain = { 0.66, 0.66, 0.62 }, float = { 0.42, 0.43, 0.46 }, fk = "cube",
+    out = { model = CUBE, c = { 0.40, 0.41, 0.44 }, metallic = 0.85, rough = 0.35, s = { 0.6, 1.1 }, sink = 0.15 } } },
+  crystal = { minDepth = 14, maxDepth = 45, rarity = 3, look = { fk = "gem",
     out = { model = GEM, glow = 0.55, s = { 0.4, 0.85 }, sink = 0.2, cluster = true } } },
   uranium = { minDepth = 20, maxDepth = 50, rarity = 4, look = {
-    seam = { 0.50, 0.66, 0.26 }, stain = { 0.62, 0.70, 0.34 }, float = { 0.40, 0.50, 0.18 },
-    out = { model = GEM, c = { 0.22, 0.27, 0.12 }, e = { 0.45, 0.85, 0.2 }, glow = 0.35, s = { 0.3, 0.6 }, sink = 0.25, cluster = true } } },
+    seam = { 0.10, 0.10, 0.09 }, stain = { 0.60, 0.86, 0.18 }, float = { 0.09, 0.09, 0.08 }, fk = "nodule",
+    out = { model = NODULE, c = { 0.035, 0.035, 0.032 }, s = { 0.4, 0.8 }, sink = 0.2, cluster = true } } },
   ilmenite = { minDepth = 0, maxDepth = 30, surface = true, rarity = 2, look = {
-    seam = { 0.14, 0.14, 0.16 }, stain = { 0.30, 0.30, 0.32 }, float = { 0.16, 0.16, 0.18 },
-    out = { model = BOULDER, c = { 0.10, 0.10, 0.11 }, rough = 0.35, s = { 0.45, 0.85 }, sink = 0.3 } } },
+    seam = { 0.14, 0.14, 0.16 }, stain = { 0.30, 0.30, 0.32 }, float = { 0.16, 0.16, 0.18 }, fk = "shard",
+    out = { model = BOULDER, c = { 0.08, 0.08, 0.09 }, s = { 0.45, 0.85 }, sink = 0.3 } } },
   he3 = { minDepth = 0, maxDepth = 5, surface = true, rarity = 3, look = {
-    seam = { 0.70, 0.68, 0.62 }, stain = { 0.74, 0.72, 0.66 }, float = { 0.62, 0.60, 0.56 },
+    seam = { 0.70, 0.68, 0.62 }, stain = { 0.74, 0.72, 0.66 }, float = { 0.62, 0.60, 0.56 }, fk = "stone",
     out = { model = STONE, c = { 0.55, 0.53, 0.50 }, s = { 0.4, 0.8 }, sink = 0.35 } } },
   kreep = { minDepth = 8, maxDepth = 40, rarity = 3, look = {
-    seam = { 0.40, 0.26, 0.20 }, stain = { 0.50, 0.34, 0.26 }, float = { 0.44, 0.28, 0.22 },
+    seam = { 0.40, 0.26, 0.20 }, stain = { 0.50, 0.34, 0.26 }, float = { 0.44, 0.28, 0.22 }, fk = "stone",
     out = { model = BOULDER, c = { 0.30, 0.18, 0.14 }, s = { 0.45, 0.85 }, sink = 0.3 } } },
   kamacite = { minDepth = 0, maxDepth = 40, surface = true, rarity = 2, look = {
-    seam = { 0.36, 0.36, 0.38 }, stain = { 0.56, 0.36, 0.24 }, float = { 0.42, 0.40, 0.40 },
-    out = { model = BOULDER, c = { 0.30, 0.30, 0.32 }, metallic = 0.8, rough = 0.45, s = { 0.4, 0.8 }, sink = 0.3 } } },
+    seam = { 0.36, 0.36, 0.38 }, stain = { 0.56, 0.36, 0.24 }, float = { 0.42, 0.40, 0.40 }, fk = "nodule",
+    out = { model = NODULE, c = { 0.30, 0.30, 0.32 }, metallic = 0.8, rough = 0.45, s = { 0.4, 0.8 }, sink = 0.25 } } },
   sperrylite = { minDepth = 20, maxDepth = 55, rarity = 5, look = {
-    seam = { 0.58, 0.58, 0.60 }, stain = { 0.46, 0.46, 0.48 }, float = { 0.62, 0.62, 0.64 },
-    out = { model = STONE, c = { 0.50, 0.50, 0.52 }, metallic = 0.9, rough = 0.3, s = { 0.3, 0.6 }, sink = 0.3 } } },
+    seam = { 0.58, 0.58, 0.60 }, stain = { 0.46, 0.46, 0.48 }, float = { 0.62, 0.62, 0.64 }, fk = "cube",
+    out = { model = CUBE, c = { 0.50, 0.50, 0.52 }, metallic = 0.9, rough = 0.3, s = { 0.3, 0.6 }, sink = 0.15 } } },
   monazite = { minDepth = 10, maxDepth = 45, rarity = 3, look = {
-    seam = { 0.70, 0.46, 0.22 }, stain = { 0.70, 0.52, 0.32 }, float = { 0.76, 0.50, 0.24 },
+    seam = { 0.70, 0.46, 0.22 }, stain = { 0.70, 0.52, 0.32 }, float = { 0.76, 0.50, 0.24 }, fk = "stone",
     out = { model = STONE, c = { 0.62, 0.36, 0.14 }, s = { 0.4, 0.8 }, sink = 0.3 } } },
   ammonia_ice = { minDepth = 0, maxDepth = 30, surface = true, rarity = 2, look = {
-    seam = { 0.80, 0.86, 0.92 }, stain = { 0.80, 0.84, 0.88 }, float = { 0.86, 0.90, 0.95 },
+    seam = { 0.80, 0.86, 0.92 }, stain = { 0.80, 0.84, 0.88 }, float = { 0.86, 0.90, 0.95 }, fk = "gem",
     out = { model = GEM, c = { 0.70, 0.78, 0.86 }, rough = 0.2, s = { 0.35, 0.7 }, sink = 0.25, cluster = true } } },
   clathrate = { minDepth = 10, maxDepth = 45, rarity = 3, look = {
-    seam = { 0.88, 0.90, 0.86 }, stain = { 0.74, 0.76, 0.72 }, float = { 0.92, 0.92, 0.90 },
-    out = { model = GEM, c = { 0.80, 0.82, 0.78 }, rough = 0.3, s = { 0.3, 0.6 }, sink = 0.25, cluster = true } } },
+    seam = { 0.88, 0.90, 0.86 }, stain = { 0.74, 0.76, 0.72 }, float = { 0.92, 0.92, 0.90 }, fk = "crust",
+    out = { model = CRUST, c = { 0.80, 0.82, 0.78 }, s = { 0.45, 0.85 }, sink = 0.1 } } },
   tholin = { minDepth = 0, maxDepth = 25, surface = true, rarity = 2, look = {
-    seam = { 0.40, 0.18, 0.08 }, stain = { 0.56, 0.30, 0.14 }, float = { 0.46, 0.22, 0.10 },
-    out = { model = STONE, c = { 0.36, 0.14, 0.06 }, rough = 0.25, s = { 0.4, 0.8 }, sink = 0.35 } } },
+    seam = { 0.40, 0.18, 0.08 }, stain = { 0.56, 0.30, 0.14 }, float = { 0.46, 0.22, 0.10 }, fk = "crust",
+    out = { model = CRUST, c = { 0.36, 0.14, 0.06 }, s = { 0.5, 0.9 }, sink = 0.1 } } },
   phasite = { minDepth = 18, maxDepth = 50, rarity = 5, look = {
-    seam = { 0.52, 0.40, 0.70 }, stain = { 0.56, 0.48, 0.66 }, float = { 0.50, 0.40, 0.66 },
+    seam = { 0.52, 0.40, 0.70 }, stain = { 0.56, 0.48, 0.66 }, float = { 0.50, 0.40, 0.66 }, fk = "gem",
     out = { model = GEM, c = { 0.40, 0.30, 0.62 }, e = { 0.55, 0.35, 0.95 }, glow = 0.3, s = { 0.35, 0.7 }, sink = 0.2, cluster = true } } },
   cryovolt = { minDepth = 14, maxDepth = 45, rarity = 5, look = {
-    seam = { 0.50, 0.70, 0.78 }, stain = { 0.56, 0.70, 0.76 }, float = { 0.52, 0.72, 0.80 },
+    seam = { 0.50, 0.70, 0.78 }, stain = { 0.56, 0.70, 0.76 }, float = { 0.52, 0.72, 0.80 }, fk = "gem",
     out = { model = GEM, c = { 0.36, 0.56, 0.66 }, e = { 0.30, 0.75, 1.0 }, glow = 0.25, s = { 0.35, 0.7 }, sink = 0.2, cluster = true } } },
 }
 
@@ -561,7 +636,49 @@ function bodyTraits(bname)
     type = type(w.geo) == "table" and w.geo.type or w.kind or "barren",
     family = w.kind or "barren",
     seed = w.seed or 1,
+    -- (material generation 3+) the formation's layers: geology.lua library numbers
+    layers = type(w.bio) == "table" and type(w.bio.formation) == "table" and type(w.bio.formation.layers) == "table"
+      and w.bio.formation.layers or nil,
   }
+end
+
+-- Is this save on material generation 4 or later (worlds W3: galena, and
+-- each world's ores reconciled with its formation)? Only when the save or
+-- its palette says so: a save made before keeps the ores its veins were
+-- laid with (a vein's ore is re-read from bodyOres every time its patch is).
+function oreGen4()
+  local g = PALETTE_GEN or (save and save.get and tonumber(save.get("g_matGen"))) or nil
+  return g ~= nil and g >= 4
+end
+
+-- RECONCILED WITH THE FORMATION (generation 4): the ores a world's own rock
+-- shows. A deposit layer is its ore (a hematite or gossan seam is iron, a
+-- sulfur-vein seam sulfur, an obsidian band obsidian), and the country rock
+-- carries the ores that form in it: lead-zinc in carbonates and shales
+-- (Mississippi-Valley type), uranium in granites and red-bed sandstones
+-- (roll fronts), copper in basalts. [library layer] = { ore, weight as a
+-- seam/pocket/band/cliff, weight as strata/cave rock }.
+LAYER_ORE = {
+  [27] = { "iron", 1.2, 0.5 }, [42] = { "iron", 1.2, 0.5 }, [1] = { "iron", 0.6, 0.4 },
+  [5] = { "copper", 1.0, 0.4 }, [59] = { "sulfur", 1.2, 0.6 }, [26] = { "sulfur", 1.0, 0.5 },
+  [48] = { "obsidian", 0.9, 0.6 }, [43] = { "uranium", 0.5, 0.3 }, [61] = { "galena", 1.2, 0.6 },
+  [25] = { "galena", 0.5, 0.45 }, [46] = { "galena", 0.4, 0.35 }, [52] = { "galena", 0.4, 0.35 },
+  [33] = { "galena", 0.4, 0.4 }, [34] = { "galena", 0.3, 0.3 }, [35] = { "galena", 0.3, 0.3 },
+  [30] = { "galena", 0.4, 0.4 }, [45] = { "galena", 0.3, 0.3 },
+  [14] = { "uranium", 0.15, 0.12 }, [51] = { "uranium", 0.12, 0.1 }, [44] = { "uranium", 0.15, 0.12 },
+  [15] = { "uranium", 0.1, 0.08 }, [13] = { "copper", 0.4, 0.3 }, [39] = { "copper", 0.4, 0.3 },
+}
+function formationOres(layers)
+  local out = {}
+  if type(layers) ~= "table" then return out end
+  for _, k in ipairs({ "seam", "pocket", "band", "cliff", "strata", "cave" }) do
+    local e = layers[k] and LAYER_ORE[layers[k]]
+    if e then
+      local w = (k == "strata" or k == "cave") and e[3] or e[2]
+      out[e[1]] = math.max(out[e[1]] or 0, w)
+    end
+  end
+  return out
 end
 
 -- A stable number in [0, 1) for a body and an ore: two worlds of the same
@@ -588,6 +705,7 @@ function bodyOres(bname, kind)
     add("sulfur", (fam == "dune" or fam == "lava") and 1.4 or 0.6)
     if fam == "lava" then add("obsidian", 1.2) end
     add("crystal", 0.35); add("uranium", 0.25)
+    if oreGen4() then add("galena", 0.7) end
   elseif fam == "frost" or fam == "ice" or ty == "titan" or ty == "glacial" or ty == "frost" then
     -- cold bodies (by what they are made of, not the clamped temperature,
     -- which reads 0 for everything under 233 K): volatile ices, and on a
@@ -610,6 +728,14 @@ function bodyOres(bname, kind)
   -- dense worlds hold the metals that sank in them
   if t.dense > 1.25 and not t.home then add("kamacite", 0.8); add("sperrylite", 0.35) end
   if fam == "crystal" and not t.home then add("phasite", 0.3) end
+  -- generation 4: what the world's formation shows (a moon's ices keep to
+  -- their own list: an airless or frozen body's rock adds no weathered ores)
+  if oreGen4() and t.layers and not (t.airless and not t.home) then
+    local cold = fam == "frost" or fam == "ice" or ty == "titan" or ty == "glacial" or ty == "frost"
+    if not cold then
+      for id, w in pairs(formationOres(t.layers)) do add(id, w) end
+    end
+  end
   local out, total = {}, 0
   for id, w in pairs(pool) do
     local wj = w * (0.65 + 0.7 * jitter(t.seed, id))
@@ -827,6 +953,16 @@ ORE_CODEX = {
       "They give Titan's haze its orange colour and darken Pluto's Cthulhu Macula and the Kuiper belt object Arrokoth to red-brown.",
       "They are rich in carbon, hydrogen and nitrogen, a feedstock for hydrocarbons and for growing things.",
       "NASA's Dragonfly rotorcraft is to fly on Titan to study this prebiotic chemistry.",
+    } },
+  galena = { name = "Galena (lead-zinc ore)",
+    summary = "Lead sulfide in bright grey cubes, with zinc's sphalerite beside it: the ore of lead and the radiation shield it makes.",
+    facts = {
+      "Galena (PbS) is the main ore of lead. It breaks into perfect cubes along three cleavages at right angles and shines like fresh metal on a broken face, though it is a sulfide, not a metal.",
+      "It is very dense, about 7.4 to 7.6 grams per cubic centimetre: a fist-sized lump feels far heavier than any rock of its size.",
+      "Most of it comes from Mississippi Valley-type deposits, where warm brines carried lead and zinc through limestone and dolomite and dropped galena and sphalerite (ZnS) in its cavities and fractures.",
+      "Roasting galena drives off its sulfur as sulfur dioxide and smelting the oxide with carbon gives lead; silver often rides along in it and is recovered too.",
+      "Lead's density and high atomic number make it a dense gamma shield: about a centimetre of lead halves the dose from a cobalt-60 source, as several centimetres of concrete would.",
+      "Galena was the crystal of the first radio detectors, the 'cat's whisker' sets of the early twentieth century: a fine wire on a galena face makes a rectifying junction.",
     } },
   phasite = { name = "Phasite", fictional = true,
     summary = "A deep crystal whose density answers to gravity: heavy on small worlds, light on big ones.",

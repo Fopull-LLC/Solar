@@ -200,6 +200,15 @@ KIND_LIST = KINDS
 -- glow through their emissive map. The engine's per-prop roll shades each
 -- rock ±15 % on top.
 local ROCK_NEUTRAL = 0.42
+-- (worlds W3) the mineral models' picture (tools/gen_flora.py write_minerals)
+-- is brighter, so a tint, which can only darken, still reaches sulfur yellow
+-- or clathrate white: the neutral a model's tint is worked out against.
+MINERAL_NEUTRAL = 0.80
+function neutralOf(model)
+  if type(model) == "string" and (model:find("rock_nodule", 1, true) or model:find("rock_shard", 1, true)
+     or model:find("rock_crust", 1, true) or model:find("rock_cube", 1, true)) then return MINERAL_NEUTRAL end
+  return ROCK_NEUTRAL
+end
 local CRYSTAL_HUES = {
   { 0.35, 0.85, 0.75 }, { 0.62, 0.45, 0.95 }, { 0.95, 0.70, 0.35 }, { 0.95, 0.50, 0.70 }, { 0.65, 0.85, 1.00 },
 }
@@ -794,11 +803,12 @@ end
 --
 -- ORE IS A PLACE. A few veins per patch: a seam of the ore's own texture
 -- (materials.VEIN_SLOTS: hematite for iron, the orange veinstone for copper,
--- sulfur, the glowing crystal and magma slots) painted into the ground along a
+-- sulfur, the crystal slots, the pitchblende and galena layers) painted into the ground along a
 -- wandering strike line 3–15 m long, a lens reaching about two and a half of
 -- its widths down, with outcrops of the ore standing out of it (iron as dark
--- metallic knobs, copper as green-stained stone, sulfur yellow, crystal and
--- uranite as glowing clusters). You see one from a hundred metres, walk over,
+-- metallic knobs, copper as green-stained stone, sulfur as yellow crust,
+-- galena as grey cubes, uranite as black nodules, crystal as glowing
+-- clusters: worlds W3). You see one from a hundred metres, walk over,
 -- and cut INTO it: what the laser removes there is ore, by the volume of ore
 -- removed (terrain.yields), and the rock round it is the rock it is.
 --
@@ -837,16 +847,24 @@ local function vein_save(pk)
 end
 local function bit_on(mask, j) return math.floor((mask or 0) / 2 ^ (j - 1)) % 2 == 1 end
 
--- The outcrops' looks, by ore: the rock meshes (painted in a neutral ramp,
--- ROCK_NEUTRAL) tinted to the mineral, with its sheen or glow.
+-- The outcrops' looks, by ore: the rock and mineral meshes (painted in a
+-- neutral ramp, ROCK_NEUTRAL) tinted to the mineral, with its sheen or glow.
+-- materials.ORE[ore].look answers first; these are the home ores' own,
+-- kept for a registry without looks (worlds W3: each in its mineral's habit,
+-- tools/gen_flora.py write_minerals: kidney hematite boulders, green-stained
+-- copper stone, sulfur crust slabs, obsidian blades, galena cubes, black
+-- botryoidal pitchblende; only the fictional crystal glows).
+local M_DIR = "models/flora/"
 local OUT_LOOK = {
-  iron     = { model = "models/flora/rock_boulder_l0.gltf", c = { 0.42, 0.13, 0.08 }, s = { 0.45, 0.85 }, sink = 0.3 },
-  copper   = { model = "models/flora/rock_stone_l0.gltf", c = { 0.12, 0.50, 0.38 }, s = { 0.55, 1.0 }, sink = 0.3 },
-  sulfur   = { model = "models/flora/rock_stone_l0.gltf", c = { 0.95, 0.80, 0.12 }, s = { 0.5, 0.95 }, sink = 0.3 },
-  obsidian = { model = "models/flora/rock_stone_l0.gltf", c = { 0.07, 0.06, 0.08 }, rough = 0.15, s = { 0.35, 0.7 }, sink = 0.3 },
-  crystal  = { model = "models/flora/rock_crystal_l0.gltf", c = nil, glow = 0.55, s = { 0.4, 0.85 }, sink = 0.2, cluster = true },
-  uranium  = { model = "models/flora/rock_crystal_l0.gltf", c = { 0.22, 0.27, 0.12 }, e = { 0.45, 0.85, 0.2 }, glow = 0.35, s = { 0.3, 0.6 }, sink = 0.25, cluster = true },
+  iron     = { model = M_DIR .. "rock_boulder_l0.gltf", c = { 0.42, 0.13, 0.08 }, s = { 0.45, 0.85 }, sink = 0.3 },
+  copper   = { model = M_DIR .. "rock_stone_l0.gltf", c = { 0.12, 0.50, 0.38 }, s = { 0.55, 1.0 }, sink = 0.3 },
+  sulfur   = { model = M_DIR .. "rock_crust_l0.gltf", c = { 0.95, 0.80, 0.12 }, s = { 0.55, 1.0 }, sink = 0.1 },
+  obsidian = { model = M_DIR .. "rock_shard_l0.gltf", c = { 0.06, 0.055, 0.07 }, rough = 0.12, s = { 0.4, 0.8 }, sink = 0.15 },
+  galena   = { model = M_DIR .. "rock_cube_l0.gltf", c = { 0.40, 0.41, 0.44 }, metallic = 0.85, rough = 0.35, s = { 0.6, 1.1 }, sink = 0.15 },
+  crystal  = { model = M_DIR .. "rock_crystal_l0.gltf", c = nil, glow = 0.55, s = { 0.4, 0.85 }, sink = 0.2, cluster = true },
+  uranium  = { model = M_DIR .. "rock_nodule_l0.gltf", c = { 0.035, 0.035, 0.032 }, s = { 0.4, 0.8 }, sink = 0.2, cluster = true },
 }
+OUT_LOOKS = OUT_LOOK
 
 -- An ore's look: materials.ORE[ore].look first (every ore, home and
 -- off-world, keeps its look with its registry entry), these tables after.
@@ -1158,12 +1176,14 @@ worldReserved = world_reserved
 
 -- The colour a seam is painted in (the texture is tinted by it, ×1.6 in the
 -- shader: 0.62 is the texture as authored): iron's rusty hematite black,
--- copper's verdigris, sulfur's yellow, uranite's sickly green over the magma
--- glow. Dark and saturated enough to read against the ground round it at
+-- copper's verdigris, sulfur's yellow, uranite's pitch black. Dark and
+-- saturated enough to read against the ground round it at
 -- eye level (the 0.26 grey it had drew paler than most ground).
+-- (Worlds W3: obsidian's glass black, galena's lead grey, uranite's
+-- pitchblende black; no more sickly green, uranite does not glow.)
 SEAM_COLOUR = {
   iron = { 0.30, 0.15, 0.11 }, copper = { 0.24, 0.56, 0.44 }, sulfur = { 0.86, 0.76, 0.26 },
-  obsidian = { 0.16, 0.15, 0.18 }, uranium = { 0.50, 0.66, 0.26 },
+  obsidian = { 0.10, 0.09, 0.11 }, uranium = { 0.10, 0.10, 0.09 }, galena = { 0.28, 0.29, 0.32 },
 }
 -- The stain a seam bleeds into the ground round it (a colour paint only, over
 -- the ground's own tint, so the host rock keeps its texture; the brush's own
@@ -1171,9 +1191,12 @@ SEAM_COLOUR = {
 -- sulfur's pale yellow bloom. It runs on past both ends of the seam along its
 -- strike, fainter. What reads first from twenty metres is a discoloured streak
 -- wider and longer than the seam, the seam a dark core inside it.
+-- (W3: sulfur's bloom is the pale sulfate efflorescence round native sulfur;
+-- galena's hardly a stain, the grey-white of weathered cerussite; uranite's
+-- the yellow-green of autunite and uranophane on dark rock.)
 STAIN_COLOUR = {
-  iron = { 0.66, 0.32, 0.16 }, copper = { 0.34, 0.60, 0.48 }, sulfur = { 0.84, 0.76, 0.36 },
-  obsidian = { 0.30, 0.28, 0.30 }, uranium = { 0.62, 0.70, 0.34 },
+  iron = { 0.66, 0.32, 0.16 }, copper = { 0.34, 0.60, 0.48 }, sulfur = { 0.86, 0.83, 0.62 },
+  obsidian = { 0.30, 0.28, 0.30 }, uranium = { 0.60, 0.86, 0.18 }, galena = { 0.66, 0.66, 0.62 },
 }
 local w_seed = nil
 
@@ -1361,7 +1384,7 @@ local function vein_slot(p, v, body, R)
   if rec.p[v.key] then return rec.p[v.key] end
   if not terrain.slotAt then return nil end
   local mats = ref("materials")
-  local slots = mats and mats.VEIN_SLOTS and mats.VEIN_SLOTS[v.ore]
+  local slots = mats and ((mats.veinSlots and mats.veinSlots(v.ore)) or (mats.VEIN_SLOTS and mats.VEIN_SLOTS[v.ore]))
   if not slots then rec.p[v.key] = -1; vein_save(p.key); return -1 end
   local g = vein_ground(v, body, R)
   if not g then return nil end
@@ -1455,7 +1478,8 @@ local function outcrop_look(n, ore, w)
     c = { crystal_hue[1] * 0.55, crystal_hue[2] * 0.55, crystal_hue[3] * 0.55 }
     e = crystal_hue
   end
-  local t = { color = { c[1] / ROCK_NEUTRAL, c[2] / ROCK_NEUTRAL, c[3] / ROCK_NEUTRAL } }
+  local nt = neutralOf(L.model)
+  local t = { color = { c[1] / nt, c[2] / nt, c[3] / nt } }
   if e then t.emissive, t.emissiveStrength = e, L.glow or 0.4 end
   if n.setTint then pcall(n.setTint, n, t) end
   -- (and once more a pass later, with the sheen: veins_tick)
@@ -1527,19 +1551,49 @@ end
 -- ground is dug. Tinted as the outcrops are (OUT_LOOK), a little toward the
 -- world's rock so it stays stone, not paint. Decoration only: it does not
 -- break for ore (the seam under it does).
+-- WORLDS W3: the fragments are the ore's own habit (FLOAT_MODELS by the
+-- look's `fk`): red scree for iron, green botryoidal chips for copper,
+-- yellow crust flakes for sulfur, glass blades for obsidian, little cubes for
+-- galena, black nodules for pitchblende, crystals for the crystal ores.
 local FLOAT_KINDS = {
   { id = "grit", lod = { "models/flora/rock_pebbles_l0.gltf", "models/flora/rock_pebbles_l1.gltf" },
     scale = { 0.45, 0.9 }, area = 0.45, chunk = 8, far = 45 },
   { id = "frag", lod = { "models/flora/rock_stone_l0.gltf", "models/flora/rock_stone_l1.gltf" },
     gem = { "models/flora/rock_crystal_l0.gltf", "models/flora/rock_crystal_l1.gltf" },
-    scale = { 0.16, 0.42 }, area = 0.32, chunk = 8, far = 70 },
+    scale = { 0.16, 0.42 }, area = 0.32, chunk = 8, far = 70, byOre = true },
 }
+FLOAT_MODELS = {
+  stone = { M_DIR .. "rock_stone_l0.gltf", M_DIR .. "rock_stone_l1.gltf" },
+  nodule = { M_DIR .. "rock_nodule_l0.gltf", M_DIR .. "rock_nodule_l1.gltf" },
+  shard = { M_DIR .. "rock_shard_l0.gltf", M_DIR .. "rock_shard_l1.gltf" },
+  crust = { M_DIR .. "rock_crust_l0.gltf", M_DIR .. "rock_crust_l1.gltf" },
+  cube = { M_DIR .. "rock_cube_l0.gltf", M_DIR .. "rock_cube_l1.gltf" },
+  gem = { M_DIR .. "rock_crystal_l0.gltf", M_DIR .. "rock_crystal_l1.gltf" },
+}
+-- The home ores' float shapes (a registry look's `fk` answers first).
+local FLOAT_KIND = { iron = "stone", copper = "nodule", sulfur = "crust", obsidian = "shard",
+  galena = "cube", uranium = "nodule", crystal = "gem" }
 -- The bits' colour by ore: weathered, lighter than the outcrops' fresh faces
 -- (iron's float is rusted through; dark tints draw blue-grey under the sky).
 local FLOAT_COLOUR = {
-  iron = { 0.64, 0.30, 0.14 }, copper = { 0.22, 0.58, 0.42 }, sulfur = { 0.92, 0.80, 0.22 },
-  obsidian = { 0.09, 0.08, 0.10 }, uranium = { 0.40, 0.50, 0.18 },
+  iron = { 0.64, 0.30, 0.14 }, copper = { 0.18, 0.52, 0.40 }, sulfur = { 0.92, 0.80, 0.22 },
+  obsidian = { 0.07, 0.065, 0.08 }, uranium = { 0.09, 0.09, 0.08 }, galena = { 0.42, 0.43, 0.46 },
 }
+-- An ore's float shape: the look's `fk`, else the table, else stone.
+function floatKindOf(ore)
+  local l = look_of(ore)
+  local k = (l and l.fk) or FLOAT_KIND[ore]
+  if not k then k = out_look(ore).cluster and "gem" or "stone" end
+  return k, FLOAT_MODELS[k]
+end
+-- Everything an ore looks like, gathered (tests, probes): seam, stain, float
+-- colour, float kind and models, the outcrop look.
+function oreLookOf(ore)
+  local l = look_of(ore) or {}
+  local fk, fm = floatKindOf(ore)
+  return { seam = l.seam or SEAM_COLOUR[ore], stain = l.stain or STAIN_COLOUR[ore],
+           float = l.float or FLOAT_COLOUR[ore], fk = fk, floatModels = fm, out = out_look(ore) }
+end
 local function float_make(p, v, w, R)
   if v.float or params.vein_float <= 0 or not (scatter and scatter.create and p.node and p.node.valid) then return end
   v.float = {}
@@ -1581,12 +1635,16 @@ local function float_make(p, v, w, R)
     c, e = { h[1] * 0.55, h[2] * 0.55, h[3] * 0.55 }, h
   end
   local rock = lookOf(KINDS[2], w).tint
-  local tint = { c[1] / ROCK_NEUTRAL, c[2] / ROCK_NEUTRAL, c[3] / ROCK_NEUTRAL }
-  tint = mix3(tint, rock, 0.15)
+  local function tint_for(model)
+    local nt = neutralOf(model)
+    local k = ROCK_NEUTRAL / nt
+    return mix3({ c[1] / nt, c[2] / nt, c[3] / nt }, { rock[1] * k, rock[2] * k, rock[3] * k }, 0.15)
+  end
   local fg = ref("flora_gen")
   local empty = params.fade_out > 0 and fg and fg.emptyAsset and fg.emptyAsset() or nil
+  local _, fmodels = floatKindOf(v.ore)
   for i, k in ipairs(FLOAT_KINDS) do
-    local lod = (L.cluster and k.gem) or k.lod
+    local lod = (k.byOre and fmodels) or (L.cluster and k.gem) or k.lod
     local bands = { { asset = lod[1], distance = k.far * 0.4 }, { asset = lod[2], distance = k.far } }
     if empty then bands[#bands + 1] = { asset = empty, distance = k.far + 0.5 } end
     local per = math.max(1, math.floor(k.area * k.chunk * k.chunk * params.vein_float + 0.5))
@@ -1596,7 +1654,7 @@ local function float_make(p, v, w, R)
       perChunk = per, chunk = k.chunk, align = "surface",
       scaleMin = k.scale[1], scaleMax = k.scale[2], fade = params.fade,
       lod = bands, density = data, densityRows = rows, parent = p.name,
-      tint = tint, emissive = e, emissiveStrength = e and (L.glow or 0.4) * 0.5 or nil,
+      tint = tint_for(lod[1]), emissive = e, emissiveStrength = e and (L.glow or 0.4) * 0.5 or nil,
     })
     if ok and id then v.float[#v.float + 1] = id
     elseif not ok then print("mineral field: float scatter refused: " .. tostring(id)) end
@@ -1675,6 +1733,74 @@ local function veins_tick(w, R, body, planet, rx, ry, rz)
       end
     end
   end
+end
+
+-- ── THE DOSIMETER (worlds W3) ───────────────────────────────────────────────
+-- Uranite does not glow: it is black pitchblende, and the suit's dosimeter
+-- finds it, as a Geiger counter finds a uranium showing. The reading is the
+-- ground-gamma channel (cosmic rays subtracted): a background DOSE_BG, plus
+-- each radioactive vein's share, falling off with the distance to its line
+-- through the rock between (DOSE_LAMBDA m, a game-tuned length: real gamma
+-- is stopped by a metre of rock, but radon seeping up fractures carries a
+-- uranium body's signal much further, and the radon is what the readout
+-- stands for at range). A rich 2 m vein at arm's length reads ~DOSE_A µSv/h,
+-- a few hundred times background, as a rich pitchblende face does; from the
+-- surface over a vein 20 m down, a faint rise. Thorium ores (monazite, KREEP)
+-- read a little. Sampled with the field's 0.2 s tick (no per-frame cost):
+-- `dose` (µSv/h), `doseOre` (the veins' share), `doseRising`, `doseT`.
+DOSE_ORE = { uranium = 1.0, monazite = 0.06, kreep = 0.03 }
+DOSE_BG = 0.12        -- µSv/h, the ground-gamma background
+DOSE_A = 28.0         -- µSv/h beside a 2 m-wide pitchblende vein
+DOSE_LAMBDA = 4.5     -- m
+DOSE_SHOW = 0.15      -- µSv/h over background before the HUD shows a reading
+dose, doseOre, doseRising, doseT = DOSE_BG, 0, false, -1
+-- One vein's share at `d` m from its line (pure; tests).
+function doseFrom(d, width, k)
+  return DOSE_A * (k or 1) * math.min(1.5, (width or 2) / 2) * math.exp(-math.max(0, d) / DOSE_LAMBDA)
+end
+-- The reading at a body-relative point (rx, ry, rz) on a world of radius R,
+-- from the veins laid out in the patches near it. → µSv/h, the veins' share.
+local function dose_at(R, rx, ry, rz)
+  local sum = 0
+  for _, p in pairs(patches) do
+    if p.veins and patch_dist(p, rx, ry, rz) <= 80 then
+      for _, v in ipairs(p.veins) do
+        local k = DOSE_ORE[v.ore]
+        if k then
+          local dmin = 1e9
+          local g = v.b or v.g
+          if g then
+            for _, q in ipairs(g) do
+              local d = len(q[1] - rx, q[2] - ry, q[3] - rz)
+              if d < dmin then dmin = d end
+            end
+          else
+            for _, q in ipairs(v.pts) do
+              local rr = R - (q.dk or 0)
+              local d = len(q[1] * rr - rx, q[2] * rr - ry, q[3] * rr - rz)
+              if d < dmin then dmin = d end
+            end
+          end
+          if dmin < 60 then sum = sum + doseFrom(dmin, v.width, k) end
+        end
+      end
+    end
+  end
+  return DOSE_BG + sum, sum
+end
+-- The reading at a WORLD point on the world the field is laid on (probes).
+function doseAt(x, y, z)
+  local body = cur_body and space.body(cur_body)
+  local cl = ref("climate")
+  local w = cl and cl.worldOf and cl.worldOf(cur_body)
+  if not body then return DOSE_BG, 0 end
+  return dose_at((w and w.radius) or body.radius or 100, x - body.x, y - body.y, z - body.z)
+end
+local function dose_tick(R, rx, ry, rz)
+  local was = dose
+  dose, doseOre = dose_at(R, rx, ry, rz)
+  doseRising = dose > was * 1.03 + 0.005
+  doseT = time
 end
 
 -- The vein a WORLD point lies in, or nil: { ore, slot, patch, vein, k }.
@@ -2523,6 +2649,7 @@ function update(node, dt)
   regrow()
   ground_tick(w, R)
   veins_tick(w, R, body, planet, rx, ry, rz)
+  dose_tick(R, rx, ry, rz)
 
   if not frame_checked then
     for _, p in pairs(patches) do

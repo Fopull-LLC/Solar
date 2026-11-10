@@ -322,7 +322,7 @@ local pool_making = 0
 -- What a material's sample looks like in a capsule (linear colours).
 SAMPLE_COLOUR = {
   iron = { 0.30, 0.12, 0.07 }, copper = { 0.18, 0.40, 0.30 }, sulfur = { 0.80, 0.65, 0.10 }, silica = { 0.85, 0.85, 0.82 },
-  timber = { 0.42, 0.26, 0.12 }, crystal = { 0.45, 0.30, 0.75 }, uranium = { 0.18, 0.25, 0.10 }, obsidian = { 0.04, 0.04, 0.05 },
+  timber = { 0.42, 0.26, 0.12 }, crystal = { 0.45, 0.30, 0.75 }, uranium = { 0.06, 0.06, 0.055 }, obsidian = { 0.04, 0.04, 0.05 },
   basalt = { 0.12, 0.12, 0.12 }, granite = { 0.55, 0.50, 0.48 }, regolith = { 0.45, 0.43, 0.40 }, soil = { 0.25, 0.17, 0.10 },
   sand = { 0.70, 0.60, 0.40 }, clay = { 0.55, 0.35, 0.22 }, ice = { 0.80, 0.90, 1.0 }, scrap = { 0.55, 0.56, 0.58 },
   geode = { 0.50, 0.40, 0.80 }, salt = { 0.92, 0.92, 0.90 }, hematite = { 0.40, 0.10, 0.06 }, rustrock = { 0.45, 0.20, 0.10 },
