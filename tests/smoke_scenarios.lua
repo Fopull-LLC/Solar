@@ -769,6 +769,33 @@ do
                           "sequences.fault[5].light.ambient", "sequences.now[2].weather.kind", "sequences.now[3].music", "failure" }) do
     check("FW-C validation names " .. want, not okv and txt:find(want, 1, true) ~= nil, txt:sub(1, 300))
   end
+  -- graveyard2: turn, pose, gesture, walk's near/face/pose, an event's `also`, a crew title, stage beats
+  local c3 = SCN.deepCopy(bad)
+  c3._file = "scenarios/_story/scenario.lua"
+  c3.sequences.intro[3] = { turn = { who = "hale" } }
+  c3.sequences.fault[6] = { pose = { who = "hale", kind = "nap", at = "mark:nowhere" } }
+  c3.sequences.fault[5] = { gesture = { who = "hale", clip = "moonwalk" } }
+  c3.sequences.now[2] = { walk = { who = "hale", to = "mark:hut", near = -1, face = "mark:nowhere", pose = { kind = "float" } } }
+  c3.events = c3.events or {}
+  c3.events[#c3.events + 1] = { id = "x", when = { kind = "var", name = "a", is = true }, also = { kind = "nope" }, beats = {} }
+  c3.start.crew[1].title = 7
+  local okg, errg = SCN.validate(c3, CTX)
+  local tg = table.concat(errg, "\n")
+  for _, want in ipairs({ "sequences.intro[3].turn.to", "sequences.fault[6].pose.kind", "sequences.fault[6].pose.at",
+                          "sequences.fault[5].gesture.clip", "sequences.now[2].walk.near", "sequences.now[2].walk.face",
+                          "sequences.now[2].walk.pose", ".also.kind", "start.crew[1].title" }) do
+    check("graveyard2 validation names " .. want, not okg and tg:find(want, 1, true) ~= nil, tg:sub(1, 400))
+  end
+  local gs = SCN.load("graveyard_shift", true)
+  local okgs, egs = SCN.validate(gs, CTX)
+  check("graveyard_shift validates with Dana's walks, poses, gestures and the wake event", okgs, table.concat(egs or {}, " | "))
+  local hasWake, hasPose = false, false
+  for _, e in ipairs(gs.events or {}) do if e.id == "wake" and e.also then hasWake = true end end
+  for _, b in ipairs(gs.sequences.dana_off or {}) do if b.walk and b.walk.pose and b.walk.pose.kind == "lie" then hasPose = true end end
+  check("Graveyard: Dana walks to her bunk and lies down; walking up to her wakes her", hasWake and hasPose)
+  local nohint = {}
+  for _, s in ipairs(gs.steps) do if not s.hint then nohint[#nohint + 1] = s.id end end
+  check("Graveyard: every step has a hint", #nohint == 0, table.concat(nohint, ","))
   SCN.forget()
 end
 

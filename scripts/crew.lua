@@ -182,9 +182,12 @@ local function copy(t)
   return o
 end
 
+local engine_caption = caption
 local function caption(text)
   local fx = ref("sfx")
-  if fx and fx.caption then pcall(fx.caption, text) end
+  if fx and fx.caption then pcall(fx.caption, text)
+  -- (graveyard2: sfx has no caption; the engine's own bottom-centre line)
+  elseif engine_caption then pcall(engine_caption, text) end
 end
 
 -- ── names ───────────────────────────────────────────────────────────────────
@@ -677,7 +680,8 @@ end
 -- Merge fields into a record (other crew scripts use this; panels poll
 -- `version`). `nil` can't be merged, so a field is cleared with `false`.
 local CLEAR = { task = true, hand = true, craft = true, died = true, body = true, x = true, y = true, z = true,
-                yaw = true, anchor = true, face = true, downed = true, retrain = true, leftAt = true, blackout = true }
+                yaw = true, anchor = true, face = true, downed = true, retrain = true, leftAt = true, blackout = true,
+                pose = true, title = true, gesture = true }
 function patch(id, fields)
   local r = get(id)
   if not r then return false end
@@ -989,6 +993,16 @@ end
 function roleLetter(m)
   local k = is_role(m) and m or role(m)
   return k and ROLE_LETTER[k] or nil
+end
+
+-- (graveyard2) What they are, in words, for the strip, the picker and the
+-- tag over a member you look at: the record's `title` when something gave
+-- them one (a scenario's start.crew `title`, "Night engineer"), else the
+-- role's name. Ty 2026-11-10: "no indicators for what roles everyone has".
+function roleTitle(m)
+  local r = rec_of(m)
+  if r and type(r.title) == "string" and r.title ~= "" then return r.title end
+  return roleName(m)
 end
 
 local function bodies_of(r)
@@ -1637,6 +1651,66 @@ local function world_of(r)
   return b.x + (r.x or 0), b.y + (r.y or 0), b.z + (r.z or 0)
 end
 
+-- (graveyard2) A switch made with a click leaves the button focused, and the
+-- engine's UiSubmit (Space, Enter) clicks a focused button again: Ty jumped
+-- after a switch and switched back. Every switching verb drops the focus.
+local function drop_focus()
+  if ui and ui.focus then pcall(ui.focus, nil) end
+end
+
+-- (graveyard2) A FREE SPOT for a standing capsule near world point x,y,z (its
+-- centre): never inside a wall, a console or a bunk (Ty: "npcs got stuck in
+-- the wall when switching"). Two spheres at the knees and the chest, crew and
+-- the Astronaut not counted; the first free spot on rings of 0.35–1.4 m, or
+-- the point itself when nothing is free. In the physics tick (tick poses).
+local function spot_clear(x, y, z, ux, uy, uz, ign)
+  if not (overlapSphere and vec3) then return true end
+  for _, h in ipairs({ -0.33, 0.35 }) do
+    local ok, hits = pcall(overlapSphere, vec3(x + ux * h, y + uy * h, z + uz * h), 0.28, { ignore = ign })
+    if ok and type(hits) == "table" then
+      for _, hit in ipairs(hits) do
+        local n = hit.node
+        local nm = n and n.name
+        if n and not (type(nm) == "string" and (nm:sub(1, 4) == "Door" or nm == "CrewBody" or nm == "Astronaut")) then return false end
+      end
+    end
+  end
+  return true
+end
+function freeSpot(x, y, z)
+  if not (space and space.dominant) then return x, y, z end
+  local d = space.dominant(x, y, z)
+  local b = d and space.body(d)
+  if not b then return x, y, z end
+  local ux, uy, uz = x - b.x, y - b.y, z - b.z
+  local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+  if l < 1e-6 then return x, y, z end
+  ux, uy, uz = ux / l, uy / l, uz / l
+  local ign = {}
+  local a = astro and astro()
+  if a then ign[#ign + 1] = a end
+  for _, n in pairs(bodies) do if n and n.valid ~= false then ign[#ign + 1] = n end end
+  if spot_clear(x, y, z, ux, uy, uz, ign) then return x, y, z, true end
+  local ax, ay, az = 0, 1, 0
+  if math.abs(uy) > 0.9 then ax, ay, az = 1, 0, 0 end
+  local ex, ey, ez = ay * uz - az * uy, az * ux - ax * uz, ax * uy - ay * ux
+  local el = math.sqrt(ex * ex + ey * ey + ez * ez)
+  ex, ey, ez = ex / el, ey / el, ez / el
+  local nx, ny, nz = uy * ez - uz * ey, uz * ex - ux * ez, ux * ey - uy * ex
+  for _, rr in ipairs({ 0.35, 0.7, 1.05, 1.4 }) do
+    for k = 0, 11 do
+      local t = k * math.pi / 6
+      local c, s = math.cos(t) * rr, math.sin(t) * rr
+      local px, py, pz = x + ex * c + nx * s, y + ey * c + ny * s, z + ez * c + nz * s
+      if spot_clear(px, py, pz, ux, uy, uz, ign) then return px, py, pz, true end
+    end
+  end
+  return x, y, z, false
+end
+
+-- The nodes of the bodies on foot (kit_live opens doors for a walking one).
+function bodyNodes() local out = {} for id, n in pairs(bodies) do if n and n.valid ~= false then out[id] = n end end return out end
+
 -- ── CrewBody spawn/despawn (§4.1) ──────────────────────────────────────────
 -- A record on foot becomes a body: kinematic, standing where its record says
 -- (crew_body.lua keeps it there, in its planet's frame).
@@ -1658,6 +1732,28 @@ end
 local function despawn_body(id)
   local b = bodies[id]
   bodies[id] = nil
+  -- (graveyard2) out of the way first: the destroy lands at the end of the
+  -- frame, and the Astronaut set down in the same spot this tick was pushed
+  -- out of the kinematic capsule, up into the ceiling (Ty: "npcs got stuck in
+  -- the wall when switching, and clipped through"; a probe caught the
+  -- capsule 1.3 m up). 50 m under the ground until it goes.
+  if b and b.valid ~= false and space and space.dominant then
+    local p = b.tickPos or b
+    local d = p and p.x and space.dominant(p.x, p.y, p.z)
+    local pb = d and space.body(d)
+    if pb then
+      local ux, uy, uz = p.x - pb.x, p.y - pb.y, p.z - pb.z
+      local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+      if l > 1 then
+        local nx, ny, nz = p.x - ux / l * 50, p.y - uy / l * 50, p.z - uz / l * 50
+        -- (its script stops placing it from the record first: crew_body.retire)
+        local cb = b.getScript and b:getScript("crew_body") or nil
+        if cb and cb.retire then pcall(cb.retire, nx, ny, nz) end
+        if b.tickPos ~= nil and vec3 then pcall(function() b.tickPos = vec3(nx, ny, nz) end) end
+        pcall(function() b.x, b.y, b.z = nx, ny, nz end)
+      end
+    end
+  end
   if b and b.valid ~= false and destroy then destroy(b) end
 end
 
@@ -1681,8 +1777,12 @@ local function park_avatar_member(id)
       face = { x = -f.x, y = -f.y, z = -f.z }
     end
   end
+  -- (graveyard2: the capsule you leave stands where you stood, which is free;
+  -- a pose is cleared — you got up)
+  local fx, fy, fz = freeSpot(ax, ay, az)
+  if fx ~= ax or fy ~= ay or fz ~= az then d, x, y, z = rel(fx, fy, fz); ax, ay, az = fx, fy, fz end
   patch(id, { status = "afoot", craft = false, body = d, x = x, y = y, z = z, face = face, anchor = false,
-              leftAt = clock() })
+              leftAt = clock(), pose = false })
   spawn_body(id, ax, ay, az)
 end
 
@@ -1772,8 +1872,9 @@ end
 -- can't be pushed into them). → id, "doll"|"body" | nil
 function memberOfNode(n)
   if not n then return nil end
-  for id, d in pairs(dolls) do if d.node == n then return id, "doll" end end
-  for id, b in pairs(bodies) do if b == n then return id, "body" end end
+  local nid = n.id
+  for id, d in pairs(dolls) do if d.node == n or (nid and d.node and d.node.id == nid) then return id, "doll" end end
+  for id, b in pairs(bodies) do if b == n or (nid and b and b.id == nid) then return id, "body" end end
   return nil
 end
 
@@ -1829,6 +1930,7 @@ local queue = {}
 
 -- TAKE CONTROL of member `id` (§4.1).
 function control(id)
+  drop_focus()
   local r = get(id)
   if not r then return false, "no such crew member" end
   if r.status == "dead" then return false, r.name .. " is dead" end
@@ -1848,6 +1950,7 @@ end
 
 -- FLY craft `v` as member `id` (default: its commander, else anyone aboard).
 function takeCraft(v, id)
+  drop_focus()
   if not (v and v.node and v.node.valid ~= false) then return false, "no craft" end
   local seated = aboard(v)
   if #seated == 0 then return false, "nobody aboard" end
@@ -2163,6 +2266,7 @@ function goTo(id)
 end
 
 function switchToMember(id)
+  drop_focus()
   local ok, why, mode = canSwitch(id)
   if not ok then return false, why end
   remember()
@@ -2192,7 +2296,7 @@ function switchTargets()
       local st, det = where(r.id)
       local wtxt = (st == "aboard" and ("aboard " .. tostring(det or "a craft"))) or (st == "afoot" and ("on foot · " .. tostring(det or "?")))
         or (st == "base" and "at the base") or tostring(st or "")
-      out[#out + 1] = { id = r.id, name = r.name, role = roleLetter(r), mode = mode, ok = ok, why = why, label = label,
+      out[#out + 1] = { id = r.id, name = r.name, role = roleLetter(r), title = roleTitle(r), mode = mode, ok = ok, why = why, label = label,
                         where = wtxt, o2 = r.o2 or 1, hp = r.hp or 1, you = r.id == activeId(),
                         alert = recordAlerts and recordAlerts[r.id] or nil }
     end
@@ -2312,7 +2416,17 @@ local function do_control(q)
   local r0 = get(id)
   if r0 and not r0.anchor then
     local wx, wy, wz = world_of(r0)
-    if wx then bx, by, bz = wx, wy, wz end
+    -- (graveyard2) a body mid-walk is where its walk has it, not where the
+    -- record was last written; one lying on a bunk gets up where they stood
+    -- (the record), clear of the bunk; and never into a wall
+    local wb, wpx, wpy, wpz = nil, nil, nil, nil
+    if cb and cb.walkPoint then wb, wpx, wpy, wpz = cb.walkPoint() end
+    local sb = wb and space.body(wb)
+    if sb and wb == r0.body then wx, wy, wz = sb.x + wpx, sb.y + wpy, sb.z + wpz end
+    if wx then
+      local fx, fy, fz = freeSpot(wx, wy, wz)
+      bx, by, bz = fx, fy, fz
+    end
   end
   free_avatar(nil)
   despawn_body(id)
@@ -2323,11 +2437,12 @@ local function do_control(q)
   a.vx, a.vy, a.vz = bvx, bvy, bvz
   a.visible = true
   set_active(id)
-  patch(id, { status = "afoot", craft = false, anchor = false })
+  patch(id, { status = "afoot", craft = false, anchor = false, pose = false })
   suit_in(id)
   quiet_monitors()
+  drop_focus()
   local r = get(id)
-  caption((r and r.name or "crew") .. " · on foot")
+  caption((r and r.name or "crew") .. " · on foot" .. (roleTitle and roleTitle(id) and (" · " .. roleTitle(id)) or ""))
   log_(string.format("crew: control → %s (#%d) on foot", r and r.name or "?", id))
 end
 
@@ -2511,7 +2626,7 @@ function setDown(id, x, y, z)
   if not (r and r.status ~= "dead") then return false end
   if id == activeId() and not avatarCraft() then return false end
   local d, rx, ry, rz = rel(x, y, z)
-  patch(id, { status = "afoot", craft = false, body = d, x = rx, y = ry, z = rz })
+  patch(id, { status = "afoot", craft = false, body = d, x = rx, y = ry, z = rz, pose = false })
   despawn_doll(id)
   spawn_body(id, x, y, z)
   return true

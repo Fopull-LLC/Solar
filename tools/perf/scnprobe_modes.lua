@@ -159,8 +159,9 @@ SOLVERS._story = function()
   wait(1.2)
   SP.shot("05_radio_plate", true)
   -- runtime portraits: the faces this playthrough generated
-  wait_for(function() return (sr.PROF.portraits or 0) >= 2 end, 20, "portraits")
-  SP.check("portraits", sr.portraitTex("okafor") ~= nil and sr.portraitTex("reyes") ~= nil, "captured %d (okafor %s, reyes %s) in %.1f ms of capture waits; the longest frame while one ran %.1f ms",
+  -- (graveyard2: the member you control, Okafor, keeps the booth picture; the others are taken live)
+  wait_for(function() return (sr.PROF.portraits or 0) >= 1 and sr.portraitTex("reyes") ~= nil end, 20, "portraits")
+  SP.check("portraits", sr.portraitTex("okafor") == nil and sr.portraitTex("reyes") ~= nil, "captured %d (okafor %s, reyes %s) in %.1f ms of capture waits; the longest frame while one ran %.1f ms",
     sr.PROF.portraits or 0, tostring(sr.portraitTex("okafor")), tostring(sr.portraitTex("reyes")), sr.PROF.portrait_ms or -1, sr.PROF.portrait_worst_ms or -1)
   SP.stand("mark:door", 30)
   SP.wait_step("walk", 15)
@@ -220,6 +221,17 @@ function SP.booth()
     local c = sc.cast[k]
     local id = c.crew and (save.get("scn.crew") or {})[c.crew] or donor
     local look = (not c.crew) and c.look or nil
+    -- (graveyard2) the member you control is pictured from their own body:
+    -- control goes to someone else for the picture (in first person the
+    -- Astronaut's head is not drawn), and comes back after
+    local C = findScript("crew")
+    local back = nil
+    if id and C and id == C.activeId() and donor then
+      back = id
+      C.control(donor)
+      wait_for(function() return C.activeId() == donor end, 5, "control to the donor")
+      wait(1.5)
+    end
     local got = nil
     wait_for(function() return sr.capturePortrait(id, { bytes = true, look = look, expression = c.expression }, function(bytes, why) got = bytes or false; if not bytes then P("SP booth %s: %s", k, tostring(why)) end end) end, 10, "the rig")
     wait_for(function() return got ~= nil end, 10, "portrait " .. k)
@@ -230,6 +242,7 @@ function SP.booth()
       wait_for(function() return g2 ~= nil end, 10, "wide " .. k)
       if g2 then assets.writeBytes("user://booth/" .. k .. "_wide.png", g2) end
     end
+    if back then C.control(back); wait_for(function() return C.activeId() == back end, 5, "control back"); wait(1.0) end
     SP.check("booth_" .. k, got ~= nil and got ~= false, "%s → booth/%s.png (%s)", tostring(c.name), k, look and ("look " .. look) or ("crew " .. tostring(c.crew)))
     wait(0.5)
   end

@@ -639,6 +639,13 @@ local function describe(list, title, subtitle)
   -- Flying, the instrument panel along the bottom is another UI layer, drawn
   -- over this one: the plate stays above it.
   local floor = (actor and actor.kind == "craft") and 196 or 6
+  -- (graveyard2) a scenario's dialogue plate along the bottom: the menu keeps
+  -- above it (it had drawn over the plate's lower half)
+  local SG = findScript and findScript("scenario_stage")
+  if SG and SG.plateBand then
+    local okb, _, top = pcall(SG.plateBand)
+    if okb and top then floor = math.max(floor, top + 8) end
+  end
   local x = math.max(6, math.min(st.x + 14, W - W_MENU - 6))
   local y = math.max(6, math.min(st.y + 10, H - h - floor))
   st.rect = { x = x, y = y, w = W_MENU, h = h }

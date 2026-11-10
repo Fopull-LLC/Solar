@@ -10,9 +10,17 @@
 --
 -- The structure's frame: +X east, +Z north, +Y up, the slab deck at y 0.2.
 --   HALL     x -1..13, z -7..9: two storeys, sealed, the plant inside
---   CONTROL  x -7..-1, z -1..5: the console at the windows onto the hall
---   BUNKS    x -7..-3, z 5..7
+--   CONTROL  x -9..-1, z -1..5: the console at the windows onto the hall,
+--            the log desk and Priya's bench on the west side, life support
+--            along the north wall either side of the bunk-room door
+--   BUNKS    x -7..-1, z 5..9: two bunks along the north wall (Dana's west)
 --   AIRLOCK  x -5..-3, z -3..-1 (out to the south)
+--   (graveyard2, Ty 2026-11-10: "cramped… the desk is blocking the entrance
+--   to the bedroom". The hab grew 2 m west and the bunk room 2 m north and
+--   4 m east; the door moved to the middle of the north wall, and every door
+--   keeps a clear walk of 1.2 m: bulkhead ↔ console ↔ bunk door ↔ airlock.
+--   Pieces moved in place and new ones appended at the end, so every uid
+--   the scenario names stays put.)
 --   OUTSIDE  the radiator row and the FW-2 skid east of the hall, the tower,
 --            the battery banks and the isotope skid west of the hab
 local M = {}
@@ -181,33 +189,42 @@ function M.build(defs)
   end
   for x = 0, 12, 2 do for z = -6, 8, 2 do add("floor.steel", x, Y + 4.4, z, 0) end end
   -- the CONTROL ROOM (x -7..-1, z -1..5), the BUNKS (x -7..-3, z 5..7), the AIRLOCK (x -5..-3, z -3..-1)
-  wz("wall.steel", -7, Y, 0, false); wz("porthole.steel", -7, Y, 2, false); wz("wall.steel", -7, Y, 4, false)
+  wz("wall.steel", -9, Y, 0, false); wz("porthole.steel", -9, Y, 2, false); wz("wall.steel", -9, Y, 4, false)
   wx("wall.steel", -6, Y, -1, false); U.lockIn = uid + 1; wx("airlockWall.steel", -4, Y, -1, false); wx("windowWall.steel", -2, Y, -1, false)
-  U.bunkDoor = uid + 1; wx("doorWall.steel", -6, Y, 5, true); wx("wall.steel", -4, Y, 5, true); wx("wall.steel", -2, Y, 5, true)
-  wz("wall.steel", -7, Y, 6, false); wx("wall.steel", -6, Y, 7, true); wx("wall.steel", -4, Y, 7, true); wz("wall.steel", -3, Y, 6, true)
+  U.bunkDoor = uid + 1; wx("doorWall.steel", -4, Y, 5, true); wx("wall.steel", -6, Y, 5, true); wx("wall.steel", -2, Y, 5, true)
+  wz("wall.steel", -7, Y, 6, false); wx("wall.steel", -6, Y, 9, true); wx("wall.steel", -4, Y, 9, true); wz("wall.steel", -7, Y, 8, false)
   wz("wall.steel", -5, Y, -2, false); wz("wall.steel", -3, Y, -2, true); U.lockOut = uid + 1; wx("airlockWall.steel", -4, Y, -3, false)
   for x = -6, -2, 2 do for z = 0, 4, 2 do add("floor.steel", x, Y + 2.2, z, 0) end end
   add("floor.steel", -6, Y + 2.2, 6, 0); add("floor.steel", -4, Y + 2.2, 6, 0); add("floor.steel", -4, Y + 2.2, -2, 0)
-  add("steps.steel", -4, 0, -4.0, math.pi)
+  -- (zfight2's fix, Ty 11-10: "the stairs going up to the entrance doorway I had to get on it and
+  -- crouch to get inside": Steps 0.8 m stood on the ground 0.5 m out from the slab, their top 0.6 m
+  -- over the sill. Now their top tread is the slab's top, butted to its edge under the airlock's
+  -- opening, x -4..-3.08)
+  add("steps.steel", -3.54, Y - 0.8, -3.5, math.pi)
 
   -- ── inside the control room ──
   U.console = add("reactorConsole.steel", -2.3, Y, 0.0, -Q)
-  U.logdesk = add("table.steel", -6.1, Y, 3.9, Q)
-  add("monitor.steel", -6.1, Y + 0.74, 3.9, Q)
-  add("coffee.steel", -6.2, Y + 0.74, 3.2, Q)
-  add("chair.steel", -5.5, Y, 3.9, -Q)
+  -- the log desk under the porthole on the west wall, its chair facing it
+  U.logdesk = add("table.steel", -8.1, Y, 2.6, Q)
+  add("monitor.steel", -8.15, Y + 0.74, 2.6, Q)
+  add("coffee.steel", -8.2, Y + 0.74, 1.95, Q)
+  add("chair.steel", -7.45, Y, 2.6, -Q)
   add("chair.steel", -3.3, Y, 0.0, -Q)
-  add("shelf.steel", -6.6, Y, 1.0, Q)
-  add("o2gen.steel", -2.6, Y, 4.5, math.pi)
-  add("scrubber.steel", -3.6, Y, 4.6, math.pi)
-  add("airTank.steel", -4.8, Y, 4.6, math.pi)
-  add("workbench.steel", -6.5, Y, -0.3, Q)
+  add("shelf.steel", -8.6, Y, 0.35, Q)
+  -- life support on the north wall: the generator east of the bunk door, the
+  -- scrubber and the tank rack west of it, 1.6 m clear of the door's leaf
+  add("o2gen.steel", -2.4, Y, 4.55, math.pi)
+  add("scrubber.steel", -6.95, Y, 4.6, math.pi)
+  add("airTank.steel", -8.2, Y, 4.6, math.pi)
+  -- Priya's bench on the south wall, west of the airlock: her strainmeter's readout
+  add("workbench.steel", -7.0, Y, -0.42, 0)       -- (its back 0.08 m off the wall's face, never into it)
   add("grimeScuff.film", -4, Y + 0.002, 2, 0)
-  for _, c in ipairs({ { -4, 0 }, { -4, 4 }, { -6, 6 } }) do add("lightFitting.steel", c[1], Y + 2.2, c[2], 0, { pitch = math.pi }) end
-  -- the bunk room: Dana's
-  U.bunk = add("bunk.steel", -5.0, Y, 6.45, 0)
-  add("crateS.steel", -3.6, Y, 5.6, 0.4)
-  add("coffee.steel", -3.6, Y + 0.45, 5.6, 0.4)
+  for _, c in ipairs({ { -6.5, 2 }, { -3.5, 2.6 }, { -4, 7 } }) do add("lightFitting.steel", c[1], Y + 2.2, c[2], 0, { pitch = math.pi }) end
+  -- the bunk room: Dana's bunk on the west of the north wall (the pillow
+  -- end west), Halloran's on the east
+  U.bunk = add("bunk.steel", -5.55, Y, 8.45, math.pi)
+  add("crateS.steel", -6.6, Y, 7.25, 0.4)
+  add("coffee.steel", -6.6, Y + 0.45, 7.25, 0.4)
   -- ── the hall's dressing: the half-finished PL-7 job at the cold leg ──
   add("lampFloor.steel", 6.4, Y, -4.6, 2.6)
   add("crateS.steel", 7.6, Y, -4.4, 0.2)
@@ -235,12 +252,23 @@ function M.build(defs)
   add("drum.steel", 21.6, Y, 3.6, 0)
   -- the base's power: the tower, the battery banks and two isotope skids west of the hab
   U.tower = add("tower", -16, 0, 6, 0)
-  for k = 0, 5 do add("batteryBank", -15 + 2.4 * k, 0, -6, 0) end
+  -- (zfight2's fix, Ty 11-10 "things blocking doorways": the last bank stood across the entrance steps' foot, x -4.35..-1.65)
+  for k = 0, 5 do add("batteryBank", -17.5 + 2.3 * k, 0, -6, 0) end
   add("isotopeSkid", -12, 0, 2, 0)
   add("isotopeSkid", -12, 0, -1, 0)
   -- a second course of magnetite on the core's west face, between it and the
   -- control room's windows (added last: the scenario's uids above stay put)
   for z = -2, 2 do for lv = 0, 2 do add("shieldHeavy.concrete", 1, Y + lv, z, 0) end end
+  -- (graveyard2) the bigger hab: its new floor, roof and walls, and the
+  -- second bunk (appended: the uids above stay put)
+  for _, c in ipairs({ { -8, 0 }, { -8, 2 }, { -8, 4 }, { -2, 6 }, { -6, 8 }, { -4, 8 }, { -2, 8 } }) do
+    slab(c[1], c[2])
+    add("floor.steel", c[1], Y + 2.2, c[2], 0)
+  end
+  wx("wall.steel", -8, Y, -1, false)
+  wx("wall.steel", -8, Y, 5, true)
+  wx("wall.steel", -2, Y, 9, true)
+  U.bunk2 = add("bunk.steel", -2.45, Y, 8.45, 0)
   return P, U, add, chain, line
 end
 

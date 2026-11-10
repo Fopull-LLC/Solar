@@ -35,7 +35,7 @@ return {
 
   vars = { diag = false, woke = false, prot_ok = false, prot_at_break = true, loca = false, peak_k = 0, dose_msv = 0,
            kwh = 0, brg = 39, seized = false, dana_mu = false, welded_by = "", debriefed = false, read_log = false,
-           handover = false, setback_first = true },
+           handover = false, setback_first = true, wake_go = false },
   hooks = "scn_graveyard_shift_hooks",       -- scripts/scn_graveyard_shift_hooks.lua on its prefab
   -- (FW-C, docs/scenarios.md §4.2) FW-2's bearing, which the hooks keep in
   -- `tick`, written as DATA, a model a mod could ship (not used here; the hook
@@ -63,11 +63,15 @@ return {
     research = { "ember", "rtg", "radPanel" },
     contracts = false, programme = false, ruins = false,
     crew = {
-      { name = "Halloran", role = "engineer", control = true,
-        where = { body = "home", site = "far_flat_dark" }, post = "mark:start",
+      { name = "Halloran", role = "engineer", title = "Night engineer", control = true,
+        where = { body = "home", site = "far_flat_dark" }, post = "mark:start", face = "mark:dana",
         pack = { { item = "repairkit" } } },
-      { name = "Kowalczyk", role = "engineer", where = { body = "home", site = "far_flat_dark", offset = { 1, 0, 0 } }, post = "mark:dana" },
-      { name = "Anand", role = "scientist", where = { body = "home", site = "far_flat_dark", offset = { -1, 0, 0 } }, post = "mark:priya" },
+      -- (graveyard2: Dana is there, at the console, when you come out of the
+      -- bunk room; Priya at her bench with her back to the room)
+      { name = "Kowalczyk", role = "engineer", title = "Engineer · going off shift",
+        where = { body = "home", site = "far_flat_dark", offset = { 1, 0, 0 } }, post = "mark:dana", face = "mark:window" },
+      { name = "Anand", role = "scientist", title = "Scientist · strainmeter run",
+        where = { body = "home", site = "far_flat_dark", offset = { -1, 0, 0 } }, post = "mark:priya", face = "mark:priyabench" },
     },
     structures = {
       -- (the crew are sited on open ground 10 m north-west of the hab, then
@@ -85,15 +89,33 @@ return {
       { struct = "Kerne Station", from = { part = "reactorConsole", pin = "tripped" }, to = { uid = 378, pin = "IN" } },
       { struct = "Kerne Station", from = { part = "reactorConsole", pin = "tripped" }, to = { uid = 379, pin = "IN" } },
     },
+    -- the designations the crew use on the radio, painted on the pieces (their
+    -- menus and every refusal or warning name them: "FW-2 is knocked askew")
+    -- (the interaction agent's; graveyard2's layout rework kept these uids)
+    tags = {
+      { struct = "Kerne Station", uid = 116, name = "P-3" },
+      { struct = "Kerne Station", uid = 114, name = "MU-1" },
+      { struct = "Kerne Station", uid = 109, name = "PL-7" },
+      { struct = "Kerne Station", uid = 147, name = "FW-2" },
+    },
     marks = {
       -- (offsets are the station's own frame: x east, z north)
+      -- (graveyard2: the hab grew west and north; tools/gen_graveyard_station.lua)
       center  = { at = "struct:Kerne Station", offset = { 4, 0, 1 } },
-      start   = { at = "struct:Kerne Station", offset = { -4.5, 0, 2.6 } },
+      start   = { at = "struct:Kerne Station", offset = { -5.4, 0, 3.9 } },      -- just out of the bunk room
       console = { at = "struct:Kerne Station", offset = { -3.7, 0, 0.0 } },
-      dana    = { at = "struct:Kerne Station", offset = { -3.4, 0, -0.7 } },
-      priya   = { at = "struct:Kerne Station", offset = { -5.5, 0, 0.5 } },
-      logdesk = { at = "struct:Kerne Station", offset = { -5.3, 0, 3.9 } },
-      bunk    = { at = "struct:Kerne Station", offset = { -4.4, 0, 5.8 } },
+      dana    = { at = "struct:Kerne Station", offset = { -3.9, 0, 1.65 } },     -- beside the console, 1.2 m clear of it (a right-click at the console never lands on her)
+      danawatch = { at = "struct:Kerne Station", offset = { -5.6, 0, 0.9 } },    -- out of your way, watching the board
+      danaboard = { at = "struct:Kerne Station", offset = { -4.3, 0, 1.7 } },    -- woken: back on the board, clear of the console
+      priya   = { at = "struct:Kerne Station", offset = { -7.0, 0, 0.4 } },
+      priyabench = { at = "struct:Kerne Station", offset = { -7.0, 0, -0.5 } },
+      logdesk = { at = "struct:Kerne Station", offset = { -7.0, 0, 2.6 } },
+      bunkdoor = { at = "struct:Kerne Station", offset = { -4.0, 0, 5.0 } },
+      bunk    = { at = "struct:Kerne Station", offset = { -5.4, 0, 7.55 } },     -- beside Dana's bunk
+      danabed = { at = "struct:Kerne Station", offset = { -5.55, 0, 8.45 } },    -- the lower bunk's middle
+      danapillow = { at = "struct:Kerne Station", offset = { -6.6, 0, 8.45 } },  -- the pillow end (west)
+      danasit = { at = "struct:Kerne Station", offset = { -5.4, 0, 8.12 } },     -- sitting up on its edge
+      wakespot = { at = "struct:Kerne Station", offset = { -4.3, 0, 7.5 } },     -- (the probe stands here to wake her)
       lockout = { at = "struct:Kerne Station", offset = { -4, 0, -5.0 } },
       skid    = { at = "struct:Kerne Station", offset = { 18.5, 0, 3.7 } },
       fw2     = { at = "struct:Kerne Station", offset = { 18.5, 0, 5.0 } },
@@ -111,6 +133,8 @@ return {
 
   on_start = {
     { state = { struct = "Kerne Station", part = "flPump", st = { off = true } } },       -- P-3: the makeup pump, off in standby (MU-1, its valve, stands open)
+    -- (graveyard2) Priya bent over her strainmeter's readout at the bench
+    { gesture = { who = "Anand", clip = "lean_console" } },
     { run = "arrival" },
   },
 
@@ -125,13 +149,28 @@ return {
       { shot = { from = "mark:rads", to = "mark:skid", look = "mark:center", offset = { 0, 6, 8 }, toOffset = { 0, 3, -6 }, secs = 6 } },
       { shot = { from = "mark:priya", look = "mark:window", offset = { 0, 1.7, 0 }, secs = 3 } },
     },
+    -- (graveyard2, Ty 2026-11-10: "I'm actually talking to that npc") Dana
+    -- turns from the console, walks up to you and hands over face to face
     handover = {
-      { say = { who = "dana", text = "There you are. Coffee's on the bench, it's been on since nine, drink it at your own risk." } },
-      { say = { who = "dana", text = "Where we are: I tripped her at ten past eleven to look at FW-2. Feed pump, outside, by the radiators. She's back up and parked at two per cent." } },
-      { say = { who = "dana", text = "Turbine's off line. Both coolant pumps running, pressuriser's holding, radiators are cold-soaked, so take the first thirty per cent slowly or the condenser sulks." } },
-      { say = { who = "priya", text = "And she means slowly. My strainmeter hears every load step through the rock. Last Tuesday it heard Dana sneeze." } },
-      { say = { who = "dana", text = "Priya's measuring the ridge breathing. Forty-hour run, she's on hour thirty-one. Don't be the reason she starts again." } },
-      { say = { who = "dana", text = "The log's on the desk terminal. Read it. Three items, all mine, none of them finished." } },
+      { look = { who = "dana", at = "crew:Halloran" } },
+      { walk = { who = "Kowalczyk", to = "crew:Halloran", near = 1.35, speed = 1.1, secs = 14, wait = true } },
+      { turn = { who = "Kowalczyk", to = "crew:Halloran" } },
+      { face = { who = "dana", emotion = "tired", secs = 60 } },
+      { say = { who = "dana", text = "There you are. Coffee's on the bench, it's been on since nine, drink it at your own risk.", with = "me" } },
+      { gesture = { who = "Kowalczyk", clip = "stand_talk", secs = 14 } },
+      { say = { who = "dana", text = "Where we are: I tripped her at ten past eleven to look at FW-2. Feed pump, outside, by the radiators. She's back up and parked at two per cent.", with = "me" } },
+      { say = { who = "dana", text = "Turbine's off line. Both coolant pumps running, pressuriser's holding, radiators are cold-soaked, so take the first thirty per cent slowly or the condenser sulks.", with = "me" } },
+      { gesture = { who = "Anand", clip = false } },
+      { turn = { who = "Anand", to = "crew:Halloran" } },
+      { look = { who = "priya", at = "crew:Halloran" } },
+      { say = { who = "priya", text = "And she means slowly. My strainmeter hears every load step through the rock. Last Tuesday it heard Dana sneeze.", with = "dana" } },
+      { look = { who = "dana", at = "crew:Anand" } },
+      { say = { who = "dana", text = "Priya's measuring the ridge breathing. Forty-hour run, she's on hour thirty-one. Don't be the reason she starts again.", with = "priya" } },
+      { turn = { who = "Anand", to = "mark:priyabench" } },
+      { look = { who = "priya", at = false } },
+      { gesture = { who = "Anand", clip = "lean_console" } },
+      { look = { who = "dana", at = "crew:Halloran" } },
+      { say = { who = "dana", text = "The log's on the desk terminal, under the porthole. Read it. Three items, all mine, none of them finished.", with = "me" } },
       { choice = { who = "dana", prompt = "Questions before I fall over?",
         options = {
           { text = "What did you find on FW-2?", run = "q_fw2" },
@@ -155,8 +194,11 @@ return {
       { run = "q_end" },
     },
     q_end = {
-      { say = { who = "dana", text = "Console's yours. Two to thirty, turbine on line, thirty to sixty. Watch the period. Wake me if something's on fire, and mean it." } },
+      { say = { who = "dana", text = "Console's yours. Two to thirty, turbine on line, thirty to sixty. Watch the period. Wake me if something's on fire, and mean it.", with = "me" } },
       { var = { handover = true } },
+      -- (she steps back out of your way and watches you bring her up)
+      { look = { who = "dana", at = false } },
+      { walk = { who = "Kowalczyk", to = "mark:danawatch", face = "mark:console", speed = 1.0 } },
     },
     read_log = {
       { var = { read_log = true } },
@@ -165,9 +207,12 @@ return {
       { say = { who = "log", text = "23:15  D.K.  PL-7 clamp checked, torque OK. Re-weld booked day shift. HOLD < 60 %. Shield blocks S-4, S-5 out at the foot for access. Replace after weld." } },
       { say = { who = "log", text = "23:40  D.K.  RX at 2 % auto. Hand-over to nights. Item 2 is the one that matters, Halloran. The console's PROTECTION toggle." } },
     },
+    -- (graveyard2: she walks to the bunk room, through its door, and lies
+    -- down on her bunk; she stays there until someone wakes her)
     dana_off = {
       { say = { who = "dana", text = "Sixty, and steady. That's a plant. Right. I'm horizontal. Bunk room, ten metres. Don't make it nine." } },
-      { walk = { who = "Kowalczyk", to = "mark:bunk" } },
+      { walk = { who = "Kowalczyk", to = "mark:bunk", speed = 1.0, secs = 40,
+                 pose = { kind = "lie", at = "mark:danabed", height = 0.68, head = "mark:danapillow", stand = "mark:bunk" } } },
       { say = { who = "priya", text = "She says that every night. She's asleep before the door closes." } },
     },
     -- ── ACT 2 ──────────────────────────────────────────────────────────────
@@ -232,14 +277,38 @@ return {
       { objective = { step = "loca", text = "LOSS OF COOLANT on the primary. Get the reactor shut down: SCRAM at the console if it hasn't tripped." } },
       { choice = { who = "priya", prompt = "Dana's asleep. Do I wake her?",
         options = {
-          { text = "Wake her. Now.", var = { woke = true }, run = "wake" },
+          { text = "I'll wake her. Watch the board for me.", var = { wake_go = true }, run = "wake_go" },
           { text = "Let her sleep. I've got the board.", var = { woke = false }, run = "nowake" },
         }, default = 1, timeout = 20 } },
     },
+    -- (graveyard2, Ty: "wake Dana" means walking to the bunk room and talking
+    -- to her; the event `wake` fires when you stand by her bunk)
+    wake_go = {
+      { say = { who = "priya", text = "Go. Bunk room, the north door. I'll shout if anything else goes red." } },
+      { objective = { step = "loca", text = "LOSS OF COOLANT on the primary. SCRAM at the console if it hasn't tripped. Dana is asleep in the bunk room (the north door)." } },
+    },
     wake = {
-      { say = { who = "priya", text = "DANA. Up. Hall's got a leak and the board's red." } },
-      { walk = { who = "Kowalczyk", to = "mark:dana" } },
-      { say = { who = "dana", text = "I'm up. I'm up. Talk to me, what's the inventory doing?" } },
+      { pose = { who = "Kowalczyk", kind = "sit", at = "mark:danasit", height = 0.68, facing = "crew:Halloran", stand = "mark:bunk" } },
+      { look = { who = "dana", at = "crew:Halloran" } },
+      { face = { who = "dana", emotion = "tired", secs = 8 } },
+      { say = { who = "dana", text = "Mm. Halloran? What time is it. What's that noise?", with = "me", cross = true } },
+      { say = { who = "me", text = "PL-7's let go. The hall's losing coolant.", with = "dana" } },
+      { face = { who = "dana", emotion = "alarmed", secs = 20 } },
+      { choice = { who = "dana", prompt = "What do you need?",
+        options = {
+          { text = "You, on the board. Now.", var = { woke = true }, run = "wake_yes" },
+          { text = "Nothing. Go back to sleep, I've got it.", var = { woke = false }, run = "wake_no" },
+        }, default = 1, timeout = 25 } },
+    },
+    wake_yes = {
+      { say = { who = "dana", text = "I'm up. I'm up. Talk to me on the way, what's the inventory doing?", with = "me" } },
+      { walk = { who = "Kowalczyk", to = "mark:danaboard", face = "mark:console", speed = 1.7, secs = 30 } },
+      { look = { who = "dana", at = false } },
+    },
+    wake_no = {
+      { say = { who = "dana", text = "You're sure. Then why are you still standing here? Go.", with = "me" } },
+      { look = { who = "dana", at = false } },
+      { pose = { who = "Kowalczyk", kind = "lie", at = "mark:danabed", height = 0.68, head = "mark:danapillow", stand = "mark:bunk" } },
     },
     nowake = {
       { say = { who = "priya", text = "Okay. Okay. Your board. Tell me what to watch and I'll watch it." } },
@@ -260,6 +329,8 @@ return {
     resolution = {
       { cutscene = true },
       { alarm = false },
+      -- (morning: Dana is up, whoever woke her)
+      { walk = { who = "Kowalczyk", to = "mark:danawatch", face = "mark:console", secs = 30 } },
       { shot = { orbit = "mark:center", dist = 48, height = 18, turn = 40, start = 30, secs = 10, wait = false } },
       { caption = { "05:58", "Kerne Station · the primary holds", 5 } },
       { say = { who = "log", text = "05:58  Halloran.  Primary intact, inventory recovering, plant shut down and stable. Hand-over to day shift at 07:40." } },
@@ -290,6 +361,9 @@ return {
       beats = { { say = { who = "priya", text = "Outside. It's minus sixty-one and the wind's at fourteen. Your lamp's the only light between you and the radiators, so follow the pipe." } } } },
     { id = "trip", when = { kind = "timer", secs = 30, from = "step:loca" }, run = "trip" },
     { id = "after_trip", when = { kind = "var", name = "loca", is = true }, run = "after_trip" },
+    -- (graveyard2) whatever you told Priya, standing by Dana's bunk after the break wakes her
+    { id = "wake", when = { kind = "at", who = "crew:Halloran", at = "crew:Kowalczyk", r = 1.9 },
+      also = { kind = "var", name = "loca", is = true }, after = "back", run = "wake" },
     { id = "shut", when = { kind = "reactor", struct = "Kerne Station", power_below = 0.02 }, after = "back", run = "shut_down" },
     { id = "inv40", when = { kind = "hook", fn = "inv_below", below = 0.45 }, after = "back",
       beats = { { say = { who = "priya", text = "INVENTORY says forty-four per cent. Is that the water? That's the water. Where is it going?" } } } },
@@ -307,12 +381,15 @@ return {
   steps = {
     -- ACT 1: the hand-over and the climb
     { id = "handover", text = "Hand-over. Hear Dana out.", run = "handover", act = "Act 1 · the hand-over",
-      goals = { { kind = "var", name = "handover", is = true, label = "Dana's hand-over" } } },
+      goals = { { kind = "var", name = "handover", is = true, label = "Dana's hand-over" } },
+      hint = "Dana is coming over to you. Let her talk; when she asks, pick a question with the number keys (or the mouse)." },
     { id = "log", optional = true, text = "(optional) Read the shift log on the desk terminal.", mark = "mark:logdesk",
-      goals = { { kind = "var", name = "read_log", is = true, label = "The shift log" } } },
+      goals = { { kind = "var", name = "read_log", is = true, label = "The shift log" } },
+      hint = "The desk is under the porthole on the control room's west wall. Walk up to it: the log reads itself out." },
     { id = "console", text = "Take the console.", mark = "mark:console",
       goals = { { kind = "at", who = "crew:Halloran", at = "mark:console", r = 1.6, label = "At the reactor console" } },
-      hint = "The console faces the hall windows. Right-click it for the controls; its screen turns pages every 6 s." },
+      hint = "The console stands at the windows onto the hall, by the bulkhead door (east side of the control room). Walk right up to it. Right-click it for its controls; its screen turns pages every 6 s.",
+      hint2 = "Item 2 of Dana's log: the console's PROTECTION toggle is bypassed. Restoring it is not a step, but it matters later." },
     { id = "p30", text = "Raise the reactor from 2 % to 30 %. Console: Setpoint +10 %, three times. Watch the period.",
       goals = { { kind = "reactor", struct = "Kerne Station", power_above = 0.28, label = "Reactor at 30 %" } },
       hint = "Right-click the console: Setpoint +10 %. The automatic controller walks the rods out for you.",
@@ -329,8 +406,10 @@ return {
     -- ACT 2: the bearing
     { id = "diagnose", text = "Hold 60 %. Log the restart. Night shift.", act = "Act 2 · the bearing", checkpoint = true,
       -- (a setback here: the plant restaged at 60 % on line, as the climb left it)
-      stage = { plants = { { struct = "Kerne Station", standby = 0.6, hold = 600, turbine = true } } },
-      goals = { { kind = "hook", fn = "bearing_read", label = "Feed pump bearings" } } },
+      stage = { plants = { { struct = "Kerne Station", standby = 0.6, hold = 600, turbine = true } },
+                beats = { { pose = { who = "Kowalczyk", kind = "lie", at = "mark:danabed", height = 0.68, head = "mark:danapillow", stand = "mark:bunk" } } } },
+      goals = { { kind = "hook", fn = "bearing_read", label = "Feed pump bearings" } },
+      hint = "Nothing to do but hold 60 % and keep an eye on the console. Something will come up: listen to Priya." },
     { id = "setback", text = "OP-14 step 1: setpoint to 40 % so FW-1 can carry the secondary alone.",
       goals = { { kind = "reactor", struct = "Kerne Station", power_below = 0.43, label = "Reactor at 40 %" } },
       hint = "Console: Setpoint −10 %, twice." },
@@ -340,28 +419,35 @@ return {
       hint = "H puts the helmet on. Walk into the airlock: it cycles when the inner door shuts behind you." },
     { id = "skid", text = "Walk to the FW-2 skid by the radiator row. Follow the pipe east, round the hall.", mark = "mark:skid",
       goals = { { kind = "at", who = "crew:Halloran", at = "mark:skid", r = 3, label = "At the FW-2 skid" } },
+      hint = "From the airlock steps go east along the hall's south wall, round its far corner, then north to the radiator row. The work lamp marks the skid.",
       on_done = { { run = "at_skid" } } },
     { id = "isolate", text = "OP-14 step 2: isolate FW-2. Right-click the pump: its switch OFF.", mark = "mark:fw2",
       goals = { { kind = "hook", fn = "fw2_off", label = "FW-2 off" } },
+      hint = "FW-2 is the pump on the skid under the work lamp, in the lagged return line. Right-click it and switch it OFF. FW-1, inside, takes the flow.",
       on_done = { { knock = { struct = "Kerne Station", uid = 147, lean = 0, label = "Swap FW-2's bearing cartridge", secs = 20 } }, { run = "swap_talk" } } },
     { id = "swap", text = "OP-14 step 3: swap the bearing cartridge. Right-click FW-2 with the Repair Kit.", mark = "mark:fw2",
       goals = { { kind = "piece_ok", struct = "Kerne Station", uid = 147, label = "New cartridge in" } },
+      hint = "Hold the Repair Kit (it's in your pack: the belt keys) and right-click FW-2: the repair row swaps the cartridge. Stay at the pump until it finishes.",
       on_done = { { run = "swap_done" } } },
     { id = "restore", text = "OP-14 step 4: FW-2 back on.", mark = "mark:fw2",
-      goals = { { kind = "hook", fn = "fw2_on", label = "FW-2 running" } } },
+      goals = { { kind = "hook", fn = "fw2_on", label = "FW-2 running" } },
+      hint = "Right-click FW-2 again and switch it ON." },
     { id = "back", text = "Back inside, back to the console, back to 60 %.", mark = "mark:console",
       goals = { { kind = "at", who = "crew:Halloran", at = "mark:console", r = 2.5, label = "At the console" },
-                { kind = "reactor", struct = "Kerne Station", power_above = 0.57, label = "Reactor at 60 %" } } },
+                { kind = "reactor", struct = "Kerne Station", power_above = 0.57, label = "Reactor at 60 %" } },
+      hint = "Back the way you came: the airlock is the south door of the control room. Then the console: Setpoint +10 % twice." },
     -- ACT 3: PL-7
     -- (FW-C, PLAN §2 F5) a fail from here (the core melted, a death) goes back
     -- to this checkpoint: the plant restaged at 60 % on line, FW-2 mended, the
     -- story's variables as they were when it opened; protection back in if you
     -- had restored it (its on_enter branch)
     { id = "loca", text = "Hold 60 %. Four hours to day shift.", act = "Act 3 · PL-7", checkpoint = true,
-      stage = { plants = { { struct = "Kerne Station", standby = 0.6, hold = 600, turbine = true } } },
+      stage = { plants = { { struct = "Kerne Station", standby = 0.6, hold = 600, turbine = true } },
+                beats = { { pose = { who = "Kowalczyk", kind = "lie", at = "mark:danabed", height = 0.68, head = "mark:danapillow", stand = "mark:bunk" } } } },
       on_enter = { { branch = { var = "prot_ok", is = true, beats = { { reactor = { struct = "Kerne Station", protection = true } } } } } },
       goals = { { kind = "reactor", struct = "Kerne Station", power_below = 0.02, label = "Reactor shut down" } },
-      hint = "Right-click the console: SCRAM drops every rod in two seconds." },
+      hint = "Right-click the console: SCRAM drops every rod in two seconds. If the board says TRIPPED it already has.",
+      hint2 = "Dana is asleep in the bunk room, through the north door of the control room: walk up to her bunk to wake her." },
     { id = "stabilise", text = "Stop the loss of coolant and refill the primary.", mark = "mark:mu1",
       goals = { { kind = "hook", fn = "makeup", label = "Makeup on: P-3 running, MU-1 open" },
                 { kind = "hook", fn = "welded", label = "PL-7 welded" },
@@ -371,7 +457,8 @@ return {
     -- ACT 4
     { id = "morning", text = "Morning.",
       run = "resolution",
-      goals = { { kind = "var", name = "debriefed", is = true, label = "Day shift" } } },
+      goals = { { kind = "var", name = "debriefed", is = true, label = "Day shift" } },
+      hint = "Nothing left to do. Watch the morning come in." },
   },
 
   fail = {

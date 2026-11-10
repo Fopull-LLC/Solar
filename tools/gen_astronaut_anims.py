@@ -846,6 +846,98 @@ def hanging(p):
         q.ankle[side] = None
     return q
 
+# ── the crew's poses (graveyard2): a "Pose" layer over the rest ─────────────
+# crew_body.lua puts a body on one of these (weight 1 on the Pose layer) while
+# it sits, lies, kneels or gestures; a scenario's `gesture` beat plays one for
+# a few seconds. The legs of the seated and kneeling poses hang from angles,
+# and crew_body pins the feet to the floor by IK; the node is where the hips
+# are (standing, the capsule's centre is at the hips).
+POSE_CLIPS = {
+    # name: (seconds per cycle, looped)
+    "sit_idle": (5.0, True), "lie_rest": (6.0, True), "kneel_work": (3.0, True),
+    "stand_talk": (3.2, True), "point": (2.4, True), "wave": (1.6, True), "lean_console": (4.0, True),
+}
+
+def sit_pose(t):
+    br = math.sin(2 * math.pi * t * 2)
+    p = Pose()
+    p.pelvis_off = (0.0, 0.0, -0.04)
+    p.torso = rx(-D(4) + D(0.8) * br)        # sat back a little
+    p.head = qmul(ry(D(6) * math.sin(2 * math.pi * t + 0.7)), rx(D(8)))
+    for side, sg in SIDES.items():
+        p.hip[side] = D(88); p.knee[side] = D(86); p.foot_pitch[side] = 0.0
+        p.leg_out[side] = D(6)
+        a = p.arm[side]
+        a.update(lower=D(80), out=D(2), swing=D(38) + D(1.0) * br, elbow=D(48), wrist=D(6), curl=0.45)
+    return p
+
+def lie_pose(t):
+    br = math.sin(2 * math.pi * t * 2)
+    p = Pose()
+    p.torso = rx(D(0.6) * br)
+    p.head = qmul(ry(D(14)), rx(-D(4)))       # turned to one side, asleep
+    for side, sg in SIDES.items():
+        p.hip[side] = D(4); p.knee[side] = D(8); p.foot_pitch[side] = -D(30)
+        p.leg_out[side] = D(5)
+        a = p.arm[side]
+        a.update(lower=D(86), out=D(8), swing=D(4), elbow=D(12), wrist=D(4), curl=0.5)   # arms along the body
+    return p
+
+def kneel_pose(t):
+    w = math.sin(2 * math.pi * t)
+    p = Pose()
+    p.pelvis_off = (0.0, -0.42, 0.02)
+    p.torso = rx(D(24) + D(3) * w)
+    p.head = rx(D(28))
+    # the left foot planted in front, the right knee on the floor
+    p.hip["Left"], p.knee["Left"] = D(92), D(95)
+    p.hip["Right"], p.knee["Right"] = -D(6), D(102)
+    p.foot_pitch["Right"] = -D(60)
+    for side, sg in SIDES.items():
+        a = p.arm[side]
+        a.update(lower=D(70), out=D(4), swing=D(52) + D(8) * w * sg, elbow=D(42) - D(10) * w * sg, wrist=D(14), curl=0.6)
+    return p
+
+def talk_pose(t):
+    p = stand_pose(t * 4.0)
+    g = math.sin(2 * math.pi * t)
+    g2 = math.sin(4 * math.pi * t + 0.8)
+    p.head = qmul(ry(D(4) * g2), rx(D(2) + D(3) * g))
+    a = p.arm["Right"]
+    a.update(swing=D(28) + D(10) * g, elbow=D(72) + D(12) * g2, out=D(8), wrist=D(10) - D(8) * g, curl=0.25)
+    b = p.arm["Left"]
+    b.update(swing=D(10) + D(4) * g2, elbow=D(30) + D(6) * g)
+    return p
+
+def point_pose(t):
+    p = stand_pose(t * 4.0)
+    a = p.arm["Right"]
+    a.update(lower=D(78), out=D(12), swing=D(82), elbow=D(6), wrist=-D(4), curl=0.75)
+    p.torso = qmul(ry(-D(8)), rx(D(2)))
+    p.head = ry(-D(10))
+    return p
+
+def wave_pose(t):
+    p = stand_pose(t * 2.0)
+    w = math.sin(2 * math.pi * t)
+    a = p.arm["Right"]
+    a.update(lower=-D(28), out=D(10) + D(14) * w, swing=D(18), elbow=D(72), wrist=D(4), curl=0.05)
+    return p
+
+def lean_pose(t):
+    br = math.sin(2 * math.pi * t * 2)
+    p = stand_pose(t * 4.0)
+    p.pelvis_off = (0.0, -0.03, -0.06)
+    p.torso = rx(D(26) + D(1.0) * br)
+    p.head = rx(D(30))
+    for side, sg in SIDES.items():
+        a = p.arm[side]
+        a.update(lower=D(74), out=D(6), swing=D(62), elbow=D(22), wrist=-D(30), curl=0.2)
+    return p
+
+POSE_FNS = {"sit_idle": sit_pose, "lie_rest": lie_pose, "kneel_work": kneel_pose, "stand_talk": talk_pose,
+            "point": point_pose, "wave": wave_pose, "lean_console": lean_pose}
+
 def main():
     os.makedirs(os.path.join(ROOT, OUT), exist_ok=True)
     for name, g in GAITS.items():
@@ -882,6 +974,9 @@ def main():
 
     for name, (period, _) in SWIMS.items():
         cycle(name, SWIM_POSES[name], period, 32, fix=False)
+
+    for name, (period, _) in POSE_CLIPS.items():
+        cycle(name, lambda ph, f=POSE_FNS[name], per=period: f(ph), period, 16, fix=False)
 
     write_controller()
 
@@ -937,6 +1032,9 @@ def write_controller():
         ("swim_side", 1.0, True, None, ("swimS", [("side_right", -1.0), ("side_left", 1.0)]), "side_left")], "swim_side")
     lines += layer("SwimVert", 0.0, [
         ("swim_vert", 1.0, True, None, ("swimV", [("descend", -1.0), ("ascend", 1.0)]), "ascend")], "swim_vert")
+    # The crew's poses (graveyard2): weight 0 until crew_body sits, lays,
+    # kneels or gestures a body (crossfade to the state on this layer).
+    lines += layer("Pose", 0.0, [(n, 1.0, True) for n in POSE_CLIPS], "sit_idle")
     lines += ["    ],", ")", ""]
     open(os.path.join(ROOT, "animation_controllers/character.actl.ron"), "w").write("\n".join(lines))
 

@@ -197,12 +197,31 @@ local function act(what)
   elseif what == "retry" and r.retry then r.retry()
   elseif what == "restart" and r.restart then r.restart()
   elseif what == "continue" and r.continueFreeplay then r.continueFreeplay()
-  elseif what == "hint" and r.hint then r.hint()
+  elseif what == "hint" and r.hint then
+    -- (S7: the press always answers: the hint itself as a toast, or why not)
+    local ok, why, txt = r.hint()
+    -- the toast: under the chip for HINT_TOAST s (our own, so it shows
+    -- whatever the captions setting, and never under the dialogue plate)
+    lastHint = { ok = ok, why = why, text = txt, t = time or 0 }
+    hintToast = { text = ok and tostring(txt or "") or (string.upper(tostring(why or "no hint")) .. (txt and (" · " .. tostring(txt)) or "")),
+                  ok = ok, t = time or 0 }
   elseif what == "menu" then
     if r.toMenu then r.toMenu() else local gm = ref("game_manager"); if gm and gm.exitToMenu then gm.exitToMenu() end end
   end
 end
 lastAction = nil
+lastHint = nil
+-- the hint key (S7): F1, or ? (Shift + /). F1 is the Build Kit's ROOMS overlay
+-- while the builder is open, so there it is left to the builder.
+function hintKey()
+  if not (input and input.pressed) then return false end
+  if input.pressed("f1") then
+    local fb = ref("field_builder")
+    if not (fb and fb.isOpen and fb.isOpen()) then return true end
+  end
+  if input.pressed("/") and input.key and (input.key("shift") or input.key("lshift") or input.key("rshift")) then return true end
+  return false
+end
 
 local function hold_world(on)
   if on == paused_by_us then return end
@@ -304,6 +323,13 @@ end
 local el_raw, el_base, el_since = nil, 0, 0   -- the clock between state reads
 local function elapsed_now() return el_base + el_since end
 
+-- the chip's tooltip
+function hintTip(s)
+  return "F1 or ?: the hint for this step, as a toast and on the objectives card (the debrief counts them)"
+end
+HINT_TOAST = 8.0
+hintToast = nil
+local function toast_up() return hintToast ~= nil and ((time or 0) - hintToast.t) < HINT_TOAST end
 local function chip_tree(s)
   local steps, time, over = chipText(s, elapsed_now())
   return {
@@ -315,10 +341,18 @@ local function chip_tree(s)
       { "text", key = "t", style = "hud/chipValue", w = "fit", h = "fit", text = time },
       over and { "text", key = "o", style = "hud/chipLabel", w = "fit", h = "fit", text = over } or nil,
       -- (H holsters the tool, so the hint is a key here: scenario_run.hint)
-      { "button", key = "hint", name = "Scenario Hint", style = "hud/button", w = 44, h = 18, text = "HINT",
-        textAlign = "center", textValign = "center", focusable = false,
-        tooltip = "Show the hint for this step on the objectives card (it counts against gold)",
-        onClicked = function() act("hint") end } },
+      -- (S7: a key, F1 or ?, works in first person where the pointer is
+      -- locked; the chip is focusable for the keys of a menu, and lit while
+      -- a hint has just been shown)
+      { "button", key = "hint", name = "Scenario Hint", style = "hud/button", w = 64, h = 18,
+        text = s.hintFlash and "HINT  ✓" or "HINT  F1", textAlign = "center", textValign = "center", focusable = true,
+        opacity = (s.hasHint ~= true) and 0.55 or nil,
+        tooltip = hintTip(s),
+        onClicked = function() act("hint"); if ui and ui.focus then pcall(ui.focus, nil) end end } },
+    toast_up() and { "row", key = "htoast", style = "hud/chip", pin = "top", x = CHIP_X, y = CHIP_Y + 30, w = "fit", h = "fit",
+      pad = 8, gap = 8, align = "start",
+      { "text", key = "hk", style = "hud/chipLabel", w = "fit", h = "fit", text = "HINT" },
+      { "text", key = "ht", style = "hud/chipValue", w = "fit", maxW = 430, h = "fit", wrap = true, text = hintToast.text } } or nil,
   }
 end
 
@@ -491,8 +525,9 @@ function update(node, dt)
     return
   end
   if w == "chip" then
+    if hintKey() then act("hint") end
     local a, b, c = chipText(st, elapsed_now())
-    local k = a .. b .. (c or "")
+    local k = a .. b .. (c or "") .. (st.hintFlash and "H" or "") .. (st.hasHint and "h" or "") .. (toast_up() and tostring(hintToast.t) or "")
     if k ~= chip_key or shown ~= "chip" then
       ui.make(node, tidy(chip_tree(st)))
       shown, chip_key = "chip", k

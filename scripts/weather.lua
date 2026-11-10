@@ -1097,7 +1097,12 @@ function update(node, dt)
   -- haze for them). The banks swell with the murk: a grey day a little, rain
   -- and mist more.
   local seed = seed_of(name, w)
-  s.mist = forced_mist or mistOf(o, p, at and at.sun_now, moist_v, seed, clock, params.spell)
+  -- (graveyard2, FW-C follow-up) a scenario holding the time of day
+  -- (atmosphere.sunUpOverride): the held sun is not a dawn, and mistOf can't
+  -- tell an evening from a morning by elevation, so a held "evening" lay in
+  -- a dawn whiteout. The scenario's own `light.fog` (forceMist) is the fog then.
+  local held = at and at.sunUpOverride ~= nil
+  s.mist = forced_mist or (held and 0) or mistOf(o, p, at and at.sun_now, moist_v, seed, clock, params.spell)
   local amp = 0.12 * smooth(0.4, 1.0, o.cover or 0) + 0.22 * (o.precip or 0) + 0.3 * s.mist
   s.bank = bankOf(seed, clock, amp)
   s.haze = s.haze * s.bank

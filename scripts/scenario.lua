@@ -1234,7 +1234,11 @@ BEATS = { ops = "string", say = "table", caption = "table", camera = "table", wa
           spawn = "table", remove = "string", walk = "table", hook = "string", reactor = "table",
           -- FW-C: direction, light, the world (PLAN §2 F2, F4, F7)
           face = "table", look = "table", light = "table", weather = "table", breaker = "table", wear = "table",
-          music = "music" }
+          music = "music",
+          -- graveyard2: a body turned to face something; lying or sitting
+          turn = "table", pose = "table", gesture = "table" }
+GESTURES = { stand_talk = true, point = true, wave = true, lean_console = true, kneel_work = true, sit_idle = true, lie_rest = true }
+POSES = { lie = true, sit = true, stand = true }
 -- FW-C cast fields (the rest is refused, so a typo is caught)
 CAST_FIELDS = { name = true, tag = true, color = true, crew = true, portrait = true, expression = true, look = true,
                 radio = true, delay = true, link = true }
@@ -1290,6 +1294,9 @@ function validate(sc, ctx)
     for j, it in ipairs(c.pack or {}) do
       if not (it.item or it.mat or it.part) then E(string.format("%s.pack[%d]", p, j), "item, part or mat") end
     end
+    -- graveyard2: what they are, in words ("Night engineer"), shown on the
+    -- strip, the picker, the tag over them and the plate
+    if c.title ~= nil and type(c.title) ~= "string" then E(p .. ".title", "a few words (\"Night engineer\")") end
   end
   local marks = {}
   for k in pairs(st.marks or {}) do marks[k] = true end
@@ -1432,6 +1439,7 @@ function validate(sc, ctx)
             -- FW-C: the listener beside the speaker; a line's own delay
             if val.with ~= nil then check_who(pk .. ".with", val.with) end
             if val.delay ~= nil and (type(val.delay) ~= "number" or val.delay < 0) then E(pk .. ".delay", "seconds, 0 or more") end
+            if val.cross ~= nil and type(val.cross) ~= "boolean" then E(pk .. ".cross", "true: the next line cuts in a second early") end
           elseif key == "face" then
             check_who(pk .. ".who", val.who)
             if val.who == nil then E(pk .. ".who", "missing") end
@@ -1487,6 +1495,35 @@ function validate(sc, ctx)
           elseif key == "walk" then
             check_who(pk .. ".who", val.who)
             check_ref(pk .. ".to", val.to)
+            -- graveyard2: near (stop this far off: a walk up to someone), wait, face (a ref)
+            if val.near ~= nil and (type(val.near) ~= "number" or val.near < 0) then E(pk .. ".near", "metres, 0 or more") end
+            if val.secs ~= nil and type(val.secs) ~= "number" then E(pk .. ".secs", "seconds") end
+            if val.speed ~= nil and type(val.speed) ~= "number" then E(pk .. ".speed", "m/s") end
+            if val.wait ~= nil and type(val.wait) ~= "boolean" then E(pk .. ".wait", "true or false") end
+            if val.face ~= nil then check_ref(pk .. ".face", val.face) end
+            if val.pose ~= nil and (type(val.pose) ~= "table" or not POSES[tostring(val.pose.kind)]) then E(pk .. ".pose", "{ kind = lie|sit, at, head|facing, height } on arrival") end
+          elseif key == "gesture" then
+            check_who(pk .. ".who", val.who)
+            if val.who == nil then E(pk .. ".who", "missing") end
+            if val.clip ~= false and not GESTURES[tostring(val.clip)] then E(pk .. ".clip", "stand_talk, point, wave, lean_console, kneel_work, or false") end
+            if val.secs ~= nil and type(val.secs) ~= "number" then E(pk .. ".secs", "seconds (none: held)") end
+          elseif key == "turn" then
+            check_who(pk .. ".who", val.who)
+            if val.who == nil then E(pk .. ".who", "missing") end
+            check_ref(pk .. ".to", val.to)
+            if val.to == nil then E(pk .. ".to", "a ref to face") end
+          elseif key == "pose" then
+            check_who(pk .. ".who", val.who)
+            if val.who == nil then E(pk .. ".who", "missing") end
+            if not POSES[tostring(val.kind)] then E(pk .. ".kind", "lie, sit or stand") end
+            if val.kind ~= "stand" then
+              check_ref(pk .. ".at", val.at)
+              if val.at == nil then E(pk .. ".at", "a ref (the bunk, the seat)") end
+            end
+            if val.head ~= nil then check_ref(pk .. ".head", val.head) end
+            if val.facing ~= nil then check_ref(pk .. ".facing", val.facing) end
+            if val.height ~= nil and type(val.height) ~= "number" then E(pk .. ".height", "metres over the ref's ground") end
+            if val.stand ~= nil then check_ref(pk .. ".stand", val.stand) end
           elseif key == "hook" then
             if not sc.hooks then E(pk, "the scenario names no hooks")
             elseif hooks and type(hooks[val]) ~= "function" then E(pk, "no function '" .. val .. "' in hooks") end
@@ -1547,6 +1584,7 @@ function validate(sc, ctx)
     if s.mark ~= nil then check_ref(p .. ".mark", s.mark) end
     if s.act ~= nil and type(s.act) ~= "string" then E(p .. ".act", "the words a setback card goes back to (\"ACT 3\")") end
     if s.stage ~= nil and type(s.stage) ~= "table" then E(p .. ".stage", "a start-like table restaged on a return to this checkpoint") end
+    if type(s.stage) == "table" and s.stage.beats ~= nil then check_beats(p .. ".stage.beats", s.stage.beats) end
   end
   if required == 0 and #(sc.steps or {}) > 0 then E("steps", "every step is optional") end
   for i, s in ipairs(sc.steps or {}) do
@@ -1649,6 +1687,8 @@ function validate(sc, ctx)
     if ev.run then check_seq(p .. ".run", ev.run) end
     check_beats(p .. ".beats", ev.beats)
     if ev.after then check_step(p .. ".after", ev.after) end
+    -- graveyard2: `also`, a second condition
+    if ev.also ~= nil then if type(ev.also) ~= "table" or not ev.also.kind then E(p .. ".also", "a condition { kind = … }") else check_goal(p .. ".also", ev.also) end end
     if ev.during then check_step(p .. ".during", ev.during) end
   end
   for i, s in ipairs(type(sc.steps) == "table" and sc.steps or {}) do

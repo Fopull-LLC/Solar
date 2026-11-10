@@ -72,7 +72,7 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 | `funds`, `rp`, `research = { techId… }` | The balance (career money rules: `game.mode = "scenario"`), research points, and unlocked tech (research.lua TECH ids). |
 | `safety` | `rescue`, `death` or `invincible`. |
 | `contracts = false`, `programme = false` | The Ops Board and the programme stand down until freeplay. |
-| `crew = { { name, role, control, where = { body, site, dist, offset }, post = ref, pack = { {item}, {part, n}, {mat, kg} } } }` | The starters are renamed and given these roles, and more are hired free. The `control = true` member is the player, placed at the site. `post` sets a member down at a mark once the buildings exist: crew at their stations. |
+| `crew = { { name, role, title, control, where = { body, site, dist, offset }, post = ref, face = ref, pack = { {item}, {part, n}, {mat, kg} } } }` | The starters are renamed and given these roles, and more are hired free. The `control = true` member is the player, placed at the site. `post` sets a member down at a mark once the buildings exist: crew at their stations, facing `face`. `title`: what they are, in words, everywhere their name shows. |
 | `marks = { name = { at = ref, offset } }` | Named points that steps and beats refer to. A mark may sit on a crew spot or on a structure. |
 | `structures = { { bp = "<id>/x.bp.txt", name, at, offset, yaw, air = true, powered = true } }` | A SOLBP1 blueprint code, from the Build Kit's BLUEPRINTS tab or Shift+F12, built as a structure. `air = true`: every sealed room starts at 1 atm. `powered = true`: its grid's batteries start full. |
 | `crates = { { at, offset, parts = { ["wall.steel"] = 6 }, items = { repairkit = 1 }, name } }` | A "Supply drop" crate of crated parts that an Engineer builds from. |
@@ -95,6 +95,8 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 - Steps run in order. `optional` steps count toward nothing and block nothing. Steps that share a `parallel` group are open together.
 - Every goal can take `hold = secs` (it must stay true that long) and `label` (the text on the objective card).
 - Each goal shows a reading on the card and in the Ctrl+F10 overlay, for example "p 0.71 of 0.95".
+- **Hints.** `hint` shows on its own after 90 s without progress, `hint2` later. The player asks for one with **F1** or **?** (the HUD chip "HINT F1" too; F1 is the Build Kit's ROOMS overlay while the builder is open). Every press answers: the hint as a toast and on the objectives card (in a seat too), the second press `hint2`, and "no hint for this step" with the step's text when it has none. Write a hint for every step: where the thing is and which control does it.
+- A checkpoint's `stage` may carry `beats`, run at once over the restaged world (Graveyard puts Dana back in her bunk).
 
 | kind | fields |
 |---|---|
@@ -204,7 +206,11 @@ A beat is a table with one key. Beats run in order from a queue. A line of dialo
 | power | `{ struct, part, on }` |
 | spawn | `{ structure \| crate \| flag \| craft \| crew = … }` |
 | remove | `"struct:Name"` |
-| walk | `{ who, to = ref, offset, secs, speed = 1.4 }`. The member's body walks there along the ground (§5.5); `secs` is the time-out after which they are set down there. |
+| walk | `{ who, to = ref, offset, secs, speed = 1.4, near, wait, face = ref, pose = {…} }`. The member's body walks there along the ground, round what is in the way and through doors (§5.5); `secs` is the time-out after which they are set down there. `near = 1.3`: stop that far off (a walk up to someone: `to = "crew:Halloran"`). `wait = true`: the story holds until they arrive. `face`: turn to that ref on arrival. `pose`: a `pose` beat on arrival (walk to the bunk, lie down). |
+| say (cross) | `cross = true` on a `say`: the next line cuts in a second before this one ends (one voice over another). |
+| turn | `{ who, to = ref }`: a body on foot turns to face the ref (smoothly). Never the player. |
+| pose | `{ who, kind = "lie" \| "sit" \| "stand", at = ref, offset, height, head = ref \| facing = ref, stand = ref }`: lying on a bunk (`height` is the mattress over the ref's ground; `head` where the head goes), sitting on its edge (`facing`), or standing up. `stand` is where they get up (a walk, a switch). The pose is kept in the crew record, so it survives a reload. |
+| gesture | `{ who, clip, secs }`: one of the crew's pose clips — `stand_talk`, `point`, `wave`, `lean_console`, `kneel_work` — for `secs`, or held without; `clip = false` lets go. A walk ends it. |
 | face | `{ who, emotion, weight = 1, secs = 6 }`: an expression held on their face. neutral, focus, happy, excited, relief, delight, worried, scared, panic, pain, strain, tired, bored (and alarmed, smile, calm, grim). |
 | look | `{ who, at = ref \| false }`: their head and eyes turn to the ref, re-read every frame; `false` lets go. |
 | light | `{ ambient = 0.4 \| false, fog = 0.6 \| false, time = "dusk" \| degrees \| false, secs }`: §5.8. |
@@ -250,6 +256,7 @@ events = {
 
 - `when` takes any goal kind. Events are checked four times a second with the goals.
 - `once` defaults to true. `after` and `during` gate an event on a step.
+- `also = { kind = … }`: a second condition that must hold as well (Graveyard's wake: standing by Dana's bunk, `also` the break has happened).
 
 ### 5.4 The UI
 
@@ -265,8 +272,12 @@ events = {
 - A `walk` steers the member's body (crew_body.lua `steerTo`).
 - Each frame the runner reads the ref and hands the body the target body-relative, so the walk follows a mark on a moving planet (docs/positions-and-frames.md).
 - The body walks along the ground at `speed` on the walk clip, facing the way it goes. A ray down each tick sets the feet, so it climbs onto a floor.
-- The record is written once, where it stops.
-- A member with no body in range, or who has not arrived by `secs`, is set down at the mark. So is everyone whose cutscene is skipped.
+- **Paths (graveyard2).** When the straight line is blocked (two sphere sweeps at the knees and chest), the body finds a way: an A* over a 0.25 m grid in its own ground frame, each cell asked of the physics world once (two spheres, the capsule's shape), lazily, 24 cells a tick, at most 1,800. A door's leaf is passable, and kit_live opens a door for a walking body as it does for the player. The route is pulled straight and kept body-relative. A target that moves (a walk up to the player) is planned again once it has moved a metre.
+- The walker waits for the player in its way (2.5 s), then carries on.
+- The record follows twice a second while it walks, and where it stops.
+- A member with no body in range, or who has not arrived by `secs`, is set down at the mark, on a free spot (never inside a wall). So is everyone whose cutscene is skipped. A walk with `near` is never set down on top of whoever it walked to.
+- **Standing about.** A body that stands steps aside when the player walks into it, steps out of a doorway, faces the most open way when it has no facing (a post may say `face = ref`), and turns its head to the player close by.
+- **Who is who.** A start crew's `title` ("Night engineer") is shown on the crew strip's chips, in the switch picker, on the plate, and under the crosshair when you look at them.
 
 ### 5.6 Portraits
 

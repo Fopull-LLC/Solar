@@ -213,8 +213,11 @@ do
   check(calls.hint, "the HINT key asks the runner (H holsters the tool)")
   local chip = by(last, "key", "chip")
   check(chip and chip.pin == "top" and chip.y == UI.CHIP_Y, "beside the warp chip, top centre")
+  -- (graveyard2, S7) the press always answers: a toast under the chip
+  frames(1)
+  check(by(last, "key", "htoast") ~= nil and UI.hintToast ~= nil, "a HINT press shows a toast under the chip")
   local mc = made
-  frames(10)
+  frames(8)   -- (8: the toast's frame above took one; the clock's next second is 10 frames off)
   check(made == mc, "the chip redraws only when its second changes")
   S.phase, S.outcome, S.medal, S.version = "done", "done", "silver", 9
   S.debrief = "Sealed and breathing. The budget went on the roof."
@@ -427,8 +430,13 @@ do
   local m0 = made
   frames(20)
   check(made == m0, "the line types into one text node")
+  -- (graveyard2: on foot Space is the jump; only Enter moves a line on there)
   presses.space = true; frames(1); presses.space = nil
-  check(G.current().typed, "Space finishes the typing")
+  check(not G.current().typed, "Space does not skip a line out of a cutscene (it is the jump)")
+  check(G.plateHint({ typed = false, beat = { src = "say" } }, true, false) == "Enter: the whole line" and G.plateHint({ typed = true, beat = { src = "say" } }, true, false) == "Enter: next"
+    and G.plateHint({ typed = true, beat = { src = "say" } }, true, true) == "Space or Enter: next", "a runner's line never says close; Space only in a cutscene")
+  presses.enter = true; frames(1); presses.enter = nil
+  check(G.current().typed, "Enter finishes the typing")
   presses.enter = true; frames(1); presses.enter = nil
   check(runc.done == 1 and not G.dialogueOpen() and logged[1][1] == "Dele Okafor", "Enter closes it: lineDone, and the Ops log has it")
   -- several lines in one beat

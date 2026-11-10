@@ -160,5 +160,63 @@
             transitions: [
             ],
         ),
+        (
+            name: "Pose",
+            weight: 0.0,
+            states: [
+                (
+                    name: "sit_idle",
+                    clip: "animations/astronaut_male/sit_idle",
+                    speed: 1.0,
+                    looped: true,
+                    pos: (300.0, 300.0),
+                ),
+                (
+                    name: "lie_rest",
+                    clip: "animations/astronaut_male/lie_rest",
+                    speed: 1.0,
+                    looped: true,
+                    pos: (300.0, 300.0),
+                ),
+                (
+                    name: "kneel_work",
+                    clip: "animations/astronaut_male/kneel_work",
+                    speed: 1.0,
+                    looped: true,
+                    pos: (300.0, 300.0),
+                ),
+                (
+                    name: "stand_talk",
+                    clip: "animations/astronaut_male/stand_talk",
+                    speed: 1.0,
+                    looped: true,
+                    pos: (300.0, 300.0),
+                ),
+                (
+                    name: "point",
+                    clip: "animations/astronaut_male/point",
+                    speed: 1.0,
+                    looped: true,
+                    pos: (300.0, 300.0),
+                ),
+                (
+                    name: "wave",
+                    clip: "animations/astronaut_male/wave",
+                    speed: 1.0,
+                    looped: true,
+                    pos: (300.0, 300.0),
+                ),
+                (
+                    name: "lean_console",
+                    clip: "animations/astronaut_male/lean_console",
+                    speed: 1.0,
+                    looped: true,
+                    pos: (300.0, 300.0),
+                ),
+            ],
+            default_state: Some("sit_idle"),
+            transitions: [
+            ],
+        ),
     ],
 )

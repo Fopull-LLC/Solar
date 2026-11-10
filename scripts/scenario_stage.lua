@@ -398,6 +398,19 @@ local function listener_tree(w)
       text = string.upper(tostring(w.who or "")) } }
 end
 
+-- (graveyard2, FW-C follow-up) the plate's key line. A runner's line (src
+-- "say") closes by itself when its time is up, so it never says "close": the
+-- key moves the story on. Out of a cutscene you are walking about, and Space
+-- is the jump, so only Enter skips a line there.
+function plateHint(d, last, inCut)
+  local keys = inCut and "Space or Enter" or "Enter"
+  if d.beat and d.beat.src == "say" then
+    return d.typed and (keys .. ": next") or (keys .. ": the whole line")
+  end
+  if not inCut then keys = "Click or Enter" else keys = "Click, Space or Enter" end
+  return d.typed and (last and (keys .. ": close") or (keys .. ": next")) or "Click: the whole line"
+end
+
 local function dialogue_tree(d, y)
   -- (on foot the plate sits above the walk-up prompt and tool hint)
   local b = d.beat
@@ -423,7 +436,7 @@ local function dialogue_tree(d, y)
     kids[#kids + 1] = row
   else
     kids[#kids + 1] = { "text", key = "h", style = "panel/hint", w = "100%", h = "fit", textAlign = "end",
-      text = d.typed and (last and "Click, Space or Enter: close" or "Click, Space or Enter: next") or "Click: the whole line" }
+      text = plateHint(d, last, cut.on) }
   end
   return { "button", key = "dlg", name = "Scenario Dialogue", style = "panel/frame", pin = "bottom", y = y, w = PANEL_W, h = "fit",
     dir = "row", pad = 14, gap = 14, align = "start", focusable = false,
@@ -457,9 +470,25 @@ local function stage_tree()
   if D then
     local y = (h >= BAR_H - 1) and -(BAR_H + 10) or -150
     if cap and h < BAR_H - 1 then y = -210 end
+    plate_y = y
     out[#out + 1] = dialogue_tree(D, y)
   end
   return out
+end
+
+-- (graveyard2, for context_menu) where the dialogue plate stands, in design
+-- units from the bottom of the screen: → bottom, top, width, or nil when no
+-- plate is up. The right-click menu keeps above it (it drew over the plate's
+-- lower half). The height is the plate's own: a line, plus a row per choice.
+plate_y = -150
+function plateBand()
+  local d = D
+  if not d then return nil end
+  local bottom = -plate_y
+  local lines = 1 + math.floor(ulen(d.lines and d.lines[d.i] or "") / 78)
+  local hgt = 92 + 22 * math.max(0, lines - 2)
+  if d.typed and d.i == #d.lines and #d.choices > 0 then hgt = hgt + 36 * #d.choices end
+  return bottom, bottom + math.max(120, hgt + 28), PANEL_W
 end
 
 local function tidy(t)
@@ -556,8 +585,9 @@ function update(node, dt)
       if last and #D.choices > 0 then
         for i = 1, #D.choices do if input.pressed(tostring(i)) then picked = choose(i) break end end
       end
+      -- (Space is the jump on foot: it skips a line only in a cutscene)
       if not picked and not (D and D.typed and last and #D.choices > 0)
-        and (input.pressed("space") or input.pressed("enter")) then
+        and ((cut.on and input.pressed("space")) or input.pressed("enter")) then
         advance()   -- finishes the typing; never skips a choice that is up
       end
     end

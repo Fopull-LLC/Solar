@@ -990,7 +990,7 @@ end
 -- pays. No directions and no brief — you are already doing it.
 local function flight_step(o)
   local mi, co = ref("missions"), ref("company")
-  if o and o.kind == "scn" then local st = o.step; st.hint = nil; return st end
+  if o and o.kind == "scn" then return o.step end   -- (S7: a scenario keeps its hint in the seat too)
   if o and o.kind == "pack" then return pack_step(o, false) end
   if o and o.kind == "prog" then
     local ps = prog_step(find("Astronaut"), true, o.id)

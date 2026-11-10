@@ -419,7 +419,8 @@ local function portrait(i, m, L, hov, v)
   local a = (C and C.alerts and C.alerts(m.id)) or {}
   local name = shortName(m.name) .. (m.commander and " ★" or "")
   local nm = { "text", key = "nm" .. i, style = "hud/micro", w = "grow", h = PLATE_H, text = name }
-  local plate = { "row", key = "pl" .. i, w = L.w, h = PLATE_H, gap = 3, pad = 0, align = "center" }
+  local plate = { "row", key = "pl" .. i, w = L.w, h = PLATE_H, gap = 3, pad = 0, align = "center",
+                  tooltip = C and C.roleTitle and C.roleTitle(m.id) and (tostring(m.name) .. " · " .. C.roleTitle(m.id)) or nil }
   -- the role chip (J7): P / S / E stencilled on, before the name
   local letter = C and C.roleLetter and C.roleLetter(m.id)
   if letter then plate[#plate + 1] = roleChip("rl" .. i, letter) end
@@ -524,7 +525,8 @@ local function describe(v, list, L, afoot, chips_any, cap_in)
     end
     local row = { "row", key = "afoot", w = math.max(1, math.min(cap_in, est)), h = "fit", gap = 4, pad = 0, align = "center", wrap = true }
     for i, e in ipairs(shown) do
-      row[#row + 1] = { "button", key = "af" .. i, style = "hud/button", w = "fit", h = 20,
+      -- (not focusable: a click must not leave Space able to click it again)
+      row[#row + 1] = { "button", key = "af" .. i, style = "hud/button", w = "fit", h = 20, focusable = false,
                         text = e.label, textAlign = "center", onClicked = e.act }
     end
     rows[#rows + 1] = row
@@ -580,12 +582,12 @@ local function picker_rows(C, cap_in)
     if i > 12 then break end
     local tip = m.ok and nil or m.why
     rows[#rows + 1] = { "button", key = "pk" .. m.id, style = m.you and "panel/rowActive" or "hud/button",
-      w = math.min(cap_in, 420), h = 24, dir = "row", gap = 6, pad = 3, align = "center",
+      w = math.min(cap_in, 420), h = 24, dir = "row", gap = 6, pad = 3, align = "center", focusable = false,
       disabled = (not m.ok) or nil, tooltip = tip,
       { "text", key = "r", style = "panel/role", w = 18, h = 18, text = m.role or "?", textAlign = "center", textValign = "center" },
       { "text", key = "n", style = "panel/cellStrong", w = 112, h = "fit", maxLines = 1, overflow = "ellipsis", text = m.name or "?" },
       { "text", key = "w", style = "panel/cellMuted", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
-        text = (m.alert and (m.alert.text .. " · ") or "") .. (m.where or "") },
+        text = (m.title and (string.upper(m.title) .. " · ") or "") .. (m.alert and (m.alert.text .. " · ") or "") .. (m.where or "") },
       { "text", key = "k", style = m.ok and "panel/keys" or "panel/cellMuted", w = 132, h = "fit", maxLines = 1,
         overflow = "ellipsis", textAlign = "end", text = m.label or "" },
       onClicked = function()
@@ -607,7 +609,11 @@ local function afoot_entries(v)
   local list = (C.switchList and C.switchList()) or {}
   for _, e in ipairs(list) do
     if e.kind == "crew" and e.id ~= active then
-      out[#out + 1] = { label = string.format("%s %s · CONTROL", shortName(e.name), e.dist and string.format("%.0f m", e.dist) or ""),
+      -- (graveyard2, Ty: "no indicators for what roles everyone has") the
+      -- role in words on the chip: "K.DANA · ENGINEER 3 m · CONTROL"
+      local rt = C.roleTitle and C.roleTitle(e.id)
+      out[#out + 1] = { label = string.format("%s%s %s · CONTROL", shortName(e.name), rt and (" · " .. string.upper(rt)) or "",
+                                              e.dist and string.format("%.0f m", e.dist) or ""),
                         act = function() local ok, why = C.control(e.id); if not ok then say(why or "can't") end end }
     end
   end

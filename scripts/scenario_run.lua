@@ -363,7 +363,8 @@ local function speaker(who)
   local C = ref("crew")
   local id = member_id(who)
   local r = C and id and C.get(id)
-  return { who = who, name = r and r.name or tostring(who), tag = r and r.role and string.upper(r.role) or nil }
+  local tt = r and C.roleTitle and C.roleTitle(id)
+  return { who = who, name = r and r.name or tostring(who), tag = (tt and string.upper(tt)) or (r and r.role and string.upper(r.role)) or nil }
 end
 speakerOf = speaker
 local function chirp()
@@ -680,7 +681,9 @@ WORLD_BEATS = { reactor = true, knock = true, state = true, power = true, var = 
                 give = true, funds = true, unlock = true, mark = true, ["goto"] = true, objective = true, branch = true,
                 run = true, alarm = true, fail = true, done = true, hook = true,
                 -- FW-C: what changes the world (or the light it is seen in)
-                light = true, weather = true, breaker = true, wear = true, music = true }
+                light = true, weather = true, breaker = true, wear = true, music = true,
+                -- graveyard2: where a body faces and how it rests
+                turn = true, pose = true, gesture = true }
 local stage_one        -- set by the staging section: (kind, entry, out)
 local walks = {}       -- id → { to = ref, offset, t1 }
 
@@ -782,6 +785,82 @@ local function look_beat(v)
   if cb and cb.lookSelf then pcall(cb.lookSelf, fn) end
   local fc = body_script("face", id)
   if fc then fc.gaze = fn end
+end
+
+-- (graveyard2) TURN: { who, to = ref } — a body on foot turned to face the
+-- ref (the record's `face`, the way the suit looks; crew_body turns to it
+-- smoothly). The player is never turned.
+local function turn_member(id, to)
+  local C = ref("crew")
+  local r = C and id and C.get(id)
+  if not (r and r.status == "afoot" and r.body and r.x) then return false end
+  if C.activeId and C.activeId() == id then return false end
+  local p = pos_of(to)
+  if not (p and p.body == r.body) then return false end
+  local l = math.sqrt(r.x * r.x + r.y * r.y + r.z * r.z)
+  if l < 1e-6 then return false end
+  local ux, uy, uz = r.x / l, r.y / l, r.z / l
+  local dx, dy, dz = p.x - r.x, p.y - r.y, p.z - r.z
+  local du = dx * ux + dy * uy + dz * uz
+  dx, dy, dz = dx - ux * du, dy - uy * du, dz - uz * du
+  local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if d < 1e-3 then return false end
+  C.patch(id, { face = { x = dx / d, y = dy / d, z = dz / d } })
+  return true
+end
+local function turn_beat(v) return turn_member(who_id(v.who), v.to) end
+turnMember = turn_member
+-- (graveyard2) POSE: { who, kind = "lie" | "sit" | "stand", at = ref,
+-- offset, height (m over the ref's ground: a bunk's mattress), head = ref
+-- (lie: where the head goes) | facing = ref (sit: the way they face) }. The
+-- record keeps where they stood, so getting up (stand, a walk, a switch)
+-- starts there.
+-- (graveyard2) GESTURE: { who, clip = "stand_talk" | "point" | "wave" |
+-- "lean_console" | "kneel_work" | false, secs } — a body plays one of the
+-- crew's pose clips (held without secs; false lets go). A walk ends it.
+local function gesture_beat(v)
+  local id = who_id(v.who)
+  local C = ref("crew")
+  if not (C and id) then return false end
+  if v.clip == false or v.clip == nil then C.patch(id, { gesture = false }); return true end
+  C.patch(id, { gesture = { clip = v.clip, t1 = v.secs and (now() + v.secs) or false } })
+  return true
+end
+local function pose_beat(v)
+  local id = who_id(v.who)
+  local C = ref("crew")
+  if not (C and id) then return false end
+  if C.activeId and C.activeId() == id then say_log("pose: not on the member you control"); return false end
+  if v.kind == "stand" or v.kind == false or not v.at then C.patch(id, { pose = false }); return true end
+  local x, y, z, F = world_at(v.at, v.offset, v.height or 0)
+  local p = pos_of(v.at)
+  local b = p and space.body(p.body or "")
+  if not (x and b) then return false end
+  x, y, z = x - b.x, y - b.y, z - b.z
+  local f = nil
+  local to = v.head or v.facing
+  local tp = to and pos_of(to)
+  if tp and tp.body == p.body then
+    local dx, dy, dz = tp.x - x, tp.y - y, tp.z - z
+    local du = dx * F.ux + dy * F.uy + dz * F.uz
+    dx, dy, dz = dx - F.ux * du, dy - F.uy * du, dz - F.uz * du
+    local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if d > 1e-3 then f = { x = dx / d, y = dy / d, z = dz / d } end
+  end
+  local fields = { pose = { kind = v.kind, x = x, y = y, z = z, f = f or false, lift = v.lift } }
+  -- `stand = ref`: where they get up (the record's point, 1 m over that
+  -- ground; crew_body settles it onto the floor)
+  local sp = v.stand and pos_of(v.stand)
+  if sp and sp.body == p.body then
+    local sl = math.sqrt(sp.x * sp.x + sp.y * sp.y + sp.z * sp.z)
+    if sl > 1e-6 then fields.x, fields.y, fields.z = sp.x * (sl + 1) / sl, sp.y * (sl + 1) / sl, sp.z * (sl + 1) / sl end
+  end
+  C.patch(id, fields)
+  -- (a body walking there stops: the pose is where it ends)
+  local cb = body_script("crew_body", id)
+  if cb and cb.steerStop then pcall(cb.steerStop) end
+  walks[id] = nil
+  return true
 end
 
 -- LIGHT AND TIME (PLAN §2 F4). In Stars mode the engine lights the ground
@@ -1013,7 +1092,9 @@ local function run_beat(b, e)
       return nil
     end
     local s = show_line(who, v.text or v[2], v.secs, v)
-    if v.wait ~= false then beat_busy = { kind = "line", t1 = now() + s.secs } end
+    -- (graveyard2) say.cross: the next line cuts in a second before this one
+    -- ends (one voice over another: "Kovac over Hana")
+    if v.wait ~= false then beat_busy = { kind = "line", t1 = now() + (v.cross and math.max(0.6, s.secs - 1.0) or s.secs) } end
   elseif k == "choice" then
     local s = speaker(v.who)
     local texts = {}
@@ -1073,7 +1154,14 @@ local function run_beat(b, e)
     if sid and ST then ST.remove(sid) end
   elseif k == "walk" then
     local id = who_id(v.who)
-    if id then walks[id] = { to = v.to, offset = v.offset, t1 = now() + (v.secs or 20), who = v.who, speed = v.speed } end
+    if id then
+      walks[id] = { to = v.to, offset = v.offset, t1 = now() + (v.secs or 20), who = v.who, speed = v.speed,
+                    near = v.near, face = v.face, pose = v.pose }
+      -- (graveyard2) wait = true: the story holds until they get there
+      if v.wait then beat_busy = { kind = "walk", id = id, t1 = now() + (v.secs or 20) + 0.5 } end
+      local C = ref("crew")
+      if C and C.patch then C.patch(id, { pose = false, gesture = false }) end
+    end
   elseif k == "give" then give(v)
   elseif k == "funds" then local co = ref("company"); if co then if v >= 0 then co.earn(v, "scenario") else co.spend(-v, "scenario") end end
   elseif k == "unlock" then local rs = ref("research"); if rs and rs.grant then rs.grant(v, "scenario") end
@@ -1098,6 +1186,9 @@ local function run_beat(b, e)
   -- FW-C
   elseif k == "face" then face_beat(v)
   elseif k == "look" then look_beat(v)
+  elseif k == "turn" then turn_beat(v)
+  elseif k == "pose" then pose_beat(v)
+  elseif k == "gesture" then gesture_beat(v)
   elseif k == "light" then light_beat(v)
   elseif k == "weather" then weather_beat(v)
   elseif k == "breaker" then breaker_beat(v)
@@ -1148,19 +1239,31 @@ local function walks_tick()
           if not w.cb then w.look_t = now() + 0.5 end
         end
         local cb = (not w.instant and now() <= w.t1) and w.cb or nil
-        if cb and cb.steerSelf and cb.steerSelf(p.body, x - b.x, y - b.y, z - b.z, { speed = w.speed }) then
+        -- (graveyard2) arrived is asked BEFORE the target is handed over again:
+        -- a steer after the stop starts a new walk and clears the flag, so
+        -- the walk never ended on arrival (only on its time-out)
+        if cb and w.steered and cb.arrived and cb.arrived() and not (cb.walking and cb.walking()) then
+          walks[id] = nil
+          if w.face then turn_member(id, w.face) end
+          if w.pose then local pz = {}; for k2, x2 in pairs(w.pose) do pz[k2] = x2 end; pz.who = w.who; pose_beat(pz) end
+        elseif cb and cb.steerSelf and cb.steerSelf(p.body, x - b.x, y - b.y, z - b.z, { speed = w.speed, arrive = w.near }) then
           w.steered = true
-          if cb.arrived and cb.arrived() then walks[id] = nil end
         elseif now() > w.t1 - (w.instant and w.t1 or 0) then
           local cb2 = w.steered and w.cb or nil
           if cb2 and cb2.steerStop then cb2.steerStop() end
           local far = true
           if cb2 and cb2.walkDist then local d = cb2.walkDist(p.body, x - b.x, y - b.y, z - b.z); far = d == nil or d > 2.0 end
-          if far or w.instant then
+          -- (graveyard2) a walk up to someone (near =) is never set down on
+          -- top of them; a set-down lands on a free spot, never in a wall
+          if (far or w.instant) and not w.near then
             local l = math.sqrt((x - b.x) ^ 2 + (y - b.y) ^ 2 + (z - b.z) ^ 2)
-            if C.setDown then C.setDown(id, b.x + (x - b.x) * (l + 0.5) / l, b.y + (y - b.y) * (l + 0.5) / l, b.z + (z - b.z) * (l + 0.5) / l) end
+            local sx, sy, sz = b.x + (x - b.x) * (l + 0.5) / l, b.y + (y - b.y) * (l + 0.5) / l, b.z + (z - b.z) * (l + 0.5) / l
+            if C.freeSpot then sx, sy, sz = C.freeSpot(sx, sy, sz) end
+            if C.setDown then C.setDown(id, sx, sy, sz) end
           end
           walks[id] = nil
+          if w.face then turn_member(id, w.face) end
+          if w.pose then local pz = {}; for k2, x2 in pairs(w.pose) do pz[k2] = x2 end; pz.who = w.who; pose_beat(pz) end
         end
       end
     end
@@ -1185,7 +1288,7 @@ function skipCutscene()
   if choice then local c = choice; choice = nil; apply_choice(c.opts[c.default or 1]) end
   for _, e in ipairs(run_now) do
     local k, v = next(e.b)
-    if k == "walk" then local id2 = who_id(v.who); if id2 then walks[id2] = { to = v.to, offset = v.offset, t1 = now(), instant = true } end
+    if k == "walk" then local id2 = who_id(v.who); if id2 then walks[id2] = { to = v.to, offset = v.offset, t1 = now(), instant = true, near = v.near, face = v.face, pose = v.pose, who = v.who } end
     else run_beat(e.b, { cs = nil }) end
   end
   for id2, w in pairs(walks) do w.t1 = now(); w.instant = true end
@@ -1209,6 +1312,7 @@ local function beats_tick()
     if not cut then camera_end() end
   end
   if line and not (beat_busy and beat_busy.kind == "line") and now() > line.t0 + line.secs + 0.5 then line = nil; bump() end
+  if beat_busy and beat_busy.kind == "walk" and not walks[beat_busy.id] then beat_busy = nil end
   if beat_busy then
     if beat_busy.kind == "choice" and now() >= beat_busy.t1 and choice then choose(choice.default or 1) end
     if beat_busy and now() < beat_busy.t1 then return end
@@ -1340,7 +1444,23 @@ local function base_ctx(b)
     local m = math.sqrt(vx * vx + vy * vy + vz * vz)
     if m > 1e-9 then sv = { x = vx / m, y = vy / m, z = vz / m } end
   end
-  return { R = l, u = u, t1 = t1, t2 = t2, ground = ground_of(b), sun = sd, vel = sv, clear = clear,
+  -- (graveyard2) the siting search asks the ground hundreds of times; on a
+  -- loaded machine it ran past the 2 s a script may run without returning
+  -- ("STAGING ERROR … a loop without an exit?", seen twice). Staging is a
+  -- coroutine: the ground query yields a frame every 8 calls, and the body
+  -- is read again after each yield (the planet moved: frames doc rule 1).
+  local g0 = ground_of(b)
+  local gq = 0
+  local function ground(dir)
+    gq = gq + 1
+    if gq % 8 == 0 and coroutine.isyieldable and coroutine.isyieldable() then
+      coroutine.yield()
+      local nb = space.body(b.name or "")
+      if nb then b.x, b.y, b.z = nb.x, nb.y, nb.z end
+    end
+    return g0(dir)
+  end
+  return { R = l, u = u, t1 = t1, t2 = t2, ground = ground, sun = sd, vel = sv, clear = clear,
            wet = function(dir, r)
              if not (cl and cl.isUnderwater) then return false end
              return cl.isUnderwater(b.x + dir.x * r, b.y + dir.y * r + 0.5, b.z + dir.z * r) == true
@@ -1375,6 +1495,8 @@ local function stage_crew(list, out)
       map[c.name] = id
       C.rename(id, c.name)
       if c.role then C.patch(id, { role = c.role }) end
+      -- (graveyard2) what they are, in words: the strip, the picker, the tag
+      C.patch(id, { title = type(c.title) == "string" and c.title or false })
       -- FW-C: a cast `look` seed pins this member's face (else the generator's, random)
       local CF = ref("crew_faces")
       for _, cc in pairs((sc and sc.cast) or {}) do
@@ -1535,8 +1657,18 @@ local function stage_posts(list, out)
           a.vx, a.vy, a.vz = 0, 0, 0
           coroutine.yield()
         end
+        -- (graveyard2) the player's view turned to their post's `face` (a
+        -- direction: planet_camera flattens it onto the ground next frame)
+        local fp = c.face and pos_of(c.face)
+        local pc = ref("planet_camera")
+        if fp and fp.body == g.body and pc and pc.face then
+          pcall(pc.face, fp.x - g.x, fp.y - g.y, fp.z - g.z, 0)
+        end
       elseif C and C.setDown then
         C.setDown(id, b.x + g.x * k, b.y + g.y * k, b.z + g.z * k)
+        -- (graveyard2) the way they face at their post (`face = ref`);
+        -- without one crew_body turns them to the most open way
+        if c.face then turn_member(id, c.face) else C.patch(id, { face = false }) end
       end
       out[#out + 1] = string.format("post %s: %s", c.name, tostring(c.post))
     end
@@ -1825,6 +1957,12 @@ local function stage_all()
     local i = rulebook().stepIndex(sc, cp)
     local s = i and sc.steps[i]
     if s and s.stage then stage_table(s.stage, out) end
+    -- (graveyard2) and its `beats`, run at once over the restaged world (a
+    -- crew member back in her bunk: a pose; where someone stands: a turn)
+    for _, b in ipairs((s and s.stage and s.stage.beats) or {}) do
+      local okb, err = pcall(run_beat, b, { cs = nil })
+      if not okb then out[#out + 1] = "stage beat: " .. tostring(err) end
+    end
     sset("scn.retryFrom", false)
     retried = true      -- (a return to a checkpoint goes straight back in: no briefing)
   end
@@ -1846,6 +1984,16 @@ end
 local function set_phase(p)
   if phase == p then return end
   phase = p
+  -- (interaction plan B3) a run that ends or is abandoned mid-shot never
+  -- leaves planet_camera.cinematic set: that blocks every right-click menu
+  -- (context_menu.blocked) until the next camera_end. A shot with
+  -- `wait = false` whose sequence ends in a finish before its t1 did.
+  if p == "done" or p == "failed" or p == "freeplay" then
+    pcall(cut_end)
+    pcall(camera_end)
+    local pc = ref("planet_camera")
+    if pc and pc.cinematic and pc.setCinematic then pcall(pc.setCinematic, false) end
+  end
   bump()
   say_log("phase " .. tostring(p))
   emit("phase", p, state())
@@ -2210,6 +2358,11 @@ local function evaluate()
       mem["ev:" .. key] = mem["ev:" .. key] or {}
       local c2 = { done = done, t0 = ctx.t0, now = t, stepAt = ctx.stepAt, stepT0 = cur and step_t0[sc.steps[cur].id] or nil }
       local hit = R_.evalGoal(ev.when, W, mem["ev:" .. key], c2)
+      -- (graveyard2) `also`: a second condition that must hold too
+      if hit and ev.also then
+        mem["ev2:" .. key] = mem["ev2:" .. key] or {}
+        hit = R_.evalGoal(ev.also, W, mem["ev2:" .. key], c2)
+      end
       if hit then
         fired[key] = t
         sset("scn.ev", fired)
@@ -2254,6 +2407,7 @@ local function build_state()
     line = line, choice = choice and { who = choice.who, name = choice.name, color = choice.color, tag = choice.tag, portrait = choice.portrait, prompt = choice.prompt,
                                       options = choice.options, t0 = choice.t0, timeout = choice.timeout } or nil,
     cutscene = cut ~= nil, letterbox = cut ~= nil, alarm = alarm_on, vars = vars(),
+    hintFlash = (now() - (hintFlashT or -100)) < 2.5 or nil, hasHint = (s and s.hint) and true or nil,
   }
   local ob = sget("scn.obj") or {}
   if s and ob[s.id] then st.stepText = ob[s.id] elseif s and s.objective then st.stepText = s.objective end
@@ -2407,16 +2561,30 @@ function completeStep()
   last_eval = -1
   return s.id
 end
+-- HINT (interact PLAN §6, S7; Ty 2026-11-10 "hint button does nothing"):
+-- → ok, why, text. The first press shows the step's hint (and counts it), a
+-- second shows hint2 when there is one, any later press shows it again; the
+-- card's hint row is lit for a moment (state().hintFlash) and the caller
+-- toasts `text`. No hint on this step: false, "no hint for this step", and
+-- the step's own text to read again.
+hintFlashT = -100
 function hint()
+  if not (active and sc) or phase ~= "running" then return false, "no scenario step open" end
   local _, cur = rulebook().openSteps(sc, done_tbl())
   local s = cur and sc.steps[cur]
-  if not (s and s.hint) then return false end
+  if not s then return false, "no scenario step open" end
+  if not s.hint then
+    local ob = sget("scn.obj") or {}
+    return false, "no hint for this step", ob[s.id] or s.objective or s.text
+  end
   if not hint_shown[s.id] then
     hint_shown[s.id] = 1
     sset("scn.hints", (tonumber(sget("scn.hints")) or 0) + 1)
-  elseif s.hint2 then hint_shown[s.id] = 2 end
+  elseif s.hint2 and hint_shown[s.id] == 1 then hint_shown[s.id] = 2 end
+  hintFlashT = now()
   bump()
-  return true
+  local txt = (hint_shown[s.id] == 2 and s.hint2) and (s.hint .. " " .. s.hint2) or s.hint
+  return true, nil, txt
 end
 function goalKind(k, def) rulebook().KINDS[k] = def end
 function holdCurtain() return active == true and (phase == "loading" or phase == "staging") end
@@ -2628,7 +2796,14 @@ function capturePortrait(id, opts, cb)
     if okv and down then visor0 = true; pcall(su.setVisor, false) end
   end
   local hidden = {}
-  for _, h in ipairs(find_named(n, opts.noHelmet and { Helmet = true } or HIDE_FOR_PORTRAIT, {}, 0)) do
+  -- (graveyard2, FW-C follow-up) the player's own picture was taken through
+  -- the helmet's glass, and its reflection band crossed the face: for the
+  -- member you control the whole bubble is off for the picture
+  local hide = HIDE_FOR_PORTRAIT
+  if opts.noHelmet or (C_ and id == (C_.activeId and C_.activeId())) then
+    hide = { Helmet = true, ["Helmet Visor"] = true, ["Helmet Lamps"] = true }
+  end
+  for _, h in ipairs(find_named(n, hide, {}, 0)) do
     if h.visible ~= false then h.visible = false; hidden[#hidden + 1] = h end
   end
   pcam = { target = n, id = id, making = true, fc = fc, w0 = wall(), hidden = hidden, f0 = wall(), dist = opts.dist }
@@ -2665,6 +2840,12 @@ local function portrait_job()
   for _, k in ipairs(keys) do
     local c = sc.cast[k]
     local id = member_id(c.crew)
+    -- (graveyard2) never the member you control: in first person their head
+    -- is not drawn (the picture was the wall behind it), and through the
+    -- helmet's glass the reflection crossed the face. They keep the booth's
+    -- picture (tools/perf/portraitbooth.sh takes it from their body).
+    local C_ = ref("crew")
+    if id and C_ and C_.activeId and C_.activeId() == id then id = nil end
     -- a quiet moment: no cutscene (its looks and walks turn heads), not walking
     local t1q = wall() + 60
     while wall() < t1q do

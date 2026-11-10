@@ -226,11 +226,33 @@ end
 -- ── doors ───────────────────────────────────────────────────────────────────
 function doorOpen(sid, uid) local e = E[key(sid, uid)]; return e and e.open or nil end
 local SND = { open = "audio/foley/servo_short.ogg", heavy = "audio/foley/servo_run.ogg", seal = "audio/foley/hiss_seal.ogg" }
+-- (graveyard2) a crew member WALKING (crew_body's steer: a scenario walk, a
+-- step aside) opens doors too: their walking point, body-relative, placed
+-- against this frame's body (frames doc rule 1). The walkers are looked up
+-- four times a second, not a scene walk a frame.
+local walkers, walkers_t = {}, -1
+local function walker_points(out)
+  local t = now()
+  if t - walkers_t >= 0.25 then
+    walkers_t = t
+    walkers = {}
+    for _, s in ipairs(findScripts and findScripts("crew_body") or {}) do
+      if s.doll ~= true and s.walking and s.walking() then walkers[#walkers + 1] = s end
+    end
+  end
+  for _, s in ipairs(walkers) do
+    local bn, x, y, z = nil, nil, nil, nil
+    if s.walkPoint then bn, x, y, z = s.walkPoint() end
+    local b = bn and space and space.body and space.body(bn)
+    if b then out[#out + 1] = { x = b.x + x, y = b.y + y, z = b.z + z } end
+  end
+end
 local function crew_points()
   local out = {}
   local a = find and find("Astronaut")
   local pw = ref("planet_walker")
   if valid(a) and (not pw or pw.onFoot ~= false) then out[#out + 1] = a end
+  walker_points(out)
   return out
 end
 local function step_door(e, dt, pts)
@@ -704,14 +726,19 @@ function update(node, dt)
       if not valid(e.node) then E[k] = nil
       elseif a then
         local d
-        if e.px and e.b then
-          local bb = bodies[e.b]
-          if bb == nil then bb = (space and space.body and space.body(e.b)) or false; bodies[e.b] = bb end
-          if bb then d = math.sqrt((bb.x + e.px - a.x) ^ 2 + (bb.y + e.py - a.y) ^ 2 + (bb.z + e.pz - a.z) ^ 2) end
-        end
-        if not d then
-          local w = e.node.worldPos
-          d = math.sqrt((w.x - a.x) ^ 2 + (w.y - a.y) ^ 2 + (w.z - a.z) ^ 2)
+        -- (the nearest of the crew points: the Astronaut, a walking body)
+        for _, q in ipairs(pts) do
+          local dq
+          if e.px and e.b then
+            local bb = bodies[e.b]
+            if bb == nil then bb = (space and space.body and space.body(e.b)) or false; bodies[e.b] = bb end
+            if bb then dq = math.sqrt((bb.x + e.px - q.x) ^ 2 + (bb.y + e.py - q.y) ^ 2 + (bb.z + e.pz - q.z) ^ 2) end
+          end
+          if not dq then
+            local w = e.node.worldPos
+            dq = math.sqrt((w.x - q.x) ^ 2 + (w.y - q.y) ^ 2 + (w.z - q.z) ^ 2)
+          end
+          if not d or dq < d then d = dq end
         end
         -- (S8: a door a signal holds open is stepped wherever the crew is)
         local held = false

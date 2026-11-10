@@ -202,6 +202,82 @@ local function chip(i, c, flash)
              text = c[1] } }
 end
 
+-- (graveyard2, Ty 2026-11-10: "no indicators for what roles everyone has")
+-- THE TAG: look at a crew member within 8 m and their name and role show
+-- under the crosshair ("DANA KOWALCZYK · ENGINEER · GOING OFF SHIFT"). A
+-- ray down the view ten times a second; the tag stays 0.4 s after the ray
+-- leaves them, so it does not blink at an edge.
+TAG_RANGE, TAG_EVERY, TAG_HOLD = 8.0, 0.1, 0.4
+tagNow = nil                 -- { id, name, title } (probes)
+local tag_t, tag_seen = -1, -1
+local function tag_tick(C, pc)
+  local t = time or 0
+  if t - tag_t < TAG_EVERY then
+    if tagNow and t - tag_seen > TAG_HOLD then tagNow = nil end
+    return tagNow
+  end
+  tag_t = t
+  local pw = ref("planet_walker")
+  if not (raycast and pc and pc.fwd_x and pw and pw.onFoot) then tagNow = nil return nil end
+  local a = find and find("Astronaut")
+  -- Who is under the crosshair: of the bodies on foot (crew.bodyNodes, a
+  -- handful), the nearest whose capsule (knees to head) the view's line
+  -- passes within 0.4 m of, up to 8 m past the player, with nothing standing
+  -- between (one ray to it). A single ray down the view missed a capsule at
+  -- an edge and, from a third-person camera behind a wall, met the wall first.
+  local cx, cy, cz = pc.cam_x, pc.cam_y, pc.cam_z
+  local fx, fy, fz = pc.fwd_x, pc.fwd_y, pc.fwd_z
+  local s0 = 0
+  if a then s0 = math.max(0, (a.x - cx) * fx + (a.y - cy) * fy + (a.z - cz) * fz) end
+  local dom = space.dominant and space.dominant(cx, cy, cz)
+  local pb = dom and space.body(dom)
+  local n, best = nil, math.huge
+  tagRay = "none"
+  for _, bn in pairs((pb and C.bodyNodes) and C.bodyNodes() or {}) do
+    if bn and bn.valid ~= false then
+      local p = bn.worldPos or bn
+      local ux, uy, uz = p.x - pb.x, p.y - pb.y, p.z - pb.z
+      local ul = math.sqrt(ux * ux + uy * uy + uz * uz)
+      ux, uy, uz = ux / ul, uy / ul, uz / ul
+      local near_off, near_along, near_d = math.huge, 0, 0
+      for _, hgt in ipairs({ -0.45, 0.0, 0.4, 0.75 }) do
+        local qx, qy, qz = p.x + ux * hgt - cx, p.y + uy * hgt - cy, p.z + uz * hgt - cz
+        local along = qx * fx + qy * fy + qz * fz
+        local ox, oy, oz = qx - fx * along, qy - fy * along, qz - fz * along
+        local off = math.sqrt(ox * ox + oy * oy + oz * oz)
+        if off < near_off then near_off, near_along, near_d = off, along, math.sqrt(qx * qx + qy * qy + qz * qz) end
+      end
+      if near_off < 0.4 and near_along > s0 and near_along < s0 + TAG_RANGE and near_along < best then
+        -- a line to it: nothing nearer in the way (walls, consoles)
+        local vx, vy, vz = p.x + ux * 0.4 - cx, p.y + uy * 0.4 - cy, p.z + uz * 0.4 - cz
+        local d = math.sqrt(vx * vx + vy * vy + vz * vz)
+        local ok, h = pcall(raycast, cx, cy, cz, vx / d, vy / d, vz / d, d, { ignore = a and { a, bn } or { bn }, ignoreChildren = true })
+        local blocked = ok and h and h.distance and h.distance < d - 0.45 and h.distance > s0 + 0.3
+        tagRay = blocked and tostring(h.node and h.node.name or "terrain") or "clear"
+        if not blocked then n, best = bn, near_along end
+      end
+    end
+  end
+  if n and n.name == "CrewBody" and C.memberOfNode then
+    local id = C.memberOfNode(n)
+    local r = id and C.get(id)
+    if r then
+      -- (in a scenario the cast's full name: "Dana Kowalczyk", not the record's "Kowalczyk")
+      local nm = r.name
+      local sr = ref("scenario_run")
+      if sr and sr.isActive and sr.isActive() and sr.speakerOf then
+        local ok2, sp = pcall(sr.speakerOf, r.name)
+        if ok2 and type(sp) == "table" and sp.name then nm = sp.name end
+      end
+      tagNow = { id = id, name = nm, rec = r.name, title = C.roleTitle and C.roleTitle(id) or nil }
+      tag_seen = t
+      return tagNow
+    end
+  end
+  if tagNow and t - tag_seen > TAG_HOLD then tagNow = nil end
+  return tagNow
+end
+
 function lateUpdate(node, dt)
   if not el then el = node:getcomponent("UiElement") end
   if not el then return end
@@ -230,11 +306,22 @@ function lateUpdate(node, dt)
   dim = dim + (want - dim) * math.min(1, dt * (want > dim and 0.6 or 3.0))
   hud.chips, hud.dim = #chips, dim
   local cine = pc and (pc.cinematic or pc.freecam)
-  if (#chips == 0 and dim < 0.01) or cine then
+  local tg = (C and not cine) and tag_tick(C, pc) or nil
+  if (#chips == 0 and dim < 0.01 and not tg) or cine then
+    S.made_key = nil
     if el.visible then el.visible = false end
     return
   end
   if not el.visible then el.visible = true end
+  -- (a tag alone, or steady chips: described again only when they change)
+  local still = dim <= 0.01
+  for _, c in ipairs(chips) do if c[2] == "danger" or c[1] == "O2 1 MIN" or c[1] == "PINNED" or c[1]:find("^HIT") then still = false end end
+  if still then
+    local k = (tg and (tostring(tg.name) .. "|" .. tostring(tg.title)) or "") .. "#"
+    for _, c in ipairs(chips) do k = k .. c[1] .. c[2] .. ";" end
+    if k == S.made_key then return end
+    S.made_key = k
+  else S.made_key = nil end
   local root = { "box", key = "alerts", pin = "center", w = "100%", h = "100%" }
   if dim > 0.01 then
     root[#root + 1] = { "box", key = "dim", style = "load/backdrop", pin = "center", w = "100%", h = "100%", opacity = dim }
@@ -257,5 +344,10 @@ function lateUpdate(node, dt)
     row[#row + 1] = chip(i, c, flash)
   end
   root[#root + 1] = row
+  if tg then
+    root[#root + 1] = { "col", key = "tag", style = "hud/chip", pin = "center", y = 64, w = "fit", h = "fit", pad = 6, gap = 1, align = "center",
+      { "text", key = "tn", style = "hud/chipValue", w = "fit", h = "fit", text = string.upper(tostring(tg.name or "")) },
+      tg.title and { "text", key = "tr", style = "hud/chipLabel", w = "fit", h = "fit", text = string.upper(tg.title) } or nil }
+  end
   ui.make(node, root)
 end
