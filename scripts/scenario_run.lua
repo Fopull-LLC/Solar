@@ -301,8 +301,15 @@ function W.reactor(sid)
   local o = e.o or {}
   local aux = 0
   for _, v in pairs(e.aux or {}) do aux = aux + v end
+  local RX = ref("reactor")
+  local I = RX and RX.IDX or {}
   return { power = o.P or 0, fuelK = o.Tf, primaryK = o.Tp, flow = o.mpe, scrammed = e.S.scram == true, melted = e.S.melt == true,
-           netKW = (o.Pe or 0) / 1000 - aux, key = RP.keyOf and RP.keyOf(e.sid, e.uid) }
+           netKW = (o.Pe or 0) / 1000 - aux, key = RP.keyOf and RP.keyOf(e.sid, e.uid),
+           -- (flagship) the rest of what the console shows
+           genKW = (o.Pe or 0) / 1000, inventory = I.inv and e.S.y[I.inv] or 1, damage = I.dmg and e.S.y[I.dmg] or 0,
+           protection = e.S.prot ~= false, setpoint = e.S.set, mode = e.S.mode, cause = e.S.cause,
+           turbine = e.turbOn ~= false, cooldown = e.S.cooldown == true, breaks = #(e.breaks or {}), coreKW = (o.Qcore or 0) / 1000,
+           rods = o.x, steamK = o.Ts, condK = o.Tk }
 end
 W.now = agency_now
 worldAdapter = W
@@ -555,6 +562,7 @@ local function knock(t)
   local r = ST.get(sid)
   -- the X8 look (a Repair Kit's "repair" puts it back: ruins.repairPiece)
   p.wr = true
+  p.wrl, p.wrs = t.label, t.secs     -- (flagship) the repair's words and seconds
   p.o_p = p.o_p or p.pitch or 0
   p.pitch = (p.pitch or 0) + (t.lean or 0.12)
   ST.put(r)
@@ -565,8 +573,25 @@ local function knock(t)
 end
 W.pieceOk = function(t) local sid, uid, p = piece_of(t); if not sid then return nil end return not p.wr end
 
+-- (flagship) a `reactor` beat: { struct, scram, reset, startup = set, setpoint,
+-- protection, turbine, cooldown, pump = { part|uid, on } } on the plant of struct
+function reactor_beat(v)
+  local RP = ref("reactor_plant")
+  local sid = struct_id(tostring(v.struct or ""):gsub("^struct:", ""))
+  local e = sid and RP and RP.plantOfPart and RP.plantOfPart(sid)
+  if not e then say_log("reactor: no plant in " .. tostring(v.struct)); return end
+  local key = RP.keyOf(e.sid, e.uid)
+  if v.reset then RP.resetTrip(key) end
+  if v.scram then RP.scram(key) end
+  if v.startup then RP.startUp(key, v.startup) end
+  if v.setpoint then RP.setPoint(key, v.setpoint) end
+  if v.protection ~= nil then RP.setProtection(key, v.protection) end
+  if v.turbine ~= nil then RP.setTurbine(key, v.turbine) end
+  if v.cooldown ~= nil then RP.setCooldown(key, v.cooldown) end
+end
+
 -- beats that change the world: a skipped cutscene still runs these
-WORLD_BEATS = { knock = true, state = true, power = true, var = true, add = true, spawn = true, remove = true, walk = true,
+WORLD_BEATS = { reactor = true, knock = true, state = true, power = true, var = true, add = true, spawn = true, remove = true, walk = true,
                 give = true, funds = true, unlock = true, mark = true, ["goto"] = true, objective = true, branch = true,
                 run = true, alarm = true, fail = true, done = true, hook = true }
 local stage_one        -- set by the staging section: (kind, entry, out)
@@ -650,6 +675,7 @@ local function run_beat(b, e)
     sset("scn.obj", o)
     bump()
   elseif k == "knock" then knock(v)
+  elseif k == "reactor" then reactor_beat(v)
   elseif k == "state" then
     local sid, uid = piece_of(v)
     local ST = ref("structures")
@@ -895,7 +921,20 @@ local function base_ctx(b)
     end
     return true
   end
-  return { R = l, u = u, t1 = t1, t2 = t2, ground = ground_of(b), sun = sd, clear = clear,
+  -- (flagship) the world's velocity round its star (the body nearest the sun
+  -- point): a spot facing along it is turning into the night
+  local sv = nil
+  if sun then
+    local best, bd = nil, math.huge
+    for _, q in ipairs(space.bodies() or {}) do
+      local d = (q.x - sun.x) ^ 2 + (q.y - sun.y) ^ 2 + (q.z - sun.z) ^ 2
+      if d < bd then best, bd = q, d end
+    end
+    local vx, vy, vz = (b.vx or 0) - (best and best.vx or 0), (b.vy or 0) - (best and best.vy or 0), (b.vz or 0) - (best and best.vz or 0)
+    local m = math.sqrt(vx * vx + vy * vy + vz * vz)
+    if m > 1e-9 then sv = { x = vx / m, y = vy / m, z = vz / m } end
+  end
+  return { R = l, u = u, t1 = t1, t2 = t2, ground = ground_of(b), sun = sd, vel = sv, clear = clear,
            wet = function(dir, r)
              if not (cl and cl.isUnderwater) then return false end
              return cl.isUnderwater(b.x + dir.x * r, b.y + dir.y * r + 0.5, b.z + dir.z * r) == true
@@ -1235,6 +1274,86 @@ end
 
 -- One start-like table, staged in order. (The checkpoint fallback stages a
 -- step's `stage` table with this too.)
+-- (flagship) PLANTS: { struct, fuel = { item, n }, power, days, scramFor (s),
+-- standby = set, hold (s), protection, turbine, fill = { { uid | part, kg } } }: the channels loaded, then a
+-- history run through the plant's own catch-up (as a load after an absence):
+-- days at `power`, a SCRAM, scramFor s tripped, then the start-up to the
+-- standby setpoint held `hold` s. The xenon, the decay heat and the trend are
+-- the history's.
+local function plant_skip(RP, e, secs, out)
+  e.t = (e.t or agency_now()) - secs
+  local t1 = wall() + 60
+  while wall() < t1 do
+    if agency_now() - (e.t or 0) < 1 then return true end
+    coroutine.yield()
+  end
+  out[#out + 1] = string.format("plant catch-up ran out (%.0f s behind)", agency_now() - (e.t or 0))
+  return false
+end
+function stage_plants(list, out)
+  local RP, ST = ref("reactor_plant"), ref("structures")
+  if not (RP and ST) then return end
+  for _, p in ipairs(list or {}) do
+    local sid = struct_id(tostring(p.struct or ""):gsub("^struct:", ""))
+    local rec = sid and ST.get(sid)
+    local e
+    local t1 = wall() + 10
+    while rec and wall() < t1 do
+      e = RP.plantOfPart(sid)
+      if e and e.M then break end
+      coroutine.yield()
+    end
+    if not (e and e.M) then out[#out + 1] = "plant " .. tostring(p.struct) .. ": no plant found"; return end
+    local n = 0
+    if p.fuel then
+      for _, q in ipairs(rec.bp) do
+        if tostring(q.id):match("^fuelChannel") then n = n + (RP.loadRods(sid, q.uid, p.fuel.item or "fuelRod", p.fuel.n or 8) or 0) end
+      end
+    end
+    frames(2)
+    e = RP.plantOfPart(sid)
+    local key = RP.keyOf(e.sid, e.uid)
+    if p.power and p.days then
+      RP.startUp(key, p.power)
+      plant_skip(RP, e, p.days * 86400, out)
+    end
+    if p.scramFor then RP.scram(key); frames(1); plant_skip(RP, e, p.scramFor, out); RP.resetTrip(key) end
+    if p.standby then RP.startUp(key, p.standby); plant_skip(RP, e, p.hold or 600, out) end
+    if p.protection ~= nil then RP.setProtection(key, p.protection) end
+    if p.turbine ~= nil then RP.setTurbine(key, p.turbine) end
+    -- fill = { { uid | part, kg } }: tanks of the structure's fluid networks filled
+    local FN = ref("fluid_net")
+    for _, f in ipairs(p.fill or {}) do
+      local fs, fu = piece_of({ struct = p.struct, part = f.part, uid = f.uid })
+      local ok = false
+      local t2 = wall() + 5
+      while fs and FN and FN.setContent and wall() < t2 do
+        ok = FN.setContent(fs, fu, f.kg or 1e9)
+        if ok then break end
+        coroutine.yield()
+      end
+      out[#out + 1] = string.format("fill %s: %s", tostring(fu), ok and "full" or "no tank")
+    end
+    if RP.saveNow then pcall(RP.saveNow) end
+    local o = e.o or {}
+    out[#out + 1] = string.format("plant %s: %d rods, P %.3f, fuel %.0f K, primary %.0f K", tostring(p.struct), n, o.P or -1, o.Tf or 0, o.Tp or 0)
+  end
+end
+-- WIRES: { struct, from = { uid | part, pin }, to = { uid | part, pin } }: a
+-- Signal Cable laid free between two pins (logic_net.layWire)
+function stage_wires(list, out)
+  local LN = ref("logic_net")
+  if not (LN and LN.layWire) then return end
+  for _, w in ipairs(list or {}) do
+    local sa, ua = piece_of({ struct = w.struct, part = w.from.part, uid = w.from.uid })
+    local sb, ub = piece_of({ struct = w.struct, part = w.to.part, uid = w.to.uid })
+    if sa and sb then
+      local id = LN.layWire({ sid = sa, uid = ua, pin = w.from.pin }, { sid = sb, uid = ub, pin = w.to.pin }, { ground = false, free = true, noHistory = true })
+      out[#out + 1] = string.format("wire %s.%s → %s.%s: %s", tostring(ua), w.from.pin, tostring(ub), w.to.pin, tostring(id))
+    end
+  end
+end
+
 local function stage_table(st, out)
   local co, rs = ref("company"), ref("research")
   if st.funds then set_funds(st.funds) end
@@ -1248,6 +1367,8 @@ local function stage_table(st, out)
   stage_marks(st.marks, out, true)
   stage_posts(st.crew, out)
   stage_lived_in(out)
+  stage_plants(st.plants, out)
+  stage_wires(st.wires, out)
   stage_crates(st.crates, out)
   stage_flags(st.flags, out)
   stage_survey(st.survey, out)
@@ -1339,6 +1460,29 @@ local function call_hook(name, ...)
 end
 hooks_api = function()
   return {
+    reactor = function(struct)
+      local sid = struct_id(tostring(struct or ""):gsub("^struct:", ""))
+      local r = sid and W.reactor(sid)
+      if not r then return nil end
+      local c = {}
+      for k, v in pairs(r) do c[k] = v end
+      return c
+    end,
+    piece = function(struct, part)
+      local sid, uid, p = piece_of({ struct = struct, part = type(part) == "string" and part or nil, uid = type(part) == "number" and part or nil })
+      if not sid then return nil end
+      local ST, RP = ref("structures"), ref("reactor_plant")
+      local st = ST and ST.partState and ST.partState(sid, uid) or {}
+      local c = { id = p.id, uid = uid, knocked = p.wr == true }
+      for k, v in pairs(st) do if type(v) ~= "table" then c[k] = v end end
+      if RP and RP.plantOfPart and RP.plantOfPart(sid, uid) and RP.pumpOn then c.pumpOn = RP.pumpOn(sid, uid) end
+      return c
+    end,
+    dose = function(who)
+      local C = ref("crew")
+      local id = member_id(tostring(who or ""):gsub("^crew:", ""))
+      return (C and id and C.doseOf) and C.doseOf(id) or 0
+    end,
     say = function(who, text) queue_beats({ { say = { who = who, text = text } } }, "hook") end,
     run = function(seq) run_seq(seq, false) end,
     beat = function(b) queue_beats({ b }, "hook") end,
@@ -1426,7 +1570,7 @@ local function stats_now()
   local safe = not W.crewDead(nil)
   return { secs = agency_now() - t0, spent = math.max(0, (tonumber(sget("scn.f0")) or 0) - (co and co.balance() or 0)),
            hints = tonumber(sget("scn.hints")) or 0, pieces = math.max(0, pieces - (tonumber(sget("scn.p0")) or pieces)),
-           crewSafe = safe }
+           crewSafe = safe, vars = vars() }
 end
 statsNow = stats_now
 
@@ -1513,6 +1657,7 @@ local function evaluate()
     end
     if s.hint2 and hint_shown[s.id] == 1 and t - (progress_t[s.id] or t) >= R_.HINT2_SECS then hint_shown[s.id] = 2; bump() end
   end
+  call_hook("tick", t)
   -- the scripted events
   local fired = sget("scn.ev") or {}
   for i, ev in ipairs(sc.events or {}) do
@@ -1777,10 +1922,45 @@ function start(node)
   decide()
 end
 
+-- (flagship) the right-click row on a knocked piece of any structure that is
+-- not a ruin (ruins.lua has its own): repaired with a Repair Kit from the pack
+local function repair_provider(t, ctx)
+  if not (active and t and t.node) then return {} end
+  local ST, RU, inv = ref("structures"), ref("ruins"), ref("inventory")
+  if not (ST and ST.partOfNode and RU and RU.repairPiece) then return {} end
+  local rec, part = ST.partOfNode(t.node)
+  if not (rec and part and part.wr and not rec.ru) then return {} end
+  local pack = (ctx and ctx.actor and ctx.actor.pack) or "astro"
+  local pb = ref("parts_base")
+  local d = pb and pb.partInfo(part.id)
+  local label = part.wrl or ("Repair the " .. ((d and d.label) or tostring(part.id)))
+  local secs = tonumber(part.wrs) or 8
+  local function near()
+    local CP = ref("context_providers")
+    if CP and CP.actorReach then return CP.actorReach(ctx, t, 1.5) ~= nil end
+    return true
+  end
+  return { { id = "scn_fix", type = "action", group = "Repair", label = label, hint = string.format("Repair Kit · %d s", secs),
+    enabled = function() return inv and (inv.itemCount(pack, "repairkit") or 0) > 0 and near() end,
+    why = function() return near() and "needs a Repair Kit in the pack" or "come closer" end,
+    job = { secs = secs, label = label, check = function() return near(), "walked away" end,
+      done = function()
+        if inv and inv.removeItem then inv.removeItem(pack, "repairkit", 1) end
+        local ok = RU.repairPiece(rec.id, part.uid)
+        if ok then emit("repair", rec.id, part.uid) end
+        return ok, nil
+      end } } }, "Repair", nil
+end
+local repair_reg = false
+
 function update(node, dt)
   node_ref = node
   if active == false then return end
   if active == nil and not decide() then return end
+  if not repair_reg then
+    local reg = ref("context_registry")
+    if reg and reg.register then reg.register("prop", repair_provider, { id = "scn_repair", order = 4 }); repair_reg = true end
+  end
   if phase == "loading" then
     local gm, bf = ref("game_manager"), ref("base_facilities")
     if gm and not gm.loading and bf and bf.sited and not (bf.grading and bf.grading()) then

@@ -74,6 +74,8 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 | `crates = { { at, offset, parts = { ["wall.steel"] = 6 }, items = { repairkit = 1 }, name } }` | A "Supply drop" crate of crated parts that an Engineer builds from. |
 | `flags`, `survey` | A flag planted (deployables), survey layers credited. |
 | `craft = { { file = "<id>/lander.json", name, where = { pad } \| { runway } \| { orbit = { body = "moon", alt, e, inc } } \| { ground = ref, offset }, control = false } }` | VAB launch-format JSON. `orbit` makes a station or a drone; `ground` makes a landed craft. |
+| `plants = { { struct, fuel = { item, n }, power, days, scramFor, standby, hold, protection, turbine, fill = { { uid \| part, kg } } } }` | A reactor plant in a staged structure, with a past: every fuel channel loaded, then `days` at `power` run through the plant's own catch-up (so the xenon, the decay heat and the trend are real), a SCRAM held `scramFor` s, a start-up to `standby` held `hold` s; then the protection and the turbine set, and tanks of its fluid networks filled. Graveyard Shift's plant: twenty days at 60 %, parked at 2 % with the trips bypassed. |
+| `wires = { { struct, from = { uid \| part, pin }, to = { uid \| part, pin } } }` | Signal Cables laid between two pins (logic_net), so a base's alarms and interlocks are live from the start: a console's `tripped` to an Alarm Beacon's `IN`. Blueprint pieces keep their order, so a piece's uid is its line in the blueprint. |
 
 ## 4. Steps and goals
 
@@ -189,6 +191,15 @@ When data is not enough, a game scenario may name hooks: `hooks = "scn_<id>_hook
 - under luajit, `scenario.load` loads the script from disk.
 
 Every hook gets a small `api` and should use nothing else: `say`, `run`, `beat`, `var`, `setVar`, `done`, `goto`, `fail`, `finish`, `pos` (body-relative), `dist`, `now`, `log`.
+
+It may also READ (copies, never handles): `reactor(struct)` (the console's numbers: power, fuelK, primaryK, flow, inventory, damage, protection, setpoint, mode, scrammed, melted, turbine, genKW, netKW, coreKW, breaks…), `piece(struct, part | uid)` (the piece's part state, `knocked`, and a reactor pump's `pumpOn`) and `dose(who)` (the share of a lethal dose taken). A `tick(api, t)` global runs with the goals, 4 Hz on the agency clock: meters, peaks and models of things the systems don't simulate (Graveyard Shift's pump bearing) live there.
+
+More for game scenarios (all data):
+- the `reactor` beat: `{ struct, scram, reset, startup = set, setpoint, protection, turbine, cooldown }`;
+- `knock = { …, label, secs }`: the repair row's words and time; a knocked piece of any structure (not only a ruin's) gets a Repair-Kit row while a scenario runs;
+- the `core_melted` fail kind: `{ kind = "core_melted", struct, text }`;
+- the siting rule `far_flat_dark`: flat ground with the sun down (a world's day is its year: the light still moves);
+- `score.rows = { { label, var, fmt, par, lte | gte } }` and medal criteria `vars = { name = { lte | gte | is } }`: the debrief and the medal read the run's variables.
 
 A player's scenario under `user://` cannot carry hooks. It is refused with a reason, because mods are data only. Everything a mod needs is in the beats and goals.
 

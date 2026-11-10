@@ -431,7 +431,14 @@ local function best_of(C, cands, wantLit)
       local clear = not C.clear or C.clear(dir, g0)
       if n >= 7 and not wet and clear then
         local lit = lit_of(C, dir)
-        local score = spread + ((wantLit and lit <= 0.25) and 2.0 or 0)
+        local score = spread + ((wantLit == true and lit <= 0.25) and 2.0 or 0)
+        if wantLit == "dark" then
+          -- (flagship) a world's day is its year, and short (half an hour on
+          -- small worlds): the longest night ahead is at sunset (the sun on
+          -- the horizon, the spot turning away from it along the world's motion)
+          local turning = C.vel and (dir.x * C.vel.x + dir.y * C.vel.y + dir.z * C.vel.z) or 0
+          score = score + ((lit >= 0.15) and 4.0 or 0) + math.abs(lit - 0.04) * 3 + ((C.vel and turning <= 0.1) and 3.0 or 0)
+        end
         if not best or score < best.score then best = { dir = dir, r = g0, spread = spread, lit = lit, score = score } end
       end
     end
@@ -457,16 +464,17 @@ function findSpot(rule, C, dist)
     if not b then return nil, "no dry ground near the base" end
     return b
   end
-  if rule == "far_flat_lit" or rule == "far_flat" then
+  if rule == "far_flat_lit" or rule == "far_flat" or rule == "far_flat_dark" then
     local cands = {}
-    for _, frac in ipairs({ 0.9, 0.8, 0.7 }) do
+    -- (flagship) the dark side may be the spaceport's own: the dark rule looks nearer too
+    for _, frac in ipairs(rule == "far_flat_dark" and { 0.9, 0.8, 0.7, 0.55, 0.4, 0.25, 0.12 } or { 0.9, 0.8, 0.7 }) do
       for k = 0, 23 do
         local a = k * math.pi / 12
         local t = { x = t1.x * math.cos(a) + t2.x * math.sin(a), y = t1.y * math.cos(a) + t2.y * math.sin(a), z = t1.z * math.cos(a) + t2.z * math.sin(a) }
         cands[#cands + 1] = dirAt(u, t, math.pi * R * frac, R)
       end
     end
-    local b = best_of(C, cands, rule == "far_flat_lit")
+    local b = best_of(C, cands, (rule == "far_flat_lit") or (rule == "far_flat_dark" and "dark"))
     if not b then return nil, "no flat dry ground on the far side" end
     return b
   end
@@ -787,6 +795,13 @@ kind("reactor", { req = { "struct" }, eval = function(g, W)
   if g.net_above then ok = ok and (r.netKW or 0) >= g.net_above; parts[#parts + 1] = string.format("%.1f kW net", r.netKW or 0) end
   return ok, table.concat(parts, " · ")
 end })
+-- (flagship) a fail condition: the core of struct's plant has melted
+kind("core_melted", { fail = true, req = { "struct" }, eval = function(g, W)
+  local sid = sid_of(W, g)
+  local r = sid and W.reactor and W.reactor(sid)
+  if not r then return false, "no reactor" end
+  return r.melted == true, r.melted and "MELTED" or string.format("fuel %.0f K", r.fuelK or 0)
+end })
 kind("hook", { req = { "fn" }, eval = function(g, W)
   if not W.hookGoal then return false, "no hooks" end
   return W.hookGoal(g.fn, g)
@@ -856,6 +871,12 @@ local function meets(sc, crit, stats)
   if crit.hints and (stats.hints or 0) > crit.hints then return false end
   if crit.pieces and S.budget and S.budget.pieces and (stats.pieces or 0) > S.budget.pieces * crit.pieces then return false end
   if crit.crewSafe and stats.crewSafe == false then return false end
+  -- (flagship) vars = { name = { lte = n, … } }: the run's variables (varTest)
+  if type(crit.vars) == "table" then
+    for k, t in pairs(crit.vars) do
+      if not varTest((stats.vars or {})[k], t) then return false end
+    end
+  end
   return true
 end
 function medal(sc, stats)
@@ -886,6 +907,15 @@ function score(sc, stats)
   end
   rows[#rows + 1] = { label = "Hints", value = tostring(stats.hints or 0), ok = (stats.hints or 0) == 0 }
   if stats.crewSafe ~= nil then rows[#rows + 1] = { label = "Crew", value = stats.crewSafe and "all safe" or "lost", ok = stats.crewSafe } end
+  -- (flagship) score.rows = { { label, var, fmt, par, lte | gte } }: rows read off the run's variables
+  for _, r in ipairs(S.rows or {}) do
+    local v = (stats.vars or {})[r.var]
+    local ok = true
+    if r.lte ~= nil then ok = type(v) == "number" and v <= r.lte end
+    if r.gte ~= nil then ok = type(v) == "number" and v >= r.gte end
+    rows[#rows + 1] = { label = r.label or r.var, value = (type(v) == "number" and r.fmt) and string.format(r.fmt, v) or tostring(v == nil and "—" or v),
+                        par = r.par, ok = ok }
+  end
   return rows
 end
 
@@ -995,9 +1025,9 @@ BEATS = { ops = "string", say = "table", caption = "table", camera = "table", wa
           -- v2: dialogue, cutscenes, the world
           choice = "table", run = "string", cutscene = "boolean", shot = "table", var = "table", add = "table",
           branch = "table", ["goto"] = "string", objective = "table", knock = "table", state = "table", power = "table",
-          spawn = "table", remove = "string", walk = "table", hook = "string" }
+          spawn = "table", remove = "string", walk = "table", hook = "string", reactor = "table" }
 TEACH = { overlay = true, catalogue = true, ghost = true, at = true, mark = true, marker = true }
-SITES = { base = true, near_base = true, far_flat_lit = true, far_flat = true }
+SITES = { base = true, near_base = true, far_flat_lit = true, far_flat = true, far_flat_dark = true }
 -- ctx (all optional): partExists(id) → bool, readFile(path) → text|nil,
 -- decodeBp(code) → bp|nil, why, readJson(path) → value|nil, why
 function validate(sc, ctx)

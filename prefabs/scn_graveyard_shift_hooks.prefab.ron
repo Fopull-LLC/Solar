@@ -1,0 +1,20 @@
+// Graveyard Shift's hooks (scripts/scn_graveyard_shift_hooks.lua), spawned by
+// scenario_run.lua when scenarios/graveyard_shift is played.
+[
+    (
+        name: "scn_graveyard_shift_hooks",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "scn_graveyard_shift_hooks",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

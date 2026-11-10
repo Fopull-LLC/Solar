@@ -304,6 +304,9 @@ function survey()
   local walker = ref("planet_walker")
   if not (walker and walker.onFoot) then return nil end
   if not base_world() then return nil end
+  -- (a scenario's crew are where its story put them: no shuttle home)
+  local co = ref("company")
+  if co and co.isScenario and co.isScenario() then return nil end
   local d = crew_distance()
   if d and d <= params.pickup_range then return nil end
   -- No distance at all → the cap, directly. `pickup_max` is a FEE, not a range,

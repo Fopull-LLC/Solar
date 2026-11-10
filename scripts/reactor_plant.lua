@@ -310,7 +310,10 @@ function primaryOf(sid, uid)
       local inv = e.S.y[R.IDX.inv]
       local p
       if M.broken then p = 101325 + 740 * 9.81 * 1.0
-      elseif M.tsat >= 600 then p = 15.5e6
+      -- (a pressuriser holds 15.5 MPa only with water in it: a loop welded
+      -- after a loss of coolant stays at its own saturation pressure until the
+      -- makeup has refilled it, so a low-pressure pump can finish the job)
+      elseif M.tsat >= 600 and (inv or 1) >= 0.9 then p = 15.5e6
       else
         local F = ref("fluids")
         p = math.max(101325, F and F.psatWater and F.psatWater(o.Tp or 300) or 101325)
