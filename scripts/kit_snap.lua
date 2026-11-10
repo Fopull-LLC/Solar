@@ -28,7 +28,9 @@
 --   mount  flush on the face hit, facing out of it (pitch 90° on a wall, 180°
 --          under a ceiling), on a 0.25 m grid in that face
 --   hab    on a can's end: the next ring (a cap or bulkhead turned to face
---          out); on a top: on the grid, square toward you
+--          out); a segment on a segment's side: a branch, its end on the
+--          side's middle (the host turns into a junction: HAB JOINS below);
+--          on a top: on the grid, square toward you
 --
 -- ── SUPPORT (Career; Creative skips it) ─────────────────────────────────────
 -- A piece is held if a chain of pieces it touches reaches the structure's
@@ -322,6 +324,13 @@ function face(q)
     if H == "hab" and ax == "z" then
       cy, cx = 0, 0
       if an > 0 then dyaw = 0; cz = hb[6] - nb[5] else dyaw = math.pi; cz = hb[5] + nb[5] end
+    elseif H == "hab" and ax == "x" and def.join and hd.join then
+      -- (Ty 11-10) a segment against a segment's side: a branch, its end on
+      -- the side's middle; the host becomes the T, the cross or the corner
+      -- (habShapes below)
+      cy, cz = 0, 0
+      cx = an > 0 and (hb[2] - nb[5]) or (hb[1] + nb[5])
+      dyaw = an > 0 and QUARTER or -QUARTER
     elseif ax == "y" and an > 0 and (H == "floor" or H == "slab" or H == "block") then
       cy = top
       cx, cz = quantize(px, GRID), quantize(pz, GRID)
@@ -672,4 +681,106 @@ function mountAt(rec, defs, lx, ly, lz, tol)
     end
   end
   return best, bdef
+end
+
+-- ── HAB JOINS (Ty 11-10: "it just recognizes what's near it and forms the
+-- connection"; docs/base-building.md §29) ──────────────────────────────────
+-- A joinable segment (parts_kit `join`: the Hab Segment, the Window Segment)
+-- works out its shape from the hab pieces round it, in its structure:
+--   PORT   another segment, square to it, with an END on its side's middle
+--          (on its box's side, at its ring's middle, within JOIN_TOL): a
+--          port on that side, L (-X) or R (+X), the branch meeting the
+--          port's berthing plate flush;
+--   ENDS   with a port, an end with no hab piece on it (a probe 0.1 m past
+--          the end in nobody's box) is plated: b (-Z), f (+Z). A straight
+--          segment's open end still leaks until a cap or bulkhead goes on.
+-- The code (nil for a straight one) names the variant parts_kit.joinId draws
+-- and rooms.lua seals. Only cans upright and on the quarter grid join.
+-- Cost: one pass over the structure's parts and, per segment near the
+-- change, one over its hab pieces (a 40-can base: well under 0.1 ms).
+JOIN_TOL = 0.12
+JOIN_R = 3.6     -- a change re-shapes the segments whose centres are this near it
+
+local function hab_entry(p, d)
+  local c, s = math.cos(p.yaw or 0), math.sin(p.yaw or 0)
+  return { p = p, d = d, x = p.x or 0, y = p.y or 0, z = p.z or 0, fx = s, fz = c, rx = c, rz = -s, seg = d.join == true }
+end
+-- The hab pieces of rec (and `extra`, a part not placed yet), upright.
+local function hab_list(rec, defs, extra)
+  local out = {}
+  local function one(p)
+    local d = defs(p.id)
+    if d and d.snap == "hab" and math.abs(p.pitch or 0) < 1e-3 and math.abs(p.roll or 0) < 1e-3 then out[#out + 1] = hab_entry(p, d) end
+  end
+  for _, p in ipairs(rec.bp or {}) do one(p) end
+  if extra then one(extra) end
+  return out
+end
+local function in_box(h, x, y, z)
+  if math.abs(y - h.y) > 0.05 then return false end
+  local dx, dz = x - h.x, z - h.z
+  local lx, lz = dx * h.rx + dz * h.rz, dx * h.fx + dz * h.fz
+  local b = h.d.box
+  return lx >= b[1] - 1e-3 and lx <= b[2] + 1e-3 and lz >= b[5] - 1e-3 and lz <= b[6] + 1e-3
+end
+local function shape_of(A, list)
+  local yaw = A.p.yaw or 0
+  if math.abs(wrap(yaw - quantize(yaw, QUARTER))) > 1e-3 then return nil end
+  local b = A.d.box
+  local L, R, ob, of = false, false, false, false
+  local bx0, bx1 = A.x + A.fx * (b[5] - 0.1), A.z + A.fz * (b[5] - 0.1)
+  local fx0, fx1 = A.x + A.fx * (b[6] + 0.1), A.z + A.fz * (b[6] + 0.1)
+  for _, B in ipairs(list) do
+    if B ~= A and math.abs(B.y - A.y) < 0.05 and (B.x - A.x) ^ 2 + (B.z - A.z) ^ 2 < 16 then
+      if B.seg and math.abs(B.fx * A.fx + B.fz * A.fz) < 0.1 then
+        local cl = (B.x - A.x) * A.rx + (B.z - A.z) * A.rz
+        for _, e in ipairs({ B.d.box[5], B.d.box[6] }) do
+          local ex, ez = B.x + B.fx * e, B.z + B.fz * e
+          local lx = (ex - A.x) * A.rx + (ez - A.z) * A.rz
+          local lz = (ex - A.x) * A.fx + (ez - A.z) * A.fz
+          if math.abs(lz - (b[5] + b[6]) / 2) < JOIN_TOL then
+            if math.abs(lx - b[2]) < JOIN_TOL and cl > b[2] then R = true end
+            if math.abs(lx - b[1]) < JOIN_TOL and cl < b[1] then L = true end
+          end
+        end
+      end
+      if in_box(B, bx0, A.y, bx1) then ob = true end
+      if in_box(B, fx0, A.y, fx1) then of = true end
+    end
+  end
+  if not (L or R) then return nil end
+  return (L and "L" or "") .. (R and "R" or "") .. (ob and "" or "b") .. (of and "" or "f")
+end
+
+-- The codes of rec's joinable segments near the structure-frame points pts
+-- ({ { x, z } … }; nil = every one), as they would be with `extra` (a part
+-- not placed yet: the ghost) added. Writes nothing. → { { p, code } … }
+function habCodes(rec, defs, pts, extra)
+  local list = hab_list(rec, defs, extra)
+  local out = {}
+  for _, A in ipairs(list) do
+    if A.seg then
+      local near = pts == nil
+      if not near then
+        for _, q in ipairs(pts) do
+          if (A.x - q.x) ^ 2 + (A.z - q.z) ^ 2 <= JOIN_R * JOIN_R then near = true break end
+        end
+      end
+      if near then out[#out + 1] = { p = A.p, code = shape_of(A, list) } end
+    end
+  end
+  return out
+end
+
+-- Re-shape rec's segments near pts (nil = all): writes each one's `hj` (nil
+-- when straight). → { p … } whose code changed (structures re-draws those)
+function habShapes(rec, defs, pts)
+  local changed = {}
+  for _, e in ipairs(habCodes(rec, defs, pts)) do
+    if e.p.hj ~= e.code then
+      e.p.hj = e.code
+      changed[#changed + 1] = e.p
+    end
+  end
+  return changed
 end

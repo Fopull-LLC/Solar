@@ -127,7 +127,7 @@
     (
         name: "Door",
         transform: (
-            translation: (-0.4620, 1.0225, 0.0000),
+            translation: (-0.4620, 0.9775, 0.0000),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -163,7 +163,7 @@
     (
         name: "Door Wall 1",
         transform: (
-            translation: (0.0020, -0.0475, 0.0000),
+            translation: (0.0020, -0.0025, 0.0000),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
             scale: (1.0, 1.0, 1.0),
         ),

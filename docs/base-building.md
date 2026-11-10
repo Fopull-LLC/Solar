@@ -1192,7 +1192,7 @@ the adjoining place in the hit part's frame, on its 0.5 m grid:
 | post | a top | on the nearest corner, or the grid; on a post: stacked; at a wall's end: a corner post |
 | block (stairs, blocks, fittings) | a top | on the grid, square toward you |
 | mount (light, screen, switch, tray) | any face | flush, facing out of it (pitch 90° on a wall, 180° under a ceiling) |
-| hab | a ring's end / a top | the next ring (a cap or bulkhead turned to face out) / on the grid |
+| hab | a ring's end / a segment's side / a top | the next ring (a cap or bulkhead turned to face out) / a branch, the host turning into a T, cross or corner (§29) / on the grid |
 
 - **R** turns a quarter, **Shift+R** pitches a quarter (a truss laid down),
   **T** rolls, **PgUp / PgDn** lift a face-snapped piece a storey, **Shift**
@@ -3882,3 +3882,169 @@ is read in lateUpdate after `fr.refresh()` (planet and frame in one pose).
   bearings, its pivot pushed into the ground, zoomed hard, panned, HOME; each
   checked against the terrain and the local up (`CAMP` lines, pictures
   `save/user/buildshots/{flat,slope,cliff}_*.png`).
+
+## 29. Playtest 11-10: hab segments that join (T, cross, corner)
+
+Ty, on the 11-09d demo: "for surface hab segments they should recognize
+what's put near them and change shape to make the connection properly … i
+don't want to clog with pieces either so let's make it so it just recognizes
+what's near it and forms the connection so you can place a hallway off the
+side of a straight one and it will make the 3 way split naturally".
+
+### What a player does
+
+The HAB section is the same four pieces. Aim a Hab Segment (or a Window
+Segment) at another segment's side: the ghost is the branch, its end on the
+side's middle and square to it, and the segment it would join already shows
+the junction it will become (a hologram over it). Click, and the host turns
+into the T. A segment off the other side makes the cross; a segment off the
+side of a run's last segment makes the corner, its free end plated over.
+Taking the branch away gives the straight segment back. Nothing to pick or
+swap.
+
+### The rules (`kit_snap.habShapes`, pure)
+
+- **A port** is another joinable segment (parts_kit `join`: the Hab Segment
+  and the Window Segment), square to this one, with an END on this one's side
+  (its box's side, ±1.35 m, at its ring's middle, within `JOIN_TOL` 0.12 m):
+  L on its -X side, R on its +X.
+- **The ends.** With a port, an end with no hab piece on it (a probe 0.1 m past
+  the end in nobody's box) is plated: b (-Z), f (+Z). A cap or a bulkhead on
+  that end opens it again. A straight segment's open end leaks until it is
+  capped, as before.
+- **The code** is the letters in that order (12 of them: L, R, LR, Lb … LRbf;
+  a T is R or L, the cross LR, a corner Rf and so on). Only cans upright, on
+  the quarter grid and on the same level join.
+- **Derived, kept as a cache.** The record keeps `habSeg.steel` (its cost,
+  mass, catalogue entry and refund); `structures.lua` writes the code to the
+  part's `hj` (nil when straight) on every `addPart`, `removeParts`, `add` and
+  `put` (a placement, a Deconstruct, an undo, a paste, the hub's commit, a
+  ruin), re-shaping only the segments within `JOIN_R` (3.6 m) of the change,
+  and once for every record after a load, so an old save rebuilds its
+  junctions. `habCodes(rec, defs, pts, extra)` is the same rule with a part not
+  placed yet (the preview), writing nothing.
+
+### The pieces (`tools/gen_kit_parts.py` `hab_junction`)
+
+- **Hidden variants** `habSegJ<code>` and `habWindowJ<code>` (20 prefabs; a
+  window side with a port gives up its window, so a window junction with ports
+  both sides is `habSegJLR*`), `parts_kit.joinId(id, hj)` names them. Same
+  generator, same sets and paint as the segment (Clad lining and skin, the
+  bulkhead's steel plate and hazard frame), its MeshIn split for interior paint.
+- **A port** (the host carries it, the branch stays a plain segment): the hull
+  cut through ±56.25° of the side and ±0.67 m along it, both skins' edges
+  buried in a short trunk: the deck carried through as its floor, a lined
+  ceiling at the bulkhead door's 1.8 m, its walls a hazard frame following the
+  lining 5 cm proud and then lined inside and painted outside, out to a
+  **berthing plate** at the box's side (the flanges' 1.30 m disc, x 1.31–1.35)
+  with the 1.24 × 1.8 m passage through it. The branch's open ring butts on
+  the plate (its flange on x 1.35), so the joint is flush and closed; the plate
+  is clear of the run's neighbouring flanges. The host's saddles move to
+  ±0.87 m, clear of the trunk.
+- **A plated end**: the lining's disc inside at 0.95 m, a raised cover plate
+  on the flange outside with two stiffeners and a data plate.
+- **Colliders**: the ring boxes over the hole are split either side of it; the
+  trunk's floor, ceiling and walls and the plate round the passage are boxes
+  (a T has 32 colliders to the straight segment's 19). The generator's
+  z-fight check finds no coplanar faces but the flange and kick-strip ends
+  every segment already has.
+
+### Drawing it (`structures.spawn_part`, `reshape`)
+
+A segment with a code spawns its variant's prefab. A live segment whose code
+changed is spawned again as its variant, and its old node goes only when the
+new one lands (each part's newest spawn lands, an older one destroys itself),
+so nothing blinks; its footing is not cast twice. Nothing runs per frame:
+the work is on a placement or removal, and the variant is one more prefab,
+not more nodes on the piece.
+
+### Snapping and the preview
+
+- `kit_snap.face`: a joinable segment aimed at a joinable segment's ±X face
+  goes at that side's middle, (1.35 + 1) m out, turned a quarter; a cap is
+  not offered the side. In the Base Hub's builder the same rule snaps a
+  segment to a side (`builder.kitSnap`).
+- `field_builder.join_preview`: with a segment in hand on a face pose, the
+  codes are worked out with the ghost added (only when the pose or the
+  structure changes). Each neighbour that would change is drawn as its
+  variant, a hologram parented to the planet at the part's own pose (set
+  once: the planet moving carries it), and the real can is hidden once its
+  hologram is there; the ghost in hand is its own variant if it would be one.
+  The hand emptied, the pose moved or the part placed, the holograms go and
+  the cans are drawn again.
+
+### Rooms and air (`rooms.lua`)
+
+A segment's sides, floor and crown now run to ±1.25 m (`CAN_EXT`, the can's
+own radius) instead of ±1.0, so a branch, which stands 0.35 m off the 1 m
+grid, rounds onto the same cells as its host, and its far end meets its cap.
+A junction (its `hj`) seals as its variant: no quad on a port's side (the
+branch's walls close round it) and a section quad at ±1.25 m for a plated end.
+A T, a cross or a corner with its branches capped is ONE sealed room that
+holds air (a tank anywhere in it fills the whole thing); a branch's open end
+leaks. The seal signature carries the code. Aligned runs solve exactly as
+before (the extension only reaches a cell whose middle is past the end).
+
+### Z-fighting and the joint seam (Ty, playtest 11-10: "standing in any room flickers")
+
+The generator's coplanar-face check (`base_models.zcheck`) over every kit
+piece found 4,090 overlapping same-facing face pairs; the ones in the pieces
+rooms are made of are fixed, each face inset 2–5 mm or its hidden copy removed:
+
+| Piece | The fight | Fix |
+|---|---|---|
+| every hab segment and junction | the deck plate's and the kick strips' ends in the flange's face at z ±1 | both stop 4 mm short (`KICKZ`); the deck's collider stays whole |
+| Door Wall (and mirrored), Double Door, Open Frame, Window, Vent Louvre | the reveal lining's face in the panel's cut edge and the channels' ends; jambs overlapping the head and sill | linings stand 3 mm into the opening; jambs meet head and sill end to end, 2 mm off the floor line |
+| Airlock Wall | the pressure frame's jambs over its head, in the wall's cut edge and its end stud | 3 mm into the opening and in from the wall's end, jambs under the head |
+| Hab Door Bulkhead | the hazard frame 3 mm into the plate, its head over its jambs | on the plate's face, the head between the jambs |
+| heavy door leaves (Airlock Wall, Bulkhead, pressure Bulkhead) | the top chevron ending on the leaf's top face | the chevrons stop 5 mm under it |
+| Window Wall | the transom's ends in the panes' ends | the panes' edges sit inside the reveals, the transom stops on them |
+| Porthole Wall | its flange discs faced the wall (see-through from outside), their bolts' feet in them | the discs face out |
+| Roof Ridge, Lead-lined Wall, Wall Cable Tray | ends and stacked plates sharing planes | 2–5 mm apart |
+
+Every hab piece and every wall-class piece now checks clean. What the check
+still counts in them are undersides at y 0 pressed onto the floor or wall
+they stand on (a corner post's, a handrail's, the tray's clips), never seen.
+Elsewhere (props, trusses, machines, the reactor's and fluids' parts, in
+their own generators) 3,321 pairs remain: a list for the next pass is in
+`work/habjoin/zall_after.txt`.
+
+**The joint seam.** A hab can is two skins; their gap was open at the ends,
+so the hairline where two segments' linings meet showed back faces behind
+it. `hull()` now closes the gap with a ring 1 cm in from each end (out of
+sight behind the flanges) and backs the hairline with a 12 mm band of lining
+4 mm behind it, facing in, so a sub-pixel crack shows lit lining. What is
+still seen at a joint in the probe's pictures (`hj11b`) is a faint tick where
+each dark corrugation stripe crosses it: the texture's seam, not a gap.
+
+**Smooth arcs.** The port's frame and trunk walls are curved slabs with
+smooth normals on their arcs (no facets catching the light in steps), and
+no faces inside them.
+
+### Left for later
+
+- Ports on a can's top or bottom (a vertical can has no deck).
+- The Base Hub's builder draws the segments straight while you edit; BUILD IT
+  spawns them as their junctions.
+- Fittings inside a can are still refused by the overlap rule.
+- Ground plants grow up through a hab's deck (straight segments too, seen in
+  the probe's pictures): `flora_field`'s clear doesn't count a hab's raised
+  deck. Not changed here.
+
+### Tests and the probe
+
+- `luajit solar/tests/smoke_hab_join.lua`: the neighbour-to-shape rules
+  (straight, T either way round, cross, corner both ends, a cap or a bulkhead
+  opening a plated end, a lone segment's dead-end T, a branch that is a host
+  too, removal changing only the host, nothing for another storey, an
+  off-square can, a parallel can, a branch half a module along, a cap at the
+  side; turned and moved half a module), the preview writing nothing, the side
+  snap (and not for a cap), the variants (hidden, on disk, in the bounds, not
+  in the column), structures (an OLD save rebuilding its junction, placing the
+  cross and the corner, the code saved as a cache, undo, a record added whole,
+  a record put), rooms (a T, a cross, an L and a long branch capped are one
+  sealed room, an open branch leaks, each moved half a module and turned; the
+  branch's volume; the signature) and the cost.
+- `tools/perf/kitprobe.sh <engine> habjoin` (PATCHES=funds.patch;
+  `tools/perf/habjoinprobe_modes.lua`). Pictures
+  `save/user/buildshots/hj*.png`; numbers in `work/habjoin/NOTES.md`.

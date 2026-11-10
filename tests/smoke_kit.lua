@@ -90,7 +90,10 @@ for name, P in pairs(K.PIECES) do
         local b = P.box
         local tol = 0.13
         check(math.abs(sh.lo[1] - b[1]) <= tol and math.abs(sh.hi[1] - b[2]) <= tol, string.format("%s: mesh x %.2f..%.2f vs box %.2f..%.2f", id, sh.lo[1], sh.hi[1], b[1], b[2]))
-        check(math.abs(sh.lo[3] - b[5]) <= tol + 0.08 and math.abs(sh.hi[3] - b[6]) <= tol + 0.08, string.format("%s: mesh z %.2f..%.2f vs box %.2f..%.2f", id, sh.lo[3], sh.hi[3], b[5], b[6]))
+        -- (a hab junction's berthing plate is the flanges' disc, past its box's ends: `meshZ`)
+        local z0, z1 = b[5], b[6]
+        if P.meshZ then z0, z1 = -P.meshZ, P.meshZ end
+        check(math.abs(sh.lo[3] - z0) <= tol + 0.08 and math.abs(sh.hi[3] - z1) <= tol + 0.08, string.format("%s: mesh z %.2f..%.2f vs box %.2f..%.2f", id, sh.lo[3], sh.hi[3], z0, z1))
         -- (a stair's rails stand 1 m over its treads; a roof panel's thickness hangs under its eave)
         local up = (P.snap == "block" and b[4] > 0.5) and 1.1 or 0.1
         check(sh.lo[2] >= b[3] - 0.11 and sh.hi[2] <= b[4] + up and sh.hi[2] >= b[4] - 0.1,

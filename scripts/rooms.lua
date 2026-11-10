@@ -24,7 +24,8 @@
 --           can's section for a hab bulkhead), sealed while its door is shut
 --   "ring"  a hab can: a segment closes its four sides along its length (the
 --           2.5 m can as the 2.5 x 2.5 m tube the grid can hold), an end cap
---           its section
+--           its section; a junction (its part's `hj`, kit_snap.habShapes)
+--           leaves a port's side open and closes its plated ends
 --   nil     never: an open frame, a vent louvre, a rail. Wall-class pieces
 --           that don't seal are kept as NAMED OPENINGS, so a leak can say
 --           "the Vent Louvre Wall lets air through".
@@ -65,6 +66,7 @@ MERGE = 0.25       -- planes closer than this are one
 MAX_CELLS = 300000 -- a structure bigger than this is not solved (it says so)
 -- the hab can's section as the grid holds it (tools/gen_kit_parts.py HR 1.25, axis 1.65)
 CAN = { x0 = -1.25, x1 = 1.25, y0 = 0.40, y1 = 2.90 }
+CAN_EXT = 0.25     -- a segment's quads run this far past its ends (to ±1.25 m: the can's radius)
 AIRLOCK_M3 = 24.0  -- a chamber bigger than this is a room with two doors, not an airlock
 
 local floor, ceil, abs, min, max = math.floor, math.ceil, math.abs, math.min, math.max
@@ -99,10 +101,19 @@ function localQuads(d)
     local C = CAN
     if s == "ring" and (b[6] - b[5]) >= 1.5 then
       -- a segment: its two sides, its floor and its crown, along its length
-      Q(1, C.x0, 0, 0, C.y0, C.y1, b[5], b[6])
-      Q(1, C.x1, 0, 0, C.y0, C.y1, b[5], b[6])
-      Q(2, C.y0, C.x0, C.x1, 0, 0, b[5], b[6])
-      Q(2, C.y1, C.x0, C.x1, 0, 0, b[5], b[6])
+      -- and on to the can's radius past each end (Ty 11-10: a branch off a
+      -- side stands 0.35 m off the grid; this way its walls and a junction's
+      -- round onto the same cells, and its far end meets its cap)
+      local z0, z1 = b[5] - CAN_EXT, b[6] + CAN_EXT
+      local J = d.jn
+      -- a junction (parts_kit `jn`): no side where a port is (the branch's
+      -- walls close round it), and its plated ends closed
+      if not (J and J.L) then Q(1, C.x0, 0, 0, C.y0, C.y1, z0, z1) end
+      if not (J and J.R) then Q(1, C.x1, 0, 0, C.y0, C.y1, z0, z1) end
+      Q(2, C.y0, C.x0, C.x1, 0, 0, z0, z1)
+      Q(2, C.y1, C.x0, C.x1, 0, 0, z0, z1)
+      if J and J.b then Q(3, z0, C.x0, C.x1, C.y0, C.y1, 0, 0) end
+      if J and J.f then Q(3, z1, C.x0, C.x1, C.y0, C.y1, 0, 0) end
     else
       -- an end cap or a door bulkhead: its section
       Q(3, (b[5] + b[6]) / 2, C.x0, C.x1, C.y0, C.y1, 0, 0, s == "door")
@@ -151,6 +162,10 @@ function quadsOf(rec, defs)
   local out, skipped = {}, 0
   for _, p in ipairs(rec.bp or {}) do
     local d = defs(p.id)
+    -- (Ty 11-10) a hab segment that is a junction seals as its variant
+    if d and d.join and p.hj and p.hj ~= "" then
+      d = defs((d.piece or "") .. "J" .. p.hj .. "." .. (d.mat or "")) or defs("habSegJ" .. p.hj .. "." .. (d.mat or "")) or d
+    end
     if d and d.kit and not d.live then
       local lq = lq_cache[d]
       if not lq then lq = localQuads(d); lq_cache[d] = lq end
@@ -179,7 +194,7 @@ function signatureOf(rec, defs)
   for _, p in ipairs(rec.bp or {}) do
     local d = defs(p.id)
     if d and d.kit and (d.seals or d.snap == "wall" or d.life or d.eqv) then
-      t[#t + 1] = string.format("%d:%s:%.2f:%.2f:%.2f:%.3f:%.3f:%.3f", p.uid, p.id, p.x or 0, p.y or 0, p.z or 0, p.yaw or 0, p.pitch or 0, p.roll or 0)
+      t[#t + 1] = string.format("%d:%s:%.2f:%.2f:%.2f:%.3f:%.3f:%.3f:%s", p.uid, p.id, p.x or 0, p.y or 0, p.z or 0, p.yaw or 0, p.pitch or 0, p.roll or 0, p.hj or "")
     end
   end
   table.sort(t)

@@ -341,12 +341,12 @@ PIECES = {
   -- ── HAB (the 2.5 m pressure can; along its Z) ──
   habSeg    = { label = "Hab Segment", section = "HAB", snap = "hab", box = B(-1.35, 1.35, 0, 2.9, -1, 1),
                 mats = { "steel" }, vol = 1.0, fill = "solid", cost = 4200, fillk = { steel = 0.1146 }, seals = "ring",
-                deckTop = 0.80,
-                desc = "2.5 m pressure can, 2 m long, on its saddles · a deck inside" },
+                deckTop = 0.80, join = true,
+                desc = "2.5 m pressure can, 2 m long, on its saddles · a deck inside · set one against another's side and it makes the T, the cross or the corner itself" },
   habWindow = { label = "Hab Window Segment", section = "HAB", snap = "hab", box = B(-1.35, 1.35, 0, 2.9, -1, 1),
                 mats = { "steel" }, vol = 1.0, fill = "solid", cost = 5600, fillk = { steel = 0.1401 }, seals = "ring",
-                deckTop = 0.80,
-                desc = "a hab segment with two windows" },
+                deckTop = 0.80, join = true,
+                desc = "a hab segment with two windows · joins like the Hab Segment (a side with a branch gives up its window)" },
   habCap    = { label = "Hab End Cap", section = "HAB", snap = "hab", box = B(-1.35, 1.35, 0, 2.9, -0.35, 0.35),
                 mats = { "steel" }, vol = 0.35, fill = "solid", cost = 1800, fillk = { steel = 0.1456 }, seals = "ring",
                 desc = "a closed dome for a can's end" },
@@ -644,6 +644,48 @@ PIECES = {
                 mats = { "steel" }, vol = 1.0, fill = "solid", mass = { steel = 1.08 }, cost = 700, shieldk = 0.25,
                 desc = "a steel tank of water, 0.5 m thick · light and cheap · lets a quarter through" },
 }
+
+-- ── HAB JUNCTIONS (Ty 11-10: "it just recognizes what's near it and forms the
+-- connection"; docs/base-building.md §29) ──────────────────────────────────
+-- A Hab Segment (or Window Segment) with another segment's END against its
+-- side is a junction: kit_snap.habShapes reads the neighbours and gives a
+-- code, L / R (a port on its -X / +X side) and b / f (its -Z / +Z end
+-- plated: a junction's end with nothing on it is closed, the corner of an L).
+-- The record keeps "habSeg.steel" (its cost, mass, catalogue entry, refund);
+-- the code is DERIVED, cached on the part as `hj` by structures.lua, so old
+-- saves rebuild their junctions on load. It is drawn as the hidden variant
+-- habSegJ<code> (tools/gen_kit_parts.py hab_junction: the hull cut, a trunk
+-- out to a berthing plate the branch's ring butts on, flush; the free ends
+-- plated), and rooms.lua seals it by its `jn`. A window junction with ports
+-- on both sides has no window left: it is habSegJLR*.
+JOIN_CODES = { "L", "R", "LR", "Lb", "Lf", "Lbf", "Rb", "Rf", "Rbf", "LRb", "LRf", "LRbf" }
+JOIN_PLATE = 1.30    -- the berthing plate's radius: past the box's ends (smoke_kit's bounds allow it)
+for _, base in ipairs({ "habSeg", "habWindow" }) do
+  local P0 = PIECES[base]
+  for _, code in ipairs(JOIN_CODES) do
+    local L, R = code:find("L", 1, true) ~= nil, code:find("R", 1, true) ~= nil
+    if not (base == "habWindow" and L and R) then
+      local t = {}
+      for k, v in pairs(P0) do t[k] = v end
+      t.hidden, t.join, t.joinOf = true, nil, base
+      t.jn = { L = L, R = R, b = code:find("b", 1, true) ~= nil, f = code:find("f", 1, true) ~= nil }
+      t.meshZ = JOIN_PLATE
+      t.label = P0.label .. " (junction)"
+      PIECES[base .. "J" .. code] = t
+      FACES2[base .. "J" .. code] = true
+    end
+  end
+end
+-- The variant id a joinable piece is drawn and sealed as, for code `hj`
+-- (nil or "" = the piece itself).
+function joinId(id, hj)
+  if not hj or hj == "" then return id end
+  local a, b = id:match("^([%w]+)%.([%w]+)$")
+  if not (a and PIECES[a] and PIECES[a].join) then return id end
+  if a == "habWindow" and hj:find("L", 1, true) and hj:find("R", 1, true) then a = "habSeg" end
+  local v = a .. "J" .. hj
+  return PIECES[v] and (v .. "." .. b) or id
+end
 
 -- ── PROPS (S4: clutter and character; tools/gen_kit_props.py) ───────────────
 -- masses are the things' own (an empty steel crate, a bunk with its mattresses)
@@ -1230,6 +1272,8 @@ local function resolve(piece, mat)
     tile = P.tile, deck = P.deck, deckTop = P.deckTop, slopeZ = P.slopeZ, triangle = P.triangle,
     door = P.door, light = P.light, screen = P.screen, switch = P.switch, life = P.life,
     sym = P.sym or "x", mirror = P.mirror, hidden = P.hidden,
+    -- (Ty 11-10) a hab segment joins its neighbours; a junction variant's ports and plated ends
+    join = P.join, joinOf = P.joinOf, jn = P.jn,
     -- (S4) character: films, clutter, signs, the emblem, a lamp's own lens;
     -- what takes paint on two faces and what gathers dust
     film = P.film, clutter = P.clutter, grime = P.grime, sign = P.sign, emblem = P.emblem, lens = P.lens,

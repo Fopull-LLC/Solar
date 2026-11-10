@@ -111,9 +111,11 @@ local function plain(r)
 end
 
 local reindex
+local join_pending = false
 local function load()
   recs, order = {}, {}
   cells = {}
+  join_pending = true
   local sv = S()
   if not (sv and sv.get) then return end
   for _, id in ipairs(sv.get("struct.list") or {}) do
@@ -127,7 +129,37 @@ local function load()
   end
   reindex()
 end
-local function ensure() if not recs then load() end end
+-- (Ty 11-10) HAB JOINS: a hab segment's shape (straight, T, cross, corner) is
+-- derived from its neighbours by kit_snap.habShapes, which writes the
+-- segment's `hj` (a cache: an old save rebuilds it on load, a placement, a
+-- removal, an undo, a hub commit re-shape only the segments near the change).
+-- A live segment whose code changed is drawn again as its variant (reshape).
+local reshape
+local function rejoin(r, pts)
+  local KS = findScript and findScript("kit_snap")
+  local PB = findScript and findScript("parts_base")
+  if not (r and KS and KS.habShapes and PB and PB.partInfo) then return nil end
+  local ok, changed = pcall(KS.habShapes, r, PB.partInfo, pts)
+  if not ok then
+    if log then log("structures: habShapes: " .. tostring(changed)) end
+    return nil
+  end
+  if reshape then for _, p in ipairs(changed) do reshape(r, p) end end
+  return changed
+end
+local function pts_of(parts)
+  local out = {}
+  for _, p in ipairs(parts) do out[#out + 1] = { x = p.x or 0, z = p.z or 0 } end
+  return out
+end
+-- every record's segments, once the rulebook is there (after a load)
+local function join_all()
+  if not join_pending or not recs then return end
+  if not (findScript and findScript("kit_snap") and findScript("parts_base")) then return end
+  join_pending = false
+  for _, id in ipairs(order) do rejoin(recs[id], nil) end
+end
+local function ensure() if not recs then load() end; if join_pending then join_all() end end
 local function bump() version = version + 1 end
 local function write_index() local sv = S(); if sv and sv.set then sv.set("struct.list", order) end end
 local function write(r) local sv = S(); if sv and sv.set then sv.set("struct." .. tostring(r.id), plain(r)) end end
@@ -308,6 +340,7 @@ function add(r)
   recs[r.id] = r
   order[#order + 1] = r.id
   for _, p in ipairs(r.bp) do index_part(r, p, true) end
+  rejoin(r, nil)
   write(r)
   write_index()
   bump()
@@ -328,6 +361,7 @@ function addPart(id, part)
   part.parent, part.att, part.sym, part.mir, part.stage = part.parent or 0, part.att or "", part.sym or 0, part.mir or "", part.stage or 0
   r.bp[#r.bp + 1] = part
   index_part(r, part, true)
+  rejoin(r, pts_of({ part }))
   write(r)
   bump()
   if live[id] and spawn_part then spawn_part(r, live[id], part) end
@@ -355,6 +389,7 @@ function removeParts(id, uids)
     remove(id)
     return out, true
   end
+  if #out > 0 then rejoin(r, pts_of(out)) end
   write(r)
   bump()
   return out, false
@@ -367,6 +402,7 @@ function put(r)
   ensure()
   if not (r and recs[r.id]) then return false end
   recs[r.id] = r
+  rejoin(r, nil)
   write(r)
   bump()
   return true
@@ -568,7 +604,7 @@ local function footing_mesh(ft)
   return name
 end
 
-spawn_part = function(r, L, p)
+spawn_part = function(r, L, p, noFoot)
   L.asked = L.asked or {}
   L.asked[p.uid] = true
   local pb = parts_lib()
@@ -585,10 +621,24 @@ spawn_part = function(r, L, p)
   end
   local x, y, z, U, F = partPose(r, p, def.seat)
   local function mine() return live[r.id] == L and recs and recs[r.id] == r and part_in(r, p.uid) == p end
+  -- (Ty 11-10) a hab segment that is a junction is drawn as its variant
+  local prefab = def.prefab
+  if def.join and p.hj then
+    local PK = findScript and findScript("parts_kit")
+    local vd = PK and PK.joinId and pb.partInfo(PK.joinId(p.id, p.hj))
+    if vd and vd.prefab then prefab = vd.prefab end
+  end
+  -- (only the newest spawn of a part lands: a re-shape swaps the node in place,
+  -- the old one going as the new one arrives, so nothing blinks)
+  L.gen = L.gen or {}
+  local gen = (L.gen[p.uid] or 0) + 1
+  L.gen[p.uid] = gen
   L.spawning = L.spawning + 1
-  local ok = pcall(spawn, def.prefab, vec3(b.x + x, b.y + y, b.z + z), function(inst)
+  local ok = pcall(spawn, prefab, vec3(b.x + x, b.y + y, b.z + z), function(inst)
     L.spawning = L.spawning - 1
-    if not mine() then inst:destroy() return end
+    if not mine() or L.gen[p.uid] ~= gen then inst:destroy() return end
+    local prev = L.nodes[p.uid]
+    if prev and prev ~= inst then drop_node(prev) end
     -- (setUp points −Z along the vector given: +Z, the part's front, faces F)
     inst:setUp(vec3(U.x, U.y, U.z), vec3(-F.x, -F.y, -F.z))
     inst.x, inst.y, inst.z = x, y, z
@@ -621,7 +671,7 @@ spawn_part = function(r, L, p)
     end
   end, planet)
   if not ok then L.spawning = L.spawning - 1 end
-  local ft = p.ft
+  local ft = (not noFoot) and p.ft or nil
   if type(ft) == "table" and ft.d and ft.d > 0.05 and createNode then
     local m = footing_mesh(ft)
     if m then
@@ -640,11 +690,23 @@ spawn_part = function(r, L, p)
   end
 end
 
+-- (Ty 11-10) a segment's junction code changed: its node is drawn again as
+-- the variant, swapped in place (spawn_part drops the old node as the new one
+-- lands). Only a part already asked for: a new part spawns by addPart.
+reshapes = 0          -- probes: segments re-drawn for a new junction code
+reshape = function(r, p)
+  local L = live[r.id]
+  if not (L and L.asked and L.asked[p.uid]) then return end
+  reshapes = reshapes + 1
+  spawn_part(r, L, p, true)
+end
+
 -- (X8) the paced queue: { { r, L, i } … } drained `pace` parts a frame
 local paceq = {}
 pacedParts = 0        -- probes: parts spawned through the queue
 local function spawn_rec(r, paced)
   if live[r.id] then return end
+  if join_pending then join_all() end
   local pb = parts_lib()
   local planet = find and find(r.b)
   local b = space and space.body and space.body(r.b)

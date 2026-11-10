@@ -1123,10 +1123,23 @@ end
 ghost_node = nil
 ghost_foot = nil
 local G = { id = nil, body = nil, making = false, color = nil, fcolor = nil, fmaking = false, fbody = nil }
+-- (Ty 11-10) THE JUNCTION PREVIEW: a hab segment in hand against a segment's
+-- side shows the junction it will make before the click. Each neighbour whose
+-- shape would change is drawn as its variant (a hologram parented to the
+-- planet at the part's own pose, set once; the real node hidden while it
+-- shows), and the held piece's ghost is its own variant if it would be one.
+-- Worked out only when the snapped pose or the structure changes.
+JP = { key = nil, holo = {}, hidden = {}, own = nil, n = 0 }
+local function jp_clear()
+  for _, n in pairs(JP.holo) do if n and n.valid ~= false then n:destroy() end end
+  for _, n in pairs(JP.hidden) do if n and n.valid ~= false then n.visible = true end end
+  JP.holo, JP.hidden, JP.key, JP.own, JP.n = {}, {}, nil, nil, 0
+end
 local function ghost_drop()
   if ghost_node and ghost_node.valid ~= false then ghost_node:destroy() end
   if ghost_foot and ghost_foot.valid ~= false then ghost_foot:destroy() end
   ghost_node, ghost_foot, G.id, G.body, G.color, G.fcolor, G.fbody = nil, nil, nil, nil, nil, nil, nil
+  if JP.key then jp_clear() end
 end
 local function ghost_want(id, body)
   if G.id == id and G.body == body and (G.making or (ghost_node and ghost_node.valid ~= false)) then return ghost_node end
@@ -1235,8 +1248,55 @@ function paste_ghosts(p, col)
   if PG.color ~= col and gh and gh.apply then PG.color = col; gh.apply(root, col, 0.45) end
 end
 
+-- → the id the held piece's ghost shows (its junction variant), or nil
+local function join_preview(p, r)
+  local def = r.def
+  if not (def and def.join and p and p.mode == "face" and p.sid and not r.bad and not pasting) then
+    if JP.key then jp_clear() end
+    return nil
+  end
+  local ST, KS, PK = ref("structures"), ref("kit_snap"), ref("parts_kit")
+  local rec = ST and ST.get(p.sid)
+  if not (rec and KS and KS.habCodes and PK and PK.joinId) then return nil end
+  local key = string.format("%s|%s|%.2f|%.2f|%.2f|%.3f|%d", tostring(p.sid), tostring(heldPart), p.lx or 0, p.ly or 0, p.lz or 0,
+    p.yaw or 0, ST.version or 0)
+  if key == JP.key then return JP.own end
+  jp_clear()
+  JP.key = key
+  local extra = { uid = -1, id = heldPart, x = p.lx or 0, y = (p.ly or 0) + (r.base or 0), z = p.lz or 0, yaw = p.yaw or 0, pitch = 0, roll = 0 }
+  local okc, codes = pcall(KS.habCodes, rec, partInfo, { { x = extra.x, z = extra.z } }, extra)
+  if not okc then return nil end
+  local planet = find and find(rec.b)
+  local gh = ref("ghost")
+  for _, e in ipairs(codes) do
+    if e.p == extra then
+      if e.code then JP.own = PK.joinId(heldPart, e.code) end
+    elseif e.code ~= e.p.hj and planet and spawn then
+      local vd = partInfo(e.code and PK.joinId(e.p.id, e.code) or e.p.id)
+      if vd and vd.prefab then
+        local x, y, z, U, F = ST.partPose(rec, e.p, vd.seat)
+        local want, uid, sid = key, e.p.uid, p.sid
+        JP.n = JP.n + 1
+        spawn(vd.prefab, vec3(planet.x, planet.y, planet.z), function(n)
+          if JP.key ~= want then n:destroy() return end
+          n:setUp(vec3(U.x, U.y, U.z), vec3(-F.x, -F.y, -F.z))
+          n.x, n.y, n.z = x, y, z
+          pcall(function() n.name = "BuildGhost" end)
+          if gh and gh.apply then gh.apply(n, GREEN, 0.5) end
+          JP.holo[uid] = n
+          -- (the real can steps aside only once its preview is there: nothing blinks)
+          local real = ST.nodeOf(sid, uid)
+          if real and real.valid ~= false then real.visible = false; JP.hidden[uid] = real end
+        end, { parent = planet, body = false })
+      end
+    end
+  end
+  return JP.own
+end
+
 local function ghost_paint()
   if not (heldPart and req and (req.pose or req.cable) and open_) then
+    if JP.key then jp_clear() end
     if PG.root or PG.making then paste_drop() end
     if ghost_node and ghost_node.valid ~= false and ghost_node.visible then ghost_node.visible = false end
     if ghost_foot and ghost_foot.valid ~= false and ghost_foot.visible then ghost_foot.visible = false end
@@ -1251,7 +1311,7 @@ local function ghost_paint()
     return
   end
   local p = req.pose
-  local g = ghost_want(heldPart, p.body)
+  local g = ghost_want(join_preview(p, req) or heldPart, p.body)
   local def = req.def
   local col = req.bad and RED or GREEN
   local gh = ref("ghost")

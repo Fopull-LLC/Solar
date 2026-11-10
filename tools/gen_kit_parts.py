@@ -200,10 +200,17 @@ def wall_body(m, sh, mat, x0, x1, y0, y1, holes=(), t=WT, trims=True):
                 if any(a <= x <= b and d >= y1 - 1e-6 for (a, b, c, d) in cells):
                     bx(m, "Steel", DARK, x - 0.05, x + 0.05, y1 - 0.004, y1 + 0.006, -0.05, 0.05)
     # reveals round every hole: a steel lining through the wall and a trim proud of each face
+    # (z-fight, playtest 11-10: a lining's face lay in the panel's cut edge and
+    # the channels' ends, the jamb Ty saw flicker; each now stands RI proud of
+    # the cut into the opening, and the jambs meet the head and the sill
+    # end to end instead of overlapping them)
     if trims:
+        RI = 0.003
         for (a, b, c, d) in holes:
             r = 0.035
-            for (p0, p1, q0, q1) in ((a - r, a, c, d), (b, b + r, c, d), (a - r, b + r, d, d + r)) + (((a - r, b + r, c - r, c),) if c > y0 + 1e-3 else ()):
+            sill = c > y0 + 1e-3
+            cj = c + RI if sill else c + 0.002   # (no sill: 2 mm off the floor line, clear of the channel's underside)
+            for (p0, p1, q0, q1) in ((a - r, a + RI, cj, d - RI), (b - RI, b + r, cj, d - RI), (a - r, b + r, d - RI, d + r)) + (((a - r, b + r, c - r, c + RI),) if sill else ()):
                 bx(m, "Steel", GREY, p0, p1, q0, q1, -hz - 0.012, hz + 0.012)
 
 
@@ -230,8 +237,10 @@ def door_leaf(w, h, heavy=False, window=True, t=0.05):
             for s in (-1, 1):
                 bx(m, "Steel", DARK, -w / 2 + 0.02, -w / 2 + 0.10, y, y + 0.08, s * (t / 2 + 0.012) - 0.01, s * (t / 2 + 0.012) + 0.01)
         for k in range(8):
-            y = 0.12 + k * 0.24
-            bx(m, "Steel", SAFETY if k % 2 == 0 else DARK, -w / 2 - 0.004, -w / 2 + 0.05, y, y + 0.24, -t / 2 - 0.003, t / 2 + 0.003)
+            # (z-fight, playtest 11-10: the top chevron ended on the leaf's top face; they now stop 5 mm under it)
+            ch = (h - 0.125) / 8
+            y = 0.12 + k * ch
+            bx(m, "Steel", SAFETY if k % 2 == 0 else DARK, -w / 2 - 0.004, -w / 2 + 0.05, y, y + ch, -t / 2 - 0.003, t / 2 + 0.003)
     return m, sh
 
 
@@ -466,9 +475,12 @@ def p_windowWall(mat):
     hole = (-0.6, 0.6, 0.9, 1.9)
     wall_body(m, sh, mat, -1, 1, 0, WH, holes=[hole])
     # double glazing, a sill outside, the pane's frame
+    # (z-fight, playtest 11-10: the transom's ends lay in the panes' ends; the panes' edges now
+    # sit inside the reveals, 3 mm proud of the cut, and the transom stops on the reveals' faces)
+    g = 0.003
     bx(m, "Pane", (1, 1, 1), -0.6, 0.6, 0.9, 1.9, -0.035, -0.023)
     bx(m, "Pane", (1, 1, 1), -0.6, 0.6, 0.9, 1.9, 0.023, 0.035)
-    bx(m, "Steel", DARK, -0.6, 0.6, 1.385, 1.415, -0.04, 0.04)
+    bx(m, "Steel", DARK, -0.6 + g, 0.6 - g, 1.385, 1.415, -0.04, 0.04)
     bx(m, "Steel", GREY, -0.66, 0.66, 0.86, 0.9, 0.08, 0.17)
     sh.add((0, 1.4, 0), (1.2, 1.0, 0.07))
     return m, sh, []
@@ -481,7 +493,8 @@ def p_porthole(mat):
     for s in (-1, 1):
         m.color = GREY
         sub = CModel(seed=2); sub.ground = False; sub.color = GREY
-        disk(sub, "Steel", 0.40, 0.0, segs=28, up=True, r_in=0.25)
+        # (playtest 11-10: the disk faced the wall, so from outside it was see-through and its bolts' feet fought it)
+        disk(sub, "Steel", 0.40, 0.0, segs=28, up=False, r_in=0.25)
         lathe(sub, "Steel", [(0.40, 0.0), (0.40, -0.03)], segs=28)
         M = rot_x(-s * math.pi / 2)
         m.merge(sub, M=M, t=(0, cy, s * (WT / 2 + 0.03)))
@@ -503,7 +516,9 @@ def p_airlockWall(mat):
     # a heavy pressure frame proud of both faces, hazard-striped, with its seal
     for s in (-1, 1):
         z0, z1 = s * WT / 2, s * (WT / 2 + 0.06)
-        for (a, b, c, d) in ((-1.0, -0.92, 0, 2.05), (0.0, 0.08, 0, 2.05), (-1.0, 0.08, 1.95, 2.13)):
+        # (z-fight, playtest 11-10: the jambs overlapped the head and lay in the wall's cut edges
+        # and its end stud; now 3 mm into the opening, 3 mm in from the wall's end, jambs under the head)
+        for (a, b, c, d) in ((-0.997, -0.917, 0.002, 1.947), (-0.003, 0.08, 0.002, 1.947), (-0.997, 0.08, 1.947, 2.13)):
             bx(m, "Steel", (0.55, 0.50, 0.32), a, b, c, d, min(z0, z1) - s * 0.004, max(z0, z1))
         for k in range(9):
             y = k * 0.22
@@ -582,8 +597,9 @@ def p_roofRidge(mat):
         a = math.radians(30) * s
         c, sn = math.cos(a), math.sin(a)
         M = np.array([[1, 0, 0], [0, c, sn], [0, -sn, c]])
-        rbox(m, "Steel", (0.40, 0.42, 0.44), (0, 0.08, -s * 0.09), (2.0, 0.02, 0.2), M)
-    tb(m, "Steel", GREY, (-1, 0.13, 0), (1, 0.13, 0), 0.025, segs=8)
+        # (z-fight, playtest 11-10: the two flashings' ends and the roll's caps shared the end planes)
+        rbox(m, "Steel", (0.40, 0.42, 0.44), (0, 0.08, -s * 0.09), (2.0 - (0.004 if s > 0 else 0), 0.02, 0.2), M)
+    tb(m, "Steel", GREY, (-0.995, 0.13, 0), (0.995, 0.13, 0), 0.025, segs=8)
     sh.add((0, 0.08, 0), (2.0, 0.16, 0.36))
     return m, sh, []
 
@@ -730,6 +746,7 @@ def p_rail(mat):
 # ── the hab can (2.5 m, along Z, on saddles) ─────────────────────────────────
 HR, HT, HAX = 1.25, 0.08, 1.65    # outer radius, hull, the axis's height (saddles 0.4 m)
 HDECK = 0.80                      # the deck's top
+KICKZ = 0.996                     # the deck's kick strips stop short of the flanges' faces
 
 
 def hab_saddles(m, sh, zs):
@@ -744,21 +761,31 @@ def hab_saddles(m, sh, zs):
         bx(m, "Steel", SAFETY, -1.1, -0.9, 0.12, 0.124, z - 0.12, z + 0.12)
 
 
-def hab_ring_colliders(sh, z0, z1, skip=lambda a: False):
+def hab_ring_colliders(sh, z0, z1, skip=lambda a: False, split=lambda a: False):
     n = 16
     for k in range(n):
         a = (k + 0.5) * TAU / n
+        if split(a):
+            # (a junction's port side: the box either side of the hull's hole)
+            for (za, zb) in ((z0, -PHZ), (PHZ, z1)):
+                hab_ring_box(sh, a, za, zb, n)
+            continue
         if skip(a):
             continue
-        c, s = math.cos(a), math.sin(a)
-        r = HR - HT / 2
-        M = np.array([[-s, c, 0], [c, s, 0], [0, 0, 1]])
-        sh.add((r * c, HAX + r * s, (z0 + z1) / 2), (2 * HR * math.sin(math.pi / n) * 1.08, HT + 0.04, z1 - z0), quat_from_basis(M))
+        hab_ring_box(sh, a, z0, z1, n)
+
+
+def hab_ring_box(sh, a, z0, z1, n=16):
+    c, s = math.cos(a), math.sin(a)
+    r = HR - HT / 2
+    M = np.array([[-s, c, 0], [c, s, 0], [0, 0, 1]])
+    sh.add((r * c, HAX + r * s, (z0 + z1) / 2), (2 * HR * math.sin(math.pi / n) * 1.08, HT + 0.04, z1 - z0), quat_from_basis(M))
 
 
 def hab_deck(m, sh, z0, z1):
     half = math.sqrt((HR - HT) ** 2 - (HDECK - HAX) ** 2) - 0.02
-    bx(m, "Steel", (0.50, 0.51, 0.52), -half, half, HDECK - 0.04, HDECK, z0, z1)
+    # (z-fight, playtest 11-10: the deck's ends lay in the flanges' faces; 4 mm in, the collider still whole)
+    bx(m, "Steel", (0.50, 0.51, 0.52), -half, half, HDECK - 0.04, HDECK, z0 + (1 - KICKZ), z1 - (1 - KICKZ))
     sh.add((0, HDECK - 0.06, (z0 + z1) / 2), (2 * half + 0.1, 0.12, z1 - z0))
     return half
 
@@ -773,6 +800,16 @@ def hull(m, z0, z1, skip=None, bands=None):
     lathe(sub, "Clad", prof, segs=32, smooth=True, uv_m=0.5, skip=skip)
     sub.color = LIGHT
     lathe(sub, "Clad", [(HR - HT, y) for (_, y) in prof], segs=32, smooth=True, uv_m=0.5, inward=True, skip=skip)
+    # (playtest 11-10: the skins' gap was open at each end, so the hairline
+    # where two segments' linings meet showed the back faces behind it: a
+    # dotted line of daylight at every joint. A ring 1 cm in closes the gap
+    # out of sight behind the flanges.)
+    disk(sub, "Clad", HR, z1 - 0.01, segs=32, up=True, uv_m=0.5, r_in=HR - HT)
+    disk(sub, "Clad", HR, z0 + 0.01, segs=32, up=False, uv_m=0.5, r_in=HR - HT)
+    # ...and the hairline itself is backed by a band of lining 4 mm behind it,
+    # facing in and lit as the wall is, so the seam reads as one surface
+    for (ya, yb) in ((z1 - 0.012, z1), (z0, z0 + 0.012)):
+        lathe(sub, "Clad", [(HR - HT + 0.004, ya), (HR - HT + 0.004, yb)], segs=32, smooth=True, uv_m=0.5, inward=True)
     # rot_x(+90°): +Y → +Z; a lathe point (r cos a, y, r sin a) → (r cos a, -r sin a, y)
     m.merge(sub, M=rot_x(math.pi / 2), t=(0, HAX, 0))
 
@@ -788,9 +825,11 @@ def flange(m, z, out=1):
            ((HR + 0.025) * math.cos(a), HAX + (HR + 0.025) * math.sin(a), z + 0.01 * out), 0.012, segs=5)
 
 
-def p_habSeg(mat, window=False):
+def p_habSeg(mat, window=False, join=None):
     m, sh = CModel(seed=63), Shell()
     m.ground = False
+    if join is not None:
+        return hab_junction(m, sh, window, join)
     if window:
         # two windows, either side at eye height: cells left open in the hull
         segs = 32
@@ -819,12 +858,317 @@ def p_habSeg(mat, window=False):
     bx(m, "Steel", GREY, -0.12, 0.12, HAX + HR - HT - 0.10, HAX + HR - HT - 0.04, -0.95, 0.95)
     bx(m, "Lamp", LAMP_WARM, -0.05, 0.05, HAX + HR - HT - 0.105, HAX + HR - HT - 0.10, -0.8, 0.8)
     for sx in (-1, 1):
-        bx(m, "Steel", DARK, sx * (half + 0.02) - 0.03, sx * (half + 0.02) + 0.03, HDECK, HDECK + 0.08, -1, 1)
+        # (z-fight, playtest 11-10: the kick strips' ends lay in the flange's face at z ±1; 4 mm in)
+        bx(m, "Steel", DARK, sx * (half + 0.02) - 0.03, sx * (half + 0.02) + 0.03, HDECK, HDECK + 0.08, -KICKZ, KICKZ)
     return m, sh, [("Light", "empty", (0, HAX + HR - HT - 0.3, 0))]
 
 
 def p_habWindow(mat):
     return p_habSeg(mat, window=True)
+
+
+# ── hab junctions (Ty 11-10: "it just recognizes what's near it and forms the
+# connection"). A segment with another segment's END against its side is a
+# junction: that side has a PORT (the hull cut, a short trunk out to a berthing
+# plate the branch's open ring butts on, flush), and an end with nothing on it
+# is closed by a flat end plate (an L corner, a dead-end T). The catalogue
+# keeps the one Hab Segment: scripts/kit_snap.lua habShapes picks the code from
+# the neighbours, parts_kit names the hidden variant habSegJ<code>, and
+# structures.lua swaps the prefab. Codes: L / R a port on -X / +X, b / f the
+# -Z / +Z end closed.
+JOIN_CODES = ("L", "R", "LR", "Lb", "Lf", "Lbf", "Rb", "Rf", "Rbf", "LRb", "LRf", "LRbf")
+PZ, PWT = 0.62, 0.10                 # the passage's half-width, the trunk's walls
+PHZ = 0.67                           # the hull's hole half-width (inside the walls)
+PY1 = HDECK + 1.8                    # the passage's ceiling (the deck is its floor): the bulkhead door's height
+PFB, PCT = HAX - 1.05, HAX + 1.05    # the trunk's underside and top (they bury the hole's edges)
+PX0 = 0.62                           # where the trunk starts, inside the hull
+PLX0, PLX1 = 1.31, 1.35              # the berthing plate; the branch's ring butts on PLX1 (the box's side)
+PLR = HR + 0.05                      # its radius: the flanges'
+RFR = HR - HT - 0.05                 # the frame's room edge, 5 cm proud of the lining
+FRAME = (0.55, 0.50, 0.32)           # the bulkhead's hazard frame
+PLATE = (0.70, 0.70, 0.67)           # the bulkhead's plate
+DECKC = (0.50, 0.51, 0.52)
+# the hull's cells cut for a port (lathe cell i spans i × 11.25°, measured from
+# +X toward -Y): ±56.25° about the side, so both skins' edges land inside the
+# trunk's floor and ceiling
+HOLE_I = {1: set(range(0, 5)) | set(range(27, 32)), -1: set(range(11, 21))}
+
+
+def face_poly(m, mat, col, pts, n):
+    """A flat convex polygon (3D points in order round it) facing n, planar UVs in metres."""
+    m.color = col
+    n = np.asarray(n, float)
+    a = np.cross(n, [0.0, 1.0, 0.0] if abs(n[1]) < 0.9 else [1.0, 0.0, 0.0]); a /= np.linalg.norm(a)
+    b = np.cross(n, a)
+    uvm = UVM.get(mat, 1.0)
+    P = [np.asarray(p, float) for p in pts]
+    UV = [((p @ a) * uvm, -(p @ b) * uvm) for p in P]
+    I = []
+    for k in range(1, len(P) - 1):
+        if np.cross(P[k] - P[0], P[k + 1] - P[0]) @ n >= 0:
+            I.append((0, k, k + 1))
+        else:
+            I.append((0, k + 1, k))
+    m.add(mat, [tuple(p) for p in P], [tuple(n)] * len(P), UV, I)
+
+
+def prism_xy(m, mat, col, poly, z0, z1):
+    """A prism along Z from a convex (x, y) polygon, every face facing out."""
+    cx = sum(p[0] for p in poly) / len(poly)
+    cy = sum(p[1] for p in poly) / len(poly)
+    face_poly(m, mat, col, [(x, y, z1) for x, y in poly], (0, 0, 1))
+    face_poly(m, mat, col, [(x, y, z0) for x, y in poly], (0, 0, -1))
+    n = len(poly)
+    for k in range(n):
+        (xa, ya), (xb, yb) = poly[k], poly[(k + 1) % n]
+        l = math.hypot(xb - xa, yb - ya)
+        if l < 1e-6:
+            continue
+        nx, ny = (yb - ya) / l, -(xb - xa) / l
+        if nx * ((xa + xb) / 2 - cx) + ny * ((ya + yb) / 2 - cy) < 0:
+            nx, ny = -nx, -ny
+        face_poly(m, mat, col, [(xa, ya, z0), (xb, yb, z0), (xb, yb, z1), (xa, ya, z1)], (nx, ny, 0))
+
+
+def quads_add(m, mat, col, quads):
+    """Many flat quads ((p0, p1, p2, p3), n) in one call, each wound to face n."""
+    m.color = col
+    uvm = UVM.get(mat, 1.0)
+    P, N, UV, I = [], [], [], []
+    for pts, n in quads:
+        n = np.asarray(n, float)
+        a = np.cross(n, [0.0, 1.0, 0.0] if abs(n[1]) < 0.9 else [1.0, 0.0, 0.0]); a /= np.linalg.norm(a)
+        b = np.cross(n, a)
+        base = len(P)
+        Q = [np.asarray(q, float) for q in pts]
+        for q in Q:
+            P.append(tuple(q)); N.append(tuple(n)); UV.append(((q @ a) * uvm, -(q @ b) * uvm))
+        for (i, j, k) in ((0, 1, 2), (0, 2, 3)):
+            if np.cross(Q[j] - Q[i], Q[k] - Q[i]) @ n >= 0:
+                I.append((base + i, base + j, base + k))
+            else:
+                I.append((base + i, base + k, base + j))
+    m.add(mat, P, N, UV, I)
+
+
+def curved_slab(m, mat, col, inn, out, z0, z1):
+    """A slab along Z between two (x, y) polylines of equal length (its inner
+    and outer edges, y rising), from z0 to z1: no faces inside it."""
+    q = []
+    for k in range(len(inn) - 1):
+        a, b, c, d = inn[k], out[k], out[k + 1], inn[k + 1]
+        for z, nz in ((z1, 1), (z0, -1)):
+            q.append(([(a[0], a[1], z), (b[0], b[1], z), (c[0], c[1], z), (d[0], d[1], z)], (0, 0, nz)))
+    for (k, ny) in ((0, -1), (len(inn) - 1, 1)):
+        a, b = inn[k], out[k]
+        q.append(([(a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1)], (0, ny, 0)))
+    quads_add(m, mat, col, q)
+    # the curved edges with smooth normals (flat facets read as a sawtooth of
+    # light along the arc in the engine's shading)
+    for (pl, sg) in ((inn, -1), (out, 1)):
+        segn = []
+        for k in range(len(pl) - 1):
+            dx, dy = pl[k + 1][0] - pl[k][0], pl[k + 1][1] - pl[k][1]
+            l = math.hypot(dx, dy) or 1.0
+            segn.append((dy / l * sg, -dx / l * sg))
+        vn = []
+        for k in range(len(pl)):
+            ns = [segn[j] for j in (k - 1, k) if 0 <= j < len(segn)]
+            nx, ny = sum(n[0] for n in ns), sum(n[1] for n in ns)
+            l = math.hypot(nx, ny) or 1.0
+            vn.append((nx / l, ny / l, 0.0))
+        m.color = col
+        uvm = UVM.get(mat, 1.0)
+        P, N, UV, I = [], [], [], []
+        s_acc = 0.0
+        for k in range(len(pl)):
+            if k > 0:
+                s_acc += math.hypot(pl[k][0] - pl[k - 1][0], pl[k][1] - pl[k - 1][1])
+            for z in (z0, z1):
+                P.append((pl[k][0], pl[k][1], z)); N.append(vn[k]); UV.append((z * uvm, -s_acc * uvm))
+        for k in range(len(pl) - 1):
+            i0, i1, i2, i3 = 2 * k, 2 * k + 1, 2 * k + 3, 2 * k + 2
+            A, B, C = np.asarray(P[i0]), np.asarray(P[i1]), np.asarray(P[i2])
+            n = np.array([segn[k][0], segn[k][1], 0.0])
+            if np.cross(B - A, C - A) @ n >= 0:
+                I += [(i0, i1, i2), (i0, i2, i3)]
+            else:
+                I += [(i0, i2, i1), (i0, i3, i2)]
+        m.add(mat, P, N, UV, I)
+
+
+def hab_port(m, sh, s, half):
+    """One side's port, built on +X and turned half round for -X (s = -1)."""
+    sub = CModel(seed=70 + s)
+    sub.ground = False
+    W0, W1 = PZ, PZ + PWT
+    PX1 = PLX0 + 0.01     # (the trunk's shell ends inside the plate; its lining meets the passage's edges)
+
+    def xc(yr, r):
+        return math.sqrt(max(r * r - yr * yr, 0.0))
+
+    # the side walls in strips, following the hull: a hazard frame from 5 cm
+    # proud of the lining out through both skins (it buries the hole's edges),
+    # then the trunk's wall to the plate, lined inside and painted outside
+    n = 18
+    y0r, y1r = PFB + 0.01 - HAX, PCT - 0.01 - HAX   # (their ends inside the floor's filler and the ceiling)
+    ys = [y0r + (y1r - y0r) * k / n for k in range(n + 1)]
+    inn = [(max(PX0, xc(y, RFR)), HAX + y) for y in ys]
+    out = [(max(PX0 + 0.04, xc(y, HR + 0.02)), HAX + y) for y in ys]
+    for sz in (-1, 1):
+        z0, z1 = sorted((sz * W0, sz * W1))
+        curved_slab(sub, "Steel", FRAME, inn, out, z0, z1)
+        zl0, zl1 = sorted((sz * W0, sz * (W0 + 0.02)))
+        zs0, zs1 = sorted((sz * (W0 + 0.02), sz * W1))
+        curved_slab(sub, "Clad", LIGHT, out, [(PLX0, y) for (_, y) in out], zl0, zl1)
+        curved_slab(sub, "Clad", PAINT, out, [(PX1, y) for (_, y) in out], zs0, zs1)
+    # the ceiling: lining under, the painted shell over (both skins' top edges inside it)
+    bx(sub, "Clad", LIGHT, PX0, PLX0, PY1, PY1 + 0.02, -W0, W0)
+    bx(sub, "Clad", PAINT, PX0, PX1, PY1 + 0.02, PCT, -W1 + 0.005, W1 - 0.005)
+    # the floor: the deck carried through, a filler under it (the bottom edges inside it)
+    bx(sub, "Steel", DECKC, half, PLX0, HDECK - 0.04, HDECK, -W0, W0)
+    bx(sub, "Steel", DARK, PX0, PX1 + 0.005, PFB, HDECK - 0.04, -W1 + 0.005, W1 - 0.005)
+    # stiffening ribs round the trunk, outside
+    for xr in (PLX0 - 0.06,):
+        bx(sub, "Steel", GREY, xr - 0.03, xr + 0.03, PCT, PCT + 0.04, -W1 - 0.02, W1 + 0.02)
+        for sz in (-1, 1):
+            bx(sub, "Steel", GREY, xr - 0.03, xr + 0.03, PFB, PCT, sz * (W1 + 0.0), sz * (W1 + 0.04))
+    # the berthing plate: a disc (the flanges' radius) with the passage through it
+    yb0, yb1 = HDECK - HAX, PY1 - HAX
+    corners = [math.atan2(yb0, W0), math.atan2(yb1, W0), math.atan2(yb1, -W0), math.atan2(yb0, -W0)]
+    angs = sorted(set([TAU * i / 48 - math.pi for i in range(48)] + corners))
+
+    def inner(t):
+        c, sn = math.cos(t), math.sin(t)
+        tz = W0 / abs(c) if abs(c) > 1e-9 else 1e9
+        ty = (yb1 / sn) if sn > 1e-9 else ((yb0 / sn) if sn < -1e-9 else 1e9)
+        r = min(tz, ty)
+        return r * c, HAX + r * sn
+    for k in range(len(angs)):
+        t_a, t_b = angs[k], angs[(k + 1) % len(angs)]
+        if t_b < t_a:
+            t_b += TAU
+        za, ya = inner(t_a)
+        zb, yb = inner(t_b)
+        oza, oya = PLR * math.cos(t_a), HAX + PLR * math.sin(t_a)
+        ozb, oyb = PLR * math.cos(t_b), HAX + PLR * math.sin(t_b)
+        face_poly(sub, "Steel", PLATE, [(PLX1, ya, za), (PLX1, yb, zb), (PLX1, oyb, ozb), (PLX1, oya, oza)], (1, 0, 0))
+        face_poly(sub, "Clad", PAINT, [(PLX0, ya, za), (PLX0, yb, zb), (PLX0, oyb, ozb), (PLX0, oya, oza)], (-1, 0, 0))
+        nz, ny = math.cos((t_a + t_b) / 2), math.sin((t_a + t_b) / 2)
+        face_poly(sub, "Steel", GREY, [(PLX0, oya, oza), (PLX1, oya, oza), (PLX1, oyb, ozb), (PLX0, oyb, ozb)], (0, ny, nz))
+    # the passage's edges through the plate, and a hazard sill
+    face_poly(sub, "Steel", DECKC, [(PLX0, HDECK, -W0), (PLX1, HDECK, -W0), (PLX1, HDECK, W0), (PLX0, HDECK, W0)], (0, 1, 0))
+    face_poly(sub, "Clad", LIGHT, [(PLX0, PY1, -W0), (PLX1, PY1, -W0), (PLX1, PY1, W0), (PLX0, PY1, W0)], (0, -1, 0))
+    for sz in (-1, 1):
+        face_poly(sub, "Steel", FRAME, [(PLX0, HDECK, sz * W0), (PLX1, HDECK, sz * W0), (PLX1, PY1, sz * W0), (PLX0, PY1, sz * W0)], (0, 0, -sz))
+    bx(sub, "Steel", FRAME, PLX0 - 0.10, PLX1, HDECK, HDECK + 0.012, -W0, W0)
+    # bolts round the plate, inside the branch's bore and clear of the passage
+    for k in range(24):
+        t = TAU * k / 24
+        z, yr = 1.08 * math.cos(t), 1.08 * math.sin(t)
+        if abs(z) < W0 + 0.06 and yb0 - 0.06 < yr < yb1 + 0.06:
+            continue
+        tb(sub, "Steel", DARK, (PLX1 - 0.002, HAX + yr, z), (PLX1 + 0.012, HAX + yr, z), 0.012, segs=6)
+    m.merge(sub, M=rot_y(math.pi) if s < 0 else None)
+    # colliders: the trunk's floor, ceiling and walls, the plate round the passage
+    boxes = [((half + PLX1) / 2, HDECK - 0.06, 0, PLX1 - half, 0.12, 2 * W0),
+             ((PX0 + PLX1) / 2, (PY1 + PCT + 0.05) / 2, 0, PLX1 - PX0, PCT + 0.05 - PY1, 2 * W1),
+             ((1.0 + PLX1) / 2, HAX, (W0 + W1) / 2, PLX1 - 1.0, PCT - PFB, W1 - W0),
+             ((1.0 + PLX1) / 2, HAX, -(W0 + W1) / 2, PLX1 - 1.0, PCT - PFB, W1 - W0),
+             ((PLX0 + PLX1) / 2, (PY1 + HAX + 1.28) / 2, 0, PLX1 - PLX0, HAX + 1.28 - PY1, 1.8),
+             ((PLX0 + PLX1) / 2, (HDECK + PY1) / 2, (W0 + 1.25) / 2, PLX1 - PLX0, PY1 - HDECK, 1.25 - W0),
+             ((PLX0 + PLX1) / 2, (HDECK + PY1) / 2, -(W0 + 1.25) / 2, PLX1 - PLX0, PY1 - HDECK, 1.25 - W0)]
+    for (cx, cy, cz, sx, sy, sz) in boxes:
+        sh.add((s * cx, cy, s * cz), (sx, sy, sz))
+
+
+def hab_end_plate(m, s):
+    """A junction's free end closed flat (s = +1 its +Z end): the lining's face
+    inside, a raised cover plate with two stiffeners on the flange outside."""
+    sub = CModel(seed=73 + s)
+    sub.ground = False
+    sub.color = LIGHT
+    disk(sub, "Clad", HR - HT, 0.95 * s, segs=32, up=s < 0, uv_m=0.5)
+    sub.color = PLATE
+    disk(sub, "Steel", 1.18, 1.02 * s, segs=32, up=s > 0)
+    sub.color = GREY
+    lathe(sub, "Steel", [(1.18, min(1.0 * s, 1.02 * s)), (1.18, max(1.0 * s, 1.02 * s))], segs=32)
+    m.merge(sub, M=rot_x(math.pi / 2), t=(0, HAX, 0))
+    z0, z1 = sorted((1.02 * s, 1.08 * s))
+    bx(m, "Steel", DARK, -1.0, 1.0, HAX - 0.06, HAX + 0.06, z0, z1)
+    z0, z1 = sorted((1.015 * s, 1.075 * s))
+    bx(m, "Steel", DARK, -0.06, 0.06, HAX - 1.0, HAX + 1.0, z0, z1)
+    # a stencilled data plate by the deck line
+    z0, z1 = sorted((1.02 * s, 1.03 * s))
+    bx(m, "Steel", SAFETY, 0.35, 0.75, HDECK + 0.05, HDECK + 0.25, z0, z1)
+
+
+def hab_junction(m, sh, window, join):
+    L, R, cb, cf = join
+    ports = [s for s, on in ((-1, L), (1, R)) if on]
+    wins = [s for s in (-1, 1) if window and s not in ports]
+    bands = [-1, -PHZ, -0.38, 0.38, PHZ, 1] if window else [-1, -PHZ, PHZ, 1]
+
+    def skip(i, k):
+        mid = (bands[k] + bands[k + 1]) / 2
+        for s in ports:
+            if abs(mid) < PHZ and i in HOLE_I[s]:
+                return True
+        if abs(mid) < 0.38:
+            if 1 in wins and i in (0, 31):
+                return True
+            if -1 in wins and i in (15, 16):
+                return True
+        return False
+    hull(m, -1, 1, skip=skip, bands=bands)
+    for sx in wins:
+        hy = HR * math.sin(TAU / 32)
+        x = sx * (HR * math.cos(TAU / 32) - 0.01)
+        for (yy0, yy1, zz0, zz1) in ((-hy - 0.06, -hy, -0.44, 0.44), (hy, hy + 0.06, -0.44, 0.44),
+                                     (-hy, hy, -0.44, -0.38), (-hy, hy, 0.38, 0.44)):
+            bx(m, "Steel", GREY, x - 0.06, x + 0.06, HAX + yy0, HAX + yy1, zz0, zz1)
+        bx(m, "Pane", (1, 1, 1), x - 0.012, x + 0.012, HAX - hy, HAX + hy, -0.38, 0.38)
+        sh.add((x, HAX, 0), (0.1, 2 * hy, 0.76))
+    flange(m, -1, -1)
+    flange(m, 1, 1)
+    hab_saddles(m, sh, (-0.87, 0.87))
+    half = hab_deck(m, sh, -1, 1)
+    hab_ring_colliders(sh, -1, 1, skip=lambda a: any(s * math.cos(a) > 0.97 for s in wins),
+                       split=lambda a: any(s * math.cos(a) > 0.3 for s in ports))
+    bx(m, "Steel", GREY, -0.12, 0.12, HAX + HR - HT - 0.10, HAX + HR - HT - 0.04, -0.95, 0.95)
+    bx(m, "Lamp", LAMP_WARM, -0.05, 0.05, HAX + HR - HT - 0.105, HAX + HR - HT - 0.10, -0.8, 0.8)
+    for sx in (-1, 1):
+        xa, xb = sx * (half + 0.02) - 0.03, sx * (half + 0.02) + 0.03
+        spans = ((-KICKZ, -PZ - 0.03), (PZ + 0.03, KICKZ)) if sx in ports else ((-KICKZ, KICKZ),)   # (cut ends inside the frame)
+        for (za, zb) in spans:
+            bx(m, "Steel", DARK, xa, xb, HDECK, HDECK + 0.08, za, zb)
+    for s in ports:
+        hab_port(m, sh, s, half)
+    if cb:
+        hab_end_plate(m, -1)
+        sh.add((0, HAX, -0.975), (2.3, 2.3, 0.06))
+    if cf:
+        hab_end_plate(m, 1)
+        sh.add((0, HAX, 0.975), (2.3, 2.3, 0.06))
+    return m, sh, [("Light", "empty", (0, HAX + HR - HT - 0.3, 0))]
+
+
+def join_flags(code):
+    return ("L" in code, "R" in code, "b" in code, "f" in code)
+
+
+def join_inside(c):
+    """A junction's INSIDE (its MeshIn): the can's lining and deck, the
+    passage's own faces, and the plate's face the branch sees."""
+    x, y, z = c
+    if math.hypot(x, y - HAX) < HR - HT * 0.5 and abs(z) < 1.0 + 1e-3:
+        return True
+    ax = abs(x)
+    if PX0 - 0.05 <= ax <= PLX1 + 1e-3 and abs(z) <= PZ + 1e-3 and HDECK - 1e-3 <= y <= PY1 + 1e-3:
+        return True
+    if ax >= PLX1 - 1e-3 and math.hypot(z, y - HAX) < PLR - 0.01:
+        return True
+    return False
 
 
 def p_habCap(mat):
@@ -880,8 +1224,9 @@ def p_habBulkhead(mat):
     # the door frame, hazard-striped
     for s in (-1, 1):
         z0, z1 = s * (t / 2), s * (t / 2 + 0.05)
-        for (a, b, c, d) in ((dx0 - 0.08, dx0, dy0, dy1 + 0.08), (dx1, dx1 + 0.08, dy0, dy1 + 0.08), (dx0 - 0.08, dx1 + 0.08, dy1, dy1 + 0.08)):
-            bx(m, "Steel", (0.55, 0.50, 0.32), a, b, c, d, min(z0, z1) - s * 0.003, max(z0, z1))
+        for (a, b, c, d) in ((dx0 - 0.08, dx0, dy0, dy1 + 0.08), (dx1, dx1 + 0.08, dy0, dy1 + 0.08), (dx0, dx1, dy1, dy1 + 0.08)):
+            # (z-fight, playtest 11-10: reaching 3 mm into the plate, the frame's edges lay in the plate strips' ends)
+            bx(m, "Steel", (0.55, 0.50, 0.32), a, b, c, d, min(z0, z1), max(z0, z1))
     sh.add(((-R + dx0) / 2, HAX, 0), (R + dx0, 2 * R, 0.08))
     sh.add(((R + dx1) / 2, HAX, 0), (R - dx1, 2 * R, 0.08))
     sh.add(((dx0 + dx1) / 2, (dy1 + HAX + R) / 2, 0), (dx1 - dx0, HAX + R - dy1, 0.08))
@@ -907,8 +1252,8 @@ def p_leadWall(mat):
     m, sh = CModel(seed=72), Shell()
     wall_body(m, sh, "steel", -1, 1, 0, WH)
     # the lead is behind the inner skin; the outside says so
-    bx(m, "Steel", SAFETY, -0.25, 0.25, 1.45, 1.75, WT / 2 - 0.002, WT / 2 + 0.004)
-    bx(m, "Steel", DARK, -0.2, 0.2, 1.5, 1.7, WT / 2 + 0.003, WT / 2 + 0.006)
+    bx(m, "Steel", SAFETY, -0.25, 0.25, 1.45, 1.75, WT / 2 - 0.002, WT / 2 + 0.006)
+    bx(m, "Steel", DARK, -0.2, 0.2, 1.5, 1.7, WT / 2 + 0.004, WT / 2 + 0.010)
     return m, sh, []
 
 
@@ -950,7 +1295,8 @@ def p_wallScreen(mat):
 def p_wallTray(mat):
     m, sh = CModel(seed=85), Shell()
     m.ground = False
-    bx(m, "Steel", GREY, -1, 1, 0, 0.004, -0.1, 0.1)
+    # (z-fight, playtest 11-10: the tray's floor and its sides ended in one plane; the floor stops 2 mm short)
+    bx(m, "Steel", GREY, -0.998, 0.998, 0, 0.004, -0.096, 0.096)
     for s in (-1, 1):
         bx(m, "Steel", GREY, -1, 1, 0, 0.1, s * 0.098 - 0.002, s * 0.098 + 0.002)
     for k, (z, r) in enumerate(((-0.05, 0.016), (0.0, 0.02), (0.05, 0.014), (-0.02, 0.012))):
@@ -1254,6 +1600,14 @@ PIECES = {
 }
 
 
+# ── hab junctions: hidden variants of the Hab Segment and the Hab Window
+# Segment (a window side that has a port loses its window, so a window
+# junction with ports on both sides is the plain one: none is made)
+for _code in JOIN_CODES:
+    PIECES["habSegJ" + _code] = ((lambda mat, j=join_flags(_code): p_habSeg(mat, False, j)), ["steel"])
+    if not ("L" in _code and "R" in _code):
+        PIECES["habWindowJ" + _code] = ((lambda mat, j=join_flags(_code): p_habSeg(mat, True, j)), ["steel"])
+
 # ── S4: the character pieces (tools/gen_kit_props.py) ────────────────────────
 PIECES.update(gen_kit_props.pieces(sys.modules[__name__]))
 
@@ -1300,7 +1654,7 @@ PIECES.update(gen_kit_weapons.pieces(sys.modules[__name__]))
 FACES2 = {
     "z": {"wall", "halfWall", "wall12", "doorWall", "doorWallM", "doubleDoor", "windowWall", "porthole", "airlockWall",
           "openFrame", "ventWall", "leadWall", "gable"},
-    "ring": {"habSeg", "habWindow"},
+    "ring": {"habSeg", "habWindow"} | {"habSegJ" + c for c in JOIN_CODES} | {"habWindowJ" + c for c in JOIN_CODES if not ("L" in c and "R" in c)},
 }
 NO_PAINT = {"lightFitting", "wallScreen", "switchPlate", "lampDesk", "lampFloor"}
 NO_PAINT |= gen_kit_logic.NO_PAINT   # (S8: control gear is never painted)
@@ -1351,6 +1705,8 @@ def paint_split(piece, m, children):
     inn = None
     if f2 == "z":
         m, inn = split_model(m, lambda mat, c: c[2] < -1e-4)
+    elif f2 == "ring" and "J" in piece:
+        m, inn = split_model(m, lambda mat, c: join_inside(c))
     elif f2 == "ring":
         m, inn = split_model(m, lambda mat, c: math.hypot(c[0], c[1] - HAX) < HR - HT * 0.5 and abs(c[2]) < 1.0 + 1e-3)
     if inn is not None and inn.parts:
