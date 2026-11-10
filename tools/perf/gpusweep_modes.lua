@@ -431,6 +431,36 @@ function GS.run_burst()
   GS.set_level("Medium")
   GS.burst("switch_medium")
 end
+-- E's forest questions (2026-11-09): the Lighting node out of stars mode (one
+-- directional sun, no per-star march), every cloud deck's cover to 0 (no cloud
+-- shading of the ground), and flora_field without its 0661 shadow config
+-- (every plant casts, as before the card) — the field grown again each way.
+TOGGLES.stars0 = { on = function(c) c.st = c.L.stars; c.L.stars = false end, off = function(c) c.L.stars = c.st end }
+TOGGLES.clouds0 = {
+  on = function(c)
+    c.cl = {}
+    for _, nm in ipairs(space.bodies() or {}) do
+      local name = type(nm) == "table" and nm.name or nm
+      local nd = find(name)
+      local cb = nd and nd:getcomponent("CelestialBody")
+      if cb and (cb.clouds or 0) > 0 then c.cl[#c.cl + 1] = { cb = cb, v = cb.clouds }; cb.clouds = 0 end
+    end
+    P("GPU clouds0: %d deck(s) cleared", #c.cl)
+  end,
+  off = function(c) for _, e in ipairs(c.cl or {}) do pcall(function() e.cb.clouds = e.v end) end end,
+}
+TOGGLES.shadowkind0 = {
+  on = function(c)
+    local ff = findScript("flora_field")
+    c.sk = ff.SHADOW_KIND; ff.SHADOW_KIND = {}
+    ff.clearAll(); GS.regrow("every plant casts")
+  end,
+  off = function(c)
+    local ff = findScript("flora_field")
+    ff.SHADOW_KIND = c.sk
+    ff.clearAll(); GS.regrow("0661 config back")
+  end,
+}
 -- every LightProbes volume in the scene switched off (E's GI-ambient question)
 TOGGLES.probes0 = {
   on = function(c)
@@ -462,22 +492,40 @@ function GS.run()
   local w, h = screen()
   P("GS picture %dx%d fullscreen %s fov %s", w, h, tostring(app.fullscreen and app.fullscreen()), tostring(params.fov))
   -- E's fog questions (2026-11-09): the luminous bodies, and the fog's own dials
-  pcall(function()
-    local cam = find("Camera 1") or astro()
-    local list = {}
+  GS.sky_report = function(tag)
+    -- every celestial body's CelestialBody component: the luminous ones as the
+    -- engine ranks them (irradiance = luminosity x 1e6 / d^2; star_uniforms keeps
+    -- up to 4 at >= 1 % of the brightest), and every cloud deck in reach
+    local cam = astro() or find("Camera 1")
+    local list, decks = {}, {}
     for _, nm in ipairs(space.bodies() or {}) do
-      local bd = space.body(type(nm) == "table" and nm.name or nm)
-      local lum = bd and (bd.luminosity or (bd.celestial and bd.celestial.luminosity))
-      if bd and lum and lum > 0 then
+      local name = type(nm) == "table" and nm.name or nm
+      local bd, nd = space.body(name), find(name)
+      local cb = nd and nd.getcomponent and nd:getcomponent("CelestialBody")
+      if bd and cb then
         local d = len(bd.x - cam.x, bd.y - cam.y, bd.z - cam.z)
-        list[#list + 1] = { bd.name, lum, d, lum * 1e6 / (d * d) }
+        local lum = cb.luminosity or 0
+        if lum > 0 then list[#list + 1] = { name, lum, d, lum * 1e6 / math.max(d * d, 1) } end
+        if (cb.clouds or 0) > 0.01 and d < (bd.radius or 0) * 3 then
+          decks[#decks + 1] = string.format("%s clouds %.2f darkness %.2f height %.0f", name, cb.clouds, cb.cloudDarkness or -1, cb.cloudHeight or -1)
+        end
       end
     end
     table.sort(list, function(a, b) return a[4] > b[4] end)
-    local o = {}
-    for _, e in ipairs(list) do o[#o + 1] = string.format("%s lum %.3g at %.3g m (share %.2g)", e[1], e[2], e[3], e[4] / list[1][4]) end
-    P("GS STARS %d luminous: %s", #list, table.concat(o, "; "))
-  end)
+    local o, lit = {}, 0
+    for _, e in ipairs(list) do
+      local share = e[4] / list[1][4]
+      if share >= 0.01 then lit = lit + 1 end
+      o[#o + 1] = string.format("%s lum %.3g at %.3g m share %.2g", e[1], e[2], e[3], share)
+    end
+    local L = light()
+    P("GS STARS [%s] Light.stars %s | %d luminous, %d at >= 1%% (lit by the engine, max 4): %s", tag, tostring(L and L.stars), #list,
+      math.min(lit, 4), table.concat(o, "; "))
+    P("GS CLOUDS [%s] %d deck(s) round the camera: %s", tag, #decks, table.concat(decks, "; "))
+    local ff = findScript("flora_field")
+    P("GS FLORA0661 [%s] shadowOpts %s (true = the engine took castShadow/shadowDistance; false = refused)", tag, tostring(ff and ff.shadowOpts))
+  end
+  pcall(GS.sky_report, "start")
   local L0 = light()
   if L0 then
     P("GS FOGDIALS stars %s fogVolumetric %s fogShafts %s fogShaftsMap %s fogSteps %s fogDensity %s fogHeight %s fogFalloff %s fogLight %s fogEnd %s shadowDistance %s shadowMap %s",
@@ -498,6 +546,10 @@ function GS.run()
         local c = { L = light(), PP = post(), gx = findScript("graphics"), at = findScript("atmosphere"),
                     fl = findScript("flora_field"), fb = findScript("far_bodies") }
         ok2 = true
+        -- graphics.lua re-asserts the shadow dials every frame: silenced for the variants, as ab_toggles does
+        local gxu = c.gx and c.gx.update
+        pcall(function() c.gx.update = function() end end)
+        pcall(GS.sky_report, sc)
         for _, v in ipairs(GS.list(params.gsvariants)) do
           local T = TOGGLES[v]
           if T then pcall(T.on, c) end
@@ -509,6 +561,7 @@ function GS.run()
           if T then pcall(T.off, c) end
           wait(1.5)
         end
+        if gxu then pcall(function() c.gx.update = gxu end) end
       elseif params.gstoggles then
         -- the toggle A/B (perfbench gpu mode's) at this scene, at one level
         GS.set_level(tostring(params.gfx or "High")); wait(1.5)
