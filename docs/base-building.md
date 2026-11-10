@@ -634,6 +634,11 @@ as the quick path.
     exp 12/s, 0.3 m hysteresis), and the player's zoom is kept.
 - **The entry framing** is from where the Engineer stood, looking at the
   deck.
+- **Outdoors** (a stand or a Base Hub; playtest 11-10, §28): the floor is the
+  terrain itself, not a plane. The pivot never sinks into the ground, the
+  orbit stops on it, the camera never ends inside a builder part, RMB orbits
+  the selection or the pivot, MMB pans along the ground, the wheel eases,
+  and HOME recentres.
 
 ### Orientation (`scripts/craft_orient.lua`, shared with the VAB)
 
@@ -3769,3 +3774,97 @@ Engine 0.117.1-dev.1468 at 1280 × 720; the full table is in
   armour, intercept, the crater and the blast, old saves.
 - `tools/perf/laserprobe.sh <engine> [laser|turret]` (PATCHES=funds.patch):
   `LZ PASS|FAIL`, pictures in `save/user/lasershots/`.
+
+## 28. Playtest 11-10: the open kit's frame time, and the outdoor builder camera
+
+Ty, on the 11-09d demo: "base building seemed to be where I was getting
+choppy frame rates the second I started placing my first base plate", and
+"the camera in the full builder hub mode … gets stuck in the ground and [is]
+hard to orientate".
+
+### The chop was the parts column, not the base (`catalog_panel`)
+
+Measured with `tools/perf/chopprobe.sh chop` and `chopab` (fresh save, the
+home world, 210 m out; see the table in the probe's README entry):
+
+- **Structures cost nothing measurable.** After a 32-40 piece base with the
+  kit shut the frame was 15.9-16.1 ms p50, against 18.6-19.9 ms on foot
+  before the first plate: no rise. `placeAt` itself takes 0.6-2.9 ms;
+  struct_live, base_roles, base_grid, room_air and the support map never
+  reached a slow frame's top scripts, and flora_field (the clear under the
+  slabs included) stayed at 0.3-1.5 ms.
+- **The open kit did.** With the column unfolded every frame was over
+  33 ms: 47-54 ms p50, 136-166 ms p95, up to 600 ms. ALL listed 228 cards,
+  about 2,000 UI elements (scene nodes 920 → 2,940): the ui bucket 0.5 →
+  6 ms, render instancing +4.4 ms, `untimed` 3 → 20-50 ms, 3 GPU ms more,
+  and the once-a-second refresh re-described all 228 cards (catalog_panel
+  15-21 ms on that frame). Folded (B) the same scene ran at 19-21 ms; the
+  live preview of the part in hand made no difference (preview camera off:
+  50 ms p50 still).
+- **The first opening of a session** also photographed every card's icon,
+  one at a time, for 109 s (228 icons), re-describing the whole list every
+  eight.
+
+**The fix: only the rows in view are elements.** `catalog_panel.describe`
+builds the cards from `window_of(n, h, scrollY)` (the rows the list's
+height shows from its `scrollY`, and `VIEW_MARGIN` = 6 either side), with
+two spacer boxes keeping the list its full height, so the scroll bar and
+the scroll position are what they were. The window's first row is in the
+plate's signature (coarse: every 3 rows), so a scroll re-describes ~25
+cards, not 228. The VAB, a stand and a hub use the same panel and gain the
+same. Measured after: the open kit 21-24 ms p50 (was 46-64), ui 0.9-1.3 ms,
+1,125-1,240 nodes, GPU 8.3-11 ms (was 11.7-19.9); the kit shut after the
+base 16.1-17.1 ms. (Both runs shared the machine with two other engines:
+their 0.1-3.5 s `untimed` stalls land in every stretch, the shut kit's too.)
+
+### The outdoor builder camera (`builder_camera`, at a stand or a hub)
+
+The old floor at a hub was a plane 3 m UNDER the structure's ground plane,
+so an orbit could take the camera 3 m into flat ground; the world clip then
+spherecast from a pivot that a pan or a zoom-to-cursor had often put inside
+the ground already, found nothing, and left the camera 0.5 m from a buried
+pivot. Orbits turned about a point picked off the cursor (on open ground, a
+point on the pivot's depth plane), so the pivot wandered away from the base
+with every drag, and the wheel jumped.
+
+Everything stays in the builder's frame, which is the structure's own (its
++Y is the radial up where it was founded), so the view is always upright on
+the planet; only frame-local values are kept between frames, and the ground
+is read in lateUpdate after `fr.refresh()` (planet and frame in one pose).
+
+- **The ground, every frame** (`ground_pass`): the terrain's height under a
+  frame point by `terrain.raycast` down the frame's up (the field itself,
+  exact; a start in rock answers at once).
+  - The pivot under the ground slides back along the view to where the
+    ground starts (the picture does not jump); with the camera under too, it
+    is lifted to `PIVOT_CLEAR` (0.35 m).
+  - The pitch is held so the camera stays `CAM_CLEAR` (0.6 m) over the
+    ground under it, and so the sight line clears the ground: a ray from the
+    pivot toward the camera that meets a hill steepens the pitch to pass
+    `SIGHT_CLEAR` (0.8 m) over that point, up to six times (each try 0.8 m
+    more). An orbit down
+    stops on the ground, and a hill between the pivot and the camera lifts
+    the orbit over it instead of pulling the camera in to the hillside. The
+    pitch stays where the ground put it (no spring back when the hill has
+    passed: nothing moves that the player did not move).
+  - The world clip's spherecast now ignores surfaces it starts against;
+    `part_clip` keeps the camera out of the builder's own parts (they have
+    no colliders at a hub); and the drawn camera is never under the ground.
+- **RMB orbits the selection's centre, else the pivot** (never a point off
+  the terrain). **MMB / Shift+RMB pans along the ground plane** at the
+  pivot's height. **The wheel eases** (a goal at exp 14/s) toward a part
+  under the cursor, or the pivot. **HOME recentres**: the whole base framed
+  from a 25° look down along the current bearing. The hub's hint names them.
+- The VAB's camera is unchanged (all of this is behind `worldClip`).
+- Cost: builder_camera 0.28-0.34 ms a frame at a hub (3-4 terrain rays, a
+  spherecast, two builder rays; more only while a hill hides the pivot).
+
+### Tests and the probe
+
+- `tools/perf/chopprobe.sh <engine> chop|chopab` (PATCHES=funds.patch): the
+  frame time before, during and after building, every slow frame named.
+- `tools/perf/chopprobe.sh <engine> cam`: Base Hubs on flat ground, on a
+  raised hill's flank and on a dug pit's rim; the camera orbited low on eight
+  bearings, its pivot pushed into the ground, zoomed hard, panned, HOME; each
+  checked against the terrain and the local up (`CAMP` lines, pictures
+  `save/user/buildshots/{flat,slope,cliff}_*.png`).

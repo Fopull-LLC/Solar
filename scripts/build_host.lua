@@ -986,7 +986,7 @@ function hub_landed(bcn)
     if bc.setCamState then bc.setCamState({ P = { x = px, y = py, z = pz }, yaw = yaw, pitch = -0.42, d = 13.0 }) end
   end
   local b = ref("builder")
-  if b and b.hint then pcall(b.hint, string.format("Base Hub · %s  ·  every part: the kit, the BASE parts, any VAB part  ·  BUILD IT, LEAVE or ESC builds it into the base", tostring(hub.name)), 6.0) end
+  if b and b.hint then pcall(b.hint, string.format("Base Hub · %s  ·  every part: the kit, the BASE parts, any VAB part  ·  RMB orbits · MMB pans over the ground · HOME recentres  ·  BUILD IT, LEAVE or ESC builds it into the base", tostring(hub.name)), 6.0) end
   local ins = ref("builder_inspector")
   if ins and ins.setTab then pcall(ins.setTab, "INSPECT") end
 end

@@ -539,3 +539,23 @@ derelict rocket and a craft with a Laser Turret set down 20–30 m out; the
 turret charges from its batteries, tracks the derelict's tank, breaks it, and
 fires AUTO at the pod; a kit laser on the wreck. `LZ PASS|FAIL`, `LZ RESULT`;
 pictures in `save/user/lasershots/`.
+
+## chopprobe.sh + chopprobe_modes.lua + camprobe_modes.lua — the Build Kit's frame time, the outdoor builder camera
+
+    WORK=$SCRATCH/chop LOCK=$SCRATCH/engine.lock PATCHES=funds.patch tools/perf/chopprobe.sh <engine> [chop chopab cam]
+
+Playtest 11-10 (docs/base-building.md §28). `chop`: 10 s on foot, the kit
+opened with a Pad Plate's ghost, the plate placed by a click, a 40-piece base
+beside it (each piece's ghost aimed for 0.4 s, then `placeAt`), then the kit
+open and shut. Every frame over `chopms` (25) ms is a `CHOP SLOW` line with
+its buckets, parts, scripts and hottest lines; each placement a `CHOP PLACE`
+line (its worst frame); `CHOP WINDOW` / `RESULT [c*]` per stretch. `chopab`:
+the open kit one thing at a time (shut, icons being taken, open idle, the
+column folded, a part in hand, in hand folded, the preview camera off).
+`cam`: three Base Hubs (flat, a raised hill's flank, a dug pit's rim), the
+full builder opened at each and its camera driven low round the hub, into
+the hill, zoomed hard, panned, HOME: `CAMP` lines (the camera's clearance
+from the terrain, the pivot's, its roll against the local up), pictures in
+`save/user/buildshots/{flat,slope,cliff}_*.png`. Under load (another engine,
+load average 40+) every stretch shows 0.3-3.5 s `untimed` stalls, the shut
+kit's too: compare runs made back to back.

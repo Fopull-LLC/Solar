@@ -11,6 +11,12 @@
 --   NUM 1 / 3 / 7     front / side / top view; NUM 5 near-orthographic (telephoto)
 --   F4 hide the UI · F6 photo orbit · F12 screenshot
 --
+-- OUTDOORS (a Build Stand, a Base Hub: setWorldClip on) the same keys, tuned
+-- for a base on the ground (playtest 11-10): RMB orbits the selection or the
+-- pivot, MMB pans along the ground, the wheel eases, HOME recentres from a
+-- 25° look down, and the pivot and the camera never go into the terrain or a
+-- part (see "OUTDOORS" and "THE GROUND" below).
+--
 -- Everything is worked in the builder's frame (builder.frame(): the BuildFrame
 -- on the real VAB, or the identity in standalone builder.ron) and turned into
 -- the world only when the node is placed, in lateUpdate.
@@ -269,6 +275,13 @@ function frameCraft()
   if not bx then S.goal = { P = v(0, 2, 0), d = 14 } return false end
   return frame_box(bx)
 end
+-- HOME: the whole craft framed; outdoors (a stand, a hub) also from a 25°
+-- look down along the bearing the camera already has, so a view that ended
+-- up flat on the ground or straight down comes back to an easy one.
+function recentre()
+  if worldClip then S.pitch = -0.44 end
+  return frameCraft()
+end
 
 -- ── the height slider (HT): the pivot from the craft's floor to its top ─────
 local function height_range()
@@ -370,7 +383,65 @@ local function cursor_point(mx, my)
   return add(O, mul(D, t)), b and b.hovered and b.hovered() or nil
 end
 
+-- OUTDOORS (a Build Stand or a Base Hub: worldClip on; playtest 11-10 "the
+-- camera in the full builder hub mode gets stuck in the ground and is hard to
+-- orientate"). Everything stays in the builder's frame, which is the stand's
+-- or the structure's own (its +Y the world's radial up where it was founded),
+-- so the view is always upright on the planet:
+--   * the wheel eases in and out (a goal, exp 14/s) toward the part under the
+--     cursor, or the pivot; never toward a point on the open ground;
+--   * RMB orbits the selection's centre, else the pivot, never a point picked
+--     off the terrain (the pivot used to wander off with each orbit);
+--   * MMB / Shift+RMB pans along the frame's ground plane, at the pivot's height;
+--   * HOME recentres: the whole base framed from a 25° look down;
+--   * the pivot never sinks into the ground and the camera never goes under
+--     it or into a part (lateUpdate's ground pass, the world clip).
+local function outdoor() return worldClip == true end
+local function zoom_soft(notches, mx, my)
+  local k = (params.wheel or 1.2) ^ (-notches)
+  local g = S.goal or { P = S.P, d = S.d }
+  local nd = clamp(g.d * k, MIN_D, MAX_D)
+  k = nd / g.d
+  if math.abs(k - 1) < 1e-6 then return end
+  -- toward a part under the cursor only (frame-local ray); else about the pivot
+  local Q = nil
+  local b = B()
+  local fr = b and b.frame and b.frame()
+  if mx and fr and fr.ray and b.rayCraft then
+    local ox, oy, oz, dx, dy, dz = fr.ray(mx, my)
+    if ox then
+      local uid, t = b.rayCraft(ox, oy, oz, dx, dy, dz)
+      if uid and t and t > 0 then Q = v(ox + dx * t, oy + dy * t, oz + dz * t) end
+    end
+  end
+  if Q then
+    local f = viewBasis(S.yaw, S.pitch)
+    local C = sub(g.P, mul(f, g.d))
+    local _, P2 = zoomAbout(C, g.P, Q, k)
+    S.goal = { P = P2, d = nd }
+  else
+    S.goal = { P = g.P, d = nd }
+  end
+end
+-- Pan along the frame's ground plane: right and forward flattened, so the
+-- pivot slides over the ground at its own height (grab-the-ground: the world
+-- follows the mouse).
+local function pan_ground(dx, dy)
+  local sh = 720
+  if camera and camera.screenSize then local _, h = camera.screenSize(); sh = (h and h > 0) and h or sh end
+  local k = 2 * S.d * math.tan(S.fov * 0.5) / sh
+  local f, r = viewBasis(S.yaw, S.pitch)
+  local fh = v(f.x, 0, f.z)
+  local l = math.sqrt(fh.x * fh.x + fh.z * fh.z)
+  if l < 1e-4 then fh = v(-math.sin(S.yaw), 0, -math.cos(S.yaw)) else fh = mul(fh, 1 / l) end
+  -- (looking down steeply, a pixel covers more ground forward: 1/sin, capped)
+  local kf = k / clamp(math.abs(math.sin(S.pitch)), 0.35, 1)
+  S.goal = nil
+  S.P = add(S.P, add(mul(v(r.x, 0, r.z), -dx * k), mul(fh, dy * kf)))
+end
+
 local function zoom(notches, mx, my)
+  if outdoor() then return zoom_soft(notches, mx, my) end
   local k = (params.wheel or 1.2) ^ (-notches)
   local nd = S.d * k
   if nd < MIN_D then k = MIN_D / S.d elseif nd > MAX_D then k = MAX_D / S.d end
@@ -502,15 +573,21 @@ function update(node, dt)
     local flykeys = key("w") or key("a") or key("s") or key("d") or key("q") or key("e")
     if not R.dragged and (math.abs(mx - R.x) > DRAG_PX or math.abs(my - R.y) > DRAG_PX or flykeys) then
       R.dragged = true
-      R.Q = (not key("shift")) and cursor_point(R.x, R.y) or nil
-      local sel = (not R.uid) and sel_bounds() or nil
-      if sel then R.Q = sel.centre end
+      if outdoor() then
+        -- (outdoors: the selection's centre, else the pivot itself)
+        local sel = sel_bounds()
+        R.Q = sel and sel.centre or nil
+      else
+        R.Q = (not key("shift")) and cursor_point(R.x, R.y) or nil
+        local sel = (not R.uid) and sel_bounds() or nil
+        if sel then R.Q = sel.centre end
+      end
       photoOrbit = false
     end
     if R.dragged and rmb then
       S.goal = nil
       if key("shift") and not flykeys then
-        pan(dx, dy)
+        if outdoor() then pan_ground(dx, dy) else pan(dx, dy) end
       elseif flykeys then
         -- Fly: look about the camera itself, move on the keys.
         R.fly = true   -- the lock itself: cursor_assert below, while RMB is down
@@ -548,7 +625,10 @@ function update(node, dt)
   local mmb = input.button(2)
   if mmb and not S.mmb and not ui_over then S.mmb = true end
   if S.mmb then
-    if mmb then local dx, dy = input.mouse_delta(); pan(dx, dy) else S.mmb = nil end
+    if mmb then
+      local dx, dy = input.mouse_delta()
+      if outdoor() then pan_ground(dx, dy) else pan(dx, dy) end
+    else S.mmb = nil end
   end
 
   -- The wheel: zoom to the cursor; CTRL height; ALT slide along the craft.
@@ -560,7 +640,7 @@ function update(node, dt)
   end
 
   if input.pressed("f") and not key("ctrl") then frameSelection() end
-  if input.pressed("home") then frameCraft() end
+  if input.pressed("home") then recentre() end
   if input.pressed("pageup") then height_step(0.10) end
   if input.pressed("pagedown") then height_step(-0.10) end
   if input.pressed("num1") then set_view(0, 0) end
@@ -618,7 +698,7 @@ function world_clip(fr, C, dt)
   if L > 1e-3 and spherecast then
     local a = find and find("Astronaut")
     local ok, hit = pcall(spherecast, vec3(px, py, pz), vec3(dx / L, dy / L, dz / L), 0.25, L + 0.3,
-      a and { ignore = { a } } or nil)
+      a and { ignore = { a }, ignoreStart = true } or { ignoreStart = true })
     if ok and hit and hit.distance then room = math.min(room, math.max(MIN_D, hit.distance - 0.1)) end
   end
   if terrain and terrain.query and L > 1e-3 then
@@ -646,6 +726,101 @@ function world_clip(fr, C, dt)
   return sub(S.P, mul(f, clip.d))
 end
 
+-- THE GROUND (outdoors). The terrain's height under a frame-local (x, z), in
+-- frame y: a ray down the frame's up from `top`, read from the ground's own
+-- field (terrain.raycast: exact, and a start inside rock answers at once).
+-- Read in lateUpdate after fr.refresh(), so the frame and the planet are in
+-- the same pose; only frame-local heights are kept.
+PIVOT_CLEAR, CAM_CLEAR = 0.35, 0.6
+SIGHT_CLEAR = 0.8    -- how far over a crest between the pivot and the camera the sight line passes
+groundAt = nil        -- probes: { pivot = y, cam = y } (frame), last frame
+local function ground_y(fr, lx, lz, top)
+  if not (terrain and terrain.raycast and vec3) then return nil end
+  local ox, oy, oz = fr.toWorld(lx, top, lz)
+  local dx, dy, dz = fr.dirToWorld(0, -1, 0)
+  local ok, h = pcall(terrain.raycast, vec3(ox, oy, oz), vec3(dx, dy, dz), top + 600)
+  if ok and type(h) == "table" and h.distance then return top - h.distance end
+  return nil
+end
+-- The first terrain along a frame-local segment (t in metres), or nil.
+local function ground_along(fr, A, D, maxd)
+  if not (terrain and terrain.raycast and vec3) then return nil end
+  local ox, oy, oz = fr.toWorld(A.x, A.y, A.z)
+  local dx, dy, dz = fr.dirToWorld(D.x, D.y, D.z)
+  local ok, h = pcall(terrain.raycast, vec3(ox, oy, oz), vec3(dx, dy, dz), maxd)
+  if ok and type(h) == "table" and h.distance then return h.distance end
+  return nil
+end
+-- Keep the pivot out of the ground and the orbit over it. The pivot under the
+-- ground (a zoom, a pan, RMB-fly) slides back along the view to where the
+-- ground starts, so the picture does not jump; with the camera itself under
+-- too, the pivot is lifted. Then the pitch is held so the camera stays
+-- CAM_CLEAR over the ground under where it would be (twice: that spot moves
+-- with the pitch): orbiting down stops on the ground instead of in it.
+local function ground_pass(fr)
+  local top = math.max(S.P.y, cam_pos().y) + 80
+  local gp = ground_y(fr, S.P.x, S.P.z, top)
+  if gp and S.P.y < gp + PIVOT_CLEAR then
+    local f = viewBasis(S.yaw, S.pitch)
+    local C = cam_pos()
+    local gc = ground_y(fr, C.x, C.z, top)
+    local t = (not gc or C.y > gc + 0.05) and ground_along(fr, C, f, S.d + 1) or nil
+    if t and t - PIVOT_CLEAR > MIN_D then
+      S.d = t - PIVOT_CLEAR
+      S.P = add(C, mul(f, S.d))
+      if S.goal then S.goal.d = math.min(S.goal.d, S.d) end
+    else
+      S.P = v(S.P.x, gp + PIVOT_CLEAR, S.P.z)
+    end
+    if S.goal and S.goal.P.y < gp + PIVOT_CLEAR then S.goal.P = v(S.goal.P.x, gp + PIVOT_CLEAR, S.goal.P.z) end
+  end
+  -- the whole sight line, not only its end: a hill BETWEEN the pivot and
+  -- the camera lifts the orbit over it (it used to pull the camera in to a
+  -- metre or two from the pivot, against the hillside: "stuck in the ground").
+  -- The camera's own spot first (CAM_CLEAR over the ground under it), then a
+  -- ray from the pivot toward the camera: where it meets the ground the
+  -- pitch is steepened to pass SIGHT_CLEAR over that point, and again, up to
+  -- six times, each asking SIGHT_CLEAR more (a crest, then the next).
+  local gc = nil
+  for it = 1, 6 do
+    local C = cam_pos()
+    if it <= 2 then
+      gc = ground_y(fr, C.x, C.z, top)
+      if gc then
+        floorY = gc + CAM_CLEAR
+        floor_clamp()
+      end
+    end
+    local f = viewBasis(S.yaw, S.pitch)
+    local t = ground_along(fr, S.P, mul(f, -1), S.d)
+    if not (t and t > 0.05) then break end
+    -- (f.y = sin(pitch) and the camera is at P - f d: the line at t is
+    -- P.y - sin(pitch) t high, so SIGHT_CLEAR more there is sin less by SIGHT_CLEAR / t)
+    -- (each further try asks for more: a ridge behind the first hit is met sooner)
+    local np = math.max(-PITCH_MAX, math.asin(clamp(math.sin(S.pitch) - SIGHT_CLEAR * it / t, -1, 1)))
+    if np >= S.pitch - 1e-4 then break end
+    S.pitch = np
+  end
+  groundAt = { pivot = gp, cam = gc }
+end
+-- (a part of the builder's own between the pivot and the camera, with the
+-- camera inside it: the builder's copies at a hub have no colliders, so the
+-- spherecast never meets them) → the distance to stand at, or nil
+local function part_clip(C)
+  local b = B()
+  if not (b and b.rayCraft) then return nil end
+  local D = sub(C, S.P)
+  local L = math.sqrt(dot(D, D))
+  if L < 1e-3 then return nil end
+  local u1, t1 = b.rayCraft(S.P.x, S.P.y, S.P.z, D.x / L, D.y / L, D.z / L)
+  if not (u1 and t1 and t1 < L) then return nil end
+  -- from the camera back: a ray starting inside a part never meets that
+  -- part's faces (ray_box), so no hit at all means the camera is inside one
+  local u2 = b.rayCraft(C.x, C.y, C.z, -D.x / L, -D.y / L, -D.z / L)
+  if u2 then return nil end
+  return math.max(MIN_D, t1 - 0.2)
+end
+
 function lateUpdate(node, dt)
   local b = B()
   local fr = b and b.frame and b.frame() or nil
@@ -653,8 +828,17 @@ function lateUpdate(node, dt)
   -- pose in update, and the rails have ticked since. Re-read it here, in the
   -- camera pass, or the view sits a frame's travel (several metres) off.
   if fr and not fr.identity and fr.refresh then fr.refresh() end
+  local outside = worldClip and fr and not fr.identity and fr.toWorld
+  if outside then ground_pass(fr) end
   local C = cam_pos()
-  if worldClip and fr and not fr.identity and fr.toWorld then C = world_clip(fr, C, dt) end
+  if outside then
+    C = world_clip(fr, C, dt)
+    -- the last word: never drawn under the ground or inside a part
+    local pc = part_clip(C)
+    if pc then C = sub(S.P, mul(viewBasis(S.yaw, S.pitch), pc)) end
+    local g = ground_y(fr, C.x, C.z, math.max(S.P.y, C.y) + 80)
+    if g and C.y < g + 0.25 then C = v(C.x, g + 0.25, C.z) end
+  end
   local wx, wy, wz = C.x, C.y, C.z
   local px, py, pz = S.P.x, S.P.y, S.P.z
   local ux, uy, uz = 0, 1, 0
@@ -685,4 +869,6 @@ function setCamState(t)
 end
 -- Zoom by notches toward a screen point (probes drive it without a wheel).
 function zoomAt(notches, mx, my) zoom(notches, mx, my) end
+-- Pan by mouse pixels as MMB would (probes).
+function panBy(dx, dy) if outdoor() then pan_ground(dx, dy) else pan(dx, dy) end end
 function settle() if S.goal then S.P, S.d, S.goal = S.goal.P, S.goal.d, nil end end

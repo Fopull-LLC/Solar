@@ -603,6 +603,37 @@ local function sub_rows(B)
   return rows
 end
 
+-- THE WINDOW: which rows of a list of n are elements, from the list's scroll
+-- (the scroll node's scrollY, read each frame; a new window re-describes).
+ROW_H, ROW_GAP = 40, 3
+ROW_STEP = ROW_H + ROW_GAP
+VIEW_MARGIN = 6
+local list_el = nil
+local function list_scroll()
+  if not (list_el and list_el.valid ~= false) then
+    local n = find and find(LIST_NODE)
+    list_el = n and n.getcomponent and n:getcomponent("UiElement") or nil
+  end
+  local ok, y = pcall(function() return list_el and list_el.scrollY end)
+  return (ok and tonumber(y)) or 0
+end
+-- → first, last (1-based, inclusive) of n rows in a column `h` tall
+function window_of(n, h, scrollY)
+  if n == 0 then return 1, 0 end
+  local y = scrollY or st.scrollY or 0
+  local first = math.floor(math.max(0, y) / ROW_STEP) + 1
+  local shown = math.ceil((h or 600) / ROW_STEP) + 1
+  local a = math.max(1, first - VIEW_MARGIN)
+  local z = math.min(n, first + shown + VIEW_MARGIN)
+  if a > z then a = math.max(1, z - shown) end
+  return a, z
+end
+-- the window's first row, coarse (a re-describe when it moves VIEW_MARGIN/2 rows)
+local function window_key()
+  st.scrollY = list_scroll()
+  return math.floor(st.scrollY / (ROW_STEP * math.max(1, math.floor(VIEW_MARGIN / 2))))
+end
+
 function describe(B, L)
   load_prefs()
   local rs, co = ref("research"), ref("company")
@@ -613,7 +644,17 @@ function describe(B, L)
   else
     rows = {}
     local list = listFor(B, st.tab, st.query)
-    for _, it in ipairs(list) do rows[#rows + 1] = card(B, rs, co, it) end
+    -- (playtest 11-10, "choppy the second I started placing my first base
+    -- plate": every card of ALL — 228 at the Build Kit, ~2,000 elements —
+    -- was a live element, and the open column alone took 30-40 ms a frame.
+    -- Only the rows in view, and VIEW_MARGIN either side, are elements now;
+    -- two spacers keep the list its full height, so the scroll bar and the
+    -- scroll position are as they were.)
+    local a, z = window_of(#list, r.h)
+    if a > 1 then rows[#rows + 1] = { "box", key = "padTop", w = "100%", h = (a - 1) * ROW_STEP - ROW_GAP } end
+    for i = a, z do rows[#rows + 1] = card(B, rs, co, list[i]) end
+    if z < #list then rows[#rows + 1] = { "box", key = "padEnd", w = "100%", h = (#list - z) * ROW_STEP - ROW_GAP } end
+    st.total = #list
     if #rows == 0 then
       rows[1] = { "text", key = "none", style = "panel/body", w = "100%", h = "fit", wrap = true,
         text = st.query ~= "" and ("Nothing matches “" .. st.query .. "”.")
@@ -621,7 +662,8 @@ function describe(B, L)
           or (st.tab == "RECENT" and "Parts you pick show up here." or "Nothing here.")) }
     end
   end
-  st.count = #rows
+  st.count = st.total or #rows
+  st.total = nil
   return { "col", key = "parts", style = "panel/frame", pin = "topLeft", x = r.x, y = r.y, w = r.w, h = r.h,
     gap = 6, pad = 10, align = "stretch",
     { "row", key = "hd", w = "100%", h = 20, gap = 4, pad = 0, align = "center",
@@ -713,7 +755,7 @@ function update(node, dt)
   if st.hover and (fold or not ownsMouse()) then st.hover = nil end
   preview_tick(B, dt)
   local sig = table.concat({ math.floor(W), math.floor(H), st.tab, st.query, tostring(st.held), tostring(st.hover),
-    tostring(pv.ready), tostring(fold) }, "|")
+    tostring(pv.ready), tostring(fold), tostring(fold or window_key()) }, "|")
   if not st.dirty and sig == st.sig and st.t < 1.0 then if not fold then scroll_top_tick() end return end
   st.dirty, st.sig, st.t = false, sig, 0
   if fold then ui.make(node, { folded_tab(B, L) }) return end
