@@ -831,6 +831,40 @@ local function pose_beat(v)
   local C = ref("crew")
   if not (C and id) then return false end
   if C.activeId and C.activeId() == id then say_log("pose: not on the member you control"); return false end
+  -- (graveyard2 fix) `struct` + `spot = { x, y, z }` (+ `toward`): the surface
+  -- in the STRUCTURE's own frame (x right, y up, z front of its record), so a
+  -- bunk's mattress is its mattress whatever the ground under it does. A
+  -- mark is a TERRAIN point: on a site with 0.5 m of spread the "mattress
+  -- height over the mark" put Dana under the lower bunk.
+  if v.struct and type(v.spot) == "table" and v.kind ~= "stand" then
+    local ST = ref("structures")
+    local sid = struct_id(tostring(v.struct):gsub("^struct:", ""))
+    local rec = sid and ST and ST.get(sid)
+    if not (rec and ST.frame) then return false end
+    local ux, uy, uz, fx, fy, fz, rx, ry, rz = ST.frame(rec)
+    local function at(s) return rec.x + rx * s[1] + ux * s[2] + fx * s[3], rec.y + ry * s[1] + uy * s[2] + fy * s[3], rec.z + rz * s[1] + uz * s[2] + fz * s[3] end
+    local x, y, z = at(v.spot)
+    local f = false
+    if type(v.toward) == "table" then
+      local tx, ty, tz = at(v.toward)
+      local dx, dy, dz = tx - x, ty - y, tz - z
+      local du = dx * ux + dy * uy + dz * uz
+      dx, dy, dz = dx - ux * du, dy - uy * du, dz - uz * du
+      local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+      if d > 1e-3 then f = { x = dx / d, y = dy / d, z = dz / d } end
+    end
+    local fields = { pose = { kind = v.kind, x = x, y = y, z = z, f = f, lift = v.lift } }
+    local sp = v.stand and pos_of(v.stand)
+    if sp and sp.body == rec.b then
+      local sl = math.sqrt(sp.x * sp.x + sp.y * sp.y + sp.z * sp.z)
+      if sl > 1e-6 then fields.x, fields.y, fields.z = sp.x * (sl + 1) / sl, sp.y * (sl + 1) / sl, sp.z * (sl + 1) / sl end
+    end
+    C.patch(id, fields)
+    local cb = body_script("crew_body", id)
+    if cb and cb.steerStop then pcall(cb.steerStop) end
+    walks[id] = nil
+    return true
+  end
   if v.kind == "stand" or v.kind == false or not v.at then C.patch(id, { pose = false }); return true end
   local x, y, z, F = world_at(v.at, v.offset, v.height or 0)
   local p = pos_of(v.at)
@@ -2850,7 +2884,10 @@ local function portrait_job()
     local t1q = wall() + 60
     while wall() < t1q do
       local cb = id and body_script("crew_body", id)
-      if not cut and not (cb and cb.walking and cb.walking()) and not walks[id] then break end
+      -- (graveyard2 fix: and facing where it means to: a body still easing
+      -- round to its post's facing was pictured from behind the head)
+      if not cut and not (cb and cb.walking and cb.walking()) and not walks[id]
+        and not (cb and cb.facingSettled and not cb.facingSettled()) then break end
       coroutine.yield()
     end
     local got = false

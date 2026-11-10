@@ -1501,7 +1501,7 @@ function validate(sc, ctx)
             if val.speed ~= nil and type(val.speed) ~= "number" then E(pk .. ".speed", "m/s") end
             if val.wait ~= nil and type(val.wait) ~= "boolean" then E(pk .. ".wait", "true or false") end
             if val.face ~= nil then check_ref(pk .. ".face", val.face) end
-            if val.pose ~= nil and (type(val.pose) ~= "table" or not POSES[tostring(val.pose.kind)]) then E(pk .. ".pose", "{ kind = lie|sit, at, head|facing, height } on arrival") end
+            if val.pose ~= nil and (type(val.pose) ~= "table" or not POSES[tostring(val.pose.kind)]) then E(pk .. ".pose", "{ kind = lie|sit, at | struct + spot, head|facing|toward, height } on arrival") end
           elseif key == "gesture" then
             check_who(pk .. ".who", val.who)
             if val.who == nil then E(pk .. ".who", "missing") end
@@ -1516,9 +1516,14 @@ function validate(sc, ctx)
             check_who(pk .. ".who", val.who)
             if val.who == nil then E(pk .. ".who", "missing") end
             if not POSES[tostring(val.kind)] then E(pk .. ".kind", "lie, sit or stand") end
-            if val.kind ~= "stand" then
+            if val.kind ~= "stand" and val.struct ~= nil then
+              -- (a spot in a structure's own frame: its floors do not follow the ground)
+              check_struct(pk .. ".struct", val.struct)
+              if type(val.spot) ~= "table" or type(val.spot[1]) ~= "number" then E(pk .. ".spot", "{ x, y, z } in the structure's frame (y: the surface's height)") end
+              if val.toward ~= nil and type(val.toward) ~= "table" then E(pk .. ".toward", "{ x, y, z } in the structure's frame") end
+            elseif val.kind ~= "stand" then
               check_ref(pk .. ".at", val.at)
-              if val.at == nil then E(pk .. ".at", "a ref (the bunk, the seat)") end
+              if val.at == nil then E(pk .. ".at", "a ref (the bunk, the seat), or struct + spot") end
             end
             if val.head ~= nil then check_ref(pk .. ".head", val.head) end
             if val.facing ~= nil then check_ref(pk .. ".facing", val.facing) end

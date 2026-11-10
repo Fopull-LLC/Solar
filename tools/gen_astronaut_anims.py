@@ -877,7 +877,8 @@ def lie_pose(t):
     p.torso = rx(D(0.6) * br)
     p.head = qmul(ry(D(14)), rx(-D(4)))       # turned to one side, asleep
     for side, sg in SIDES.items():
-        p.hip[side] = D(4); p.knee[side] = D(8); p.foot_pitch[side] = -D(30)
+        # (the pack under the shoulders props the trunk up: the legs reach down to the mattress)
+        p.hip[side] = -D(11); p.knee[side] = D(5); p.foot_pitch[side] = -D(25)
         p.leg_out[side] = D(5)
         a = p.arm[side]
         a.update(lower=D(86), out=D(8), swing=D(4), elbow=D(12), wrist=D(4), curl=0.5)   # arms along the body

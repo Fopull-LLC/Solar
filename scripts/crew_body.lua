@@ -61,7 +61,7 @@ defaults = {
   foot_side = 0.12,
   hand_out = 0.18,
   hand_side = 0.26,
-  lie_lift = 0.27,     -- lying (pose): the capsule's centre over the surface (the pack under them)
+  lie_lift = 0.23,     -- lying (pose): the capsule's centre over the surface (the pack under them)
   sit_lift = 0.10,     -- sitting (pose): the hips over the surface
   sit_foot_out = 0.46,
   sit_foot_down = 0.52,
@@ -938,6 +938,19 @@ local function pose_anim(r, dt)
     pcall(anim.setLayerWeight, anim, "Pose", w)
   end
   if w == 0 then pose_clip = nil end
+end
+
+-- (graveyard2 fix) has the body finished turning to its record's facing?
+-- (a portrait taken while it eases round caught the back of the head)
+function facingSettled()
+  if steer or plan then return false end
+  local r = last_rec
+  local f = r and r.face
+  if not (type(f) == "table" and f.x) then return true end
+  if not cur_face then return false end
+  local l = math.sqrt(f.x * f.x + f.y * f.y + f.z * f.z)
+  if l < 1e-6 then return true end
+  return (cur_face.x * f.x + cur_face.y * f.y + cur_face.z * f.z) / l > 0.995
 end
 
 -- the head to the player close by (no scenario look on): weight eased

@@ -200,7 +200,7 @@ local function switch_test(sr)
   end
   SP.check("switch_ten", n >= 9 and bad == 0 and focus == 0, "%d switches in the base: %d into geometry, %d left a focus", n, bad, focus)
   -- (Dana back to bed: she got up when you took her)
-  sr.runBeat({ pose = { who = "Kowalczyk", kind = "lie", at = "mark:danabed", height = 0.68, head = "mark:danapillow", stand = "mark:bunk" } })
+  sr.runBeat({ pose = { who = "Kowalczyk", kind = "lie", struct = "Kerne Station", spot = { -5.55, 0.68, 8.45 }, toward = { -6.6, 0.68, 8.45 }, stand = "mark:bunk" } })
 end
 local function step(sr, id, tmo) local ok = until_(sr, function() return done(id) end, tmo or 60, id); SP.check("step_" .. id, ok, "%s latched", id); return ok end
 
@@ -347,6 +347,21 @@ function SOLVE(SP)
       W() - t0b, mind, db, (ws.paths or 0) - (w0.paths or 0), ws.evals or -1)
     wait(1.5)
     view("a1_dana_resting", { -3.0, 1.55, 6.3 }, { -5.6, 0.75, 8.4 }, false)
+    -- (fix) on the lower mattress, not the floor: the pose's surface in the
+    -- station's frame is the mattress top (0.68 over the frame's origin), and
+    -- a low picture from the bunk's side
+    do
+      local r = rec_of("Kowalczyk")
+      local ST = findScript("structures")
+      local s = srec()
+      local h = -9
+      if r and type(r.pose) == "table" and s and ST then
+        local ux, uy, uz = ST.frame(s)
+        h = (r.pose.x - s.x) * ux + (r.pose.y - s.y) * uy + (r.pose.z - s.z) * uz
+      end
+      SP.check("dana_on_mattress", math.abs(h - 0.68) < 0.03, "her pose's surface %.2f m over the station's origin (the lower mattress's top 0.68; the slab's 0.2)", h)
+      view("a1_dana_on_bunk", { -4.25, 0.95, 7.5 }, { -5.7, 0.8, 8.45 }, false)
+    end
     view("a1_control_room_wide", { -8.4, 1.9, 4.3 }, { -2.0, 0.9, 0.0 }, false)
     if tostring(params.switch or "1") == "1" then switch_test(sr) end
   end

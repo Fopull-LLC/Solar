@@ -212,7 +212,7 @@ return {
     dana_off = {
       { say = { who = "dana", text = "Sixty, and steady. That's a plant. Right. I'm horizontal. Bunk room, ten metres. Don't make it nine." } },
       { walk = { who = "Kowalczyk", to = "mark:bunk", speed = 1.0, secs = 40,
-                 pose = { kind = "lie", at = "mark:danabed", height = 0.68, head = "mark:danapillow", stand = "mark:bunk" } } },
+                 pose = { kind = "lie", struct = "Kerne Station", spot = { -5.55, 0.68, 8.45 }, toward = { -6.6, 0.68, 8.45 }, stand = "mark:bunk" } } },
       { say = { who = "priya", text = "She says that every night. She's asleep before the door closes." } },
     },
     -- ── ACT 2 ──────────────────────────────────────────────────────────────
@@ -288,7 +288,7 @@ return {
       { objective = { step = "loca", text = "LOSS OF COOLANT on the primary. SCRAM at the console if it hasn't tripped. Dana is asleep in the bunk room (the north door)." } },
     },
     wake = {
-      { pose = { who = "Kowalczyk", kind = "sit", at = "mark:danasit", height = 0.68, facing = "crew:Halloran", stand = "mark:bunk" } },
+      { pose = { who = "Kowalczyk", kind = "sit", struct = "Kerne Station", spot = { -5.4, 0.68, 8.12 }, toward = { -5.0, 0.68, 7.0 }, stand = "mark:bunk" } },
       { look = { who = "dana", at = "crew:Halloran" } },
       { face = { who = "dana", emotion = "tired", secs = 8 } },
       { say = { who = "dana", text = "Mm. Halloran? What time is it. What's that noise?", with = "me", cross = true } },
@@ -308,7 +308,7 @@ return {
     wake_no = {
       { say = { who = "dana", text = "You're sure. Then why are you still standing here? Go.", with = "me" } },
       { look = { who = "dana", at = false } },
-      { pose = { who = "Kowalczyk", kind = "lie", at = "mark:danabed", height = 0.68, head = "mark:danapillow", stand = "mark:bunk" } },
+      { pose = { who = "Kowalczyk", kind = "lie", struct = "Kerne Station", spot = { -5.55, 0.68, 8.45 }, toward = { -6.6, 0.68, 8.45 }, stand = "mark:bunk" } },
     },
     nowake = {
       { say = { who = "priya", text = "Okay. Okay. Your board. Tell me what to watch and I'll watch it." } },
@@ -407,7 +407,7 @@ return {
     { id = "diagnose", text = "Hold 60 %. Log the restart. Night shift.", act = "Act 2 · the bearing", checkpoint = true,
       -- (a setback here: the plant restaged at 60 % on line, as the climb left it)
       stage = { plants = { { struct = "Kerne Station", standby = 0.6, hold = 600, turbine = true } },
-                beats = { { pose = { who = "Kowalczyk", kind = "lie", at = "mark:danabed", height = 0.68, head = "mark:danapillow", stand = "mark:bunk" } } } },
+                beats = { { pose = { who = "Kowalczyk", kind = "lie", struct = "Kerne Station", spot = { -5.55, 0.68, 8.45 }, toward = { -6.6, 0.68, 8.45 }, stand = "mark:bunk" } } } },
       goals = { { kind = "hook", fn = "bearing_read", label = "Feed pump bearings" } },
       hint = "Nothing to do but hold 60 % and keep an eye on the console. Something will come up: listen to Priya." },
     { id = "setback", text = "OP-14 step 1: setpoint to 40 % so FW-1 can carry the secondary alone.",
@@ -443,7 +443,7 @@ return {
     -- had restored it (its on_enter branch)
     { id = "loca", text = "Hold 60 %. Four hours to day shift.", act = "Act 3 · PL-7", checkpoint = true,
       stage = { plants = { { struct = "Kerne Station", standby = 0.6, hold = 600, turbine = true } },
-                beats = { { pose = { who = "Kowalczyk", kind = "lie", at = "mark:danabed", height = 0.68, head = "mark:danapillow", stand = "mark:bunk" } } } },
+                beats = { { pose = { who = "Kowalczyk", kind = "lie", struct = "Kerne Station", spot = { -5.55, 0.68, 8.45 }, toward = { -6.6, 0.68, 8.45 }, stand = "mark:bunk" } } } },
       on_enter = { { branch = { var = "prot_ok", is = true, beats = { { reactor = { struct = "Kerne Station", protection = true } } } } } },
       goals = { { kind = "reactor", struct = "Kerne Station", power_below = 0.02, label = "Reactor shut down" } },
       hint = "Right-click the console: SCRAM drops every rod in two seconds. If the board says TRIPPED it already has.",
