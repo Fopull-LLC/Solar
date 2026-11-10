@@ -85,6 +85,12 @@ SANDBOX_FUNDS = 1e15
 function isSandbox()
   return save.get("game.mode") == "sandbox"
 end
+-- A SCENARIO save (slot `scn`, scenario.lua): career money rules (the
+-- balance is the scenario's budget); the depot, the Ops Board and the
+-- programme ask scenario_run.allows whether to stand down.
+function isScenario()
+  return save.get("game.mode") == "scenario"
+end
 local function unlimited()
   return rich() or isSandbox()
 end

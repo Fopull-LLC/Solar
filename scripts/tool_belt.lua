@@ -494,7 +494,7 @@ local function on_foot(node)
   local pw = ref("planet_walker")
   if not pw then why("no planet_walker in the scene — the belt can't tell who's driving") return false end
   local gm = ref("game_manager")
-  if gm and gm.inputOwner == "builder" then why(GATE_ABOARD, "builder") return false end -- the VAB builder has the keys
+  if gm and (gm.inputOwner == "builder" or gm.inputOwner == "scenario") then why(GATE_ABOARD, gm.inputOwner) return false end -- the VAB builder has the keys
   if pw.onFoot ~= true then why(GATE_ABOARD) return false end
   if pw.swimming == true then why("swimming") return false end
   local pm = ref("pause_menu")

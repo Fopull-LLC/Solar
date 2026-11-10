@@ -132,9 +132,16 @@ function ensureCrewLib()
   if find and find("CrewLib") then return end
   if spawn then pcall(spawn, "CrewLib", vec3(0, 0, 0)) end
 end
+-- THE SCENARIO LIBRARY (scripts/scenario.lua, scenario_run.lua; docs/scenarios.md):
+-- on every system scene, idle unless the slot is `scn` with `g_scenario`.
+function ensureScenarioLib()
+  if find and find("ScenarioLib") then return end
+  if spawn then pcall(spawn, "ScenarioLib", vec3(0, 0, 0)) end
+end
 
 function start(node)
   ensureCrewLib()
+  ensureScenarioLib()
   local s = save.slot()
   if s == "main" then return end -- direct editor play: stay out of the way
   slot = s
@@ -956,7 +963,13 @@ function update(node, dt)
     if launching and time < ready_t + (vs.SITE_WAIT_BASE or 90.0) + 2.0 then
       reveal_by = math.max(reveal_by, time + 0.5)
     end
-    if time >= reveal_by or (time - ready_t > 1.0 and not base_pending(find("Astronaut")) and not launching) then
+    -- a scenario staging its start (scenario_run.lua) is staged behind the curtain
+    local sr = findScript("scenario_run", { quiet = true })
+    local staging = sr and sr.holdCurtain and sr.holdCurtain()
+    if staging and time < ready_t + REVEAL_MAX + (sr.params and sr.params.curtain_max or 25.0) then
+      reveal_by = math.max(reveal_by, time + 0.5)
+    end
+    if time >= reveal_by or (time - ready_t > 1.0 and not base_pending(find("Astronaut")) and not launching and not staging) then
       reveal()
     end
   end

@@ -546,6 +546,12 @@ end
 -- packs (oldest first). Each { key, kind, id, name [, pack] }.
 function objectiveList()
   local out = {}
+  -- a scenario's current step (scenario_run.lua) comes first
+  local sr = ref("scenario_run")
+  local ss = sr and sr.cardStep and sr.cardStep()
+  if ss then
+    out[#out + 1] = { key = "scn", kind = "scn", id = ss.key, name = ss.label, step = ss }
+  end
   local mi = ref("missions")
   if mi and mi.active then
     local m = mi.byId and mi.byId(mi.active)
@@ -572,6 +578,7 @@ end
 -- What the card follows when nothing is picked: the contract, else the first
 -- milestone (current_step_inner's own order).
 local function auto_key(list)
+  for _, o in ipairs(list) do if o.kind == "scn" then return o.key end end
   for _, o in ipairs(list) do if o.kind == "contract" then return o.key end end
   for _, o in ipairs(list) do if o.kind == "prog" then return o.key end end
   return nil
@@ -651,7 +658,8 @@ local function current_step(astro, o)
     local bf = ref("base_facilities")
     if not (bf and not bf.sited) then
       local st
-      if o.kind == "pack" then st = pack_step(o, true) else st = prog_step(astro, false, o.id) end
+      if o.kind == "scn" then st = o.step
+      elseif o.kind == "pack" then st = pack_step(o, true) else st = prog_step(astro, false, o.id) end
       if st then return st end
     end
   end
@@ -853,7 +861,7 @@ local function describe(step, astro, pick_i, pick_n)
         local way = bearing_to(astro, { worldX = s.x, worldY = s.y, worldZ = s.z })
         if way then rows[#rows + 1] = row("way", "hud/where", "   " .. way) end
       else
-        rows[#rows + 1] = row("where", "hud/where", "› You're at the crate — press E")
+        rows[#rows + 1] = row("where", "hud/where", s.near or "› You're at the crate — press E")
       end
     end
   end
@@ -982,6 +990,7 @@ end
 -- pays. No directions and no brief — you are already doing it.
 local function flight_step(o)
   local mi, co = ref("missions"), ref("company")
+  if o and o.kind == "scn" then local st = o.step; st.hint = nil; return st end
   if o and o.kind == "pack" then return pack_step(o, false) end
   if o and o.kind == "prog" then
     local ps = prog_step(find("Astronaut"), true, o.id)
@@ -1049,6 +1058,8 @@ function update(node, dt)
   local afoot = crew_afoot()
   local list = objectiveList()
   local o = chosen(list)
+  -- a running scenario's step is the card's own choice (unless something else is picked)
+  if not o and list[1] and list[1].kind == "scn" then o = list[1] end
   picked_pack = (o and o.kind == "pack") and o.id or nil
   -- The completion banner outranks everything except a panel: it is the game's
   -- one answer to "did that count?", and the moment it has to be given is
@@ -1162,6 +1173,26 @@ function lateUpdate(node, dt)
   if not vw or vw <= 0 then return end
   local k = vh / uiDesignH()
   local rects = blocked_rects()
+  -- a scenario step's mark: placed against this frame's body (scenario_run
+  -- keeps it body-relative), drawn as the facility marker is
+  local sr = shown and ref("scenario_run")
+  local mk = sr and sr.isActive and sr.isActive() and sr.state().mark
+  if mk then
+    local wx, wy, wz = sr.pointOf(mk)
+    if wx then
+      local ax, ay, az = world_of(astro)
+      local d = math.sqrt((wx - ax) ^ 2 + (wy - ay) ^ 2 + (wz - az) ^ 2)
+      local ux, uy, uz = up_at(wx, wy, wz)
+      local sx, sy, dep, on = camera.worldToScreen(wx + ux * 2.5, wy + uy * 2.5, wz + uz * 2.5)
+      if d > params.arrived * 0.5 and on and sx and (not dep or dep > 0) then
+        local name = tostring(mk):gsub("^%a+:", "")
+        if tag(sx, sy - 26 * k, string.format("%s  ·  %s", name, fmt_m(d)), 14 * k, 0.95, 0.86, 0.55, 1.0, rects) then
+          draw.circle(sx, sy, 5 * k, 0.95, 0.80, 0.40, 0.95)
+          draw.circleOutline(sx, sy, 10 * k, 0.95, 0.80, 0.40, 0.8, 2 * k)
+        end
+      end
+    end
+  end
   for name, label in pairs(FAC_LABEL) do
     local f = find(name)
     if f then

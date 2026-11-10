@@ -567,7 +567,8 @@ function update(node, dt)
   -- menu over a loading screen is a menu you cannot leave.
   -- Nor while the VAB builder has the keys: its Esc backs out of its own
   -- levels and never pauses (LEAVE is a button there).
-  if mgr and (mgr.loading or mgr.inputOwner == "builder") then
+  -- (nor in a scenario cutscene: Esc held skips it, scenario_run.lua)
+  if mgr and (mgr.loading or mgr.inputOwner == "builder" or mgr.inputOwner == "scenario") then
     if open then close() end
     return
   end

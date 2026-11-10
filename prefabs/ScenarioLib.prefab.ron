@@ -1,0 +1,29 @@
+// SCENARIO LIBRARY — scripts/scenario.lua (the pure rulebook of a scripted
+// mission) and scripts/scenario_run.lua (its scene half: staging, the step
+// machine, beats, fail and score; docs/scenarios.md). Spawned by
+// game_manager.lua in every system scene, as CrewLib is; idle unless the slot
+// is `scn` and holds `g_scenario`. Reached with findScript("scenario") /
+// ("scenario_run").
+[
+    (
+        name: "ScenarioLib",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "scenario",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "scenario_run",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

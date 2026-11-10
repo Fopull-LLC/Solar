@@ -1906,6 +1906,7 @@ end
 -- The milestones in progress, in programme order.
 function progActive()
   local out = {}
+  if stoodDown and stoodDown("programme") then return out end
   for _, e in ipairs(programme()) do
     if e.state == "active" then out[#out + 1] = e.m end
   end
@@ -1944,6 +1945,7 @@ local function prog_tick()
   if not ok then error(err, 0) end
 end
 prog_tick_body = function()
+  if stoodDown and stoodDown("programme") then return end
   net_poll()
   net_dirty = false
   local done, perm = prog_done(), prog_perm()
@@ -2022,6 +2024,7 @@ end
 function offers()
   local done = done_set()
   local out = {}
+  if stoodDown and stoodDown("contracts") then return out end
   for _, m in ipairs(CATALOGUE) do
     if not done[m.id] and m.id ~= active
       and (not m.requires or done[m.requires]) then
@@ -2538,6 +2541,20 @@ local function goal_now(g, v, info)
   end
   return false
 end
+
+-- Published for the scenarios' goal evaluator (scenario.lua passes the old
+-- kinds through it): the same answer the contract tracker reads. v = a
+-- vessel_controller (or { node = n } with nobody flying), info = its
+-- assembly.info (nil on foot).
+function goalNow(g, v, info) return goal_now(g, v or {}, info) end
+
+-- A scenario that switched contracts or the programme off (scenario_run.lua
+-- `allows`): the board offers nothing and no milestone ticks or pays.
+local function stood_down(what)
+  local sr = ref("scenario_run")
+  return sr ~= nil and sr.allows ~= nil and sr.allows(what) == false
+end
+stoodDown = stood_down
 
 -- Kinds that are things you DID rather than states of the flight you're on:
 -- they latch for the whole contract and survive stepping out of the pod.

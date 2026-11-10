@@ -8,7 +8,10 @@
 --   F8   +$25,000
 --   F9   INFINITE FUNDS on/off   (survives the scene hop and the reload)
 --   F10  unlock every part in the catalogue
---   F11  complete the contract on the books
+--   F11  complete the contract on the books (in a scenario: its current step)
+--   Shift+F12  scenario authoring: dump the world as a `start` table
+--              (user://scenarios/dump_<n>.lua; plain F12 stays the screenshot)
+--   Ctrl+F10   the scenario's goal readings on screen (scenario_run.lua)
 --
 -- F9 is a FLAG, not a big deposit. A one-off grant still runs dry halfway
 -- through a builder session and then "did that fail because of the bug or
@@ -89,6 +92,12 @@ local function unlock_all()
 end
 
 local function finish_contract()
+  -- a scenario running: F11 latches its current step instead (scenario_run.lua)
+  local sr = ref("scenario_run")
+  if sr and sr.isActive and sr.isActive() and sr.phaseNow() == "running" then
+    local id = sr.completeStep()
+    return say(id and ("scenario step completed: " .. tostring(id)) or "no scenario step open")
+  end
   local mi = ref("missions")
   if not (mi and mi.active) then return say("no contract on the books") end
   local m = mi.byId(mi.active)
@@ -117,6 +126,13 @@ local function go_home()
   astro.x, astro.y, astro.z = bf.baseX + ux * 4, bf.baseY + uy * 4, bf.baseZ + uz * 4
   astro.vx, astro.vy, astro.vz = 0, 0, 0
   say("teleported to the base")
+end
+
+local function dump_start()
+  local sr = ref("scenario_run")
+  if not (sr and sr.dumpStart) then return say("no scenario library in this scene") end
+  local path = sr.dumpStart()
+  say("world dumped: " .. tostring(path))
 end
 
 local function resite()
@@ -154,9 +170,12 @@ end
 function update(node, dt)
   if not el then el = node:getcomponent("UiElement") end
   if params.enabled >= 0.5 and not exported_build() then
+    local ctrl, shift = input.key("ctrl"), input.key("shift")
     for _, k in ipairs(KEYS) do
-      if input.pressed(k[1]) then k[2]() end
+      -- (Ctrl+F10 is the scenario overlay, scenario_run's own key)
+      if input.pressed(k[1]) and not (k[1] == "f10" and ctrl) then k[2]() end
     end
+    if shift and input.pressed("f12") then dump_start() end
   end
 
   local co = ref("company")

@@ -1367,6 +1367,24 @@ local function save_struct(sid, s)
   save.set("air." .. tostring(sid), { a = s.a, rooms = rooms, tanks = tanks, cells = cells, recv = recv })
 end
 function saveNow() for sid, s in pairs(S) do if s.R then save_struct(sid, s) end end end
+-- (scenarios) a start state already lived in: every sealed room of sid at
+-- `p` atm (1) of normal air. → rooms filled | nil (the rooms not solved yet)
+function pressurise(sid, p)
+  local s = S[sid]
+  if not (s and s.R) then return nil end
+  p = p or 1.0
+  local n = 0
+  for _, r in ipairs(s.R.rooms) do
+    if r.sealed and not r.leaky then
+      local f = s.air[r.id] and s.air[r.id].f
+      s.air[r.id] = { N = r.m3 * p * (1 - O2N), x = r.m3 * p * O2N, c = 0, f = f }
+      n = n + 1
+    end
+  end
+  s.netsDirty = true
+  save_struct(sid, s)
+  return n
+end
 
 -- ── the menu: life support, an airlock's door ───────────────────────────────
 local function provider(t, ctx)

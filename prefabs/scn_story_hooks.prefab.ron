@@ -1,0 +1,20 @@
+// The story probe's hooks (scripts/scn_story_hooks.lua), spawned by
+// scenario_run.lua when scenarios/_story is played.
+[
+    (
+        name: "scn_story_hooks",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [
+            (
+                kind: "scn_story_hooks",
+                enabled: true,
+                params: [],
+            ),
+        ],
+    ),
+]

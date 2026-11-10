@@ -880,7 +880,7 @@ local function on_foot()
   local pw = ref("planet_walker")
   if not (pw and pw.onFoot == true) then gate = "aboard" return false end
   local gm = ref("game_manager")
-  if gm and (gm.loading or gm.inputOwner == "builder") then gate = "builder" return false end
+  if gm and (gm.loading or gm.inputOwner == "builder" or gm.inputOwner == "scenario") then gate = "builder" return false end
   for _, k in ipairs({ "pause_menu" }) do local s = ref(k); if s and s.open then gate = "paused" return false end end
   for _, k in ipairs({ "facility_menu", "ops_board", "orbit_map", "context_menu" }) do
     local s = ref(k)

@@ -888,6 +888,17 @@ function partFlow(sid, uid)
 end
 
 function gridOfStruct(sid) fresh() return G.bySid[sid] end
+-- (scenarios) a start state already lived in: sid's grid with its stores full.
+-- → true | nil (no grid with a store)
+function chargeFull(sid)
+  fresh()
+  local g = G.bySid[sid]
+  local M, st = g and G.models[g.id], g and G.st[g.id]
+  if not (M and st and (M.C or 0) > 0) then return nil end
+  st.e = M.C
+  spread(g, M, st.e)
+  return true
+end
 -- (S6) Is a part's load served now? (a plant's pump on a grid short and
 -- flat drops out.) → true | false | nil (not on a grid, or no load)
 function partServed(sid, uid)

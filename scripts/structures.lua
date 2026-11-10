@@ -195,6 +195,29 @@ function localAxes(yaw, pitch, roll)
   return up, fw
 end
 
+-- A structure record from a list of pieces in its frame (a blueprint's, a
+-- ruin's build, a scenario's start): pieces = { { id, x, y, z, yaw, pitch,
+-- roll, … any other field kept on the bp entry (paint, paintIn, ri, rl, wr,
+-- o_*, fill, text) } … }; g = { x, y, z (the ground point, body-relative),
+-- ux, uy, uz (up), fx, fy, fz (front) }; opts = { st, t, d, extra } (extra:
+-- fields set on the record, e.g. `ru`). uids are 1..n in order. (pure)
+function recordFromPieces(pieces, body, g, name, by, opts)
+  opts = opts or {}
+  local bp = {}
+  for i, e in ipairs(pieces) do
+    local p = {}
+    for k, v in pairs(e) do if type(v) ~= "table" then p[k] = v end end
+    p.uid, p.yaw, p.pitch, p.roll = i, e.yaw or 0, e.pitch or 0, e.roll or 0
+    p.x, p.y, p.z = e.x or 0, e.y or 0, e.z or 0
+    p.parent, p.att, p.sym, p.mir, p.stage = 0, "", 0, "", 0
+    bp[i] = p
+  end
+  local r = { b = body, x = g.x, y = g.y, z = g.z, ux = g.ux, uy = g.uy, uz = g.uz, fx = g.fx, fy = g.fy, fz = g.fz,
+              n = name, by = by, t = opts.t or 0, d = opts.d, bp = bp, st = opts.st or {} }
+  for k, v in pairs(opts.extra or {}) do r[k] = v end
+  return r
+end
+
 -- A new one-part structure: the part `partId` on the ground point (x, y, z)
 -- (body-relative), up `up` and front `fwd` (body-frame vectors).
 -- opts = { by, name, t, d, paid, st }
