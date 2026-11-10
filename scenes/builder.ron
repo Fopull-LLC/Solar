@@ -1210,6 +1210,12 @@
                     enabled: true,
                     params: [],
                 ),
+                // the WEAPON parts (parts_weapons.lua) — expansion X9
+                (
+                    kind: "parts_weapons",
+                    enabled: true,
+                    params: [],
+                ),
             ],
         ),
         // The ACTION GROUPS editor (tool 5): its frame only; the contents are

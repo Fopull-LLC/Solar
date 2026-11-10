@@ -1,0 +1,19 @@
+// WEAPON LASER beam: vfx/WeaponBeam on an empty, a pool of four spawned by scripts/lasers.lua
+// (top level: its coordinates are world coordinates; the beam's end is setBeamEnd).
+[
+    (
+        name: "FxWeaponBeam",
+        tags: ["toolfx"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        particles: Some((
+            asset: "vfx/WeaponBeam",
+            play_on_start: false,
+        )),
+    ),
+]

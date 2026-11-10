@@ -2939,6 +2939,18 @@
                     enabled: true,
                     params: [],
                 ),
+                // the WEAPON parts and the craft turret's scene (parts_weapons.lua,
+                // laser_turret.lua) — expansion X9
+                (
+                    kind: "parts_weapons",
+                    enabled: true,
+                    params: [],
+                ),
+                (
+                    kind: "laser_turret",
+                    enabled: true,
+                    params: [],
+                ),
                 // builder_proc: meshes and colliders for drawn frame parts
                 // (vessel_spawner dresses them before assembly.rebuild).
                 (
@@ -3595,6 +3607,10 @@
                 // refineries and the Fabricator: the rulebook and the scene (machines, refinery; X6)
                 ( kind: "machines", enabled: true, params: [] ),
                 ( kind: "refinery", enabled: true, params: [] ),
+                // lasers from components: the physics, the damage rules and the scene (beam, damage, lasers; X9)
+                ( kind: "beam", enabled: true, params: [] ),
+                ( kind: "damage", enabled: true, params: [] ),
+                ( kind: "lasers", enabled: true, params: [] ),
                 ( kind: "base_shield", enabled: true, params: [] ),
                 ( kind: "craft_orient", enabled: true, params: [] ),
                 ( kind: "ghost", enabled: true, params: [] ),

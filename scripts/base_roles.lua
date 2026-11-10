@@ -13,7 +13,7 @@
 --   REFINERY  ⚙  a Crusher, Furnace, Kiln, Mixer or Fabricator (strongest while it works)
 --   SCIENCE   ✦  a telescope or a Survey Station (strongest with a Scientist there or a sweep running)
 --   DEPOT     ▤  hoppers and silos holding 2 t, or 4 t of room
---   DEFENCE   ✚  (X9's emitters and launch rails: a part with `defence`)
+--   DEFENCE   ✚  a Beam Director (X9's lasers; X10's launch rails later): a part with `defence`
 --   OUTPOST   ⌂  none of the above
 --
 -- Each role has a STRENGTH 0..1. A role shows from SHOW (0.5). Strength rises
@@ -56,7 +56,7 @@ HOW = {
   refinery = "a Crusher, Furnace, Kiln, Regocrete Mixer or Fabricator",
   science = "a telescope or a Survey Station, and a Scientist",
   depot = "hoppers and silos: 4 t of room, or 2 t held",
-  defence = "an emitter or a launch rail (to come)",
+  defence = "a Beam Director at the end of a laser (Laser Emitter, Capacitor Banks on a Pulse Bus)",
 }
 SHOW = 0.5
 DECAY = 3 * 86400        -- game s a role takes to fade from 1 to 0

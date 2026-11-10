@@ -453,7 +453,7 @@ end
 local function drawn_point(T)
   local t = target
   if not (T and t) then return nil end
-  if T.body then return T.x, T.y, T.z end
+  if T.body or T.spot then return T.x, T.y, T.z end
   local v = T.v
   if not (v and v.node and v.node.valid) then return nil end
   if t.kind == "part" then
@@ -488,7 +488,8 @@ local function store()
   if not (save and save.set) then return end
   local t = target
   if not t then save.set(SAVE_SEL, false) return end
-  save.set(SAVE_SEL, { kind = t.kind, name = t.name, fid = t.fid, uid = t.uid, port = t.port, craft = t.craft })
+  save.set(SAVE_SEL, { kind = t.kind, name = t.name, fid = t.fid, uid = t.uid, port = t.port, craft = t.craft,
+                       body = t.body, x = t.x, y = t.y, z = t.z })
 end
 
 local function say(msg)
@@ -544,6 +545,12 @@ end
 function targetBody(name)
   if not (space and space.body and space.body(name)) then return false, "no such world" end
   return set({ kind = "body", name = name })
+end
+-- (X9) a spot on a world: `bx, by, bz` body-relative (never a world point:
+-- the planet moves), e.g. a structure piece or the ground a laser should hit
+function targetSpot(body, bx, by, bz, name)
+  if not (body and space and space.body and space.body(body)) then return false, "no such world" end
+  return set({ kind = "spot", body = body, x = bx, y = by, z = bz, name = name or "spot" })
 end
 function targetCraft(v)
   if not (v and v.node and v.node.valid) then return false, "no craft" end
@@ -602,6 +609,14 @@ function resolve()
     local b = space.body(t.name)
     if not b then return nil end
     return { x = b.x, y = b.y, z = b.z, vx = b.vx or 0, vy = b.vy or 0, vz = b.vz or 0, name = t.name, radius = b.radius, body = true }
+  end
+  if t.kind == "spot" then
+    -- (X9) a point on a world, held body-relative: placed against this
+    -- pass's read of its body (drawn in lateUpdate, the tick in fixedUpdate)
+    local b = space.body(t.body)
+    if not b then return nil end
+    return { x = b.x + (t.x or 0), y = b.y + (t.y or 0), z = b.z + (t.z or 0), vx = b.vx or 0, vy = b.vy or 0, vz = b.vz or 0,
+             name = t.name, spot = true, onBody = t.body }
   end
   local v = vessel_by_id(t.id)
   if lost(v) then return nil end
@@ -727,6 +742,9 @@ local function same(t)
   if not (c and t) then return false end
   if c.kind ~= t.kind then return false end
   if c.kind == "body" then return c.name == t.name end
+  if c.kind == "spot" then
+    return c.body == t.body and math.abs((c.x or 0) - (t.x or 0)) + math.abs((c.y or 0) - (t.y or 0)) + math.abs((c.z or 0) - (t.z or 0)) < 0.5
+  end
   if c.kind == "craft" then return c.id == t.id end
   return c.id == t.id and c.uid == t.uid
 end
@@ -976,7 +994,7 @@ function drawMap(subject, px_at, label, lk)
   end
   -- THE CLOSEST APPROACH: both on conics about the body we are in (a craft
   -- in our sphere, or a moon of our world). Recomputed twice a second.
-  if not (me and space.propagate and space.dominant) then return end
+  if not (me and space.propagate and space.dominant) or T.spot then return end
   local dn = space.dominant(o.x, o.y, o.z)
   local db = dn and space.body(dn)
   if not (db and (db.mu or 0) > 0) or T.name == dn then return end
@@ -1286,6 +1304,11 @@ local function restore_try()
   if not s then return end
   if s.kind == "body" then
     if space.body(s.name) then target = { kind = "body", name = s.name }; pending = nil end
+    return
+  end
+  if s.kind == "spot" then
+    if s.body and space.body(s.body) then target = { kind = "spot", body = s.body, x = s.x, y = s.y, z = s.z, name = s.name } end
+    pending = nil
     return
   end
   local fo = ref("flight_ops")

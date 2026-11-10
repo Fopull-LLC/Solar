@@ -1284,6 +1284,10 @@ PIECES.update(gen_kit_quarry.pieces(sys.modules[__name__]))
 import gen_kit_refinery  # noqa: E402
 MATS.update(gen_kit_refinery.MATERIALS)
 PIECES.update(gen_kit_refinery.pieces(sys.modules[__name__]))
+# ── X9: the laser's pieces (tools/gen_kit_weapons.py; its main also writes the craft turret) ──
+import gen_kit_weapons  # noqa: E402
+MATS.update(gen_kit_weapons.MATERIALS)
+PIECES.update(gen_kit_weapons.pieces(sys.modules[__name__]))
 
 # ── S4: PAINT SURFACES. node:setTint tints everything a node draws, so what
 # paint must not touch, and a wall's second face, are split into children of

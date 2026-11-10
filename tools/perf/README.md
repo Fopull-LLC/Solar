@@ -523,3 +523,19 @@ the same camera); 1.2 km off (untouched: unstamped; touched: no nodes); a
 scanner's swath and a telescope; the station's ruin entry, card and marker;
 a crate, the core, the claim, restore, repair; the claimed base's card.
 `RN PASS|FAIL` and `RN RESULT`; pictures in `save/user/ruinshots/`.
+
+## laserprobe.sh + laserprobe_modes.lua — lasers from components (expansion X9)
+
+    WORK=$SCRATCH/laser LOCK=$SCRATCH/engine.lock PATCHES=funds.patch tools/perf/laserprobe.sh <engine> [laser] [turret]
+
+docs/base-building.md §27. `laser`: a 10-bank laser (lens, Jacket Radiator)
+and a 1-stage laser on a grid of 30 Isotope Skids and five Battery Banks;
+charging measured at 50 kW a bank; pulses through the targeting feature
+("Laser target here") at steel, concrete (two), glass and regocrete walls
+40 m out, each hp against damage.lua's prediction; the stage's share; a 1 m
+pit in the ground after 3 GJ on one spot (and the engine's own dig as a control); a CW burn; a logic fire; the cinematic rule at X11 scale
+(invoked directly); costs and GPU with the beam on and off. `turret`: a
+derelict rocket and a craft with a Laser Turret set down 20–30 m out; the
+turret charges from its batteries, tracks the derelict's tank, breaks it, and
+fires AUTO at the pod; a kit laser on the wreck. `LZ PASS|FAIL`, `LZ RESULT`;
+pictures in `save/user/lasershots/`.

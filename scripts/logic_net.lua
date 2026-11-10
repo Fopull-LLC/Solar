@@ -618,6 +618,10 @@ local function apply(c)
     -- (X6) a refinery machine's or a Fabricator's RUN
     local RF = ref("refinery")
     if RF and RF.setRun then RF.setRun(sid, uid, on) end
+  elseif dev == "laser" then
+    -- (X9) a Beam Director's or a Fire Control Console's: fire on the edge, arm by level
+    local LZ = ref("lasers")
+    if LZ and LZ.logicIn then LZ.logicIn(sid, uid, c.pin, on) end
   end
 end
 
@@ -791,6 +795,12 @@ local function device_outs(key, m)
     -- (X6) BUSY: the machine is working (power, feed and room all there)
     local RF = ref("refinery")
     o.busy = (RF and RF.isBusy and RF.isBusy(m.sid, m.uid)) == true
+  elseif dev == "laser" then
+    -- (X9) READY: armed, charged, cooled; ONTGT: the director is on the target
+    local LZ = ref("lasers")
+    local s = LZ and LZ.logicOut and LZ.logicOut(m.sid, m.uid)
+    o.ready = (s and s.ready) == true
+    o.ontgt = (s and s.ontgt) == true
   end
   return o
 end

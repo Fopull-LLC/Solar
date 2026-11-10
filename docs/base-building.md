@@ -3233,7 +3233,7 @@ refineries, science labs, defense bases"). The rules are
   | REFINERY | ⚙ | a Crusher, Furnace, Kiln, Regocrete Mixer or Fabricator (1.0 while it worked in the last 24 h) |
   | SCIENCE | ✦ | a telescope or a Survey Station (1.0 with a Scientist there or a sweep running) |
   | DEPOT | ▤ | hoppers and silos with 4 t of room (0.5), or 2 t held (1.0) |
-  | DEFENCE | ✚ | a part with `defence` (X9's emitters and launch rails; none yet) |
+  | DEFENCE | ✚ | a part with `defence`: a Beam Director (X9, §27; X10's launch rails later) |
   | OUTPOST | ⌂ | none of the above |
 
   A role shows from strength 0.5. It rises at once and fades by a third a
@@ -3556,3 +3556,216 @@ Measured in `tools/perf/ruinprobe.sh` (engine 0.117.1-dev.1468, High,
   entry; an old save.
 - `tools/perf/ruinprobe.sh <engine>` (PATCHES=funds.patch): `RN PASS|FAIL`,
   pictures in `save/user/ruinshots/`.
+
+## 27. Expansion X9: energy weapons I (lasers from components)
+
+Built 2026-11-09 (`work/expansion/PLAN.md` §4.1 and its damage table, §4.5,
+the X9 row of §11, §14 item 3). Ty's rule, binding: weapons follow real
+physics; only an extreme late-game build crosses into a cinematic, explosive
+regime, and the crossover is continuous and earned, never a toggle. There is
+no planet life yet, so the targets are your own structures, old craft and the
+ground, and later X7's DEFENCE role. The rules are `scripts/beam.lua` (the
+physics) and `scripts/damage.lua` (what it does), both pure and
+luajit-tested. The scene is `scripts/lasers.lua` (the kit laser) and
+`scripts/laser_turret.lua` (the craft turret).
+
+### 27.1 What a player can do
+
+- **Build a laser from pieces** (Build Kit, DEFENCE section; research
+  *Directed Energy* $18,000 + 120 RP and copper ore, *Amplifier Stages*
+  $30,000 + 250 RP):
+
+  | piece | size, mass, price | what it is |
+  |---|---|---|
+  | Capacitor Bank | 2 × 1 × 1 m, 1.4 t, $9,000 | 20 MJ; charges from the base grid at 50 kW while its laser is ARMED; leaks 0.1 %/h; pulse ports at ±X |
+  | Pulse Bus 2 m / 1 m | $600 / $350 | busbars on insulators: join banks to one emitter or one stage |
+  | Laser Emitter | 1 × 1.3 × 1.5 m, 1.2 t, $38,000 | a Nd:YAG slab at 30 %; beam out +Z, pulse port −X, coolant (heat) port +X; CW 30 kW optical from 90 kW |
+  | Amplifier Stage | 1 × 1.3 × 2 m, 1.8 t, $52,000 | adds 45 % of its own banks' charge to the passing pulse; six at most |
+  | Lens Group | 0.8 × 1.3 × 1 m, $12,000 | the director focuses to 50,000 km instead of 5 km, or holds a range you set |
+  | Beam Director | 1.5 × 2.1 × 1.5 m, 0.9 t, $24,000 | a two-axis gimbal with a 0.5 m mirror, 10°/s; the beam's end; makes a DEFENCE base |
+  | Fire Control Console | $6,000 | the weapon page and the logic terminals |
+  | Targeting Radar | 2 × 2.6 × 2 m, $30,000, 3 kW | the lasers on its grid lock to 500 km (5 km by eye) |
+
+  Pieces join port to port (the S6 snap: a held piece's port goes onto the
+  hit piece's free port of the same bore). Banks go end to end onto the
+  emitter's side; emitter → stages and lens → director along Z; Radiator
+  Panels or Jacket Radiators on the emitter's and stages' heat ports.
+- **Aim it with the targeting feature.** Right-click a craft or a part → Set
+  target, or any structure piece or the ground near a laser → **Laser target
+  here** (a new target kind, a spot held body-relative). ARMED directors slew
+  onto the selection; ON TARGET when the miss there is under 0.3 m.
+- **Fire.** The console's (or the director's) menu: ARMED, the charge, the
+  target with its range, the PREDICTED effect (spot, fluence, and BURN THROUGH
+  / WEAR n for tanks, pods, engines, steel and concrete walls, the crater),
+  FIRE, CW, Limited by. Logic: `fire` (an edge) and `arm` (a level) in;
+  `ready` and `ontgt` out, on the director and the console.
+- **Mount a Laser Turret on a craft** (VAB, DEFENCE; research *Laser Turret*
+  $14,000 + 80 RP): a radial part (a jet's spine, a lander's side). ARMED it
+  charges its 0.5 MJ capacitor from the craft's batteries at 10 kW and tracks
+  the TARGET by itself; FIRE from its menu, or AUTO: it fires the moment it is
+  on target and charged (a sentry beside a landed pod).
+
+### 27.2 The physics (`beam.lua`)
+
+- The pulse: `E = 0.92 × (0.30 × ΣE_emitter's banks + 0.45 × Σ each stage's)`;
+  a group feeding several devices is shared evenly. Ten banks on an emitter
+  give **55.2 MJ** (the plan's "60 MJ" is rounded); the other 145 MJ is the
+  emitter's heat.
+- Divergence `θ = 2.44 λ / D + jitter`, λ = 1.06 µm. The jitter is the
+  director's own (1 µrad; X11's large one 0.05) plus 0.4 µrad a stage,
+  divided by the beam expander's magnification D / 0.5 m (an angle inside the
+  train shrinks by the expander's power).
+- Spot `d = max(2 cm, √((R θ)² + (D (1 − R/f))²))`: the optics focus at the
+  target's range up to their reach, and off focus the geometric blur adds.
+  Fluence `F = E / (π d² / 4)`.
+- Air: `T = exp(−∫σ dl)`, σ = 1e-4 /m × ρ/1.225 (clear air at 1 µm), ρ from
+  the world record along the path (`aero.airAt`, six samples). A CW beam over
+  10 kW in air above 0.3 kg/m³ blooms (half again).
+- Occlusion: a segment-sphere test against every body of one `space.bodies()`
+  read, four times a second while a target is over 200 m away.
+- Cooldown `(3 s + 0.1 s/MJ) / max(0.4, cooling)`. Cooling is
+  `machines.coolLoops` over the heat ports (one Jacket Radiator on an
+  emitter's 60 kW gives 0.27).
+- The plan's worked figures hold (smoke_beam): the 0.5 m director at 100 km
+  gives a 0.52 m spot and F 2.86e8 (plan 2.8e8); the 8 m dish at 10,000 km
+  3.23 m and 1.46e8 (plan 1.5e8). Those figures leave out the plan's own
+  1 µrad jitter: with it the 100 km spot is 0.62 m.
+
+### 27.3 What it does (`damage.lua`)
+
+| target | rule | measured (a 55 MJ pulse at 37 m: 2 cm spot, F 1.76e11) |
+|---|---|---|
+| craft part | `min(1, F/F_part) · min(1, E_on / (F_part · 0.01 m²))`; F_part tank 2e6, structural 5e6, pod 4e6, engine 8e6, shield 5e7; `vessel_controller.hitPart` (≥ 1 breaks it: its blast, chain, crater, debris) | see 27.6 (turret) |
+| kit piece | `min(1, F/F_mat) · min(1, E_on / E_cut)`; F_mat steel 5e6, concrete 2e7, glass 5e5, regocrete 1e7; E_cut = melting a 5 cm kerf through its section | steel wall (E_cut 2.53 MJ) removed; concrete (60.0 MJ) worn to 0.08, felled by the second pulse; glass (7.5 MJ) removed; regocrete (52.0 MJ) removed |
+| ground | `r = (E_abs / 3 GJ/m³)^(1/3)`; the energy waits on the spot (within 1 m) until r ≥ 1 m, the smallest dig the engine's ground takes (a 0.5 m dig changes nothing, measured); until then each pulse leaves a scorch | 0.264 m from one pulse (a scorch); a 1 m pit after 55 pulses on one spot (3 GJ) |
+| crew | `F / 1e5` hp a second (in the rules; not cast in the scene yet) | — |
+
+The energy factor is the plan's rule plus the floor it needs. By fluence
+alone a 30 kW CW beam on a 2 cm spot "burns through" a concrete wall in a
+tenth of a second, having melted a 2 cm hole. For every real pulse the factor
+is 1 and the plan's rule stands exactly. A beam wider than its target puts
+only its share on it (`intercept`). A piece's hp lives in its part state
+(`hp`; none means 1.0). At 0 the piece leaves the record (rooms re-flood) and
+throws up to 8 chunks of its material and a burst.
+
+### 27.4 The cinematic regime (continuous, earned)
+
+`c = s(xE) · s(xF) · kAmp · kMag` (s = smoothstep), where xE = (log10 E −
+8.5)/2, xF = (log10 F − 9)/2, kAmp = (1 + stages)/7 and kMag =
+clamp(log2(D/0.25)/5, 0.2, 1). At `c` the absorbed energy couples into a
+blast: TNT equivalent `c · E / 4.184 MJ`, radius `2 m · W^(1/3)`, and pieces
+and parts in it take `1.5 (1 − d/r)`. The ground's cratering energy falls
+from 3 GJ/m³ (melting) toward 30 MJ/m³ (explosive ejection) as `10^(−2c)`.
+Measured:
+
+- laser A (10 banks, 0.5 m): c = 0 (the physics).
+- the largest X9 build (0.5 m, six stages, 30 banks on every bus, 1.66 GJ,
+  ~$2.2 M, ~12 h of a 100 kW turbine's charge): **c = 0.059**, just over the
+  edge.
+- X11's 8 m dish at 22 GJ on a 0.3 m spot: **c = 0.98**. Invoked directly in
+  the probe (no such build exists yet): 5,165 kg TNT, a 34.6 m blast radius,
+  three walls 14 m away flattened, a crater of 8.8 m (the physics alone:
+  1.9 m).
+
+One more bank on every bus moves c by under 0.02 anywhere along the way
+(smoke_beam asserts it).
+
+### 27.5 The scene (`lasers.lua`)
+
+- **Layout**, on `structures.version`: `beam.layout` over each structure's
+  DEFENCE pieces (pulse groups by union-find, the beam path port to port). A
+  weapon is a director with its emitter, stages, lenses and the banks each
+  dumps. Weapon tables persist across rescans, so their aim and cooldown
+  carry over.
+- **Charging**: a bank is a `base_grid` aux load (50 kW) while its laser is
+  armed and the bank is not full; `partServed` says whether the grid carries
+  it. The step runs on the agency clock every 0.5 s (one long step equals many
+  short ones, so a reload or a warp catches up). Saved in `lz.e` / `lz.a`.
+- **Aiming and firing in fixedUpdate**, from tick poses: the director's pivot
+  from its record against `space.body` read in the tick, and the target from
+  `targeting.resolve`. The yaw and elevation are in the director's own frame;
+  nothing is kept in world. A pulse is one raycast from the muzzle along where
+  the director points; CW is one raycast every 0.1 s.
+- **Drawing in lateUpdate**, from drawn poses: the muzzle from the record
+  against this pass's `space.body`, and the hit held body-relative (or in the
+  struck part's frame, placed by the part node's `toWorld`). The head's Yoke
+  and Head children are turned by `setAngles(yaw, −elevation, 0)`. Four
+  pooled `FxWeaponBeam` nodes (vfx/WeaponBeam: core, halo, shimmer, muzzle
+  star).
+- `targeting.lua` gains the `spot` kind (resolve, store/restore, the marker).
+- `logic_net` has dev `laser`; `base_grid`'s aux sum asks `lasers.gridAux`;
+  `base_roles` counts a director (`defence`).
+
+### 27.6 The craft turret (`laser_turret.lua`, `parts_weapons.lua`)
+
+Turrets are found once a second on every live craft (`aboardRecs`, id
+`laserTurret`). Capacitor 0.5 MJ (a 138 kJ pulse), D 0.3 m, slew 40°/s,
+elevation −5° to 90°, lock 5 km. The gimbal frame is the part's: up is its +X
+(out of the hull), front its +Z. It aims and fires in fixedUpdate from
+`partFrameNow` (tick); the head is drawn from its own nodes (`Mount` →
+`Yoke`, `Head`). Charge, ARM and AUTO are not saved and start empty each
+session. Measured against a derelict's tank 14 m away: spot 9.6 cm (the
+optics focus no nearer than 20 m), F 1.9e7, amount 1: the tank burns through
+and blows; AUTO then fired by itself on the pod. Against a steel wall it
+would wear 0.055 a shot. It is an anti-craft gun, not a siege laser.
+
+### 27.7 Save keys and old saves
+
+`lz.e` and `lz.a`; a director's `arm`, a lens's `focus` and any piece's `hp`
+in their part states; `target.sel` may hold `{ kind = "spot", body, x, y, z }`.
+An old save has none of these, and nothing changes (no hp means 1.0).
+
+### 27.8 Cost
+
+Engine 0.117.1-dev.1468 at 1280 × 720; the full table is in
+`work/expansion_x9/NOTES.md`.
+
+- `lasers` with nothing built: a version compare a frame (~0.02 ms smoothed,
+  the script's own floor). Two lasers built and disarmed: +0.01 ms. Armed and
+  tracking (two directors): 0.06 ms (fixedUpdate 0.035 ms).
+- A pulse: 0.5 ms once (its raycast 0.12–0.14 ms). CW: one ray every 0.1 s.
+- The beam on screen: GPU +0.07 ms (9.53 → 9.60 ms from the same camera).
+- A layout rescan: 0.4–0.5 ms, only when the records change.
+- The craft turret armed and tracking: 0.04–0.45 ms (aim at 20 Hz; the spread
+  is the machine's load across runs; most of it is `targeting.resolve` on a
+  part target). Disarmed: its 1 Hz craft scan, ~0.01–0.02 ms.
+
+### 27.9 Balance numbers for Ty
+
+- Bank 20 MJ, $9,000, 50 kW (6.7 min from flat); pulse share 0.92; emitter
+  30 %, stage 45 %; ten banks give 55 MJ.
+- Concrete is armour: a 10-bank pulse wears a concrete wall to 0.08, and two
+  fell it. Steel and glass walls go in one. A 2-bank laser (11 MJ) fells steel
+  and wears concrete 0.18.
+- Cooldown 3 s + 0.1 s/MJ at full cooling (21 s after a 55 MJ pulse with one
+  Jacket Radiator).
+- The turret's 0.5 MJ capacitor costs 3.3 craft batteries (150 EC each) a
+  shot: the game's craft EC scale, not a real battery's.
+- Research: Directed Energy $18,000 + 120 RP + copper; Amplifier Stages
+  $30,000 + 250 RP; Laser Turret $14,000 + 80 RP.
+
+### 27.10 Left for later
+
+- The "Vantage" scenario start (the moon, the hall, the target) and X11's
+  Large Director, mirror segments and 8 m dish (the rules already carry them:
+  `JIT_LARGE`, any D).
+- A remote camera view for the turret (Ty's "remote-control turrets with
+  cameras"); the turret has no hand control beyond FIRE and AUTO.
+- Crew hit by a beam: the rule is in `damage.crewHurt`, but the scene does not
+  cast against crew capsules yet.
+- Felled pieces throw generic chunks, not the piece's own mesh (no engine call
+  turns a static prefab into a body; a card draft is in NOTES). Asteroid
+  fracturing (`0.1 J/kg × mass`) waits for X10's belt rocks.
+- Repairing a burnt piece (X8's Repair Kit path reads `wr`, not `hp`).
+- A sound of its own (it borrows the surveyor's crack and the pyro bangs).
+
+### 27.11 Tests and the probe
+
+- `tests/smoke_beam.lua` (450 checks): the plan's worked figures, the pulse,
+  focus, air and blooming, occlusion, cooldown, the regime (0 for normal
+  builds, monotonic, no step over 0.02 per bank, raised by amplification and
+  magnification), the layout (chains, groups, open chains, gaps).
+- `tests/smoke_damage.lua` (56 checks): the table, the energy floor, walls as
+  armour, intercept, the crater and the blast, old saves.
+- `tools/perf/laserprobe.sh <engine> [laser|turret]` (PATCHES=funds.patch):
+  `LZ PASS|FAIL`, pictures in `save/user/lasershots/`.

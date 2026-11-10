@@ -210,6 +210,15 @@ local function registry()
       R.survey = true
     end
   end
+  -- THE WEAPON PARTS (expansion X9, scripts/parts_weapons.lua, beside
+  -- parts_survey): the DEFENCE section (the Laser Turret).
+  if R.lib and not R.weapons then
+    local pw = findScript and findScript("parts_weapons") or nil
+    if pw and pw.register and R.lib.extend then
+      R.lib.extend(pw)
+      R.weapons = true
+    end
+  end
   -- EVERY BASE PART (playtest 11-09: "the base building parts should all be in
   -- the vab categories"): at a Build Stand or a Base Hub — the overlay on the
   -- world, where the Build Kit's scripts are — the BASE section and every kit

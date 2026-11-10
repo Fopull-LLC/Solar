@@ -102,6 +102,13 @@ TECH = {
   ceramics     = { cost = 3500,  label = "Kiln and Mixer", mat = "silica", after = "refinery", rp = 30 },
   electrolysis = { cost = 9000,  label = "Electrolyser", after = "refinery", rp = 120 },
   fabrication  = { cost = 12000, label = "Fabricator", after = "refinery", rp = 150 },
+  -- DIRECTED ENERGY (expansion X9; scripts/beam.lua, lasers.lua, parts_kit
+  -- DEFENCE): the banks, bus, emitter, lens, director, console and radar;
+  -- amplifier stages after it; the craft turret wants both copper and the
+  -- first research.
+  lasers       = { cost = 18000, label = "Directed Energy (capacitors, emitter, director)", mat = "copper", rp = 120 },
+  laserAmp     = { cost = 30000, label = "Amplifier Stages", after = "lasers", rp = 250 },
+  laserTurret  = { cost = 14000, label = "Laser Turret", after = "lasers", rp = 80 },
   -- THE BUILD KIT (deep-space M3): not bought, GIVEN: the Relay Network's
   -- first goal (10 % of the ground linked) grants it (missions.lua), and from
   -- then the Depot stocks it and every Engineer is issued one at the base

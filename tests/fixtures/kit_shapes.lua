@@ -253,4 +253,13 @@ return {
   KitMcElectro_steel = { lo = { -0.750, 0.000, -0.450 }, hi = { 0.750, 2.000, 0.450 }, colliders = 1, tris = 912, children = {  } },
   KitMcFab_steel = { lo = { -1.010, 0.000, -1.000 }, hi = { 1.010, 2.400, 1.000 }, colliders = 3, tris = 468, children = {  } },
   KitMcJacket_steel = { lo = { -1.070, 0.000, -0.150 }, hi = { 1.070, 3.400, 0.150 }, colliders = 1, tris = 660, children = {  } },
+  KitLzCap_steel = { lo = { -1.000, 0.000, -0.500 }, hi = { 1.000, 1.000, 0.500 }, colliders = 2, tris = 1092, children = {  } },
+  KitLzBus2_steel = { lo = { -1.000, 0.000, -0.150 }, hi = { 1.000, 0.570, 0.150 }, colliders = 1, tris = 768, children = {  } },
+  KitLzBus1_steel = { lo = { -0.500, 0.000, -0.150 }, hi = { 0.500, 0.570, 0.150 }, colliders = 1, tris = 408, children = {  } },
+  KitLzEmitter_steel = { lo = { -0.500, 0.000, -0.750 }, hi = { 0.500, 1.300, 0.750 }, colliders = 2, tris = 1080, children = {  } },
+  KitLzAmp_steel = { lo = { -0.500, 0.000, -1.000 }, hi = { 0.500, 1.300, 1.000 }, colliders = 2, tris = 1320, children = {  } },
+  KitLzLens_steel = { lo = { -0.400, 0.000, -0.500 }, hi = { 0.400, 1.300, 0.500 }, colliders = 2, tris = 420, children = {  } },
+  KitLzConsole_steel = { lo = { -0.620, 0.000, -0.420 }, hi = { 0.620, 1.289, 0.400 }, colliders = 1, tris = 276, children = {  } },
+  KitLzRadar_steel = { lo = { -1.000, 0.000, -1.000 }, hi = { 1.000, 2.557, 1.000 }, colliders = 2, tris = 1088, children = {  } },
+  KitLzDirector_steel = { lo = { -0.750, 0.000, -0.750 }, hi = { 0.750, 2.070, 0.750 }, colliders = 2, tris = 1540, children = { "Yoke", "Head" } },
 }

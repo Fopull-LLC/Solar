@@ -166,7 +166,7 @@ PIPE_Y = 0.6
 --             { kind = "station" } (the Survey Station: weather, seismometer,
 --             magnetometer; fills its body's layers while it stands there)
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGISTICS", "REFINERY", "LOGIC", "NUCLEAR", "SCIENCE", "FITTINGS", "PROPS", "DECALS" }
+SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGISTICS", "REFINERY", "LOGIC", "NUCLEAR", "SCIENCE", "DEFENCE", "FITTINGS", "PROPS", "DECALS" }
 EXTERIOR = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
 FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true,
            porthole = true, airlockWall = true, openFrame = true, ventWall = true, leadWall = true, gable = true,
@@ -1049,6 +1049,80 @@ do
   end
 end
 
+-- ── DEFENCE (expansion X9: a laser built from components; scripts/beam.lua
+-- (the physics), damage.lua (what it does), lasers.lua (the scene);
+-- tools/gen_kit_weapons.py; docs/base-building.md §27) ────────────────────────
+--   lz = { kind = "cap" | "bus" | "emitter" | "amp" | "lens" | "director" |
+--          "console" | "radar", … }: what a piece is to the laser.
+--   PULSE ports (bore "PULSE", at PULSE_Y) join banks and bus bars to an
+--   emitter's or a stage's side; BEAM ports (bore "BEAM", at BEAM_Y) run the
+--   beam emitter → stages and lenses → director along the pieces' Z; an
+--   emitter's and a stage's HEAT port is the S6 coolant port (DN100 at
+--   PIPE_Y): Radiator Panels, Jacket Radiators, coolant pipes, a tower.
+PULSE_Y = 0.45
+BEAM_Y = 1.0
+do
+  local function pp(name, x, z, nx, nz) return { name = name, x = x, y = PULSE_Y, z = z, nx = nx, nz = nz, bore = "PULSE", pulse = true } end
+  local function bm(name, z, nz, io) return { name = name, x = 0, y = BEAM_Y, z = z, nx = 0, nz = nz, bore = "BEAM", beam = io } end
+  local function hp(name, x, z, nx, nz) return { name = name, x = x, z = z, nx = nx, nz = nz, loop = "c", heat = true } end
+  local function W(t)
+    t.section = "DEFENCE"
+    t.mats = { "steel" }
+    t.fill = "solid"
+    t.vol = t.vol or 0.5
+    t.tech = t.tech or "lasers"
+    return t
+  end
+  for k, t in pairs({
+    lzCap      = { label = "Capacitor Bank", order = 1, snap = "block", box = B(-1, 1, 0, 1.0, -0.5, 0.5),
+                   mass = { steel = 1.4 }, cost = 9000, vol = 1.2, power = { kind = "aux", use = 50 },
+                   lz = { kind = "cap", cap = 20e6, kw = 50 },
+                   ports = { pp("p1", -1, 0, -1, 0), pp("p2", 1, 0, 1, 0) },
+                   desc = "a rack of film capacitors in an oil-filled steel can: 20 MJ, charged from the base grid at up to 50 kW while its laser is ARMED (6.7 min from flat) · leaks 0.1 % an hour · dumps only into a Pulse Bus: its ends (±X) join banks, bus bars and an emitter's or a stage's side" },
+    lzBus2     = { label = "Pulse Bus 2 m", order = 2, snap = "block", box = B(-1, 1, 0, 0.6, -0.15, 0.15),
+                   mass = { steel = 0.12 }, cost = 600, vol = 0.1, lz = { kind = "bus" },
+                   ports = { pp("p1", -1, 0, -1, 0), pp("p2", 1, 0, 1, 0) },
+                   desc = "copper busbars on porcelain insulators: joins Capacitor Banks to one emitter or one amplifier stage · the chain's pulse is the banks' charge × 0.92" },
+    lzBus1     = { label = "Pulse Bus 1 m", order = 3, snap = "block", box = B(-0.5, 0.5, 0, 0.6, -0.15, 0.15),
+                   mass = { steel = 0.06 }, cost = 350, vol = 0.05, lz = { kind = "bus" },
+                   ports = { pp("p1", -0.5, 0, -1, 0), pp("p2", 0.5, 0, 1, 0) },
+                   desc = "a 1 m length of pulse busbar" },
+    lzEmitter  = { label = "Laser Emitter", order = 4, snap = "block", box = B(-0.5, 0.5, 0, 1.3, -0.75, 0.75),
+                   mass = { steel = 1.2 }, cost = 38000, vol = 0.9, power = { kind = "aux", use = 90 },
+                   lz = { kind = "emitter", eff = 0.30, cw = 30, kw = 90, heat = 60 },
+                   ports = { pp("pulse", -0.5, 0, -1, 0), bm("beam", 0.75, 1, "out"), hp("heat", 0.5, 0, 1, 0) },
+                   desc = "a diode-pumped Nd:YAG slab (1.06 µm) at 30 % wall-plug: a PULSE fires its banks' charge (10 banks: 55 MJ) · CW 30 kW optical from 90 kW of grid · the beam leaves +Z; banks on its −X pulse port; its +X heat port wants radiators (no coolant: 40 % of its rate)" },
+    lzAmp      = { label = "Amplifier Stage", order = 5, snap = "block", box = B(-0.5, 0.5, 0, 1.3, -1, 1),
+                   mass = { steel = 1.8 }, cost = 52000, vol = 1.2, tech = "laserAmp",
+                   lz = { kind = "amp", eff = 0.45, heat = 40 },
+                   ports = { bm("in", -1, -1, "in"), bm("out", 1, 1, "out"), pp("pulse", -0.5, 0, -1, 0), hp("heat", 0.5, 0, 1, 0) },
+                   desc = "a pumped gain slab in the beam: adds 45 % of its OWN banks' charge to the passing pulse · up to six in a chain, each 0.4 µrad of jitter (less behind a bigger director) · beam in −Z, out +Z; banks on −X, coolant on +X" },
+    lzLens     = { label = "Lens Group", order = 6, snap = "block", box = B(-0.4, 0.4, 0, 1.3, -0.5, 0.5),
+                   mass = { steel = 0.3 }, cost = 12000, vol = 0.3,
+                   lz = { kind = "lens", reach = 5.0e7 },
+                   ports = { bm("in", -0.5, -1, "in"), bm("out", 0.5, 1, "out") },
+                   desc = "a focusing group in the beam: the director focuses out to 50,000 km instead of 5 km, or holds a range you set (its menu) · beam in −Z, out +Z" },
+    lzDirector = { label = "Beam Director", order = 7, snap = "block", box = B(-0.75, 0.75, 0, 2.1, -0.75, 0.75), defence = true,
+                   mass = { steel = 0.9 }, cost = 24000, vol = 1.0,
+                   lz = { kind = "director", D = 0.5, jit = 1.0e-6, slew = 10, pivot = 1.75, reach = 5000, muzzle = 0.55 },
+                   ports = { bm("in", -0.75, -1, "in") },
+                   desc = "a two-axis gimbal with a 0.5 m mirror: points the beam at the TARGET (the targeting feature: right-click → Set target) at 10°/s · beam in at its −Z port · a laser's end: emitter → stages, lens → here" },
+    lzConsole  = { label = "Fire Control Console", order = 8, snap = "block", box = B(-0.6, 0.6, 0, 1.3, -0.4, 0.4),
+                   mass = { steel = 0.25 }, cost = 6000, vol = 0.3, lz = { kind = "console" },
+                   desc = "the base's weapon page: ARM, charge, target, range, spot, the predicted effect, FIRE, CW · its terminals: fire and arm in, ready and on-target out" },
+    lzRadar    = { label = "Targeting Radar", order = 9, snap = "block", box = B(-1, 1, 0, 2.6, -1, 1),
+                   mass = { steel = 0.8 }, cost = 30000, vol = 0.8, power = { kind = "load", use = 3 },
+                   lz = { kind = "radar", range = 5.0e5 },
+                   desc = "an X-band tracking dish on a pedestal: the lasers on its grid lock targets out to 500 km (5 km by eye without it) · 3 kW" },
+  }) do PIECES[k] = W(t) end
+  local function lp(name)
+    local bx = PIECES[name].box
+    devpins(name, "laser", { { "fire", "in", bx[2] - 0.1, 1.0, bx[6] + 0.01 }, { "arm", "in", bx[2] - 0.22, 1.0, bx[6] + 0.01 },
+                              { "ready", "out", bx[2] - 0.34, 1.0, bx[6] + 0.01 }, { "ontgt", "out", bx[2] - 0.46, 1.0, bx[6] + 0.01 } })
+  end
+  lp("lzDirector"); lp("lzConsole")
+end
+
 -- ── FITTINGS: VAB parts placed live (S2) ─────────────────────────────────────
 -- The registry figures they carry are parts_registry's (and parts_aero's,
 -- parts_nuclear's), copied here because the world scene carries no registry;
@@ -1171,6 +1245,8 @@ local function resolve(piece, mat)
     lg = P.lg, wire = P.wire,
     -- (X1) a survey instrument
     survey = P.survey,
+    -- (X9) a laser's piece, and what makes a DEFENCE base (base_roles)
+    lz = P.lz, defence = P.defence,
     -- (X5) a logistics piece: the quarry, conveyors, tubes, stores, the chute
     it = P.it,
     script = P.script or ((P.door or P.light or P.screen or P.switch or P.sign or P.emblem) and "kit_live" or nil),
