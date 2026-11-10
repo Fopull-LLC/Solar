@@ -161,6 +161,13 @@ ITEMS.spentRod = { name = "Spent Rod", kind = "consumable", kg = 40.0, L = 14, c
                    hold = { prefab = "ItemSpentRod", grip = "shoulder" }, body = "SpentRodBody",
                    about = "a burnt-out fuel rod, hot with fission products: don't carry it in a pack for long. The Materials Intake takes it back" }
 
+-- THE DATA CORE (expansion X8; scripts/ruins.lua): the solid-state log of an
+-- abandoned base, pulled from its terminal. Not sold, not held: carried in a
+-- pack (or a locker) back to the home Research Lab, where it is read (RP, the
+-- site's last log, its blueprint). 6 kg in a shock case.
+ITEMS.datacore = { name = "Data Core", kind = "device", kg = 6.0, L = 4, cost = 0,
+                   about = "an abandoned base's log in a shock case: carry it into the Research Lab to have it read" }
+
 -- THE BUILD KIT (deep-space addendum K1; scripts/field_builder.lua): the
 -- Engineer's field tablet in its hard carry frame. Every Engineer is issued
 -- one (field_builder, once per member: an Engineers-only issue, so not

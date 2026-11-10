@@ -62,6 +62,12 @@
 -- world or within 20 km of it, and unloaded otherwise; the check is once a
 -- second for every structure together. A placed part is a plain static
 -- prefab: no script, no body that moves, so it costs nothing a tick.
+-- (X8) A record with a `ru` (an abandoned base's site, ruins.lua) streams by
+-- DISTANCE instead: spawned within ruin_in of the focus, unloaded past
+-- ruin_out (hysteresis), so a ruin across the world costs no draws.
+-- PACED (X8, the spawn budget): a structure streaming in is spawned
+-- `pace` parts a frame, not all at once (a 150-piece ruin over ~13 frames;
+-- a placement's spawnNow is still immediate).
 --
 -- (Step 5's snapping joins a part to an existing structure: `bp` is already a
 -- list, so it only appends. K11's anchored-assembly structure, for parts that
@@ -71,6 +77,12 @@
 defaults = {
   --@range 1000 100000 --@units m
   spawn_range = 20000.0,
+  --@range 100 5000 --@units m
+  ruin_in = 650.0,
+  --@range 100 5000 --@units m
+  ruin_out = 800.0,
+  --@range 1 200
+  pace = 12,
 }
 
 version = 0
@@ -91,7 +103,7 @@ local function norm(x, y, z)
   return x / l, y / l, z / l, l
 end
 
-local KEEP = { "id", "b", "x", "y", "z", "ux", "uy", "uz", "fx", "fy", "fz", "n", "by", "t", "d", "bp", "st", "paid" }
+local KEEP = { "id", "b", "x", "y", "z", "ux", "uy", "uz", "fx", "fy", "fz", "n", "by", "t", "d", "bp", "st", "paid", "ru" }
 local function plain(r)
   local o = {}
   for _, k in ipairs(KEEP) do o[k] = r[k] end
@@ -421,6 +433,7 @@ despawn_part = function(id, uid)
   local L = live[id]
   if not L then return end
   if L.nodes[uid] then hook_gone(id, uid) end
+  if L.asked then L.asked[uid] = nil end
   drop_node(L.nodes[uid]); L.nodes[uid] = nil
   if L.feet then drop_node(L.feet[uid]); L.feet[uid] = nil end
 end
@@ -533,6 +546,8 @@ local function footing_mesh(ft)
 end
 
 spawn_part = function(r, L, p)
+  L.asked = L.asked or {}
+  L.asked[p.uid] = true
   local pb = parts_lib()
   local planet = find and find(r.b)
   local b = space and space.body and space.body(r.b)
@@ -557,6 +572,18 @@ spawn_part = function(r, L, p)
     inst.name = def.prefab
     L.nodes[p.uid] = inst
     owner[inst.id] = { sid = r.id, uid = p.uid }
+    -- (X8) a film or a wall-mounted fitting (a decal, grime, a light, a
+    -- rack) casts nothing worth the sun map's draw: off, it and its meshes
+    if def.kit and (def.film or def.snap == "mount") then
+      local function noshadow(n, depth)
+        pcall(function() n.castShadow = false end)
+        if depth > 0 then
+          local okc, kids = pcall(n.children, n)
+          if okc and kids then for _, k in ipairs(kids) do noshadow(k, depth - 1) end end
+        end
+      end
+      noshadow(inst, 2)
+    end
     -- (S4: its paint and the dust it has gathered; kit_paint.lua)
     if def.kit then
       local KP = findScript and findScript("kit_paint")
@@ -590,7 +617,10 @@ spawn_part = function(r, L, p)
   end
 end
 
-local function spawn_rec(r)
+-- (X8) the paced queue: { { r, L, i } … } drained `pace` parts a frame
+local paceq = {}
+pacedParts = 0        -- probes: parts spawned through the queue
+local function spawn_rec(r, paced)
   if live[r.id] then return end
   local pb = parts_lib()
   local planet = find and find(r.b)
@@ -598,8 +628,31 @@ local function spawn_rec(r)
   if not (pb and planet and b and spawn) then return end
   local L = { nodes = {}, feet = {}, spawning = 0 }
   live[r.id] = L
+  if paced and #r.bp > ((params and params.pace) or 12) then
+    paceq[#paceq + 1] = { r = r, L = L, i = 1 }
+    return
+  end
   for _, p in ipairs(r.bp) do spawn_part(r, L, p) end
 end
+local function drain_pace()
+  local left = (params and params.pace) or 12
+  while left > 0 and #paceq > 0 do
+    local q = paceq[1]
+    -- (unloaded, removed or respawned meanwhile: its queue goes with it)
+    if live[q.r.id] ~= q.L or not recs or recs[q.r.id] ~= q.r then
+      table.remove(paceq, 1)
+    else
+      local p = q.r.bp[q.i]
+      if not p then table.remove(paceq, 1)
+      else
+        q.i = q.i + 1
+        if not (q.L.asked and q.L.asked[p.uid]) then spawn_part(q.r, q.L, p); pacedParts = pacedParts + 1 end
+        left = left - 1
+      end
+    end
+  end
+end
+function pacing() return #paceq end
 
 -- Spawn this one now (a placement: no waiting for the 1 Hz check).
 function spawnNow(id) ensure() local r = recs[id]; if r and not held[id] then spawn_rec(r) end end
@@ -639,27 +692,37 @@ function start(node)
   recs = nil
   live = {}
   owner = {}
+  paceq = {}
   load()
 end
 
 function update(node, dt)
   ensure()
+  if #paceq > 0 then drain_pace() end
   local t = time or 0
   if t - check_t < 1.0 or #order == 0 then return end
   check_t = t
   local fx, fy, fz = focus()
   local dom = fx and space.dominant(fx, fy, fz) or nil
   local range = (params and params.spawn_range) or 20000
+  local rin, rout = (params and params.ruin_in) or 650, (params and params.ruin_out) or 800
   for _, id in ipairs(order) do
     local r = recs[id]
     local want = false
     if fx then
-      if r.b == dom then want = true
+      if r.ru then
+        -- (X8) a ruin: by distance from the focus, with hysteresis
+        local b = r.b == dom and space.body(r.b)
+        if b then
+          local d = math.sqrt((b.x + r.x - fx) ^ 2 + (b.y + r.y - fy) ^ 2 + (b.z + r.z - fz) ^ 2)
+          want = d < (live[id] and rout or rin)
+        end
+      elseif r.b == dom then want = true
       else
         local b = space.body(r.b)
         if b then want = math.sqrt((b.x + r.x - fx) ^ 2 + (b.y + r.y - fy) ^ 2 + (b.z + r.z - fz) ^ 2) < range end
       end
     end
-    if want and not held[id] then spawn_rec(r) elseif live[id] and not want then despawn(id) end
+    if want and not held[id] then spawn_rec(r, true) elseif live[id] and not want then despawn(id) end
   end
 end

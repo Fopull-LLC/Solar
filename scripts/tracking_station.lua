@@ -479,6 +479,7 @@ local function rim_of(e)
   local k = e.kind
   if k == "debris" or k == "remains" then return C.muted end
   if k == "flag" then return C.accent end
+  if k == "ruin" then return C.warn end
   if k == "crew" or k == "structure" or k == "base" then return C.ink end
   if k == "relay" then return e.link and C.signal or C.danger end
   if k == "body" then return e.surveyed and C.done or C.soft end
@@ -1205,10 +1206,18 @@ local function header(e, rows, can_rename)
   end
   rows[#rows + 1] = { "row", key = "hd", w = "100%", h = "fit", gap = 8, pad = 0, align = "center",
     { "text", key = "g", style = "panel/heading", w = 20, h = "fit", text = e.glyph, textColor = rim_of(e) },
-    { "text", key = "nm", style = "panel/heading", w = "grow", h = "fit", wrap = true, text = e.name or "?" },
-    can_rename and key_btn("rn", "panel/secondary", "Rename", 70, 24, false, nil, function()
-      renaming, rename_text = e.id, e.name or ""; dirty_all = true end) or nil }
-  rows[#rows + 1] = { "text", key = "sit", style = "panel/label", w = "100%", h = "fit", wrap = true, text = e.sub or "" }
+    { "text", key = "nm", style = "panel/heading", w = "grow", h = "fit", wrap = true, text = e.name or "?" } }
+  -- (X8: a long name beside the Rename key wrapped to two lines in a row
+  -- sized for one and ran up over the SELECTED label: the key sits on the
+  -- situation's row instead, and the name has the card's whole width)
+  if can_rename then
+    rows[#rows + 1] = { "row", key = "st", w = "100%", h = "fit", gap = 8, pad = 0, align = "center",
+      { "text", key = "sit", style = "panel/label", w = "grow", h = "fit", wrap = true, text = e.sub or "" },
+      key_btn("rn", "panel/secondary", "Rename", 70, 24, false, nil, function()
+        renaming, rename_text = e.id, e.name or ""; dirty_all = true end) }
+  else
+    rows[#rows + 1] = { "text", key = "sit", style = "panel/label", w = "100%", h = "fit", wrap = true, text = e.sub or "" }
+  end
 end
 
 local function armed_on(id) return armed and armed.id == id and now() < armed.t end
@@ -1471,6 +1480,21 @@ local function card_other(e, rows, co)
     base_card(e, rows)
   elseif e.kind == "structure" then
     rows[#rows + 1] = txt("ab", "panel/cellMuted", string.format("%d part%s%s", e.parts or 0, (e.parts or 0) == 1 and "" or "s", e.date and (" · founded " .. e.date) or ""))
+  elseif e.kind == "ruin" then
+    -- (X8) an abandoned base (ruins.lua): how it was found, what's left, the core
+    local ru = ref("ruins")
+    local s = e.ruin or {}
+    local HOW = { proximity = "found on the ground", scanner = "mapped by an orbital scanner", telescope = "seen by a telescope" }
+    local l = { string.format("ABANDONED %s DAYS", tostring(s.age or "?")), string.upper(e.ruinKind or "ruin") .. "  ·  " .. string.upper(HOW[e.found] or "found") }
+    rows[#rows + 1] = crt("ru", l)
+    if e.read and ru and ru.lore then
+      for i, line in ipairs(ru.lore(s)) do rows[#rows + 1] = txt("lo" .. i, i == 3 and "panel/cell" or "panel/cellMuted", line) end
+    elseif e.core then
+      rows[#rows + 1] = txt("co", "panel/hint", "Its Data Core is out of the terminal: carry it into the Research Lab to read it.")
+    else
+      rows[#rows + 1] = txt("co", "panel/hint", "A terminal inside still holds its Data Core. An Engineer can claim the site at its tower.")
+    end
+    rows[#rows + 1] = txt("ow", "panel/cellMuted", ru and ru.occupant and ru.occupant(s) and ("Lived in now: " .. tostring(ru.occupant(s))) or "Nobody lives here now.")
   elseif e.kind == "base" then
     rows[#rows + 1] = txt("ab", "panel/cellMuted", "The agency's spaceport: the pad, the runway, the buildings and the ground station.")
     rows[#rows + 1] = rule("rr")

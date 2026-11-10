@@ -402,6 +402,27 @@ What each base is for and the scanner's map (`scripts/base_roles.lua`,
   Nothing is drawn while the world's disc is under 60 px across.
 - Probes: `pickEntry(id)`, `setFilter(k, v)`, `resmapStats`.
 
+### 6.2 Abandoned bases (expansion X8)
+
+The ruins other companies left (`scripts/ruins.lua`, `docs/base-building.md`
+§26):
+
+- **The ruin entry** `u:<site id>`, kind `ruin`, glyph ▣ (amber rim), group
+  STRUCTURES, class Infra: one for every site found (on the ground, by a
+  scanner's swath, by a telescope) and not yet claimed, at its sited ground
+  point (its direction on the mean radius until it is sited; body-relative).
+  Its line: "abandoned · hab block · 2483 days". `ruins.version` is the
+  snapshot's tenth stamp. An unclaimed ruin's structure record makes no
+  second "structure" entry; once claimed it is a base (BASES, the base card)
+  and its structure lists like any other.
+- **The ruin card**: where it is, a CRT inset with its age, its kind and how
+  it was found; the Data Core's state (still in the terminal; out and to be
+  read; read: the site's last log, three lines); who lives there now
+  (`ruins.occupant`, nobody yet: the life seam). Focus.
+- **The header** (every card): the Rename key now sits on the situation's
+  row, so a long name has the card's width (it wrapped beside the key in a
+  row sized for one line and ran up over SELECTED).
+
 ## 7. Left for later
 
 - **P5**: the VAB board, EN6/EN14 swaps (cards 0651, 0652), per-craft nodes

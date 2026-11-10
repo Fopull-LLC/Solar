@@ -37,10 +37,10 @@
 
 GLYPHS = { crew = "◉", rocket = "◆", probe = "◇", plane = "✈", rover = "⊡", bike = "⊚", station = "⊕",
            debris = "✕", relay = "▲", flag = "▮", remains = "◌", structure = "⌂", base = "⌂", outpost = "⌂", target = "◎",
-           recover = "↺", body = "●", route = "⇄" }
+           recover = "↺", body = "●", route = "⇄", ruin = "▣" }
 -- Layout priority (map_labels): the selected and hovered are lifted above these.
 PRIO = { crew = 70, rocket = 66, station = 64, plane = 62, rover = 60, bike = 60, probe = 50, base = 46, outpost = 46,
-         relay = 40, flag = 38, structure = 36, remains = 30, debris = 10, body = 5, route = 55 }
+         relay = 40, flag = 38, structure = 36, remains = 30, debris = 10, body = 5, route = 55, ruin = 34 }
 GROUPS = { "ATTENTION", "CREW", "CREWED", "PROBES", "RUNS", "LANDED", "DEBRIS", "RELAYS", "FLAGS", "BASES", "STRUCTURES", "WORLDS" }
 RATE = 2.0          -- s between rebuilds while nothing says it changed (a source
                     -- that changes rebuilds it at once; live craft are placed
@@ -157,7 +157,7 @@ KINDS = { "all", "craft", "crew", "infra", "debris" }
 KIND_LABEL = { all = "All", craft = "Craft", crew = "Crew", infra = "Infra", debris = "Debris" }
 SORTS = { "name", "world", "alt", "base", "alert" }
 SORT_LABEL = { name = "A–Z", world = "World", alt = "Altitude", base = "From base", alert = "Alerts" }
-local INFRA = { relay = true, flag = true, remains = true, structure = true, base = true, outpost = true }
+local INFRA = { relay = true, flag = true, remains = true, structure = true, base = true, outpost = true, ruin = true }
 -- The bases (the spaceport and every tower's base) are always on the map:
 -- no filter hides them and they never fold into a cluster (the station).
 ALWAYS = { base = true, outpost = true }
@@ -250,6 +250,8 @@ function situation(e)
   if e.kind == "flag" then return "flag" .. (e.date and (" · " .. e.date) or "") end
   if e.kind == "remains" then return "remains" end
   if e.kind == "structure" then return "structure" .. (e.date and (" · " .. e.date) or "") end
+  -- (X8) an abandoned base, once found: "abandoned · survey camp · 2,100 days"
+  if e.kind == "ruin" then return string.format("abandoned · %s · %s days", e.ruinKind or "ruin", tostring(e.age or "?")) end
   if e.kind == "base" then return "spaceport" .. (e.roleText and (" · " .. e.roleText) or "") end
   if e.kind == "body" then
     local what = e.home and "home world" or (e.parent and ("moon of " .. e.parent) or "planet")
@@ -417,16 +419,16 @@ decodes = 0            -- (tests: how many records were decoded)
 local function stamp_now()
   local fo, net, stc, dep, dp, cr = ref("flight_ops"), ref("comms"), ref("structures"), ref("deployables"),
     ref("debris_pack"), ref("crew")
-  local sv, ro, br = ref("survey"), ref("route_ops"), ref("base_roles")
+  local sv, ro, br, ru = ref("survey"), ref("route_ops"), ref("base_roles"), ref("ruins")
   return { fo and fo.fleetVersion or 0, net and net.networkVersion or 0, stc and stc.version or 0,
            dep and dep.version or 0, dp and dp.packVersion or 0, cr and cr.version or 0, sv and sv.version or 0,
-           ro and ro.version or 0, br and br.version or 0 }
+           ro and ro.version or 0, br and br.version or 0, ru and ru.version or 0 }
 end
 
 local function changed(a, b)
   if not (a and b) then return true end
   for i = 1, 5 do if a[i] ~= b[i] then return true end end
-  if a[7] ~= b[7] or a[8] ~= b[8] or a[9] ~= b[9] then return true end
+  if a[7] ~= b[7] or a[8] ~= b[8] or a[9] ~= b[9] or a[10] ~= b[10] then return true end
   return false
 end
 
@@ -615,7 +617,7 @@ local function debris_entries(out)
   end
 end
 
-local base_entries
+local base_entries, ruin_entries
 -- (X7) a base's roles on its entry: the role key's filter, the glyph (its
 -- strongest role's), the situation line ("⛁ FUEL · ⚒ MINE")
 local function role_fields(e, roles, st, id)
@@ -657,12 +659,17 @@ local function infra_entries(out)
     end
   end
   local stc = ref("structures")
+  local ru = ref("ruins")
   if stc and stc.list then
     for _, r in ipairs(stc.list()) do
-      out[#out + 1] = { id = "s:" .. tostring(r.id), kind = "structure", name = r.n or "Structure", body = r.b,
-                        rx = r.x, ry = r.y, rz = r.z, st = 0, date = r.d, parts = #(r.bp or {}), by = r.by }
+      -- (X8) an abandoned base's records are its ruin entry's until it is claimed
+      if not (r.ru and ru and ru.towerHeld and ru.towerHeld(r)) then
+        out[#out + 1] = { id = "s:" .. tostring(r.id), kind = "structure", name = r.n or "Structure", body = r.b,
+                          rx = r.x, ry = r.y, rz = r.z, st = 0, date = r.d, parts = #(r.bp or {}), by = r.by }
+      end
     end
   end
+  ruin_entries(out)
   local bf = ref("base_facilities")
   local fp = bf and bf.footprint
   if fp and fp.body then
@@ -689,6 +696,26 @@ base_entries = function(out)
                         tier = b.tier, link = b.linked, signal = b.strength, hops = b.hops, path = b.via, date = b.founded }
       out[#out].dist = home_dist(b.body, out[#out].rx, out[#out].ry, out[#out].rz)
       role_fields(out[#out], b.roles, b.stats, b.id)
+    end
+  end
+end
+
+-- THE RUINS (expansion X8, scripts/ruins.lua): each abandoned base found and
+-- not yet claimed, "u:<site id>", kind `ruin`, group STRUCTURES, at its
+-- sited ground point (or its direction on the mean radius until it is sited;
+-- body-relative). A claimed one is a base: its BASES entry carries it.
+ruin_entries = function(out)
+  local ru = ref("ruins")
+  if not (ru and ru.sites) then return end
+  for _, s in ipairs(ru.sites()) do
+    if not s.pending and ru.discovered(s.id) and not ru.claimed(s.id) and not ru.state(s.id).drop then
+      local x, y, z = ru.pointOf(s)
+      local st = ru.state(s.id)
+      local e = { id = "u:" .. s.id, kind = "ruin", name = s.name, body = s.body, rx = x, ry = y, rz = z, st = 0, ruin = s,
+                  ruinId = s.id, ruinKind = ru.LABEL and ru.LABEL[s.kind] or s.kind, age = s.age, found = st.dsc,
+                  core = st.core ~= nil, read = st.read ~= nil, stamped = st.sid ~= nil }
+      e.dist = home_dist(s.body, x, y, z)
+      out[#out + 1] = e
     end
   end
 end

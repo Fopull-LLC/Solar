@@ -3380,3 +3380,179 @@ unless said; `work/expansion_x7/NOTES.md`):
   res_map read under a budget.
 - `tools/perf/reachprobe.sh <engine>` (PATCHES=funds.patch): `XR PASS|FAIL`
   lines, pictures in `save/user/reachshots/`.
+
+## 26. Expansion X8: abandoned bases
+
+Built 2026-11-09 (`work/expansion/PLAN.md` §5, the X8 row of §11, §14: ruins
+are claimable; Ty 11-09: "abandoned bases on inhabited or previously
+inhabited planets. There's no planet life system yet, so combat is pointless
+for now."). The rules are `scripts/ruins.lua` (its pure half is
+luajit-tested); the ruin entry and card are in `docs/tracking-station.md`
+§6.2.
+
+### What a player can do
+
+- **Find the bases other companies left.** Every world of the home system
+  rolls its sites from its seed, the same list every session:
+  - an **inhabited** world (air over 0.15, or the home world): 1–3 sites, and
+    one more kept back for the life system (pending: never stamped, never
+    found);
+  - a **once-habitable** world (an airless or thin barren, frost, canyon,
+    dune, crystal or ice world whose seed rolled a warm past: 20 % of them):
+    1–2;
+  - any other world: a 10 % chance of one survey camp.
+- **Five kinds**, each a grammar over the Build Kit's own pieces (so what you
+  find is what you can build, repair and extend):
+
+  | kind | what stands | the terminal (Data Core) | RP |
+  |---|---|---|---|
+  | survey camp | a 4 × 4 crew hut, a tool shack, crates, drums | a desk monitor in the hut | 60 |
+  | mine head | a gantry over a hopper (its head gone), a bench shack | a monitor on the bench | 120 |
+  | hab block | the two-storey hab: airlock, O2 generator, scrubber, air tank | a monitor upstairs | 150 |
+  | power hall | the reactor shed, its core pulled; loops, turbine, radiator; shield blocks knocked over | the reactor console | 300 |
+  | relay post | pads, a truss mast (one length fallen), a flat battery bank, two arrays blown over | the junction box | 90 |
+
+  Every one has a dead Base Station Tower and crates.
+- **See the years on it.** Roofs go first (30–60 % by age), then 10–30 % of
+  the walls; half the windows are broken out to open frames; one piece in six
+  leans 6–12°; chairs, drums and blocks topple; a third of the walls are
+  rusted (oxide); grime runs down one standing wall in four; the record is
+  back-dated by the site's age, so every piece wears its full dust at once
+  (`kit_paint.dustOf`). Lights are off, the battery is flat, the tower is a
+  mast with no grid: dead power.
+- **Discover it** three ways: on the ground within 420 m; from orbit, when an
+  Orbital Scanner's swath passes over its cell of the world's 400-cell grid
+  (X7); or with a telescope sweep of its world (a 0.3 m finds one site a
+  sweep, a 1 m every one). A caption names it ("ABANDONED BASE · Brannock
+  Habitat 8 · a hab block, empty 2483 days"; "ANOMALY · a regular shape at
+  41° N, 12° E on Golver"), and the Tracking Station lists it (▣, STRUCTURES).
+- **Loot it.** "Search the crate" on a crate: o2 tanks, a repair kit, a
+  medkit, a beacon, a few units of the world's ores (from the seed, once; what
+  won't fit in the pack stays in the crate). A mine's hopper holds 200–2,000
+  kg of the world's commonest ore once claimed.
+- **Recover the Data Core.** "Pull the Data Core" at the terminal: a 6 kg item.
+  Carried into the home Research Lab it is read: RP by kind (× the carrier's
+  study multiplier if a Scientist carries it), the site's last log (three
+  lines from 42 fragments, kept on its card), the site's blueprint as it was
+  built saved to the BLUEPRINTS library ("Brannock Habitat 8 (recovered)"),
+  and a survey layer for its world (a mine's vein map: resources 0.6; a
+  hab's weather log: air and temperature; a camp: composition; a power hall:
+  the field).
+- **Claim it.** An Engineer's "Claim the site" on its tower: the tower founds
+  a base under the site's name (`by = "claimed"`), so the grid, X7's roles,
+  runs and comms treat it as yours. Then "Repair the <piece>" on any knocked
+  piece (a Repair Kit, 4 s: it stands straight, its paint and window come
+  back) and, at the tower, "Restore N missing pieces" (their kit price, one
+  bill; every piece the decay took goes back where it was).
+
+### The rules (`ruins.lua`, pure)
+
+- `worldClass`, `sitesFor(name, w, home, R)`: a Park–Miller stream seeded by
+  the world's name and seed; sites keep 300 m apart along the ground (or as
+  far as a small moon allows). A site is a direction, a kind, an age (an
+  inhabited world's 400–2,500 days, a once-habitable one's 2,500–6,000), a
+  facing, its own seed and a company ("Pell", "Halden" — N1's suppliers —
+  and eight more) with a number.
+- `blueprintOf(site)` → pieces with a role (slab, floor, wall, roof, door,
+  light, fix, prop, mount, decal, loot, core, silo, tower, power, array) and
+  `dep` (what a light or a rack hangs on); `decay(pieces, site)` keeps
+  `ri` (the index in the full build) on every standing piece and `o_p`,
+  `o_r`, `o_c`, `o_id` (the pitch, roll, paint and piece before the damage)
+  with `wr` on a knocked one; `missing(full, bp)` is what a restore puts back.
+- `recordOf(site, g, kept, now)`: a structure record with `ru` = the site id.
+- `occupant(site)` → nil: THE LIFE SEAM. A planet-life system fills it ("who
+  lives here now"); sites carry `life = nil`; the pending site per inhabited
+  world is where it starts. DEFENCE and any combat wait for it.
+
+### The scene
+
+- **Sited** once, the first time the crew comes within 600 m: nine field
+  raycasts (`terrain.raycast`, exact ground; a stand-in is accepted after
+  20 s or within 300 m) at the site and 11 m round it; the ground may rise
+  1.6 m at most, dry, 450 m from the spaceport, 320 m from a base's tower,
+  150 m from anything built; ten spots tried, 50 m further out each, else the
+  site is dropped. The frame (ground point, radial up, the site's facing) is
+  saved.
+- **Stamped** then (0.3–0.9 ms) as a structure; `structures.lua` streams a
+  `ru` record by distance (spawned within 650 m of the focus, unloaded past
+  800 m) instead of "the focus's world", and spawns any structure streaming
+  in 12 parts a frame (`pace`; a 108-piece power hall in ~0.5 s). Past 900 m
+  an untouched ruin leaves the records (it comes back the same from its
+  seed); a touched one (a crate, the core, a piece taken or mended, a claim)
+  stays in the records, unloaded far away.
+- `base_tower.reconcile` asks `ruins.towerHeld(rec)`: an unclaimed ruin's
+  tower founds no base (no grid, no relay, no roles). `base_grid` reads a
+  bank's own `fill` off its part (a ruin's battery arrives flat).
+  `survey.credit` tells `ruins.telescopeSwept` after any telescope sweep.
+
+### Save keys and old saves
+
+- `ruins.s` = { [site id] = { g (the sited frame, body-relative), dsc, dt (how
+  and when found), sid, n (the stamped structure and its piece count), tc
+  (touched), core, read, cl (claimed), lf (crates filled), silo, drop } };
+  `ruins.cores` (cores pulled, not yet read, in order). A stamped ruin is a
+  `struct.<id>` with `ru`; its pieces carry `ri`, `rl`, `wr`, `o_*`, `fill`.
+- An old save has none of these: every site is new and hidden, nothing
+  happens until the crew comes near one; its structures load unchanged (`ru`
+  absent).
+
+### Cost
+
+Measured in `tools/perf/ruinprobe.sh` (engine 0.117.1-dev.1468, High,
+1280 × 720; `work/expansion_x8/NOTES.md`):
+
+- `ruins` 0.005 ms a frame (its 1 Hz tick 0.02–0.04 ms: a few distances for
+  the focus world's sites; a scanner look every 5 s). Nothing a frame.
+- A stamp 0.2–0.9 ms once (the power hall the most); the paced stream-in
+  (12 parts a frame) no frame over 25 ms.
+- **The power hall (108 pieces, the biggest kind) 30 m from the camera
+  against the same view with no ruin:** GPU 10.97 → 11.22 ms (+0.25: the sun
+  map +0.10, the rest within noise); draws 845 → 892 (+47: kit pieces share
+  their meshes), instances +261, sun-map draws +261, triangles +33 k; engine
+  CPU work 16.1 → 18.1 ms mean (render +0.9, untimed +0.5, scripts +0.2,
+  mirror +0.1: the engine's cost per static node, 432 nodes for 108 pieces).
+  The smaller kinds are 20–47 pieces.
+- 1.2 km away: an untouched ruin is out of the records; a touched one stays
+  in them with no nodes (no draws, no CPU).
+
+### Balance numbers for Ty
+
+- Sites: inhabited 1–3 (+1 pending), once-habitable 1–2 (20 % of the rocky
+  airless worlds), else 10 % of one camp. Ages 400–2,500 / 2,500–6,000 days.
+- RP: camp 60, relay 90, mine 120, hab 150, power hall 300 (× a Scientist's
+  study multiplier).
+- Decay: roofs 30–60 %, walls 10–30 %, one piece in six knocked.
+- Crates: a repair kit 50 %, an o2 tank 35 %, a medkit 25 %, a beacon 15 %,
+  2–8 ore units. A mine's silo 200–2,000 kg.
+- Restoring costs the missing pieces' kit price (a hab block's 7: $2,710).
+- Distances: found at 420 m, stamped at 600 m, unstamped at 900 m, drawn
+  within 650 m (hidden past 800 m).
+
+### Left for later
+
+- The reactor hall's spent rods and decay-heat dose field (a Geiger and a
+  sign); the HALEU rack behind a jammed door; the hab's O2 generator needing
+  water as its first repair.
+- A wrecked rover beside a camp (debris roots), toppled props in the decay are
+  pieces, not loose bodies.
+- The Data Core's lore in the lab's codex (it is on the ruin's card and in the
+  log); a TECH grant as a core reward; reading at a field lab bench.
+- Discovery by scanner or telescope can name a site that turns out to have no
+  room when the crew arrives (it is then dropped and leaves the station).
+- Flora grows round a ruin (only under its slabs and floors is it cleared, as
+  for any structure); an overgrown ring might be wanted.
+- G0–G2 (EN13) for a dozen ruins in view.
+
+### Tests and the probe
+
+- `tests/smoke_ruins.lua` (luajit, 88 checks): sites per world by trait,
+  determinism, spacing; every kind's pieces resolve; decay (roofs first, never
+  the floor, dependents, age); the record through `structures.lua` (`ru`
+  kept, poses finite, lights off, the battery flat, `missing`); core rewards
+  and the log; the scene half over a smooth world (sited, stamped near,
+  unstamped far, kept when touched, found by proximity, scanner and
+  telescope, never the pending site, the tower held until claimed, claim,
+  restore, repair, a crate once, the core pulled and read); the fleet_view
+  entry; an old save.
+- `tools/perf/ruinprobe.sh <engine>` (PATCHES=funds.patch): `RN PASS|FAIL`,
+  pictures in `save/user/ruinshots/`.

@@ -3575,6 +3575,8 @@
                 ( kind: "base_tower", enabled: true, params: [] ),
                 // what each base is for, read off what is built there, and what it moved (base_roles; expansion X7)
                 ( kind: "base_roles", enabled: true, params: [] ),
+                // abandoned bases on the worlds that were lived on: sites, decay, discovery, the core, the claim (ruins; expansion X8)
+                ( kind: "ruins", enabled: true, params: [] ),
                 ( kind: "base_cable", enabled: true, params: [] ),
                 ( kind: "base_grid", enabled: true, params: [] ),
                 ( kind: "base_power", enabled: true, params: [] ),

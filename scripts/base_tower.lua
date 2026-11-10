@@ -137,9 +137,12 @@ function reconcile()
   local seen, n = {}, 0
   local fb = ref("field_builder")
   local lp = fb and fb.lastPlace
+  -- (X8) an abandoned base's tower is no base until it is claimed (ruins.lua)
+  local RU = ref("ruins")
   for _, rec in ipairs(ST.list()) do
+    local ruin = rec.ru and RU and RU.towerHeld and RU.towerHeld(rec)
     for _, p in ipairs(rec.bp) do
-      if p.id == "tower" then
+      if p.id == "tower" and not ruin then
         local gx, gy, gz, ax, ay, az, U = tower_pose(ST, rec, p, def)
         local r = p.base and B.get(p.base) or nil
         if r and (r.sid ~= rec.id or r.uid ~= p.uid) then r = nil end   -- (a copy: found its own)
@@ -151,7 +154,9 @@ function reconcile()
         if not r then
           local dp = ref("deployables")
           local t = agency_now()
-          local bid = B.found(rec.b, gx, gy, gz, rec.id, p.uid, { t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, by = p.paid and p.paid.by or rec.by })
+          local claimed = rec.ru and RU and RU.baseName and RU.baseName(rec) or nil
+          local bid = B.found(rec.b, gx, gy, gz, rec.id, p.uid, { t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil,
+            by = claimed and "claimed" or (p.paid and p.paid.by or rec.by), name = claimed })
           p.base = bid
           ST.put(rec)
           r = B.get(bid)

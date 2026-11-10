@@ -510,3 +510,16 @@ on both an Earth-like (R 892) and an alien home (R 687); the gaps under the
 buildings were the sphere falling away from their flat floors (VAB corners
 -0.98 / -1.19 m under a 0.6 m slab). Fixed by the footings
 (tools/base_foundations.py -> base_facilities FOUNDATIONS).
+
+## ruinprobe.sh + ruinprobe_modes.lua — abandoned bases (expansion X8)
+
+    WORK=$SCRATCH/ruins LOCK=$SCRATCH/engine.lock PATCHES=funds.patch tools/perf/ruinprobe.sh <engine> [ruins]
+
+docs/base-building.md §26. A home-world site moved to flat lit ground on the
+far side and the crew walked in (700 m nothing, 500 m stamped and paced in,
+300 m found); the five kinds stamped and pictured from two sides; the frame
+A/B (`RESULT [r_noruin]`, `[r_stream]`, `[r_ruin]`: the power hall 30 m from
+the same camera); 1.2 km off (untouched: unstamped; touched: no nodes); a
+scanner's swath and a telescope; the station's ruin entry, card and marker;
+a crate, the core, the claim, restore, repair; the claimed base's card.
+`RN PASS|FAIL` and `RN RESULT`; pictures in `save/user/ruinshots/`.

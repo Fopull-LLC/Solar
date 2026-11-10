@@ -236,7 +236,10 @@ function gridModel(g, pose, towerNeed, opts)
       -- (J6: `effk` on the part = the installing Engineer's bonus, fixed at placement)
       local eff = pw.eff or 1
       if tonumber(p.effk) then eff = math.max(eff, math.min(0.99, eff + tonumber(p.effk))) end
-      M.stores[#M.stores + 1] = { key = key, cap = pw.cap or 0, eff = eff, fill = pw.fill or 0, sid = r.id }
+      -- (X8) a bank may arrive with its own charge (`fill` on the part: an
+      -- abandoned base's battery is flat)
+      local fill = tonumber(p.fill) or pw.fill or 0
+      M.stores[#M.stores + 1] = { key = key, cap = pw.cap or 0, eff = eff, fill = fill, sid = r.id }
       M.C = M.C + (pw.cap or 0)
       effw, capw = effw + eff * (pw.cap or 0), capw + (pw.cap or 0)
     elseif pw and pw.kind == "load" and not M.mainsOff[r.id]

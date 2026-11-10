@@ -494,6 +494,12 @@ end
 function credit(name, src, vals, opts)
   local r = record(name)
   if not r then return 0 end
+  -- (X8) a telescope's sweep may see a regular shape on the ground: an
+  -- abandoned base (ruins.lua), whatever the layers it adds
+  if src == "tel30" or src == "tel100" then
+    local RU = ref("ruins")
+    if RU and RU.telescopeSwept then pcall(RU.telescopeSwept, name, src) end
+  end
   opts = opts or {}
   local home = name == home_name()
   local g, rose = apply(r, src, vals, { home = home, mult = opts.mult })
