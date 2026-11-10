@@ -391,9 +391,20 @@ local function clamp01(x) return math.max(0, math.min(1, x)) end
 
 -- One paint: a material + a tint. `h` is the hue the tint leans to, `s` how
 -- far (0 = the texture's own colour), `v` the brightness (0.62 ≈ as authored).
+-- Material generation 3 (geology.lua) names LIBRARY LAYERS, and a paint
+-- holds its layer (`lib`) until the world's opts are done; commit() then
+-- claims its slot from the system's palette (see THE PALETTE below).
+local GEO = nil
+local geo3 = function() return false end
 local function M(r, mat, h, s, v)
-  return { slot = GEO_SLOT[mat], color = hsv(h + r:range(-0.015, 0.015),
-    clamp01(s + r:range(-0.03, 0.03)), math.max(0.2, v + r:range(-0.04, 0.04))) }
+  local c = hsv(h + r:range(-0.015, 0.015),
+    clamp01(s + r:range(-0.03, 0.03)), math.max(0.2, v + r:range(-0.04, 0.04)))
+  if geo3() then
+    local n = GEO.LAYER[mat]
+    assert(n, "geology: no library layer " .. tostring(mat))
+    return { lib = n, color = c }
+  end
+  return { slot = GEO_SLOT[mat], color = c }
 end
 
 -- Water by chemistry: what the sea's shader is fed (scripts/ocean.lua).
@@ -512,24 +523,198 @@ GEO_SLOT.soil, GEO_SLOT.flagstone, GEO_SLOT.gravelregolith, GEO_SLOT.bandedice =
 -- shape, seas, caves and layers as version 1 would; only what it is made of
 -- changes. VERSIONED like g_alienGen: a save made before keeps version 1 (its
 -- digs stay in the same rock); a fresh one is written MAT_GEN.
-MAT_GEN = 2
+--
+-- Version 3 (2026-11-10, worlds plan W2) rolls each world's makeup from its
+-- type's FORMATIONS (scripts/geology.lua): a named stack (red beds, a basalt
+-- shield, clear ice over basalt…) with its own subsoil, strata, cave rock,
+-- cliff and band rock, thicknesses and tint ranges, drawn from the 60-layer
+-- library through the palette's wildcard slots. The draws are version 2's,
+-- one for one (rollFormation), so shapes, seas and caves stay where they
+-- were; tests/smoke_geology.lua checks it over 50 seeds.
+MAT_GEN = 3
 -- Probes and tests may pin the version (nil = the save's).
 MAT_GEN_FORCE = nil
 -- The version the roll in progress runs (set by rollGeology).
 local matGen = MAT_GEN
 
+-- geology.lua: the script beside this one on the System Generator node, or
+-- read from disk under luajit (the tests). nil: no formations (version 3
+-- cannot run, and a fresh save is written version 2).
+function geoLib()
+  if GEO then return GEO end
+  local h = findScript and findScript("geology", { quiet = true }) or nil
+  if h and h.valid == false then h = nil end
+  if not h and loadfile and setfenv then
+    local f = loadfile("solar/scripts/geology.lua") or loadfile("scripts/geology.lua")
+    if f then
+      local e = setmetatable({}, { __index = _G })
+      setfenv(f, e)
+      if pcall(f) then h = e end
+    end
+  end
+  GEO = h
+  return h
+end
+
 function matGenFor()
   if MAT_GEN_FORCE ~= nil then return MAT_GEN_FORCE end
-  if not (save and save.get) then return MAT_GEN end
+  local newest = geoLib() and MAT_GEN or 2
+  if not (save and save.get) then return newest end
   local v = save.get("g_matGen")
   if v ~= nil then return tonumber(v) or 1 end
   local old = save.get("g_played") ~= nil or save.get("base.body") ~= nil
     or save.get("system.home") ~= nil or save.get("parts.rating") ~= nil
     or save.get("fleet.next") ~= nil
-  v = old and 1 or MAT_GEN
+  v = old and 1 or newest
   if save.set then save.set("g_matGen", v) end
   return v
 end
+geo3 = function() return matGen >= 3 and geoLib() ~= nil end
+
+-- ── THE PALETTE (material generation 3) ─────────────────────────────────────
+-- The scene palette has 32 slots for every planet in it (engine slot-materials
+-- stage 5 will give each terrain its own). Twenty-four are fixed; the eight
+-- WILDCARDS (geology.WILD) have palette lines with flags and a height map but
+-- no picture, and this system's roll decides which library layer each holds:
+-- a world's paints claim them in roll order (home first) as its opts are
+-- committed, and a layer that finds none falls back to a fixed look-alike.
+-- Neighbour systems built later read the home assignment, frozen. A save
+-- before version 3 gives every wildcard its own old layer (identity).
+-- `PALETTE` is published to the save (`system.palette`: layer, mat and wild
+-- per slot), handed to materials.lua (what a dig of a slot pays) and
+-- far_bodies.lua (a slot's mean colour), and given to the engine at load by
+-- terrain.setSlotMaterial (applyPalette, from regenerate only: an editor
+-- Generate would save the slot Materials into the scene).
+ASSIGN = nil
+PALETTE = nil
+
+-- A deferred paint's slot: claimed (it is laid) or looked up (only the world
+-- record names it).
+local function claimT(t, own)
+  if t and t.lib and (not own or GEO.IS_WILD[t.lib]) then
+    t.slot = ASSIGN and ASSIGN:claim(t.lib) or GEO.fallbackOf(t.lib)
+    t.lib = nil
+  end
+end
+local function peekT(t)
+  if t and t.lib then
+    t.slot = (ASSIGN and ASSIGN:peek(t.lib)) or GEO.fallbackOf(t.lib)
+    t.lib = nil
+  end
+end
+
+-- Resolve every paint a world's opts lay, in the order its look depends on
+-- them (the surface, the cliffs, then the dig), then the record-only ones.
+local function commit(o, g)
+  if not geo3() then return end
+  -- two passes: the old layers a wildcard was made for take their own slot
+  -- first, so a new layer never pushes one out of the slot its line suits
+  for _, own in ipairs({ true, false }) do
+    claimT(o.surfaceA, own); claimT(o.surfaceB, own)
+    for _, rl in ipairs(o.biomes or {}) do claimT(rl, own) end
+    claimT(o.strata, own); claimT(o.deep, own); claimT(o.subsoil, own)
+    claimT(o.iceCaps, own); claimT(o.craterDust, own); claimT(o.pockets, own); claimT(o.seam, own); claimT(o.corePaint, own)
+  end
+  for _, k in ipairs({ "high", "low", "patch", "cap", "dust", "subsoil", "strata", "deep",
+                       "basement", "cliffRock", "bandRock", "pocketRock", "seamRock" }) do
+    peekT(g[k])
+  end
+end
+
+-- The home system is rolled: freeze its assignment (neighbours read it) and
+-- publish it. Before version 3 (or with no geology) every wildcard holds its
+-- own layer.
+function publishPalette()
+  local G = geoLib()
+  if not G then PALETTE = nil return nil end
+  local a = (geo3() and ASSIGN) or G.newAssign()
+  a:freeze()
+  ASSIGN = a
+  PALETTE = a:publish(geo3() and matGen or math.min(matGen, 2))
+  if save and save.set then save.set("system.palette", PALETTE) end
+  for _, kind in ipairs({ "materials", "far_bodies" }) do
+    local h = findScript and findScript(kind, { quiet = true }) or nil
+    if h and h.valid ~= false and h.setPalette then pcall(h.setPalette, PALETTE) end
+  end
+  return PALETTE
+end
+
+-- Give the engine each wildcard's layer (terrain.setSlotMaterial: picture,
+-- normal map and ORM; the line keeps its flags and height map). Called at
+-- load, before the first world draws; lasts for the run.
+function applyPalette()
+  local G = geoLib()
+  if not (G and PALETTE and terrain and terrain.setSlotMaterial) then return 0 end
+  local n = 0
+  for _, s in ipairs(G.WILD) do
+    local f = G.filesOf(PALETTE.layer[s] or s)
+    if f then
+      local ok = pcall(terrain.setSlotMaterial, s,
+        { texture = f.texture, normalMap = f.normalMap, roughnessMap = f.roughnessMap })
+      if ok then n = n + 1 end
+    end
+  end
+  return n
+end
+
+-- Desaturate an rgb colour toward its luminance by `k` (0 = grey).
+local function desat(c, k)
+  local l = 0.3 * c[1] + 0.59 * c[2] + 0.11 * c[3]
+  return { l + (c[1] - l) * k, l + (c[2] - l) * k, l + (c[3] - l) * k }
+end
+
+-- Version 3's depth layers: the formation, from exactly the draws version 2
+-- made for its subsoil, strata and deep picks and thicknesses (one draw for
+-- one: a pick, a next and a range each step the stream once), reinterpreted.
+local function jit3(r) return { r:range(-0.015, 0.015), r:range(-0.03, 0.03), r:range(-0.04, 0.04) } end
+local function paint3(e, j)
+  if not e then return nil end
+  local n = GEO.LAYER[e.name]
+  assert(n, "geology: no library layer " .. tostring(e.name))
+  return { lib = n, color = hsv(e.h + j[1], clamp01(e.s + j[2]), math.max(0.2, e.v + j[3])) }
+end
+local function rollFormation(r, g)
+  local dSub = (not g.subsoilMat) and r:next() or nil   -- v2: the subsoil pick
+  local dSubH, dSubS = r:next(), r:next()               -- v2: its hue, r:range(0, 0.1)
+  local jSub = jit3(r)
+  local dVar = r:next()                                 -- v2: the strata pick
+  local dStrH, dStrS = r:next(), r:next()
+  local jStr = jit3(r)
+  local dDeep = r:next()                                -- v2: the deep pick
+  local dDeepH, dWeather = r:next(), r:next()
+  local jDeep = jit3(r)
+  local dSubD, dStrD = r:next(), r:next()               -- v2: the two thicknesses
+  local f, res = GEO.variantFor(dVar, g.type)
+  local st = GEO.stackOpts(f, { sub = dSub or 0, subH = dSubH, subS = dSubS, strata = res,
+    strataH = dStrH, strataS = dStrS, deep = dDeep, deepH = dDeepH, weather = dWeather,
+    subD = dSubD, strataD = dStrD })
+  g.formation = st
+  g.subsoil = paint3(st.subsoil, jSub)
+  g.strata = paint3(st.strata, jStr)
+  g.basement = paint3(st.deep, jDeep)
+  -- generator 4 paints `deep` below half the cave zone: the caves' rock
+  g.deep = paint3(st.cave, jDeep)
+  g.cliffRock = paint3(st.cliff, jStr)
+  g.bandRock = paint3(st.band, jSub)
+  if st.pocket then
+    g.pocketRock = { lib = GEO.LAYER[st.pocket.name], color = hsv(st.strata.h, 0.12, 0.85) }
+  end
+  if st.seam then
+    g.seamRock = { lib = GEO.LAYER[st.seam.name], color = hsv(st.cave.h, 0.15, 0.78) }
+  end
+  -- the formation's own surface, in the colour the type rolled
+  for _, k in ipairs({ "high", "low", "patch" }) do
+    if st[k] and g[k] then g[k].lib = GEO.LAYER[st[k]] end
+  end
+  if st.surfaceSat then
+    for _, k in ipairs({ "high", "low" }) do
+      if g[k] and GEO.roleOf(g[k].lib) ~= "snow" then g[k].color = desat(g[k].color, st.surfaceSat * 4) end
+    end
+  end
+  g.subsoilDepth = st.subsoilDepth
+  g.strataDepth = st.strataDepth
+end
+
 
 -- `v1` on a version-1 roll, `v2` from version 2 (see MAT_GEN).
 local function mats(v1, v2) return (matGen >= 2 and v2) or v1 end
@@ -874,11 +1059,15 @@ function rollGeology(r, ctx)
   g.pocketThr = r:range(0.36, 0.52)
   -- Depth layers: soil, then the sedimentary record, then basement rock.
   local fam = g.family
-  g.subsoil = M(r, g.subsoilMat or r:pick(mats({ "mudcrack", "scree", "regolith", "sand" }, SUBSOIL2[fam])), r:next(), r:range(0, 0.1), 0.58)
-  g.strata = M(r, r:pick(mats({ "sandstone", "shale", "limestone", "onyx" }, STRATA2[fam])), r:next(), r:range(0, 0.12), 0.6)
-  g.deep = M(r, r:pick(mats({ "granite", "basalt", "slate", "veinstone" }, DEEP2[fam])), r:next(), r:range(0, 0.1), 0.56)
-  g.subsoilDepth = r:range(1.5, 4.0)
-  g.strataDepth = r:range(6.0, 14.0)
+  if geo3() and GEO.FORMATIONS[id] then
+    rollFormation(r, g)
+  else
+    g.subsoil = M(r, g.subsoilMat or r:pick(mats({ "mudcrack", "scree", "regolith", "sand" }, SUBSOIL2[fam])), r:next(), r:range(0, 0.1), 0.58)
+    g.strata = M(r, r:pick(mats({ "sandstone", "shale", "limestone", "onyx" }, STRATA2[fam])), r:next(), r:range(0, 0.12), 0.6)
+    g.deep = M(r, r:pick(mats({ "granite", "basalt", "slate", "veinstone" }, DEEP2[fam])), r:next(), r:range(0, 0.1), 0.56)
+    g.subsoilDepth = r:range(1.5, 4.0)
+    g.strataDepth = r:range(6.0, 14.0)
+  end
   -- The world's seas: liquid water between freezing and boiling (under some
   -- air), sea ice below, nothing above; a hydrocarbon world's are methane.
   if g.sea and not ctx.air then g.sea = nil end
@@ -935,7 +1124,7 @@ function geoOpts(g, radius, caveScale, sc)
   -- (lat > 1 never matches) still gets scree fields, salt pans or lava flows.
   local third = g.cap or g.patch
   if third then
-    o.iceCaps = { lat = g.cap and g.capLat or 1.01, slot = third.slot, color = third.color }
+    o.iceCaps = { lat = g.cap and g.capLat or 1.01, slot = third.slot, color = third.color, lib = third.lib }
   end
   -- Craters, sized against the rim height (see BUILD's header).
   local n = g.craters and g.craters[1] or 0
@@ -981,6 +1170,7 @@ function geoOpts(g, radius, caveScale, sc)
     o.subsoilDepth = math.max(o.subsoilDepth or 0, cell * 1.5)
     o.strataDepth = math.max(o.strataDepth or 0, o.subsoilDepth + 4)
   end
+  commit(o, g)
   return o
 end
 
@@ -1020,8 +1210,33 @@ RELIEF3 = {
 
 -- One biome rule: a paint plus its ranges.
 local function rule(p, t)
-  t.slot, t.color = p.slot, p.color
+  t.slot, t.color, t.lib = p.slot, p.color, p.lib
   return t
+end
+
+-- The cliffs and the band (version 3): the type's first slope rule lays the
+-- formation's cliff rock, and a band rule before it lays the band rock on the
+-- lower part of steep faces (ravine walls, mesa skirts): from the sea (or the
+-- low ground) to 30 % of the way up the world's relief.
+local function cliffBand(rules, g, seaA, relief, mtn)
+  if not (g.cliffRock and g.bandRock) then return rules end
+  local at
+  for i, rl in ipairs(rules) do
+    if rl.slope and rl.slope[1] >= 20 and not rl.altitude and not rl.latitude then at = i break end
+  end
+  local smin = at and rules[at].slope[1] or 35
+  local base = seaA or -relief * 0.3
+  local top = base + 0.3 * (relief + (mtn or 0))
+  local band = rule(g.bandRock, { slope = { smin, 90 }, altitude = { seaA and (seaA + 1) or -9999, top } })
+  local cliff = rule(g.cliffRock, { slope = { smin, 90 } })
+  if at then
+    rules[at] = cliff
+    table.insert(rules, at, band)
+  else
+    rules[#rules + 1] = band
+    rules[#rules + 1] = cliff
+  end
+  return rules
 end
 
 -- What each type does with the layers. `q` is the layer rng, `R` the radius,
@@ -1039,7 +1254,7 @@ end
 -- Shared rule makers.
 local function seabedRules(g, w, rules)
   if w.seaAlt then
-    rules[#rules + 1] = rule(w.rockP, { altitude = { -9999, w.seaAlt - 2.5 } })
+    rules[#rules + 1] = rule(w.seabedP or w.rockP, { altitude = { -9999, w.seaAlt - 2.5 } })
     rules[#rules + 1] = rule(w.beachP, { altitude = { w.seaAlt - 2.5, w.seaAlt + w.beach } })
   end
 end
@@ -1504,7 +1719,7 @@ function geoOpts3(g, radius, caveScale, sc, seed, reach)
   end
   local third = g.cap or g.patch
   if third then
-    o.iceCaps = { lat = g.cap and g.capLat or 1.01, slot = third.slot, color = third.color }
+    o.iceCaps = { lat = g.cap and g.capLat or 1.01, slot = third.slot, color = third.color, lib = third.lib }
   end
   -- The shared paints the rules reach for: the world's rock (its strata, which
   -- is what a cliff cuts through), a beach, scree, a meadow by the rivers and
@@ -1517,8 +1732,20 @@ function geoOpts3(g, radius, caveScale, sc, seed, reach)
     beachP = M(q, (g.family == "ice") and "scree" or q:pick({ "sand", "sand", "scree", "basalt" }), 0.1, 0.05, 0.7),
     screeP = M(q, "scree", 0.08, 0.04, 0.62),
     meadowP = M(q, q:pick({ "moss", "litter", "tundra" }), 0.2, 0.08, 0.64),
-    bandP = M(q, q:pick({ "sandstone", "onyx", "limestone", "shale" }), q:range(0.02, 0.09), q:range(0.1, 0.3), 0.66),
   }
+  local v3 = geo3() and g.formation ~= nil
+  if v3 then
+    -- the same four draws and jitter as version 2's band paint, in the
+    -- formation's band rock and tint (the cliff rules: cliffBand below)
+    local _ = q:pick({ "sandstone", "onyx", "limestone", "shale" })
+    local dh, ds = q:range(0.02, 0.09), q:range(0.1, 0.3)
+    local b = g.formation.band
+    w.bandP = M(q, b.name, b.h + (dh - 0.055) * 0.5, b.s + (ds - 0.2) * 0.2, b.v)
+    g.bandRock = w.bandP
+    w.seabedP = g.strata
+  else
+    w.bandP = M(q, q:pick({ "sandstone", "onyx", "limestone", "shale" }), q:range(0.02, 0.09), q:range(0.1, 0.3), 0.66)
+  end
   local rules = LAYERS3[g.type] and LAYERS3[g.type](q, g, radius, o, w) or {}
   -- Every world, whatever its type, gets a little more of its own: a fold to
   -- its ground, sometimes an undercut cliff or a terraced slope.
@@ -1530,6 +1757,7 @@ function geoOpts3(g, radius, caveScale, sc, seed, reach)
     o.terrace = { step = q:range(3, 6), sharpness = q:range(0.3, 0.7) }
   end
   if o.rivers then o.rivers.seaLevel = seaA or -relief * q:range(0.3, 0.6) end
+  if v3 then rules = cliffBand(rules, g, seaA, relief, o.mountains and o.mountains.height) end
   if #rules > 0 then o.biomes = rules end
   -- Craters as on scale 2, sized against the rim height.
   local n = g.craters and g.craters[1] or 0
@@ -1555,6 +1783,14 @@ function geoOpts3(g, radius, caveScale, sc, seed, reach)
     o.pockets = { slot = cold and 8 or 7, color = hsv(cold and 0.55 or 0.75, 0.3, 0.9),
       threshold = g.pocketThr, minDepth = 8 }
     o.seam = { slot = 5, color = hsv(0.08, 0.3, 0.8), minDepth = o.caveDepth * 0.5, center = 0.32, width = 0.04 }
+    -- version 3: a formation's own deposits (quartz druzy, a hematite or
+    -- sulfur seam) where it names them; the glowing worlds keep theirs
+    if v3 and g.pocketRock then
+      o.pockets.slot, o.pockets.lib, o.pockets.color = nil, g.pocketRock.lib, g.pocketRock.color
+    end
+    if v3 and g.seamRock then
+      o.seam.slot, o.seam.lib, o.seam.color = nil, g.seamRock.lib, g.seamRock.color
+    end
   end
   -- The voxel follows the radius: memory and a dug save go as (radius/voxel)²
   -- (see SCALES[3]).
@@ -1599,6 +1835,7 @@ function geoOpts3(g, radius, caveScale, sc, seed, reach)
   if alien and (o.craters or 0) > 0 then cut = math.max(cut, (o.craterMax or 0) * radius - relief * 0.3) end
   local shape = { seaAlt = seaA, peak = hi, low = relief + cut + lean, rivers = o.rivers ~= nil,
     snowline = w.snowline, formation = sig, reach = reachT }
+  commit(o, g)
   return o, shape
 end
 
@@ -1940,8 +2177,11 @@ function homeOpts3(g, radius, caveScale, sc, q)
     rule(meadow, { nearRiver = q:range(18, 32) }),
     rule(g.high, { moisture = { q:range(-0.3, 0.1), 1 } }),
   }
+  -- version 3: the formation's cliff rock on the faces, its band below (the
+  -- home world keeps its crystal pockets and veinstone seam: the campaign's)
+  if geo3() and g.formation then o.biomes = cliffBand(o.biomes, g, seaAlt, relief, mH) end
   -- No ice-cap paint: it also frosts low patch-noise spots at any latitude.
-  if g.patch then o.iceCaps = { lat = 1.01, slot = g.patch.slot, color = g.patch.color } end
+  if g.patch then o.iceCaps = { lat = 1.01, slot = g.patch.slot, color = g.patch.color, lib = g.patch.lib } end
   o.corePaint = { slot = 6, color = { 0.98, 0.82, 0.6 } }
   o.pockets = { slot = 7, color = hsv(0.75, 0.3, 0.9), threshold = g.pocketThr, minDepth = 8 }
   o.seam = { slot = 5, color = hsv(0.08, 0.3, 0.8), minDepth = o.caveDepth * 0.5, center = 0.32, width = 0.04 }
@@ -1954,6 +2194,7 @@ function homeOpts3(g, radius, caveScale, sc, q)
   local cut = math.max(o.ravines.depth, o.rivers.depth)
   local shape = { seaAlt = seaAlt, peak = hi, low = relief + cut + lean, rivers = true, snowline = snow,
     home = { gen = HOME_GEN, mask = stats } }
+  commit(o, g)
   return o, shape
 end
 
@@ -2364,11 +2605,11 @@ end
 
 -- What the flora, climate and FX read about a world's ground and life: the
 -- `bio` table on its world record (see publishWorld).
-local function bioOf(g, starClass)
+local function bioOf(g, starClass, o)
   local t = tempNorm(g.Tk)
   local function col(p) return p and { p.color[1], p.color[2], p.color[3] } or nil end
   local f = FOLIAGE[starClass or 3] or FOLIAGE[3]
-  return {
+  local out = {
     type = g.type, label = g.label,
     tempK = math.floor(g.Tk + 0.5),
     temp = t,
@@ -2391,6 +2632,28 @@ local function bioOf(g, starClass)
       deep = g.deep and g.deep.slot, dust = g.dust and g.dust.slot,
     },
   }
+  -- Material generation 3: the formation (geology.lua) and the slots of its
+  -- faces and deposits. `cave` is what generator 4 paints the cave zone with
+  -- (the same slot as `deep`); `pocket` and `seam` are deposits, not the
+  -- world's own ground (mineral_field.worldReserved skips them). `layers`
+  -- names the library layer of each, also where a slot fell back.
+  local f = g.formation
+  if f then
+    local m = out.mats
+    m.cliff = g.cliffRock and g.cliffRock.slot
+    m.band = g.bandRock and g.bandRock.slot
+    m.cave = g.deep and g.deep.slot
+    m.pocket = o and o.pockets and o.pockets.slot or nil
+    m.seam = o and o.seam and o.seam.slot or nil
+    local L = GEO and GEO.LAYER or {}
+    local function n(e) return e and L[e.name] or nil end
+    out.formation = { id = f.id, label = f.label, weather = f.weather,
+      subsoilDepth = o and o.subsoilDepth or f.subsoilDepth, strataDepth = o and o.strataDepth or f.strataDepth,
+      layers = { subsoil = n(f.subsoil), strata = n(f.strata), deep = n(f.deep), cave = n(f.cave),
+        cliff = n(f.cliff), band = n(f.band), pocket = n(f.pocket), seam = n(f.seam) } }
+    out.palette.cliff = g.cliffRock and col(g.cliffRock) or nil
+  end
+  return out
 end
 
 -- The WORLD RECORD every game system downstream reads: what archetype this body
@@ -2484,7 +2747,7 @@ local function publishWorld(b, kind, insol, sea)
     -- scale-1 world, whose readers fall back to `kind`.
     geo = b.geo and { type = b.geo.type, label = b.geo.label, family = b.geo.family,
       future = b.geo.future, home = b.geo.home } or nil,
-    bio = b.geo and bioOf(b.geo, b.starClass) or nil,
+    bio = b.geo and bioOf(b.geo, b.starClass, b.opts) or nil,
     water = (b.geo and b.geo.sea) and { state = b.geo.sea.state,
       deep = b.geo.sea.waterTable.deep, shallow = b.geo.sea.waterTable.shallow,
       clarity = b.geo.sea.waterTable.clarity } or nil,
@@ -2887,6 +3150,9 @@ local function buildSystem(r, p, cfg)
       -- Equilibrium temperature: 255 K at Earth's sunlight (insol 1), as the
       -- fourth root of the light, raised by the greenhouse.
       local Tk = 255 * (insol ^ 0.25) * (1 + density * greenhouse)
+      -- (the palette as it stood: a home world built in place of this roll
+      -- gives back the wildcards this one claimed)
+      local snap = (pi == 1 and cfg.home and ASSIGN) and ASSIGN:snapshot() or nil
       local geo = rollGeology(r, { Tk = Tk, air = air, spawn = (pi == 1 and cfg.home), avoid = lastKind })
       lastKind = geo.type
       kind = geo.family
@@ -2941,9 +3207,11 @@ local function buildSystem(r, p, cfg)
         -- (X2) the AIR choice, rolled from the home seed when it is Random
         local A = atmoLib()
         AIR_CTX.choice = A and A.resolveChoice and A.resolveChoice(AIR_CTX.raw, math.floor(hs)) or nil
+        if snap then ASSIGN:restore(snap) end
         spec, radius = alienHomeWorld(spec, p, sc, math.floor(hs))
         kind, sea, temp, opts, cel = spec.kind, spec.sea, spec.temp, spec.opts, spec.cel
       elseif pi == 1 and cfg.home and sc.layers and (p.homeGen or 1) >= 2 then
+        if snap then ASSIGN:restore(snap) end
         spec = homeWorld(spec, p, sc, radius)
         kind, sea, temp, opts, cel = spec.kind, spec.sea, spec.temp, spec.opts, spec.cel
       end
@@ -3070,6 +3338,7 @@ local function buildSystem(r, p, cfg)
         atmo = b.cel.atmoDensity or 0, sea = b.sea or 0 }
     end
     save.set("system.home", { star = starName, mu = starMu, bodies = roster, scale = p.scale or 1 })
+    publishPalette()
   end
 
   -- A NEIGHBOUR appears mid-play, so every body is authored where the rails
@@ -3217,6 +3486,10 @@ local function roll(p)
   homeGravGen = tonumber(p.gravGen) or 1
   homeScale = tonumber(p.scale) or 1
   scaleVersion, scale = homeScale, scaleOf(homeScale)
+  -- the material generation and a fresh palette for this system (a scale
+  -- without geology never asks the save, so an old save gains no key)
+  matGen = scale.geology and matGenFor() or 0
+  ASSIGN = geoLib() and GEO.newAssign() or nil
   homeStar = buildSystem(r, p, { home = true, idBase = 1, taken = homeTaken })
   print("bodies placed — the spawn planet is generating in the background (Console shows progress); every other world streams in from its genspec when you first approach it. Save the scene once the spawn planet lands.")
 end
@@ -3271,4 +3544,5 @@ function regenerate(seed, opts)
   p.homeKind, p.homeSeed = homeKindFor(p)
   p.air = airChoiceFor(p)
   roll(p)
+  applyPalette()
 end

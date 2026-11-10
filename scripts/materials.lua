@@ -350,8 +350,51 @@ SLOT = {
   [31] = "soil", [32] = "soil",
 }
 
+-- THE SYSTEM'S PALETTE (worlds plan W2, scripts/geology.lua). Eight slots are
+-- WILDCARDS: each star system's roll hands them library layers (chalk, tuff,
+-- clear ice…), so what a slot pays is the layer it holds this run.
+-- system_generator.publishPalette hands the assignment here (and to the save
+-- as `system.palette`, read once if it never did): SLOT then answers by it,
+-- and VEIN_SLOTS drops a wildcard that no longer holds the layer an ore's
+-- vein was meant to look like. A save made before material generation 3
+-- assigns every wildcard its own layer, so nothing it digs pays differently.
+SLOT_BASE = {}
+for k, v in pairs(SLOT) do SLOT_BASE[k] = v end
+VEIN_BASE = nil   -- VEIN_SLOTS as written (copied on the first setPalette)
+local palette_seen = false
+function setPalette(p)
+  palette_seen = true
+  if not VEIN_BASE then
+    VEIN_BASE = {}
+    for k, v in pairs(VEIN_SLOTS) do VEIN_BASE[k] = v end
+  end
+  for k, v in pairs(SLOT_BASE) do SLOT[k] = v end
+  local held = {}   -- wildcard slot → the layer it holds, where that is not its own
+  if type(p) == "table" and type(p.layer) == "table" then
+    for _, s in ipairs(p.wild or {}) do
+      local n = p.layer[s]
+      if n and n ~= s then held[s] = n end
+    end
+    for s, n in pairs(held) do
+      local m = type(p.mat) == "table" and p.mat[s] or nil
+      if m then SLOT[s] = m end
+    end
+  end
+  for ore, base in pairs(VEIN_BASE) do
+    local list = {}
+    for _, s in ipairs(base) do if not held[s] then list[#list + 1] = s end end
+    VEIN_SLOTS[ore] = list
+  end
+end
+local function palette_pull()
+  palette_seen = true
+  local p = save and save.get and save.get("system.palette")
+  if type(p) == "table" then setPalette(p) end
+end
+
 -- The material of a palette slot (nil / 0 = untextured ground: regolith).
 function ofSlot(slot)
+  if not palette_seen then palette_pull() end
   return (slot and SLOT[slot]) or "regolith"
 end
 

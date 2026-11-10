@@ -5,6 +5,8 @@
 # own scene from opts that alienprobe_dump.lua rolls offline.
 #   WORK=<scratch> LOCK=<lock> tools/perf/alienprobe.sh <engine> <before|after> [TAG] [list]
 #   AP_PARAMS='("first", 1.0), ("last", 4.0)'   probe params (see alienprobe.lua)
+#   AP_AMBIENT="0.3, 0.3, 0.32"                  the scene ambient (default 0.05: dig pits read black)
+#   GEO=1 [MATGEN=2] [GEO_R=520]                 worlds W2: <type>:<n> entries rolled at material generation 3 (alienprobe_dump.lua)
 # Pictures land in $WORK/alien/<TAG>/png, the log in $WORK/alien/<TAG>/run.log.
 set -u
 for _lp in "$(dirname "$0")/lockpool.sh" /mnt/disks/3tb/GithubRepositories/Solar/tools/perf/lockpool.sh; do [ -f "$_lp" ] && { . "$_lp"; break; }; done
@@ -31,7 +33,7 @@ cat > "$PJ/scenes/alienprobe.ron" <<RON
 (
     name: "alienprobe",
     lighting: (
-        direction: (0.4, 0.9, 0.45), stars: true, color: (1.0, 0.95, 0.88), ambient: (0.05, 0.05, 0.06),
+        direction: (0.4, 0.9, 0.45), stars: true, color: (1.0, 0.95, 0.88), ambient: (${AP_AMBIENT:-0.05, 0.05, 0.06}),
         intensity: 1.0, shadows: true, shadow_softness: 0.35, shadow_strength: 1.0, shadow_distance: 500.0, shadow_map: true,
         fog_color: (0.55, 0.6, 0.7), fog_start: 250.0, fog_end: 1400.0, fog_density: 0.004, fog_height: 6.0, fog_falloff: 8.0,
     ),

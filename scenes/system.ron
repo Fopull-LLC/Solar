@@ -814,6 +814,13 @@
                     enabled: true,
                     params: [],
                 ),
+                // what each world type is made of, by formation, and the
+                // palette's wildcard slots (scripts/geology.lua, worlds W2)
+                (
+                    kind: "geology",
+                    enabled: true,
+                    params: [],
+                ),
                 (
                     kind: "system_generator",
                     enabled: true,

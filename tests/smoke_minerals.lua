@@ -466,6 +466,33 @@ do
   check("an older seam's stain adds colour only, never its slot again", not any_tex and #recolour > 0, #recolour .. " ops")
 end
 
+-- WORLDS W2: a system's palette (system_generator.publishPalette) moves what
+-- a wildcard slot pays and which veins may use it; a world's deposits
+-- (bio.mats.pocket / seam) are never reserved ground.
+do
+  local M = envs.materials
+  local r = mf.worldReserved({ bio = { mats = { high = 16, rock = 15, cliff = 44, cave = 33, pocket = 7, seam = 5 } } })
+  check("the world's ground slots are reserved, cliff and cave rock too", r[16] and r[15] and r[44] and r[33])
+  check("…but not its deposits (a copper vein may still lie in veinstone)", not r[7] and not r[5])
+  local before = M.ofSlot(4)
+  local P = { gen = 3, layer = {}, mat = {}, wild = { 4, 10, 11, 12, 21, 29, 31, 32 } }
+  for s = 1, 32 do P.layer[s] = s; P.mat[s] = M.SLOT_BASE[s] end
+  P.layer[4], P.mat[4] = 46, "limestone"    -- onyx's slot holds chalk this run
+  P.layer[29], P.mat[29] = 48, "obsidian"   -- pahoehoe's holds obsidian
+  M.setPalette(P)
+  check("a wildcard slot pays the layer it holds", M.ofSlot(4) == "limestone" and M.ofSlot(29) == "obsidian" and before == "onyx",
+    tostring(M.ofSlot(4)))
+  local function has(list, s) for _, x in ipairs(list) do if x == s then return true end end return false end
+  check("…and veins skip a wildcard that no longer looks like their ore", not has(M.VEIN_SLOTS.iron, 4)
+    and not has(M.VEIN_SLOTS.obsidian, 4) and has(M.VEIN_SLOTS.iron, 27) and not has(M.VEIN_SLOTS.kreep, 29))
+  check("…while fixed slots pay as before", M.ofSlot(27) == "hematite" and M.ofSlot(15) == "sandstone")
+  P.layer[4], P.mat[4], P.layer[29], P.mat[29] = 4, "onyx", 29, "basalt"
+  M.setPalette(P)
+  check("an older save's palette (every wildcard its own layer) changes nothing", M.ofSlot(4) == "onyx"
+    and has(M.VEIN_SLOTS.obsidian, 4) and #M.VEIN_SLOTS.iron == 4)
+  M.setPalette(nil)
+end
+
 local bad = {}
 for _, c in ipairs(checks) do
   if not c.ok then bad[#bad + 1] = "  ✗ " .. c.desc .. (c.detail and ("   [" .. tostring(c.detail) .. "]") or "") end

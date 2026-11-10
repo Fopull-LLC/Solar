@@ -107,8 +107,9 @@ local function check(cond, what)
   if not cond then failures[#failures + 1] = "CHECK FAILED: " .. what end
 end
 
--- The palette: which slots have a texture.
-local palette = {}
+-- The palette: which slots have a texture, and which are wildcards (flags,
+-- no picture: geology.WILD, given a layer per system).
+local palette, wildLine = {}, {}
 do
   local f = assert(io.open("solar/terrain/system.palette"))
   local i = 0
@@ -120,9 +121,26 @@ do
       local t = io.open("solar/" .. path, "rb")
       check(t ~= nil, "palette slot " .. i .. "'s texture exists: " .. path)
       if t then t:close() end
+    elseif line:match("|scale=") then
+      wildLine[i] = line
     end
   end
   f:close()
+end
+local function exists(p)
+  local t = p and io.open("solar/" .. p, "rb")
+  if t then t:close() return true end
+  return false
+end
+-- A slot draws a picture: its line names one, or it is a wildcard and the
+-- system's palette (system_generator PALETTE) gives it a layer on disk.
+local function textured(slot)
+  if palette[slot] then return true end
+  local P = env.PALETTE
+  local G = env.geoLib and env.geoLib()
+  if not (wildLine[slot] and P and G) then return false end
+  local f = G.filesOf(P.layer[slot])
+  return f ~= nil and exists(f.texture)
 end
 
 local FAMILIES = { canyon = true, dune = true, ice = true, frost = true, lava = true, crystal = true, barren = true }
@@ -216,7 +234,7 @@ for seed = 1, SEEDS do
       for _, k in ipairs({ "surfaceA", "surfaceB", "subsoil", "strata", "deep", "craterDust", "iceCaps", "pockets", "seam", "corePaint" }) do
         local pnt = o[k]
         if pnt then
-          check(pnt.slot >= 1 and pnt.slot <= 32 and palette[pnt.slot] ~= nil,
+          check(pnt.slot >= 1 and pnt.slot <= 32 and textured(pnt.slot) and pnt.lib == nil,
             string.format("seed %d %s: %s paints slot %s, which has a texture", seed, n.name, k, tostring(pnt.slot)))
           check(pnt.color and #pnt.color == 3, k .. " has a colour")
         end
@@ -249,7 +267,7 @@ for seed = 1, SEEDS do
       if o.overhangs then check(o.overhangs.strength > 0 and o.overhangs.depth > 0, seed .. ": overhangs in range") end
       for bi, rule in ipairs(o.biomes or {}) do
         nlayer.rules = nlayer.rules + 1
-        check(rule.slot and palette[rule.slot] and rule.color and #rule.color == 3,
+        check(rule.slot and textured(rule.slot) and rule.color and #rule.color == 3,
           string.format("seed %d %s: biome rule %d paints a textured slot", seed, n.name, bi))
         for _, k in ipairs({ "latitude", "altitude", "slope", "moisture" }) do
           if rule[k] then check(#rule[k] == 2 and rule[k][1] <= rule[k][2], seed .. ": biome range " .. k .. " is {min, max}") end
@@ -470,6 +488,238 @@ for _, sc in ipairs({ 1, 2 }) do
   end
 end
 
+-- ── MATERIAL GENERATION 3: FORMATIONS (worlds plan W2, scripts/geology.lua) ──
+local w2 = {}
+do
+  local G = env.geoLib()
+  check(G ~= nil, "geology.lua loads beside the generator")
+  check(env.MAT_GEN == 3, "a fresh save rolls material generation 3")
+  -- Every type has 2–3 formations; every layer one names is a library layer
+  -- with its picture and maps on disk.
+  local nform, nlayers, seenL = 0, 0, {}
+  for _, t in ipairs(env.GEO_ORDER) do
+    local list = G.FORMATIONS[t]
+    check(list and #list >= 2 and #list <= 3, t .. " has 2–3 formations")
+    local ids = {}
+    for _, f in ipairs(list or {}) do
+      nform = nform + 1
+      check(f.id and not ids[f.id] and f.label and (f.w or 0) > 0, t .. ": a formation with an id, label and weight")
+      ids[f.id or "?"] = true
+      check(f.cliff and f.band and f.cliff ~= f.band, t .. "/" .. tostring(f.id) .. ": a cliff and a different band rock")
+      check(f.subsoil and f.subsoil.d and f.strata and f.strata.d and f.subsoil.d[1] <= f.subsoil.d[2]
+        and f.strata.d[1] <= f.strata.d[2], t .. "/" .. tostring(f.id) .. ": thickness ranges")
+      check(f.hue and f.sat and f.sat[1] <= f.sat[2] and f.sat[2] <= 0.6, t .. "/" .. tostring(f.id) .. ": tint ranges")
+      for _, n in ipairs(G.namesOf(f)) do
+        local L = G.LAYER[n]
+        check(L ~= nil, t .. "/" .. f.id .. " names a library layer: " .. n)
+        if L and not seenL[L] then
+          seenL[L] = true
+          nlayers = nlayers + 1
+          local fl = G.filesOf(L)
+          check(exists(fl.texture) and exists(fl.normalMap) and exists(fl.roughnessMap) and exists(fl.height),
+            "layer " .. L .. " " .. n .. ": picture, normal, ORM and height on disk")
+          local fb = G.fallbackOf(L)
+          check(G.isFixed(fb) and palette[fb] ~= nil, "layer " .. n .. " falls back to a fixed, textured slot (" .. tostring(fb) .. ")")
+        end
+      end
+    end
+  end
+  -- Every library layer's files (a wildcard may hold any of them).
+  for n = 1, G.LIB_COUNT do
+    local fl = G.filesOf(n)
+    check(fl and exists(fl.texture), "library layer " .. n .. "'s picture exists")
+  end
+  -- The wildcard lines: flags and their own height map, no picture.
+  for _, s in ipairs(G.WILD) do
+    check(wildLine[s] ~= nil and wildLine[s]:match("|height=") and not wildLine[s]:match("|normal=")
+      and not wildLine[s]:match("|orm="), "slot " .. s .. " is a wildcard line (flags and height, no picture)")
+  end
+  for s = 1, 32 do
+    if not G.IS_WILD[s] then check(palette[s] ~= nil, "fixed slot " .. s .. " keeps its picture") end
+  end
+  w2.forms, w2.layers = nform, nlayers
+
+  -- variantFor covers every formation; stackOpts stays in range.
+  for _, t in ipairs(env.GEO_ORDER) do
+    local hit = {}
+    for k = 0, 199 do
+      local f, res = G.variantFor((k + 0.5) / 200, t)
+      hit[f.id] = true
+      check(res >= 0 and res <= 1, "the residual draw is uniform")
+      local st = G.stackOpts(f, { sub = res, subD = 1, strataD = 0, weather = 1 })
+      check(st.subsoilDepth == f.subsoil.d[2] and st.strataDepth == f.strata.d[1], "thickness from the draws")
+      check(st.cliff.v < 0.62 and st.strata.s <= f.sat[2], "weathering darkens and greys the rock")
+    end
+    for _, f in ipairs(G.FORMATIONS[t]) do check(hit[f.id], t .. ": " .. f.id .. " is reachable") end
+  end
+
+  -- The assignment: greedy, own slot first, class next, fallback when full.
+  do
+    local a = G.newAssign()
+    check(a:claim(14) == 14, "a fixed layer is its own slot")
+    check(a:claim(31) == 31, "an old wildcard layer takes its own slot")
+    local c = a:claim(G.LAYER.chalk)
+    check(G.WILD_CLASS[c] == "rock", "a rock layer takes a rock-class wildcard (" .. c .. ")")
+    check(a:claim(G.LAYER.chalk) == c, "…and keeps it")
+    for _, n in ipairs({ "tuff", "redbeds", "gneiss", "schist", "marble", "loess", "firn", "obsidian" }) do a:claim(G.LAYER[n]) end
+    local full = a:claim(G.LAYER.scoria)
+    check(full == G.fallbackOf(G.LAYER.scoria), "a full palette falls back (" .. full .. ")")
+    local p = a:publish(3)
+    check(#p.layer == 32 and #p.mat == 32 and p.claimed == 7, "published: 32 layers, 32 materials, 7 claimed (" .. p.claimed .. ")")
+    local same = G.paletteNeeds({ { 14, 31, "chalk", "tuff", "redbeds", "gneiss", "schist", "marble", "loess", "firn", "obsidian", "scoria" } })
+    local ok = true
+    for s = 1, 32 do if same.layer[s] ~= a.layer[s] then ok = false end end
+    check(ok, "paletteNeeds gives the incremental claims' answer")
+  end
+
+  -- The rng: version 3 draws exactly what version 2 did, for every type.
+  for _, t in ipairs(env.GEO_ORDER) do
+    for seed = 1, 6 do
+      local counts, nextv = {}, {}
+      for _, v in ipairs({ 2, 3 }) do
+        env.MAT_GEN_FORCE = v
+        env.ASSIGN = G.newAssign()
+        local r = rng(seed * 101 + 7)
+        env.rollGeology(r, { type = t, Tk = env.GEO_TYPES[t].T[1] + 20, air = env.GEO_TYPES[t].air ~= false })
+        -- where the stream stands after the roll: the next draw
+        nextv[v] = r:next()
+      end
+      check(nextv[2] == nextv[3], string.format("%s seed %d: version 3's roll leaves the rng where version 2's did", t, seed))
+    end
+  end
+  env.MAT_GEN_FORCE = nil
+
+  -- SHAPES UNCHANGED between versions 2 and 3, 50 seeds: every body, orbit,
+  -- size, air, sea, relief layer, cave and seed; only what it is made of moves.
+  local PAINT = { surfaceA = 1, surfaceB = 1, subsoil = 1, strata = 1, deep = 1, craterDust = 1, iceCaps = 1,
+    pockets = 1, seam = 1, corePaint = 1, biomes = 1, subsoilDepth = 1, strataDepth = 1 }
+  local function shapeOf(st)
+    local out = { home = st["system.home"] }
+    for _, n in ipairs(nodes) do
+      if n.gen then
+        local o = {}
+        for k, v in pairs(n.gen) do if not PAINT[k] then o[k] = v end end
+        out[n.name] = o
+      end
+    end
+    for k, w in pairs(st) do
+      if k:match("^world%.") then
+        -- (the shape record minus its biome rule count: version 3 adds the band rule)
+        local sh = w.shape and { peak = w.shape.peak, low = w.shape.low, seaAlt = w.shape.seaAlt,
+          snowline = w.shape.snowline, voxel = w.shape.voxel, home = w.shape.home, layers = {} } or nil
+        if sh then for lk, lv in pairs(w.shape.layers) do if lk ~= "biomes" then sh.layers[lk] = lv end end end
+        out[k] = { w.radius, w.relief, w.sea, w.atmo, w.seed, sh, w.kind, w.geo and w.geo.type, w.atmoHeight, w.air }
+      end
+    end
+    return ser(out)
+  end
+  local same, differ, v2pal = 0, 0, true
+  for seed = 1, 50 do
+    env.MAT_GEN_FORCE = 2
+    local a = shapeOf(roll(seed * 7 + 3))
+    for s = 1, 32 do if env.PALETTE.layer[s] ~= s then v2pal = false end end
+    for k, w in pairs(store) do
+      if k:match("^world%.") and w.bio then
+        check(w.bio.formation == nil and w.bio.mats.cliff == nil, "a version-2 world has no formation keys")
+      end
+    end
+    env.MAT_GEN_FORCE = 3
+    local b = shapeOf(roll(seed * 7 + 3))
+    if a == b then same = same + 1 else differ = differ + 1 end
+  end
+  env.MAT_GEN_FORCE = nil
+  check(differ == 0, string.format("versions 2 and 3 roll the same shapes: %d of 50 seeds differ", differ))
+  check(v2pal, "a version-2 system keeps every wildcard on its own layer")
+  w2.same = same
+
+  -- VERSION 3 WORLDS: formations, faces, palette, record.
+  local byT, wilds, maxClaim, n3 = {}, 0, 0, 0
+  local setCalls = {}
+  env.terrain.setSlotMaterial = function(s, m) setCalls[#setCalls + 1] = { s, m } end
+  for seed = 1, 60 do
+    local st = roll(seed)
+    local P = env.PALETTE
+    check(P and P.gen == 3 and #P.layer == 32, seed .. ": the system's palette is published")
+    check(store["system.palette"] == P, "…to the save")
+    maxClaim = math.max(maxClaim, P.claimed)
+    w2.sumClaim, w2.sumFell, w2.nsys = (w2.sumClaim or 0) + P.claimed, (w2.sumFell or 0) + P.fell, (w2.nsys or 0) + 1
+    for s = 1, 32 do
+      if not G.IS_WILD[s] then check(P.layer[s] == s, "fixed slots hold their own layer") end
+    end
+    for _, n in ipairs(nodes) do
+      local o = n.gen
+      local w = o and st["world." .. n.name]
+      if w and w.bio and w.bio.formation then
+        n3 = n3 + 1
+        local bio, f = w.bio, w.bio.formation
+        local m = bio.mats
+        check(m.cliff and m.band and m.cave and m.cave == m.deep, n.name .. ": bio.mats has cliff, band and cave")
+        check(f.id and f.layers.cliff and f.layers.band and f.layers.cave and f.layers.strata, "bio.formation names its layers")
+        -- where a layer got a slot, the slot holds that layer (or its fallback)
+        for _, k in ipairs({ "cliff", "band", "cave" }) do
+          local L = f.layers[k]
+          local s = m[k]
+          check(P.layer[s] == L or s == G.fallbackOf(L), string.format("%s: %s slot %d holds layer %d or its fallback", n.name, k, s, L))
+        end
+        -- the cliff and band rules are laid
+        local cliffR, bandR
+        for _, rl in ipairs(o.biomes or {}) do
+          if rl.slope and not rl.altitude and rl.slot == m.cliff then cliffR = cliffR or rl end
+          if rl.slope and rl.altitude and rl.slot == m.band then bandR = bandR or rl end
+        end
+        check(cliffR ~= nil, n.name .. " (" .. w.geo.type .. "): a slope rule lays the cliff rock")
+        check(bandR ~= nil and bandR.altitude[2] > bandR.altitude[1], n.name .. ": a band rule lays the band rock low on steep faces")
+        check(o.deep.slot == m.cave and o.strata.slot == m.rock, "the engine's deep is the cave rock, strata the strata")
+        local t = w.geo.type
+        byT[t] = byT[t] or {}
+        table.insert(byT[t], { id = f.id, col = bio.palette.cliff or bio.palette.rock, layers = f.layers, seed = seed })
+      end
+    end
+  end
+  check(n3 > 300, "version 3 worlds rolled: " .. n3)
+  check(maxClaim <= #G.WILD, "never more claims than wildcards")
+  -- regenerate gives the engine every wildcard's layer
+  local before = #setCalls
+  store, generated, nodes = {}, {}, {}
+  env.regenerate(77, { scale = 3, pregen = true, homeGen = 2 })
+  local got = {}
+  for i = before + 1, #setCalls do got[setCalls[i][1]] = setCalls[i][2] end
+  local all = true
+  for _, s in ipairs(G.WILD) do
+    local mtl = got[s]
+    local fl = G.filesOf(env.PALETTE.layer[s])
+    if not (mtl and mtl.texture == fl.texture and mtl.normalMap == fl.normalMap and mtl.roughnessMap == fl.roughnessMap) then all = false end
+  end
+  check(all, "regenerate hands every wildcard its layer (texture, normal, ORM)")
+  check(store["world." .. store["system.home"].bodies[1].name].bio.formation ~= nil, "the built home world has a formation too")
+  env.terrain.setSlotMaterial = nil
+  -- two worlds of one type differ in formation or tint
+  local pairs3, twins3, forms = 0, 0, {}
+  for t, list in pairs(byT) do
+    forms[t] = {}
+    for i = 1, #list do
+      forms[t][list[i].id] = true
+      for j = i + 1, math.min(#list, i + 6) do
+        local a, b = list[i], list[j]
+        pairs3 = pairs3 + 1
+        local dc = math.abs(a.col[1] - b.col[1]) + math.abs(a.col[2] - b.col[2]) + math.abs(a.col[3] - b.col[3])
+        if a.id == b.id and a.layers.strata == b.layers.strata and a.layers.cave == b.layers.cave and dc < 0.05 then twins3 = twins3 + 1 end
+      end
+    end
+  end
+  check(pairs3 > 100 and twins3 <= pairs3 * 0.1, string.format("same-type worlds differ in rock: %d twins of %d pairs", twins3, pairs3))
+  local multi = 0
+  for _, fs in pairs(forms) do local k = 0 for _ in pairs(fs) do k = k + 1 end if k >= 2 then multi = multi + 1 end end
+  check(multi >= 12, "most types show more than one formation over 60 seeds (" .. multi .. ")")
+  w2.pairs, w2.twins, w2.claim = pairs3, twins3, maxClaim
+
+  -- A neighbour system reads the home palette, frozen.
+  roll(4242)
+  local P0 = ser(env.PALETTE.layer)
+  env.buildNeighbour(99173, 4e6, 1.0, 2e5, 500, "galaxysystem")
+  check(ser(env.ASSIGN:publish(3).layer) == P0, "a neighbour system claims no wildcard")
+end
+
 if #failures == 0 then
   local list = {}
   for t in pairs(seen) do list[#list + 1] = t end
@@ -477,6 +727,8 @@ if #failures == 0 then
   print(string.format("GEOLOGY SMOKE OK — %d worlds over %d seeds, %d/%d types (%s), %d spawn types, %d/%d same-type pairs differ; layers on %d/%d/%d/%d/%d/%d/%d bodies (mountains/warp/plateau/terrace/overhangs/ravines/rivers), %d biome rules",
     worlds, SEEDS, nseen, ntypes, table.concat(list, " "), nspawn, pairs_ - twins, pairs_,
     nlayer.mountains, nlayer.warp, nlayer.plateau, nlayer.terrace, nlayer.overhangs, nlayer.ravines, nlayer.rivers, nlayer.rules))
+  print(string.format("  FORMATIONS (matGen 3): %d formations over %d library layers; shapes equal to matGen 2 on %d/50 seeds; %d/%d same-type pairs differ in rock; at most %d of 8 wildcards claimed (mean %.1f); %.1f library layers a system fell back to a look-alike",
+    w2.forms, w2.layers, w2.same, w2.pairs - w2.twins, w2.pairs, w2.claim, w2.sumClaim / w2.nsys, w2.sumFell / w2.nsys))
   os.exit(0)
 else
   print("GEOLOGY SMOKE FAILURES:")

@@ -9,7 +9,7 @@
 -- terrainMeshing / terrainLoad parts while each view's meshes settle.
 --
 -- params: first, last (world indices), tag (shot name prefix), settle (s).
-defaults = { first = 1, last = 99, tag = "a", settle = 5, quit = 1 }
+defaults = { first = 1, last = 99, tag = "a", settle = 5, quit = 1, pit = 0, pitDepth = 10 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -80,6 +80,16 @@ local function main()
     local o = w.opts
     local R = o.radius
     local tag = string.format("%s%d_%s", params.tag, wi, w.name:gsub(":", "-"))
+    -- (worlds W2, GEO=1 dumps) the wildcard slots get the layers this world's
+    -- system assigned, as system_generator.applyPalette does at load
+    if w.palette and terrain.setSlotMaterial then
+      local names = {}
+      for _, pl in ipairs(w.palette) do
+        terrain.setSlotMaterial(pl.slot, { texture = pl.texture, normalMap = pl.normalMap, roughnessMap = pl.roughnessMap })
+        names[#names + 1] = pl.slot .. "=" .. tostring(pl.name)
+      end
+      P("PALETTE %d %s | %s", wi, table.concat(names, " "), tostring(w.stack))
+    end
     -- park the camera far out while it fills
     view(cam, SUN * (R * 3), vec3(0, 0, 0), vec3(0, 1, 0))
     yield()
@@ -159,7 +169,34 @@ local function main()
         local h1 = ground(dn, R, top)
         P("DIG %d ground %.2f -> %s m (%s)", wi, h0 - R, h1 and string.format("%.2f", h1 - R) or "nil",
           (h1 and h1 < h0 - 0.5) and "PASS" or "FAIL")
+        -- (pit=1) a dig pit ~4 m across and `pitDepth` deep, its sunlit wall
+        -- shot from the rim and from inside: subsoil over strata
+        if (params.pit or 0) > 0 then
+          local depth = params.pitDepth or 10
+          for k = 0, math.floor(depth / 1.2) do
+            local c = p - dn * (k * 1.2)
+            terrain.dig(c.x, c.y, c.z, 3.2)
+            if k % 3 == 2 then hold(0.3) end
+          end
+          hold(1.5)
+          local tan = (SUN - dn * SUN:dot(dn))
+          if tan:length() < 1e-3 then tan = dn:cross(vec3(1, 0, 0)) end
+          tan = tan:normalized()
+          view(cam, p + dn * 1.6 + tan * 4.2, p - dn * (depth * 0.55) - tan * 3.0, dn)
+          hold(params.settle * 0.6)
+          shot(tag .. "_pitrim")
+          view(cam, p - dn * (depth * 0.3) + tan * 1.6, p - dn * (depth * 0.6) - tan * 3.2, dn)
+          hold(1.5)
+          shot(tag .. "_pitwall")
+        end
       end
+    end
+    -- the steepest face close up (cliff and band rock), 30 m off
+    if (params.pit or 0) > 0 then
+      local ec, ac, dc = spot(30, 3)
+      view(cam, ec, ac, dc)
+      hold(params.settle * 0.6)
+      shot(tag .. "_cliff")
     end
     -- the other way round, toward the sun's side (front-lit)
     local e3, a3, d3 = spot(110, 6)

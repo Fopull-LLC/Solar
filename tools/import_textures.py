@@ -319,6 +319,9 @@ TERRAIN = [
 ]
 # Palette lines: slots 1..PALETTE_SLOTS go to terrain/system.palette; the rest are the library.
 PALETTE_SLOTS = 32
+# The wildcard slots (scripts/geology.lua WILD; none has a `local` version): their
+# system.palette lines carry flags and a height map but no picture. Keep the two in step.
+WILDCARD_SLOTS = (4, 10, 11, 12, 21, 29, 31, 32)
 # planetoid.palette: the first 12 slots (the legacy archetype scene).
 PLANETOID_SLOTS = 12
 
@@ -1579,13 +1582,22 @@ def write_palettes(dry, root_dir=None, local=False):
     """terrain/system.palette (32 slots) and planetoid.palette (12). Committed: cc0
     layers only. `local` (for --stage) names a slot's local layer where root_dir has it."""
     root_dir = root_dir or ROOT
-    lines = []
+    lines, wild = [], []
     for t in palette_slots():
         path, which = layer_path(OUT_CC0, t), "cc0"
         if local and t.get("local") and os.path.exists(os.path.join(root_dir, layer_path(OUT_LOCAL, t))):
             path, which = layer_path(OUT_LOCAL, t), "local"
-        lines.append(palette_line(t, path, slot_maps(t, which, root_dir), root_dir))
-    out = {"terrain/system.palette": "\n".join(lines),
+        maps = slot_maps(t, which, root_dir)
+        lines.append(palette_line(t, path, maps, root_dir))
+        # a WILDCARD line (worlds plan W2, scripts/geology.lua WILD): the slot's flags and its
+        # own height map, but no picture, normal or ORM, so terrain.setSlotMaterial gives the
+        # slot the layer the star system's roll assigns (an older save: its own layer again)
+        if t["slot"] in WILDCARD_SLOTS:
+            hmaps = {"height": maps["height"]} if maps and maps.get("height") else None
+            wild.append(palette_line(t, "", hmaps, root_dir))
+        else:
+            wild.append(lines[-1])
+    out = {"terrain/system.palette": "\n".join(wild),
            "terrain/planetoid.palette": "\n".join(lines[:PLANETOID_SLOTS])}
     for rel, text in out.items():
         p = os.path.join(root_dir, rel)
@@ -1624,13 +1636,15 @@ def write_texture_settings(dry, root_dir=None):
     open(p, "w").write(text)
 
 
+def lin_mean(t):
+    """Mean linear colour of slot t's committed layer."""
+    a = srgb_to_lin(to_float(Image.open(os.path.join(ROOT, layer_path(OUT_CC0, t))).convert("RGB")))
+    return tuple(round(float(v), 3) for v in a.reshape(-1, 3).mean(axis=0))
+
+
 def layer_means():
     """Mean linear colour of each committed layer (far_bodies.lua PAL)."""
-    out = []
-    for t in palette_slots():
-        a = srgb_to_lin(to_float(Image.open(os.path.join(ROOT, layer_path(OUT_CC0, t)))))
-        out.append(tuple(round(float(v), 3) for v in a.reshape(-1, 3).mean(axis=0)))
-    return out
+    return [lin_mean(t) for t in palette_slots()]
 
 
 SOURCE_PAGE = {"ambientCG": "https://ambientcg.com/view?id={id}", "polyhaven": "https://polyhaven.com/a/{id}"}
@@ -1837,12 +1851,20 @@ def main():
         m = layer_means()
         text = "\n".join("  " + " ".join("{ %.3f, %.3f, %.3f }," % v for v in m[i:i + 4]) for i in range(0, 32, 4))
         print(text)
+        # the library layers (33+), which a wildcard slot may hold (LIB_PAL, keyed by layer)
+        lib = [(t["slot"], lin_mean(t)) for t in TERRAIN if t["slot"] > PALETTE_SLOTS]
+        ltext = "\n".join("  " + " ".join("[%d] = { %.3f, %.3f, %.3f }," % ((n,) + v) for n, v in lib[i:i + 3])
+                          for i in range(0, len(lib), 3))
+        print(ltext)
         if a.write:
             p = os.path.join(ROOT, "scripts/far_bodies.lua")
             src = open(p).read()
             i = src.index("PAL = {\n")
             j = src.index("\n}\n", i)
-            new = src[:i] + "PAL = {\n" + text + src[j:]
+            src = src[:i] + "PAL = {\n" + text + src[j:]
+            i = src.index("LIB_PAL = {\n")
+            j = src.index("\n}\n", i)
+            new = src[:i] + "LIB_PAL = {\n" + ltext + src[j:]
             if new != src:
                 open(p, "w").write(new)
                 print("wrote scripts/far_bodies.lua PAL")

@@ -1143,12 +1143,18 @@ function oreSlots(bname)
   oreslot_cache[bname] = c
   return c
 end
+-- (material generation 3 adds bio.mats.pocket and .seam: the world's
+-- deposits, which ARE ore, so a vein may share their slot; never reserved)
+local NOT_GROUND = { pocket = true, seam = true }
 local function world_reserved(w)
   local r = {}
   local m = type(w) == "table" and type(w.bio) == "table" and w.bio.mats
-  if type(m) == "table" then for _, sl in pairs(m) do if type(sl) == "number" then r[sl] = true end end end
+  if type(m) == "table" then
+    for k, sl in pairs(m) do if type(sl) == "number" and not NOT_GROUND[k] then r[sl] = true end end
+  end
   return r
 end
+worldReserved = world_reserved
 
 -- The colour a seam is painted in (the texture is tinted by it, ×1.6 in the
 -- shader: 0.62 is the texture as authored): iron's rusty hematite black,

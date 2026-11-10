@@ -67,6 +67,53 @@ local function ser(v, ind)
   else return tostring(v) end
 end
 
+-- GEO=1 (worlds W2): each entry is `<type>:<n>`, the n-th terrain seed of
+-- that type rolled as the first world of its system (it claims the wildcard
+-- slots first), at material generation MATGEN (default 3; 2 = the same world
+-- as it was). Each world carries its palette: the layer and files each
+-- wildcard slot holds, which the probe gives the engine before it fills.
+if os.getenv("GEO") then
+  local G
+  do
+    local f = assert(loadfile(SOL .. "/scripts/geology.lua"))
+    local e = setmetatable({}, { __index = _G })
+    setfenv(f, e); f(); G = e
+  end
+  env.findScript = function(k) if k == "geology" then return G end end
+  local SC = env.SCALES[env.CURRENT_SCALE]
+  local worlds = {}
+  for name in (LIST or "canyon:1,canyon:2,volcanic:1,glacial:1"):gmatch("[^,]+") do
+    local ty, k = name:match("^([^:]+):(%d+)$")
+    k = tonumber(k)
+    local tseed = 5000 + k * 7919 + #ty * 131
+    env.MAT_GEN_FORCE = tonumber(os.getenv("MATGEN") or "") or 3
+    env.ALIEN_GEN_FORCE = env.ALIEN_GEN
+    env.homeStar = nil
+    env.ASSIGN = G.newAssign()
+    local g = env.rollGeology(rng(tseed * 3 + 1), { type = ty, Tk = TK[ty], air = AIR[ty] })
+    local o, sh = env.geoOpts3(g, tonumber(os.getenv("GEO_R") or "") or 520, 1, SC, tseed)
+    o.seed = tseed
+    env.ASSIGN:freeze()
+    local pal = {}
+    for _, s in ipairs(G.WILD) do
+      local L = env.ASSIGN.layer[s]
+      local f = G.filesOf(L)
+      pal[#pal + 1] = { slot = s, layer = L, name = G.nameOf(L), texture = f.texture, normalMap = f.normalMap, roughnessMap = f.roughnessMap }
+    end
+    local fm = g.formation
+    worlds[#worlds + 1] = { name = name, label = g.label, formation = fm and fm.id or "matgen2", reach = sh.reach or 0,
+      peak = sh.peak, low = sh.low, seaAlt = sh.seaAlt, opts = o, palette = pal,
+      stack = fm and string.format("sub %s strata %s cave %s cliff %s band %s", fm.subsoil.name, fm.strata.name,
+        fm.cave.name, fm.cliff.name, fm.band.name) or "v2" }
+    io.stderr:write(string.format("%-14s seed %d %-20s %s | slots strata %d deep %d\n", name, tseed,
+      worlds[#worlds].formation, worlds[#worlds].stack, o.strata.slot, o.deep.slot))
+  end
+  local f = assert(io.open(OUT, "w"))
+  f:write("WORLDS = " .. ser(worlds) .. "\n")
+  f:close()
+  os.exit(0)
+end
+
 local list = {}
 for w in (LIST or "crystal:fins,canyon:arches,ironred:hoodoos,sulfur:karst,saltflat:mesas,greenhouse:ribs,frost:sponge,canyon:arches:home"):gmatch("[^,]+") do
   list[#list + 1] = w
