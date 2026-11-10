@@ -16,6 +16,12 @@
 --     beat 15.5 MPa but a low-head pump refills a depressurised loop;
 --   * the pieces and their networks built from records (risers between
 --     storeys, open ends named, two substances refused).
+--   * a line shut in at both ends (a shut valve and a stopped pump: Kerne
+--     Station's makeup line in standby): no nil, nothing crosses the shut
+--     ends, it holds the pressure it was shut in at (liquid and gas), every
+--     valve / pump combination, and it rejoins when either opens; a full
+--     cell shut in drains its own water; fluid_net skips a network's failing
+--     step with one warning and steps it again once it can.
 --
 --   luajit solar/tests/smoke_fluids.lua
 
@@ -328,6 +334,188 @@ do
   local qb = into(15.5e6, 0.5, 18e6)
   local qc = into(1.1e5, 2.0, 6e5)
   check(qa == 0 and ma == "stall" and qb > 0.05 and qb < 0.5 and qc > 1.5, string.format("makeup: a process pump stalls against 15.5 MPa, the charging pump gives %.2f kg/s; after the break the process pump gives %.2f", qb, qc))
+end
+
+-- ── a line shut in at both ends (Kerne Station's makeup line) ──────────────
+-- Coolant tank → pipe → pump → pipe → gate valve → nozzle → the primary.
+-- With the valve shut and the pump off the pipe between them reaches no
+-- pressure (the solve used to leave its nodes nil and error). It holds what
+-- it had; nothing crosses its shut ends; it rejoins when either opens.
+do
+  local function line(pri_p, valve_on, pump_on)
+    -- nodes: 1 primary, 2 junction, 3 junction (shut in), 4 junction (shut in), 5 junction, 6 tank
+    local net = finish({ sub = "coolant", nodes = { { kind = "tank", a = 0, c = pri_p, cap = 1661, x0 = 1000, r = 0 }, { kind = "junction" }, { kind = "junction" }, { kind = "junction" }, { kind = "junction" }, liquid(1990, 1996, 1.13) },
+      els = { { kind = "cond", u = 1, v = 2, len = 0.3 }, { kind = "valve", u = 2, v = 3, len = 0.4, on = valve_on }, { kind = "cond", u = 3, v = 4, len = 6 },
+              { kind = "pump", u = 5, v = 4, q0 = 2.0, H0 = 6e5, len = 0.4, on = pump_on }, { kind = "cond", u = 5, v = 6, len = 2 }, { kind = "cond", u = 6, v = 5, len = 0.3 } } })
+    return net
+  end
+  local function sane(net, rep)
+    if not (rep and rep.p and rep.q and not rep.err) then return false end
+    for i = 1, #net.nodes do local v = rep.p[i]; if type(v) ~= "number" or v ~= v or v == math.huge or v == -math.huge then return false end end
+    for k = 1, #net.els do local v = rep.q[k]; if type(v) ~= "number" or v ~= v or v == math.huge or v == -math.huge then return false end end
+    return true
+  end
+  local function mass(st) return (st.x[1] or 0) + (st.x[6] or 0) end
+  -- (no flow: a few 1e-12 kg/s is the solve's round-off at 155 bar, so
+  -- a dead-end line's mass is good to ~1e-10 of it over a day)
+  local function noflow(rep) for _, v in ipairs(rep.q) do if math.abs(v) > 1e-9 then return false end end return true end
+
+  -- STANDBY: valve shut, pump off, from a fresh state (no pressure known yet: 1 atm static)
+  for _, pp in ipairs({ 15.5e6, 1.1e5 }) do
+    local net = line(pp, false, false)
+    local s = FL.newState(net)
+    local m0 = mass(s)
+    local ok, rep = pcall(FL.advance, net, s, 86400)
+    check(ok and sane(net, rep) and noflow(rep) and rep.shut and rep.shut[3] and rep.shut[4] and not rep.shut[2] and not rep.shut[5]
+      and near(rep.p[3], FL.P_ATM, 1e-6) and near(rep.p[4], FL.P_ATM, 1e-6) and rel(mass(s), m0, 1e-9) and near(s.x[6], 1990, 1e-6) and near(s.x[1], 1000, 1e-6),
+      string.format("standby at %.1f bar (valve shut, pump off): no error, no nil, nothing flows, the shut-in pipe at %.3f bar, a day on the contents unchanged (%s)",
+        pp / 1e5, ok and rep.p and (rep.p[3] or 0) / 1e5 or -1, ok and "" or tostring(rep)))
+  end
+
+  -- every other combination, pressurised and broken
+  do
+    -- valve open, pump off: the line up to the pump at the primary's pressure, nothing flows
+    local net = line(15.5e6, true, false)
+    local s = FL.newState(net)
+    local rep = FL.advance(net, s, 60)
+    check(sane(net, rep) and noflow(rep) and not rep.shut and near(rep.p[3], 15.5e6, 1e-3) and near(rep.p[4], 15.5e6, 1e-3),
+      string.format("valve open, pump off: the line to the pump at the primary's %.1f bar, no flow", rep.p[4] / 1e5))
+    -- valve shut, pump on: the pump pressurises the dead end to its shut-off head over the tank, no flow
+    net = line(15.5e6, false, true)
+    s = FL.newState(net)
+    rep = FL.advance(net, s, 60)
+    check(sane(net, rep) and noflow(rep) and rel(rep.p[4], rep.p[5] + 6e5, 1e-9) and rel(rep.p[3], rep.p[4], 1e-9) and near(s.x[6], 1990, 1e-6),
+      string.format("valve shut, pump on: the dead end at the tank + 6 bar (%.3f bar), no flow", rep.p[4] / 1e5))
+    -- both on against 15.5 MPa: the pump stalls, nothing flows, the shut side is the primary's
+    net = line(15.5e6, true, true)
+    s = FL.newState(net)
+    rep = FL.advance(net, s, 60)
+    check(sane(net, rep) and noflow(rep) and s.em[4] == "stall" and not rep.shut,
+      "both open against 15.5 MPa: the 6 bar pump stalls, no flow, nothing shut in")
+    -- both on into a broken (1.1 bar) primary: it flows, and every kg leaving the tank reaches the primary
+    net = line(1.1e5, true, true)
+    s = FL.newState(net)
+    local m0 = mass(s)
+    rep = FL.advance(net, s, 300)
+    local q = rep.q[2]
+    check(sane(net, rep) and q < -0.5 and rel(mass(s), m0, 1e-9) and s.x[1] > 1100,
+      string.format("both open into a broken primary: %.2f kg/s of makeup, the mass conserved (%.6f / %.6f kg)", -q, mass(s), m0))
+  end
+
+  -- TRANSITIONS
+  do
+    -- open (the line at 155 bar), then shut the valve: the pipe holds the 155 bar it was shut in at
+    local net = line(15.5e6, true, false)
+    local s = FL.newState(net)
+    FL.advance(net, s, 10)
+    net.els[2].on = false
+    local m0 = mass(s)
+    local rep = FL.advance(net, s, 86400)
+    check(sane(net, rep) and noflow(rep) and rep.shut and rep.shut[3] and near(rep.p[3], 15.5e6, 1e-3) and near(rep.p[4], 15.5e6, 1e-3) and rel(mass(s), m0, 1e-9),
+      string.format("shut in at 155 bar: a day on it still holds %.2f bar, no flow, the mass unchanged", rep.p[3] / 1e5))
+    -- the primary breaks meanwhile; reopen: it rejoins at once, the line at the primary's pressure
+    net.nodes[1].c = 1.1e5
+    rep = FL.advance(net, s, 1)
+    check(sane(net, rep) and near(rep.p[3], 15.5e6, 1e-3), "…the primary broken behind the shut valve: the pipe still holds its 155 bar")
+    net.els[2].on = true
+    rep = FL.advance(net, s, 1)
+    check(sane(net, rep) and noflow(rep) and not rep.shut and near(rep.p[3], 1.1e5, 1e-3),
+      string.format("reopened: it rejoins at once, the line at the primary's %.3f bar, no nil", rep.p[3] / 1e5))
+    -- the pump starts: the same makeup as a line that was never shut in
+    net.els[4].on = true
+    local m1 = mass(s)
+    rep = FL.advance(net, s, 60)
+    local fresh = line(1.1e5, true, true)
+    local fs = FL.newState(fresh)
+    fs.x[1], fs.x[6] = s.x[1], s.x[6]
+    local frep = FL.advance(fresh, fs, 0)
+    check(sane(net, rep) and rel(rep.q[2], frep.q[2], 1e-6) and rel(mass(s), m1, 1e-9),
+      string.format("…the pump started: %.3f kg/s, as a line never shut in (%.3f), the mass conserved", -rep.q[2], -frep.q[2]))
+    -- the pump runs into the shut valve, then stops: the dead end keeps the pump's head trapped
+    net = line(15.5e6, false, true)
+    s = FL.newState(net)
+    rep = FL.advance(net, s, 10)
+    local head = rep.p[4]
+    net.els[4].on = false
+    rep = FL.advance(net, s, 3600)
+    check(sane(net, rep) and noflow(rep) and rep.shut and rep.shut[4] and rel(rep.p[4], head, 1e-9) and rel(rep.p[3], head, 1e-9),
+      string.format("the pump stopped against the shut valve: the line keeps the %.3f bar it pumped in, no flow", rep.p[4] / 1e5))
+    -- and restarts: rejoins at the same head, still no flow
+    net.els[4].on = true
+    rep = FL.advance(net, s, 10)
+    check(sane(net, rep) and noflow(rep) and not rep.shut and rel(rep.p[4], head, 1e-9), "…restarted: rejoined at the same head, no flow")
+  end
+
+  -- a gas line: bottle → valve A → 3 m → valve B → a room; shut A while B is shut: it keeps its charge at its own pressure
+  do
+    local Vb = 0.15
+    local a = FL.gasA("o2", Vb)
+    local x0 = 50e5 / a
+    local gnet = finish({ sub = "o2", nodes = { { kind = "tank", a = a, c = 0, cap = 200e5 / a, x0 = x0 }, { kind = "junction" }, { kind = "junction" }, { kind = "junction" }, { kind = "fixed", p = FL.P_ATM } },
+      els = { { kind = "cond", u = 1, v = 2, len = 0.3 }, { kind = "valve", u = 2, v = 3, len = 0.4, on = true }, { kind = "cond", u = 3, v = 4, len = 3 }, { kind = "valve", u = 4, v = 5, len = 0.4, on = false } } })
+    local gs = FL.newState(gnet)
+    local r = FL.advance(gnet, gs, 10)
+    check(sane(gnet, r) and noflow(r) and rel(r.p[4], 50e5, 1e-9), string.format("gas: the line to the shut valve B at the bottle's %.2f bar", r.p[4] / 1e5))
+    gnet.els[2].on = false
+    r = FL.advance(gnet, gs, 86400)
+    check(sane(gnet, r) and noflow(r) and r.shut and r.shut[3] and r.shut[4] and rel(r.p[3], 50e5, 1e-9) and rel(gs.x[1], x0, 1e-9),
+      string.format("gas, both valves shut: the line holds %.2f bar a day on, the bottle's %.4f kg untouched", r.p[3] / 1e5, gs.x[1]))
+    gnet.els[4].on = true
+    r = FL.advance(gnet, gs, 10)
+    check(sane(gnet, r) and noflow(r) and near(r.p[3], FL.P_ATM, 1e-6) and rel(gs.x[1], x0, 1e-9), "gas: B opened, the line vents to the room's 1 atm, the bottle (behind A) untouched")
+    gnet.els[2].on = true
+    r = FL.advance(gnet, gs, 10)
+    check(sane(gnet, r) and r.q[4] > 0 and gs.x[1] < x0, string.format("gas: A opened, the bottle discharges (%.4f kg/s)", r.q[4]))
+  end
+
+  -- a full consumer cell shut in behind a valve: it drains its own water, no water from nowhere
+  do
+    local r = 1e-3
+    local net = finish({ sub = "water", nodes = { liquid(500, 2000, 1.13), { kind = "junction" }, { kind = "junction" }, liquid(20, 20, 0.05, r) },
+      els = { { kind = "cond", u = 1, v = 2, len = 1 }, { kind = "valve", u = 2, v = 3, len = 0.4, on = true }, { kind = "cond", u = 3, v = 4, len = 3 } } })
+    local s = FL.newState(net)
+    FL.advance(net, s, 60)
+    local was, x1 = s.tm[4], s.x[1]
+    net.els[2].on = false
+    local rep = FL.advance(net, s, 1000)
+    check(was == "F" and sane(net, rep) and near(s.x[4], 20 - r * 1000, 1e-6) and near(s.x[1], x1, 1e-6) and math.abs(rep.served[4] - r * 1000) < 1e-6,
+      string.format("a full cell shut in: it leaves full and drains its own %.3f kg (%.3f left), the tank behind the valve untouched", r * 1000, s.x[4]))
+  end
+end
+
+-- ── fluid_net: one network's error never stops the stepping ────────────────
+do
+  local logs = {}
+  local calls, fail = 0, true
+  -- the real rulebook, its advance made to throw on demand
+  local FF = setmetatable({ advance = function(net, st, dt, rep)
+    calls = calls + 1
+    if fail and dt > 0 then error("fluids.lua:303: attempt to perform arithmetic on a nil value") end
+    return FL.advance(net, st, dt, rep)
+  end }, { __index = FL })
+  local net0 = finish({ sub = "water", nodes = { liquid(1800, 2000, 1.13), liquid(200, 2000, 1.13), { kind = "junction" } },
+    els = { { kind = "cond", u = 1, v = 3, len = 3 }, { kind = "cond", u = 3, v = 2, len = 3 } } })
+  FF.build = function() return { nets = { net0 }, byUid = {}, open = {} } end
+  local clock = 0
+  local ST = { version = 1, list = function() return { { id = 1, bp = { { uid = 1, id = "pipe" } } } } end, get = function() return { id = 1, bp = { { uid = 1, id = "pipe" } } } end }
+  local SCR = { fluids = FF, structures = ST, parts_base = { partInfo = function() return { ports = { {} }, fl = { kind = "pipe" } } end },
+    deployables = { agencyClock = function() return clock end } }
+  local E = env({}, SCR, { log = function(m) logs[#logs + 1] = m end })
+  local FN = load_script("fluid_net.lua", E)
+  FN.start({ id = 1 })
+  E.time = 0; FN.update({ id = 1 }, 0.1)
+  E.time = 1; FN.update({ id = 1 }, 0.1)          -- (built after SOLVE_WAIT)
+  local n = FN.nets(1)
+  local x0 = n and n[1].st.x[1]
+  local ok = true
+  for k = 1, 10 do clock = k; E.time = 1 + k; local o = pcall(FN.update, { id = 1 }, 0.1); ok = ok and o end
+  local held = n and n[1].st.x[1]
+  fail = false
+  clock = 20; E.time = 30; FN.update({ id = 1 }, 0.1)
+  local after = n and n[1].st.x[1]
+  check(n and ok and #logs == 1 and logs[1]:find("skipped", 1, true) and held == x0 and after < x0 and calls > 10,
+    string.format("fluid_net: a network's failing step is skipped (state kept, %d warning for %d failures), and it steps again once it can (%.2f -> %.2f kg)",
+      #logs, (FN.PROF and FN.PROF.errors) or 0, x0 or -1, after or -1))
 end
 
 if #failures > 0 then

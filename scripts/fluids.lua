@@ -193,6 +193,7 @@ end
 -- net = { nodes = { { kind = "junction"|"tank"|"fixed", a, c, cap, p (fixed), r (drain kg/s) } },
 --         els = { { kind = "cond"|"pump"|"check"|"valve"|"reg"|"open", u, v, g, H, pset, on } } }
 -- st = { x = { [node] = kg }, tm = { [node] = "N"|"F"|"S"|"D" }, em = { [el] = mode } }
+-- (st.pk: the last solve's pressures by node, what a shut-in section holds)
 -- A pump's mode: "on" | "stall"; a check valve's: "open" | "shut"; a
 -- regulator's: "T" (throttling) | "O" (wide open) | "X" (shut).
 local function el_active(e, m)
@@ -244,11 +245,79 @@ local function plan_of(net, st)
     A[idx[e.v]][row] = A[idx[e.v]][row] - 1                            -- and enters v
     A[row][idx[e.v]] = 1                                                -- p_v = pset
   end
-  -- (a free node with nothing joined: pin it so the matrix is whole)
-  for i = 1, nf do if A[i][i] == 0 then A[i][i] = 1; free.lone = free.lone or {}; free.lone[i] = true end end
-  local F = (n > 0) and lu(A, n) or { n = 0 }
-  if n > 0 and not F then return nil, "singular" end
-  return { idx = idx, free = free, nf = nf, regs = regs, n = n, F = F }
+  -- SHUT-IN ISLANDS. A set of free nodes joined only to each other (a pipe
+  -- run between a shut valve and a stopped pump, a lone node, a full tank
+  -- behind a shut valve) reaches no pressure: no known node, no regulator's
+  -- pinned outlet. Its rows sum to nothing, so the matrix is singular. Such
+  -- an island holds what it had: one node of it (its REFERENCE) is pinned,
+  -- the rest are solved from it through the island's own elements (all at
+  -- one piezometric pressure unless a running pump circulates inside it),
+  -- and nothing crosses its shut ends. The reference is a full tank in it
+  -- if there is one (at a·cap + c; it stays full only while its drain is
+  -- served: the "unfull" guard), else a dry one (at c), else its lowest
+  -- node, at the pressure it last had (st.pk, the last solve's: the pressure
+  -- it was shut in at), else 1 atm static. Every other node keeps its own
+  -- balance, so a dry tank passes nothing and a second full one's drain
+  -- comes out of the reference, which then leaves full. Pipes
+  -- hold no inventory in this model, so a shut-in liquid or gas line keeps
+  -- its mass trivially, and it rejoins at the next solve once a valve opens
+  -- or a pump starts.
+  local isl = nil
+  if nf > 0 then
+    local U = {}
+    for j = 1, nf do U[j] = j end
+    local function find(a) while U[a] ~= a do U[a] = U[U[a]]; a = U[a] end return a end
+    local anch = {}
+    for k, e in ipairs(els) do
+      local act = el_active(e, st.em[k])
+      if act == "g" or act == "pump" then
+        local iu, iv = idx[e.u], idx[e.v]
+        if iu and iv then
+          local ra, rb = find(iu), find(iv)
+          if ra ~= rb then U[rb] = ra; if anch[rb] then anch[ra] = true end end
+        elseif iu then anch[find(iu)] = true
+        elseif iv then anch[find(iv)] = true end
+      end
+    end
+    for _, k in ipairs(regs) do anch[find(idx[els[k].v])] = true end
+    local ref = {}
+    for j = 1, nf do
+      local r = find(j)
+      if not anch[r] then
+        local i = free[j]
+        local N = nodes[i]
+        -- (rank: a full tank 2, a dry one 1, a junction 0; the lowest node of the best)
+        local tk = N.kind == "tank" and ((st.tm[i] == "F" and 2) or (st.tm[i] == "D" and 1)) or 0
+        local cur = ref[r]
+        if not cur or tk > cur.tk then ref[r] = { j = j, i = i, tk = tk } end
+      end
+    end
+    for r, R in pairs(ref) do
+      local i, N = R.i, nodes[R.i]
+      local v
+      if R.tk > 0 then
+        v = (R.tk == 2) and ((N.a or 0) * (N.cap or 0) + (N.c or 0)) or (N.c or 0)
+      else
+        v = st.pk and st.pk[i]
+        if type(v) ~= "number" or v ~= v then v = P_ATM + (N.zh or 0) end
+      end
+      local row = A[R.j]
+      for c = 1, n do row[c] = 0 end
+      row[R.j] = 1
+      isl = isl or { pin = {}, node = {}, ref = {} }
+      isl.pin[R.j] = v
+      isl.ref[i] = true
+    end
+    if isl then for j = 1, nf do if ref[find(j)] then isl.node[free[j]] = true end end end
+  end
+  local F = nil
+  if n > 0 then
+    F = lu(A, n)
+    if not F then return nil, "singular" end
+  else
+    F = { n = 0 }
+  end
+  return { idx = idx, free = free, nf = nf, regs = regs, n = n, F = F, isl = isl }
 end
 
 -- Solve at contents x (a table node → kg): → p (node → Pa), q (el → kg/s), inflow (node → kg/s)
@@ -288,7 +357,8 @@ local function solve_at(net, st, pl, x)
     for j, i in ipairs(pl.free) do
       local N = nodes[i]
       if N.kind == "tank" and st.tm[i] == "F" then rhs[j] = rhs[j] - (N.r or 0) end
-      if pl.free.lone and pl.free.lone[j] then rhs[j] = (N.kind == "tank") and ((N.a or 0) * (x[i] or 0) + (N.c or 0)) or 0 end
+      -- (a shut-in island's reference: held where plan_of pinned it)
+      if pl.isl and pl.isl.pin[j] then rhs[j] = pl.isl.pin[j] end
     end
     local sol = lusolve(pl.F, rhs)
     for j, i in ipairs(pl.free) do p[i] = sol[j] end
@@ -330,7 +400,10 @@ local function linear(net, st, pl)
     for i, N in ipairs(net.nodes) do
       local m = st.tm[i]
       if N.kind == "tank" then
-        if m == "F" then g[#g + 1] = { p[i] - ((N.a or 0) * (N.cap or 0) + (N.c or 0)) + 1e-9 * (1 + abs(p[i])), "unfull", i }
+        if m == "F" and pl.isl and pl.isl.ref[i] then
+          -- (full and shut in: it stays full only while what comes in serves its drain)
+          g[#g + 1] = { inflow[i] - (N.r or 0) + 1e-9 * (1 + abs(N.r or 0)), "unfull", i }
+        elseif m == "F" then g[#g + 1] = { p[i] - ((N.a or 0) * (N.cap or 0) + (N.c or 0)) + 1e-9 * (1 + abs(p[i])), "unfull", i }
         elseif m == "S" then
           g[#g + 1] = { inflow[i], "dry", i }
           g[#g + 1] = { (N.r or 0) - inflow[i], "fill", i }
@@ -474,11 +547,22 @@ function advance(net, st, dt, rep)
   while true do
     guard = guard + 1
     local pl, lin = settle(net, st, rep)
-    if not pl then rep.err = "singular"; return rep end
+    if not pl then
+      -- (never expected now islands are held; still, every node gets a
+      -- figure and nothing moves rather than a nil for a caller to trip on)
+      rep.err = "singular"
+      rep.p, rep.q, rep.inflow = {}, {}, {}
+      for i, N in ipairs(net.nodes) do rep.p[i] = (st.pk and st.pk[i]) or (N.kind == "fixed" and N.p) or P_ATM + (N.zh or 0); rep.inflow[i] = 0 end
+      for k = 1, #net.els do rep.q[k] = 0 end
+      return rep
+    end
     -- the flows now (the readouts, and what each element moves this segment)
     if left <= 0 or guard > 400 then
       local p, q, inflow = solve_at(net, st, pl, st.x)
       rep.p, rep.q, rep.inflow = p, q, inflow
+      -- (the nodes shut in now: true by node; nil when none)
+      rep.shut = pl.isl and pl.isl.node or nil
+      st.pk = p
       return rep
     end
     local n = lin.n
@@ -548,6 +632,7 @@ function advance(net, st, dt, rep)
       st.x[i] = math.max(0, math.min(N.cap or math.huge, xe[a]))
     end
     local p1, q1 = solve_at(net, st, pl, st.x)
+    st.pk = p1   -- (what a section shut in by the next mode change holds)
     for k = 1, #net.els do rep.moved[k] = (rep.moved[k] or 0) + 0.5 * ((q0[k] or 0) + (q1[k] or 0)) * te end
     -- drains served: a full tank or a starved one passes what it gets
     rep.served = rep.served or {}

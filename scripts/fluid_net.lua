@@ -143,6 +143,29 @@ local function ext_for(e)
   end
 end
 
+-- One network's step, guarded: an error in one network's solve must never
+-- stop it (or any other) for good. On an error the state is put back as it
+-- was, the step is skipped (the next one tries again) and a warning is
+-- logged once per network per kind of error. → rep, or nil when it failed
+local function shallow(t) local o = {}; for k, v in pairs(t or {}) do o[k] = v end return o end
+local function safe_advance(F, E, dt, rep)
+  local st = E.st
+  local x, tm, em, pk = shallow(st.x), shallow(st.tm), shallow(st.em), st.pk
+  local ok, r = pcall(F.advance, E.net, st, dt, rep)
+  if ok and type(r) == "table" then return r end
+  st.x, st.tm, st.em, st.pk = x, tm, em, pk
+  local msg = tostring(r)
+  local loc, rest = msg:match("^(.-:%d+:)(.*)$")
+  local kind = (loc or "") .. ((rest or msg):gsub("%-?%d+%.?%d*e?[%+%-]?%d*", "#"))
+  E.warned = E.warned or {}
+  if not E.warned[kind] then
+    E.warned[kind] = true
+    if log then log(string.format("fluid_net: a %s network's step failed and was skipped (it carries on): %s", tostring(E.net and E.net.sub or "fluid"), msg)) end
+  end
+  PROF.errors = (PROF.errors or 0) + 1
+  return nil
+end
+
 -- (re)build structure sid's networks from its records
 local function build(sid)
   local F, ST = FL(), ref("structures")
@@ -182,7 +205,7 @@ local function build(sid)
       if node.kind == "tank" and node.uid and (node.tk == "tank" or node.tk == "bottle") then e.content[node.uid] = E.st.x[i] end
     end
     -- the readouts at once
-    E.rep = F.advance(E.net, E.st, 0)
+    E.rep = safe_advance(F, E, 0) or E.rep
   end
   if not e.a then e.a = agency_now() end
   N[sid] = e
@@ -337,9 +360,12 @@ local function step_struct(e, a)
       refresh(e, E)
       E.x0 = {}
       for i, x in pairs(E.st.x) do E.x0[i] = x end
-      E.rep = F.advance(E.net, E.st, h, { events = {}, segs = 0 })
-      PROF.segs = PROF.segs + (E.rep.segs or 0)
-      couple(e, E, h)
+      local rep = safe_advance(F, E, h, { events = {}, segs = 0 })
+      if rep then
+        E.rep = rep
+        PROF.segs = PROF.segs + (rep.segs or 0)
+        couple(e, E, h)
+      end
     end
     left = left - h
   end

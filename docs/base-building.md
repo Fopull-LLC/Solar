@@ -1904,6 +1904,20 @@ pressurisation chambers as a mechanic: this is that.
   - One call of any dt equals any number of small calls. `smoke_fluids`
     checks a day in one step against 86,400 one-second steps, and 30 days
     across a regulator's change against thirty one-day steps, to 1e-6.
+- **Shut in.** A section with no path to a known pressure once shut valves,
+  stopped or stalled pumps and shut check valves are taken as open circuits
+  (a pipe between a shut gate valve and a stopped pump; a lone node; a full
+  cell behind a shut valve) is an ISLAND: its equations alone are singular.
+  `plan_of` finds islands by union-find over the free nodes and pins one
+  node of each (a full tank in it at a·cap + c, else a dry one at c, else its
+  lowest node at the pressure it last had, `st.pk`, i.e. the pressure it was
+  shut in at; 1 atm static on a fresh state). The rest of the island is
+  solved from that node, so a trapped liquid or gas line holds its pressure,
+  nothing crosses its shut ends, and it rejoins at the next solve when a
+  valve opens or a pump starts. A full tank shut in leaves full as soon as
+  its drain isn't served. `rep.shut` names the shut-in nodes. `fluid_net`
+  runs each network's step under `pcall`: a failing step is skipped with
+  the state put back and one logged warning per network per kind of error.
 - **Limited by** (`limitedBy`): a starved consumer first, with why ("the
   O2 Generator is starved (0.000 of 0.000045 kg/s): the Water Tank 2 m³ is
   empty"); else a stalled pump ("the pump can't beat 154.0 bar (its shut-off
