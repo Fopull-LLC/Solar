@@ -474,7 +474,14 @@ function markerGroups(entries, ox, oy, oz, here, pid, range, skip)
   return out
 end
 
-function lateUpdate(node, dt)
+-- Drawn over the world: after the camera has placed this frame's view
+-- (planet_camera.deferLate; docs/positions-and-frames.md rule 2)
+local pc_late = nil
+local function after_camera(node, dt, fn)
+  if not (pc_late and pc_late.valid) then pc_late = findScript("planet_camera", { quiet = true }) end
+  if pc_late and pc_late.valid and pc_late.deferLate then pc_late.deferLate(node, dt, fn) else fn(node, dt) end
+end
+local function late_draw(node, dt)
   if not sole(node) then return end
   if not (camera and camera.worldToScreen and camera.screenRect and draw and draw.text) then return end
   local pc = ref("planet_camera")
@@ -544,3 +551,5 @@ function fromBase(e)
   local d = math.sqrt((b.x + bx - e.x) ^ 2 + (b.y + by - e.y) ^ 2 + (b.z + bz - e.z) ^ 2)
   return fmt_m(d) .. " from the base"
 end
+
+function lateUpdate(node, dt) after_camera(node, dt, late_draw) end

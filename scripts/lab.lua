@@ -652,7 +652,14 @@ local function uiH()
   local st = ref("settings")
   return (st and st.designHeight and st.designHeight()) or 720
 end
-function lateUpdate(node, dt)
+-- Drawn over the world: after the camera has placed this frame's view
+-- (planet_camera.deferLate; docs/positions-and-frames.md rule 2)
+local pc_late = nil
+local function after_camera(node, dt, fn)
+  if not (pc_late and pc_late.valid) then pc_late = findScript("planet_camera", { quiet = true }) end
+  if pc_late and pc_late.valid and pc_late.deferLate then pc_late.deferLate(node, dt, fn) else fn(node, dt) end
+end
+local function late_draw(node, dt)
   if not (inside and lastReceived and camera and camera.worldToScreen and camera.screenRect and draw and draw.text) then return end
   local lt = ref("lab_talk")
   if lt and lt.isOpen and lt.isOpen() then return end
@@ -686,3 +693,5 @@ function lateUpdate(node, dt)
   draw.rect(sx - w / 2, sy - size, w, size * 1.6, 0.04, 0.05, 0.04, 0.78 * fade, size * 0.3)
   draw.text(sx, sy - size * 0.62, txt, size, 0.64, 0.93, 0.56, fade, "center")
 end
+
+function lateUpdate(node, dt) after_camera(node, dt, late_draw) end

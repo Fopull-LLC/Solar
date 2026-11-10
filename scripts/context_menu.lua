@@ -677,9 +677,17 @@ local function wear_draw()
   draw.text(sx, sy - 31 * k, tostring(W.label):upper(), 10 * k, 0.75, 0.72, 0.66, 1.0, "center")
   draw.text(sx, sy - 18 * k, line, 12 * k, c[1], c[2], c[3], 1.0, "center")
 end
+-- Drawn over the world: after the camera has placed this frame's view
+-- (planet_camera.deferLate; docs/positions-and-frames.md rule 2)
+local pc_late = nil
+local function after_camera(node, dt, fn)
+  if not (pc_late and pc_late.valid) then pc_late = findScript("planet_camera", { quiet = true }) end
+  if pc_late and pc_late.valid and pc_late.deferLate then pc_late.deferLate(node, dt, fn) else fn(node, dt) end
+end
+local function late_wear() if not open then wear_draw() end end
 function lateUpdate(node, dt)
   if open then return end
-  wear_draw()
+  after_camera(node, dt, late_wear)
 end
 
 function start(node)

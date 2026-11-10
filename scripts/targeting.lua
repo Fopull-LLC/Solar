@@ -1423,7 +1423,14 @@ function update(node, dt)
 end
 
 readout_s = nil   -- the smoothed readout carried between frames (relative values only)
-function lateUpdate(node, dt)
+-- Drawn over the world: after the camera has placed this frame's view
+-- (planet_camera.deferLate; docs/positions-and-frames.md rule 2)
+local pc_late = nil
+local function after_camera(node, dt, fn)
+  if not (pc_late and pc_late.valid) then pc_late = findScript("planet_camera", { quiet = true }) end
+  if pc_late and pc_late.valid and pc_late.deferLate then pc_late.deferLate(node, dt, fn) else fn(node, dt) end
+end
+local function late_draw(node, dt)
   if (params and params.enabled or 1) < 0.5 then return end
   if not (camera and camera.worldToScreen and camera.screenRect and draw and draw.text) then return end
   readout = nil
@@ -1432,6 +1439,14 @@ function lateUpdate(node, dt)
   local T = resolve()
   if not T then return end
   if me and T.v and T.v.node.id == me.node.id then return end
+  -- resolve() reads the craft's physics frame (what steer wants); the marker
+  -- goes where the craft is DRAWN, read in this same pass (a tick of its
+  -- travel apart: 0.35 m on a rover at 10 m/s, metres in orbit)
+  if T.v and T.v.drawnShift then
+    local dx, dy, dz = T.v.drawnShift()
+    T.x, T.y, T.z = T.x + dx, T.y + dy, T.z + dz
+    if T.port then T.port.x, T.port.y, T.port.z = T.port.x + dx, T.port.y + dy, T.port.z + dz end
+  end
   local key = string.format("%s|%s|%s|%s", tostring(target.kind), tostring(target.id or target.name),
     tostring(target.uid), tostring(me and myPort(me) or ""))
   local R = TM.smooth(readout_s, measure(me), dt, 12, key)
@@ -1449,3 +1464,5 @@ function lateUpdate(node, dt)
   local cm = ref("context_menu")
   if me and cm and cm.open and cm.target and cm.target.kind == "dockchoice" then draw_port_numbers(me, k) end
 end
+
+function lateUpdate(node, dt) after_camera(node, dt, late_draw) end

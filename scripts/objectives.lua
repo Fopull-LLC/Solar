@@ -1163,7 +1163,14 @@ end
 -- the building the frame shows rather than a frame behind it. worldToScreen
 -- projects through the camera as it stands now (0.117), so a planet-fixed
 -- point holds still on screen while the planet moves along its rails.
-function lateUpdate(node, dt)
+-- Drawn over the world: after the camera has placed this frame's view
+-- (planet_camera.deferLate; docs/positions-and-frames.md rule 2)
+local pc_late = nil
+local function after_camera(node, dt, fn)
+  if not (pc_late and pc_late.valid) then pc_late = findScript("planet_camera", { quiet = true }) end
+  if pc_late and pc_late.valid and pc_late.deferLate then pc_late.deferLate(node, dt, fn) else fn(node, dt) end
+end
+local function late_draw(node, dt)
   if not (camera and camera.worldToScreen and camera.screenRect and draw and draw.text) then return end
   if cinematicUp() then return end
   local astro = find("Astronaut")
@@ -1237,3 +1244,5 @@ function lateUpdate(node, dt)
     end
   end
 end
+
+function lateUpdate(node, dt) after_camera(node, dt, late_draw) end

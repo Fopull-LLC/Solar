@@ -1802,6 +1802,74 @@ local function handoff_tick(node, dt)
   cam_x, cam_y, cam_z = c.x, c.y, c.z
 end
 
+-- ── AFTER THE CAMERA (playtest 2026-11-10: "indicators lagging behind") ────
+-- A marker drawn over the world must project through the camera AS THIS FRAME
+-- PLACED IT. Two things stood in the way:
+--  * Between nodes, lateUpdate runs in the engine's node order, which is not
+--    load order (it goes by kind of node, and a removed node moves another
+--    into its place). A label drawn from its own lateUpdate before this one
+--    projected through LAST frame's camera: a frame of the view's motion
+--    behind (tens of px turning or driving).
+--  * Even a script called from here saw the old camera: a script's writes to
+--    its OWN node reach the scene only when its hook returns, and
+--    camera.worldToScreen / screenToRay read the scene.
+-- So the placed view is written once more through a second handle to the
+-- same node (a cross-node write lands at once; the own-node write-back at the
+-- end of the hook writes the same numbers), and a script whose lateUpdate
+-- draws over the world hands its work here:
+--
+--   function lateUpdate(node, dt) deferLate(node, dt, late_draw) end
+--   (through its planet_camera handle: pc.deferLate(node, dt, fn))
+--
+-- deferLate runs fn(node, dt) at once when the view is already placed this
+-- frame, and otherwise right after the placement, in the order asked. Either
+-- way it runs this frame, in the camera pass, with drawn poses read then
+-- (docs/positions-and-frames.md, rule 2). `placedAt` is the `time` of the
+-- last placement.
+placedAt = -1
+local deferred = {}
+function placedThisFrame() return placedAt == time end
+function deferLate(n, dt, fn)
+  if placedAt == time then
+    fn(n, dt)
+  else
+    deferred[#deferred + 1] = { n, dt, fn }
+  end
+end
+local view_h = nil
+function commit_view(node)
+  placedAt = time
+  -- (the orbit map places the view itself, through its own handle: this
+  -- node's raw numbers are then the old view, and must not be written over it)
+  local m = map()
+  if m and m.map_view then return end
+  if not (view_h and view_h.valid and view_h.id == node.id) then
+    view_h = nil
+    for _, s in ipairs(findScripts("planet_camera") or {}) do
+      local n = s.node
+      if n and n.valid and n.id == node.id then view_h = n break end
+    end
+    if not view_h then return end
+  end
+  -- (the angles straight across: the own write-back at the hook's end writes
+  -- these same raw numbers, so the two cannot disagree)
+  view_h.x, view_h.y, view_h.z = node.x, node.y, node.z
+  view_h.yaw, view_h.pitch, view_h.roll = node.yaw, node.pitch, node.roll
+end
+function run_deferred()
+  placedAt = time
+  if #deferred == 0 then return end
+  local q = deferred
+  deferred = {}
+  for i = 1, #q do
+    local d = q[i]
+    if d[1] == nil or d[1].valid ~= false then
+      local ok, err = pcall(d[3], d[1], d[2])
+      if not ok then log("planet_camera: a deferred lateUpdate failed: " .. tostring(err)) end
+    end
+  end
+end
+
 function lateUpdate(node, dt)
   -- The interiors and parked nodes are never the main camera's to draw.
   if main_mask_set == nil or (main_mask_set == "iva" and not (cockpit and seatView and not seatView.open)) then
@@ -1809,7 +1877,7 @@ function lateUpdate(node, dt)
   end
   -- The VAB builder's own camera has the view (build_host); this one waits.
   local gm = script_ref("game_manager")
-  if gm and gm.inputOwner == "builder" then return end
+  if gm and gm.inputOwner == "builder" then run_deferred() return end
   if cinematic_tick(node, dt) then
     -- the free camera placed the view itself
   elseif hold_tick(node) then
@@ -1835,12 +1903,15 @@ function lateUpdate(node, dt)
       draw.text(sw * 0.5, sh * 0.14, mode_msg, 22 * k, 0.92, 0.89, 0.81, a, "center")
     end
   end
+  -- Everything below projects through the camera: it must see this frame's.
+  commit_view(node)
   if not atmo_ref or not atmo_ref.valid then atmo_ref = findScript("atmosphere") end
   if atmo_ref and atmo_ref.valid and atmo_ref.follow then atmo_ref.follow(dt) end
   -- The sun flare projects the star through the camera, so it too wants the
   -- camera where this frame put it (its own lateUpdate runs before ours).
   if not flare_ref or not flare_ref.valid then flare_ref = findScript("sun_flare") end
   if flare_ref and flare_ref.valid and flare_ref.follow then flare_ref.follow(dt) end
+  run_deferred()
 end
 
 -- ── CINEMATIC MODE ──────────────────────────────────────────────────────────

@@ -779,6 +779,14 @@ function update(node, dt)
   if t - save_t >= SAVE_EVERY then save_t = t; saveNow() end
 end
 
+-- Drawn over the world: after the camera has placed this frame's view
+-- (planet_camera.deferLate; docs/positions-and-frames.md rule 2)
+local pc_late = nil
+local function after_camera(node, dt, fn)
+  if not (pc_late and pc_late.valid) then pc_late = findScript("planet_camera", { quiet = true }) end
+  if pc_late and pc_late.valid and pc_late.deferLate then pc_late.deferLate(node, dt, fn) else fn(node, dt) end
+end
+local function late_overlay() if overlay_on() then drawOverlay() end end
 function lateUpdate(node, dt)
-  if overlay_on() then drawOverlay() end
+  after_camera(node, dt, late_overlay)
 end

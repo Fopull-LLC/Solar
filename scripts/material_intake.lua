@@ -832,7 +832,14 @@ local function tag(x, y, text, size, r, g, b, a, align)
   draw.text(align == "left" and (x0 + size * 0.5) or x, y - size * 0.62, text, size, r, g, b, a, align == "left" and "left" or "center")
 end
 
-function lateUpdate(node, dt)
+-- Drawn over the world: after the camera has placed this frame's view
+-- (planet_camera.deferLate; docs/positions-and-frames.md rule 2)
+local pc_late = nil
+local function after_camera(node, dt, fn)
+  if not (pc_late and pc_late.valid) then pc_late = findScript("planet_camera", { quiet = true }) end
+  if pc_late and pc_late.valid and pc_late.deferLate then pc_late.deferLate(node, dt, fn) else fn(node, dt) end
+end
+local function late_draw(node, dt)
   if not (G and live and camera and camera.worldToScreen and camera.screenRect and draw and draw.text) then return end
   local pc = ref("planet_camera")
   if pc and pc.cinematic == true then return end
@@ -888,3 +895,5 @@ function lateUpdate(node, dt)
     tag(sx, y0 + (i - 1) * lh, l[1], size, l[2], l[3], l[4], l[5] or 1.0)
   end
 end
+
+function lateUpdate(node, dt) after_camera(node, dt, late_draw) end

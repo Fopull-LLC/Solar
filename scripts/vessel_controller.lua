@@ -5566,9 +5566,17 @@ end
 -- put it and the axes turned with it (partPosed). The same frame serves a
 -- point picked off the screen: measured on 0.117.0-rc27 in lateUpdate,
 -- node:toWorld (the drawn pose) agrees with this to the millimetre, while
--- node.x/basis(node) read a rails carry behind (3.4 m in orbit). `rendered` is accepted for callers that pass it and
--- changes nothing. → a table, or nil when the part or the craft is gone.
+-- node.x/basis(node) read a rails carry behind (3.4 m in orbit).
+-- `rendered` = true asks for the frame as the craft is DRAWN this frame, for
+-- a marker, a prompt or a hand on it (lateUpdate). Measured on
+-- 0.117.1-dev.1468 in lateUpdate (tools/perf/framefix.sh lagrover): a rover
+-- at ~10 m/s had info.origin up to 0.35 m from its root as drawn (0.15 m on
+-- average), a tick's travel, so a prompt built on it slid along the hull. The
+-- drawn frame is this one moved by that gap, read in the same pass (through
+-- drawnRoot: this script's own handle is a hook behind when read from another).
+-- → a table, or nil when the part or the craft is gone.
 function partFrameNow(uid, rendered)
+  local want_drawn = rendered == true
   rendered = false
   local d = uid and bp_by_uid[uid]
   if not d or integ.gone[uid] or (part_hp[uid] or 1) <= 0 then return nil end
@@ -5613,8 +5621,47 @@ function partFrameNow(uid, rendered)
       -- (com is in the same frame as the origin we used)
       if rendered then F.cx, F.cy, F.cz = F.cx + node.x - info.origin.x, F.cy + node.y - info.origin.y, F.cz + node.z - info.origin.z end
     end
+    local rh = want_drawn and info.origin and drawnRoot()
+    if rh then
+      local w = rh.worldPos
+      local dx, dy, dz = w.x - info.origin.x, w.y - info.origin.y, w.z - info.origin.z
+      F.ox, F.oy, F.oz = F.ox + dx, F.oy + dy, F.oz + dz
+      F.cx, F.cy, F.cz = F.cx + dx, F.cy + dy, F.cz + dz
+    end
   end
   return F
+end
+
+-- The gap from the craft's physics frame to its root as drawn, read now
+-- (lateUpdate): add it to a point from assembly.info / partFrameNow to draw it
+-- on the craft. → dx, dy, dz (zeros without a compound)
+function drawnShift()
+  local node = dock.node
+  if destroyed or not (node and node.valid) then return 0, 0, 0 end
+  local info = assembly.info(node)
+  local rh = drawnRoot()
+  if not (info and info.origin and rh) then return 0, 0, 0 end
+  local w = rh.worldPos
+  return w.x - info.origin.x, w.y - info.origin.y, w.z - info.origin.z
+end
+
+-- A second handle to this craft's root, for reading where it is drawn from
+-- another script's hook. dock.node is this script's OWN handle, whose raw
+-- x/y/z are what they were at this script's last hook: read from anywhere
+-- else they trail the rails carry (18 m measured on a parked rover), which is
+-- the "node.x lags 3.4 m in orbit" the notes above found. A findScripts
+-- handle reads the scene as it is now.
+function drawnRoot()
+  local n = dock.node
+  if not (n and n.valid) then return nil end
+  local h = dock.root_h
+  if h and h.valid and h.id == n.id then return h end
+  dock.root_h = nil
+  for _, s in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+    local c = s.node
+    if c and c.valid and c.id == n.id then dock.root_h = c return c end
+  end
+  return nil
 end
 
 -- How far the craft's PHYSICS frame (info.origin, this tick) is from the

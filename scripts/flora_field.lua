@@ -93,13 +93,18 @@ defaults = {
   touch_cap = 14,
   -- 1 = bend with the engine's scatter interactors (engine 0.117.0-rc7: the
   -- props lean in the draw, no node, no remove/restore) where the engine has
-  -- them; 0 = swap each bent plant for a node (see "touch"). Off for now:
-  -- measured on Kail it costs about half (flora_field 0.5–1.0 ms against
-  -- 0.9–2.2, worst 10–17 ms against 6–28), but up to rc9 the engine bent
-  -- EVERY source in reach, rocks and trunks too, and had no easing of its own
-  -- (the wake below stands in for it). rc10 bends only bend > 0 sources and
-  -- springs them back; its look is not signed off yet.
-  touch_engine = 0,
+  -- them; 0 = swap each bent plant for a node (see "touch"). ON since the
+  -- 2026-11-10 playtest ("plants flickering"): the swap took each plant the
+  -- crew brushed out of the field and put a node in its place, and back again
+  -- a moment later, ten at a time while walking. tools/perf/framefix.sh
+  -- lagflora counted those as plants leaving and coming back within a second
+  -- (12 a 6 s creep, 16 a 6 s sprint), and a swapped plant looks different
+  -- for the moment it is a node (always the near LOD, its own material, no
+  -- dissolve). The engine bend has none of that. It costs about half
+  -- (measured on Kail: flora_field 0.5–1.0 ms against 0.9–2.2, worst 10–17 ms
+  -- against 6–28). Since rc10 it bends only bend > 0 sources and springs them
+  -- back. Its points are set in the camera pass, in drawn poses (lateUpdate).
+  touch_engine = 1,
   -- Trunks and rocks stop the crew (planet_walker reads `obstacles`), and
   -- how far round the crew they are gathered.
   touch_bump = 1,
@@ -1677,7 +1682,12 @@ local WAKE_STEP, WAKE_LIFE = 0.45, 1.1
 -- Trunks and rocks never bend (bend = 0), so a tree is left to its felling.
 local saw_pt = nil
 function sawAt(x, y, z, strength)
-  saw_pt = { x = x, y = y, z = z, s = strength or 0.6, t = time }
+  -- kept against its body: it is drawn after this frame's ticks have moved
+  -- the planet (docs/positions-and-frames.md rule 1)
+  local d = space and space.dominant and space.dominant(x, y, z)
+  local b = d and space.body(d)
+  if not b then return end
+  saw_pt = { body = d, x = x - b.x, y = y - b.y, z = z - b.z, s = strength or 0.6, t = time }
 end
 
 local function touch_engine(astro, body)
@@ -1702,11 +1712,12 @@ local function touch_engine(astro, body)
       end
     end
   end
-  if saw_pt and time - saw_pt.t < 0.2 and #pts < 30 then
+  local sb = saw_pt and space.body(saw_pt.body)
+  if saw_pt and sb and time - saw_pt.t < 0.2 and #pts < 30 then
     -- a point that darts round the bite, so the lean flips: a shiver
     local a = time * 37.0
     local jx, jz = math.cos(a) * 0.22, math.sin(a * 1.31) * 0.22
-    pts[#pts + 1] = { pos = vec3(saw_pt.x + jx, saw_pt.y, saw_pt.z + jz), radius = 1.1,
+    pts[#pts + 1] = { pos = vec3(sb.x + saw_pt.x + jx, sb.y + saw_pt.y, sb.z + saw_pt.z + jz), radius = 1.1,
                       strength = s * saw_pt.s * (0.55 + 0.45 * math.sin(time * 29.0)) }
   end
   scatter.setInteractors(pts)
@@ -1878,7 +1889,9 @@ local function touch_obstacles(astro, body)
   touchStats.obstacles, touchStats.trunks, touchStats.rocks = #want, nt, nr
 end
 
+local touch_engine_due = false
 local function touch_tick(dt)
+  touch_engine_due = false
   local pw = ref("planet_walker")
   local astro = find("Astronaut")
   local body = cur_body and space.body(cur_body)
@@ -1889,7 +1902,9 @@ local function touch_tick(dt)
   end
   if params.touch_engine > 0 and scatter.setInteractors then
     if touch.n > 0 then for key, b in pairs(touch.bent) do touch_release(key, b) end end
-    touch_engine(astro, body)
+    -- (the points themselves are set in lateUpdate: interactors are world
+    -- points, and this frame's ticks move the planet metres after update)
+    touch_engine_due = true
   else
     touch_engine_off()
     touch_drive(astro, body, dt)
@@ -1913,6 +1928,7 @@ function update(node, dt)
   clear_tick()
   if params.enabled ~= 0 and cur_body then audit_tick(observer()); struct_clear(observer()) end
   if params.rare > 0 then rare_tick(dt) end
+  touch_engine_due = false
   if params.touch > 0 and params.enabled ~= 0 and scatter and scatter.near then touch_tick(dt) end
   if params.enabled == 0 then
     if cur_body then clearAll(); cur_body = nil end
@@ -2580,6 +2596,15 @@ local function fell_tick()
 end
 
 function lateUpdate(node, dt)
+  -- The crew's bend points, in drawn poses read now (the camera pass), so the
+  -- grass leans where the crew is drawn, not where it stood before the ticks.
+  if touch_engine_due then
+    local astro = find("Astronaut")
+    local body = cur_body and space.body(cur_body)
+    if astro and body then touch_engine(astro, body) else touch_engine_off() end
+  elseif params.touch_engine > 0 then
+    touch_engine_off()
+  end
   fell_tick()
   if params.motes <= 0 or not cur_body or time < mote_t then return end
   mote_t = time + 0.5
@@ -3589,7 +3614,7 @@ function sourceInfo(id)
     return nil
   end
   local p = patches[s.patch]
-  return { patch = s.patch, spid = s.sp.id, name = s.sp.name, part = s.part, made = s.made,
+  return { patch = s.patch, spid = s.sp.id, name = s.sp.name, kind = s.sp.kind, part = s.part, made = s.made,
            current = p ~= nil and (p.srcs[s.sp.id] == id or p.bark[s.sp.id] == id) }
 end
 

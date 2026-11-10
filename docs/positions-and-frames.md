@@ -83,6 +83,19 @@ breaking one of the rules below.
 
 6. **Probe and screenshot cameras go in lateUpdate**, after the game has placed
    everything for the frame.
+   - **Markers drawn over the world project after the camera.** lateUpdates
+     between nodes run in the engine's node order, not load order. Hand the
+     drawing to planet_camera: `function lateUpdate(node, dt)
+     pc.deferLate(node, dt, late_draw) end`. It runs `late_draw` right after
+     the view is placed this frame, and at once if the view is already
+     placed. objectives, targeting, salvage, lab, material_intake,
+     context_menu and the overlay scripts do this.
+   - **Another script's own `node` is a hook behind.** A script's own handle
+     keeps the raw x/y/z of its last hook, so read from anywhere else it
+     trails the rails carry (18 m measured on a parked rover). To draw on a
+     craft, use `partFrameNow(uid, true)` / `partPointNow(..., true)` (drawn
+     pose) or add `drawnShift()` to a physics-frame point. Both read the root
+     through a fresh `findScripts` handle.
 
 7. **Smooth what the player sees.** Aims, facings, markers, lines, camera
    offsets, IK targets and HUD readouts can jitter between updates, even when
@@ -155,6 +168,8 @@ local wx = F.ox + F.rx*lx + F.ux*ly + F.zx*lz   -- lx,ly,lz stored in the part's
 | Coverage swung 0–45%; links blinked | Relays and stations placed against different reads of the bodies | Rule 2: one `space.bodies()` read |
 | Boarding rings drawn beside the ship | Drawn with node coords that lag the carry | Tick or drawn pose consistently |
 | Plants appearing, sliding and vanishing at the base | Sources redeclared with world-frame props | Keep scatter edits in the planet frame |
+| Prompts and target markers on a moving craft slid behind it (0.35 m on a rover at 10 m/s) | Drawn from `assembly.info`/`partFrameNow` (physics frame), and `rendered` was ignored | `partFrameNow(uid, true)`, `drawnShift()` |
+| Grass round the feet blinked while walking | Each brushed plant was swapped for a node and back | Engine bending (`touch_engine = 1`), its points set in lateUpdate |
 
 ## Review checklist (code and screenshots)
 
