@@ -96,6 +96,7 @@ mouseLooking = false
 -- MODEL CHILD, the part you actually see, straight back on. You spent first
 -- person inside your own head. One owner: the camera decides, the walker asks.
 hidesBody = false
+fp_drawn = false   -- first person with the body drawn this frame (fp_body)
 -- View basis for other scripts (world space; set every frame).
 fwd_x, fwd_y, fwd_z = 0.0, 0.0, -1.0
 flat_x, flat_y, flat_z = 0.0, 0.0, -1.0
@@ -458,6 +459,17 @@ end
 
 local function map()
   return script_ref("orbit_map")
+end
+
+-- fp_body (first person with the body drawn), asked again every 2 s when a
+-- scene has none
+local fpb_n, fpb_miss = nil, -10.0
+local function fp_body_ref()
+  if fpb_n and fpb_n.valid then return fpb_n end
+  if (time or 0) - fpb_miss < 2.0 then return nil end
+  fpb_n = findScript("fp_body", { quiet = true })
+  if not fpb_n then fpb_miss = time or 0 end
+  return fpb_n
 end
 
 -- Is one of the game's panels in front of the player? First person grabs the
@@ -1573,7 +1585,11 @@ local function place_camera(node, dt)
   -- Don't draw a body we are standing inside — first person, or a wall that has
   -- pushed the view into the character's shoulders. (While piloting, the vessel
   -- owns the astronaut's visibility — leave it alone.)
-  hidesBody = firstPerson or back < 0.7
+  -- (first person with the body drawn — fp_body: the body stays, its head
+  -- and helmet are put away, and you see your own arms, chest and feet)
+  local fpb = fp_body_ref()
+  fp_drawn = firstPerson and fpb ~= nil and fpb.active == true
+  hidesBody = not fp_drawn and (firstPerson or back < 0.7)
   if not piloting then
     target.visible = not hidesBody
   end
@@ -1599,7 +1615,7 @@ local function place_camera(node, dt)
       back = lo
       clip_back = math.min(clip_back or lo, lo)
       place = head - fwd * back
-      hidesBody = firstPerson or back < 0.7
+      hidesBody = not fp_drawn and (firstPerson or back < 0.7)
       target.visible = not hidesBody
     end
   end
@@ -1892,6 +1908,11 @@ function lateUpdate(node, dt)
     -- after the placement, whatever order the two nodes' lateUpdates run in.
     if not (sv_ref and sv_ref.valid) then sv_ref = findScript("surveyor", { quiet = true }) end
     if sv_ref and sv_ref.valid and sv_ref.cameraFollow then sv_ref.cameraFollow(node, dt) end
+    -- The body's hands in first person are held in the camera's frame, so
+    -- they are posed here, after the view is placed (and turned by the
+    -- optic), whatever order the nodes' lateUpdates run in (fp_body.lua).
+    local fpb = fp_body_ref()
+    if fpb and fpb.afterCamera then fpb.afterCamera(node, dt) end
     shot_tick(node, dt)
     handoff_tick(node, dt)
   end

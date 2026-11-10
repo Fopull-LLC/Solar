@@ -618,6 +618,49 @@ humans slightly smaller … always just barely able to fit through doorways".
   2.2 m over the soles, which is higher than a kit door's 2.05 m lintel), 0.3 m
   off the right shoulder at rest (`shoulder_idle`), and a start pitch of −0.22.
 
+### 4.1.2 First person: your own body, hands by IK (2026-11-10)
+
+Ty's playtest (11-09d): "the fast walking arm jitter in first person" feels
+silly; "the first person hands should be more immersive and use things like ik
+so no matter what action you're doing they fit and look natural".
+
+**The jitter** was the view models' walk bob: `|cos|` of a phase run at
+speed / 1.6 m (the walk's stride) whatever the gait. At a sprint the hands
+bounced 5.4 times a second against the feet's 3.1, and `|cos|` has a corner at
+every bounce, so the hand's velocity reversed inside one frame (fphandprobe:
+5.9 mm of second difference a frame at 50 fps, 18 px on screen). The bob now
+follows the walker's own gait phase (`planet_walker.gaitPhase`, one dip per
+heel strike, the sway once a stride) as a smooth curve, faded in with the gait
+(tool_belt `view.springs`). Sprint: 13.3 → 2.5 px p95 frame-to-frame.
+
+**The body** (scripts/fp_body.lua, on the player's Astronaut only):
+
+| | |
+|---|---|
+| Drawn | the AstroModel stays in first person; the Face (and its hair) is hidden, the helmet, visor and lamps by suit.lua asking `fp_body.active` |
+| Set back | 0.02 m behind the eye, up to 0.15 m looking straight down, so the collar never crosses the view and the chest, belt and boots come into sight |
+| Facing | the torso square to the view (the walker snaps `face_yaw` in first person, and fp_body re-squares it to this frame's camera) |
+| When | `fp_body.afterCamera`, called by planet_camera right after it placed the view (and the rifle's optic turned it): every target is this frame's drawn pose, so the hands are pinned to the camera with no lag on the moving planet |
+| Cost | only in first person on foot: ~0.05-0.1 ms a frame (`fp_body.ms`) |
+| Off | `fp_body.setEnabled(false)` (save key `opt_fpBody`) goes back to the view models |
+
+**What the hands do:**
+
+| Action | Hands |
+|---|---|
+| Gravity Gun, Terrain Laser, TL-5 Surveyor | the third-person model at true size, its grip held in the camera's frame (`tool_belt.FP_HOLD`: low right at rest, in toward the middle on the trigger), toed in to the crosshair; both hands on its grips by two-bone IK, the chest turned a little toward the tool so the left hand reaches the fore-grip; sway, bob, kick and swap dip; a wall in front pulls the hold in and tips the muzzle up (`tool_belt.fpHold`) |
+| Medkit, Repair Kit, Gas Can, Build Kit | the case by its handle in a curled left fist, low left, hanging plumb (`item_hand.fpCarry`) |
+| Beacon, Flag, Rope Kit, fuel rods | slung on the shoulder as in third person |
+| Repair, Medkit treatment, pouring, planting, a rope | their own IK (item_hand, rope_climb), now in sight |
+| E at a door, crate, console, pump | a reach to what the crosshair is on (within 2.4 m; never past arm's length), or ahead of the chest; the left hand when a tool is held |
+| Flashlight (L) | a touch of the left hand at the helmet's side |
+| Kit Ladder | both hands on its rails, a forearm ahead, hand over hand with the stride |
+| Seated | unchanged: the open-seat view already draws the rider with hands on the controls (command_seat), the cockpits a seated self (iva) |
+
+Probe: `tools/perf/fphandprobe.sh` (`fpjit`: the hand in the camera's frame
+every frame, flat and on a 10° ramp; `fpshots`: picture sequences of every
+action). Test: `tests/smoke_fp_hands.lua`.
+
 ### 4.2 What is switchable
 
 The **switch list** contains:

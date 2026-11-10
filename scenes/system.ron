@@ -533,6 +533,11 @@
                     enabled: true,
                     params: [],
                 ),
+                (
+                    kind: "fp_body",
+                    enabled: true,
+                    params: [],
+                ),
             ],
             rigidbody: Some((
                 capsule: true,

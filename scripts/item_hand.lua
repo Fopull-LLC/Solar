@@ -1353,8 +1353,58 @@ function posePour(p, m, an, o, U, F, Rt)   -- (global: pose_carry, above, calls 
   return true
 end
 
+-- ── FIRST PERSON, THE BODY DRAWN (fp_body.lua calls this from the camera's
+-- pass, after the view is placed): a case by its handle in the LEFT fist, low
+-- left in the view, the case hanging plumb below it, the view's sway and bob
+-- (tool_belt's) on the fist; the arm put there by two-bone IK. The slung
+-- items keep their third-person carry (pose_carry, on the shoulder), and the
+-- jobs that pose the arms themselves (a pour, a plant) are left alone.
+-- → "case", the right hand's target (nil), the left's; or nil.
+local carrying = false   -- on foot with the hands ours (update)
+local FP_FIST = { -0.17, -0.15, 0.37 }   -- the left wrist, camera frame (x right, y up, z ahead)
+function fpCarry(cn, dt)
+  local id = held()
+  local I = items()
+  if not (id and I and I.gripOf and carrying) or I.isTool(id) or I.gripOf(id) ~= "left" then return nil end
+  if POUR.on or D.plant then return nil end
+  local p = prop(id)
+  local m, an = model()
+  if not (p and p.valid and m and an and an.reach and cn) then return nil end
+  local sl = an:boneWorld("Upperarm.Left")
+  if not sl then return nil end
+  local o = m:toWorld(vec3(0, 0, 0))
+  local U = (m:toWorld(vec3(0, 1, 0)) - o):normalized()
+  local Rt = (m:toWorld(vec3(-1, 0, 0)) - o):normalized()
+  local E, R, Uc, F = cn.worldPos, cn:worldRight(), cn:worldUp(), cn:worldForward()
+  local tb = ref("tool_belt")
+  local v = tb and tb.viewState or {}
+  -- looking down, the fist goes out a little so it stays clear of the chest
+  local down = math.max(0, -F:dot(U))
+  local fx = FP_FIST[1] + (v.sx or 0) + (v.bx or 0)
+  local fy = FP_FIST[2] + (v.sy or 0) - (v.by or 0)
+  local fz = FP_FIST[3] + 0.16 * math.max(0, down - 0.25)
+  local fist = E + R * fx + Uc * fy + F * fz
+  -- the case plumb under the fist, its long side along the flat view
+  local Ff = F - U * F:dot(U)
+  if Ff:length() < 1e-4 then Ff = (m:toWorld(vec3(0, 0, 1)) - o) end
+  Ff = Ff:normalized()
+  local c = fist - U * 0.13 - Rt * 0.02
+  p:setUp(U, Ff)
+  p.x, p.y, p.z = c.x, c.y, c.z
+  if not p.visible then p.visible = true end
+  -- a fist round the handle (rope_climb's curl: about Z, signed per hand;
+  -- bone writes run before the reaches whatever the order of the calls)
+  an:addBoneRot("Fingers1.Left", 0, 0, -1.25, 1.0)
+  an:addBoneRot("Fingers2.Left", 0, 0, -1.15, 1.0)
+  an:addBoneRot("Thumb1.Left", 0, 0, -0.55, 1.0)
+  an:reach("Hand.Left", fist, { pole = sl - U * 0.4 - Rt * 0.45 - F * 0.05, weight = 1 })
+  -- the knuckles along the handle, tipped down a little with the case's weight
+  an:lookAt({ "Hand.Left" }, fist + (Ff - U * 0.35):normalized() * 0.2,
+    { axis = vec3(0.996, 0.036, 0.08), limit = 80, weight = 0.7 })
+  return "case", nil, fist
+end
+
 -- ── the frame ───────────────────────────────────────────────────────────────
-local carrying = false
 local function treating()
   local c = crew()
   if not (c and c.treating) then return nil end
@@ -1433,7 +1483,10 @@ end
 function lateUpdate(node, dt)
   local tk = task()
   local pc = ref("planet_camera")
-  local fp = pc and pc.firstPerson == true
+  -- (first person with the body drawn counts as third person here: the body
+  -- and what it carries are in sight; fpCarry places a case in the view)
+  local fb = ref("fp_body")
+  local fp = pc and pc.firstPerson == true and not (fb and fb.active == true)
   local pw = ref("planet_walker")
   guard("worn", pose_worn, pw and pw.onFoot == true and not fp)
   local T = treating()

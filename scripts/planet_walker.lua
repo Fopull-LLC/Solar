@@ -878,6 +878,7 @@ end
 local STRIDE = { walk = 1.6, run = 3.312, sprint = 5.58 }
 local phase = 0.0          -- 0 = left heel strike, 0.5 = right
 local gait_amt = 0.0       -- 0 = standing (Base shows), 1 = a gait owns the body
+gaitPhase, gaitAmount = 0.0, 0.0   -- published copies of the two above (tool_belt's bob)
 local gait_sent = nil      -- the last `gait` written, so an unchanged one isn't re-sent
 local layer_w = {}         -- last weights written, so unchanged ones aren't re-sent
 local land_dip = 0.0
@@ -952,6 +953,8 @@ local function animate(node, dt, spd, on_ground, jumped, swimming, landed_at)
     or STRIDE.run + (STRIDE.sprint - STRIDE.run) * (g - 1)
   local before = phase
   if gait_amt > 0.01 then phase = (phase + dt * spd / stride) % 1.0 end
+  -- (published: the first-person hands bob in step with the feet — tool_belt)
+  gaitPhase, gaitAmount = phase, gait_amt
   if on_ground and not swimming and gait_amt > 0.5 then footstep(node, before, phase) end
   if not anim then return end
 
@@ -2648,7 +2651,13 @@ function update(node, dt)
     local before = face_yaw
     if want then
       local turn = swim_anim and params.swim_turn or params.turn
-      face_yaw = face_yaw + wrap(want - face_yaw) * (1 - math.exp(-turn * dt))
+      -- In first person with the body drawn (fp_body) the torso is square to
+      -- the view at once: the hands are held in the camera's frame, and a
+      -- body still swinging round under a flicked view put them across the
+      -- chest or out of reach.
+      local fb = aiming and cam ~= nil and cam.firstPerson == true and ref("fp_body") or nil
+      if fb and fb.active == true and not swim_anim then face_yaw = want
+      else face_yaw = face_yaw + wrap(want - face_yaw) * (1 - math.exp(-turn * dt)) end
     end
     yaw_rate = yaw_rate + (wrap(face_yaw - before) / math.max(dt, 1e-4) - yaw_rate) * math.min(1, dt * 10)
   end

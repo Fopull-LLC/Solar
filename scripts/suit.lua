@@ -149,8 +149,16 @@ end
 -- camera hides the body in first person (and the walker the model with it),
 -- and a hidden parent hides these — set here as well, for any engine where
 -- visibility is not inherited.
+local fpb, fpb_t = nil, -10.0
 local function show()
   local body = model and model.valid and model.visible ~= false
+  -- (first person with the body drawn, fp_body: the camera is in the helmet;
+  -- a scene without it is asked again every 2 s)
+  if body and not (fpb and fpb.valid) and (time or 0) - fpb_t > 2.0 then
+    fpb_t = time or 0
+    fpb = findScript and findScript("fp_body", { quiet = true }) or nil
+  end
+  if body and fpb and fpb.valid and fpb.active == true then body = false end
   if nodes.helmet and nodes.helmet.valid then nodes.helmet.visible = body and helmet end
   if nodes.visor and nodes.visor.valid then nodes.visor.visible = body and helmet and visor end
   if nodes.lamps and nodes.lamps.valid then nodes.lamps.visible = body and helmet and lamps end
