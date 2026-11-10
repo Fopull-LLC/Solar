@@ -219,6 +219,10 @@ function FH.setup()
   local fb = findScript("fp_body", { quiet = true })
   if fb and fb.setEnabled then fb.setEnabled((params.fp_body or 1) > 0) end
   if fb and fb.probe then fb.probe.want = (params.fp_cost or 0) == 0 end
+  -- ("fp_stance", 0.0): the body where the capsule puts it (the A/B of the
+  -- stance fix, playtest 2026-11-10)
+  if fb and fb.stance ~= nil then fb.stance = (params.fp_stance or 1) > 0 end
+  if fb and fb.probe then fb.probe.frames = (params.fp_frames or 0) > 0 end
   FH.L("fp_body script %s, on %s", tostring(fb ~= nil), tostring(fb and fb.enabled))
   return true
 end
@@ -441,4 +445,187 @@ function FH.run_shots()
   end
   pw.steer(nil)
   FH.L("DONE fpshots")
+end
+
+-- ── stances (fppolish, playtest 2026-11-10: "crouching / jumping makes your
+-- body clip into the camera", "the first-person models move in jittery
+-- steps", "the held tool stays frozen while the hands move") ────────────────
+-- fpstance: with a tool (laser), empty hands and a case (medkit), stand,
+-- walk, sprint, crouch, crouch-walk, jump in place, jump at a run and land.
+-- Every frame, from fp_body's probe (read in the pass that placed the
+-- camera, after the IK): the right and left hands, the neck (the Head bone's
+-- joint) and both shoulders in the camera's frame (x right, y up, z ahead).
+--   `FS RESULT <item> <phase> jerk`: d2 p95 / max of the hand on a 1080-line
+--     screen (px) and of the neck in the camera's frame (mm): steps show here
+--   `FS RESULT <item> <phase> clip`: the neck's highest y and most forward z
+--     (m; the eye is 0,0,0: a neck at y > -0.10 or z > -0.04 is in the view's
+--     near field), the nearest shoulder to the eye (m)
+--   `FS RESULT <item> <phase> grip`: how far each hand is from its grip (mm,
+--     p95 / max) and how much that moves frame to frame (d2 p95, mm): a hand
+--     sliding on a tool that stays put
+function FH.stance_sample()
+  local fb = findScript("fp_body", { quiet = true })
+  local pr = fb and fb.probe
+  if not (pr and pr.on and pr.t and math.abs(pr.t - time) < 0.2) then return nil end
+  local foc = 540 / math.tan((pr.fov or 1.15) * 0.5)
+  local function scr(x, z) return x / math.max(z, 0.05) * foc end
+  local pw = findScript("planet_walker")
+  return { t = time, rx = pr.rx or 0, ry = pr.ry or 0, rz = pr.rz or 0, lx = pr.lx or 0, ly = pr.ly or 0, lz = pr.lz or 0,
+           hx = pr.hx or 0, hy = pr.hy or 0, hz = pr.hz or 0,
+           sx = scr(pr.hx or 0, pr.hz or 1), sy = scr(pr.hy or 0, pr.hz or 1),
+           nx = pr.nx or 0, ny = pr.ny or 0, nz = pr.nz or 0,
+           sr = math.sqrt((pr.srx or 9) ^ 2 + (pr.sry or 9) ^ 2 + (pr.srz or 9) ^ 2),
+           sl = math.sqrt((pr.slx or 9) ^ 2 + (pr.sly or 9) ^ 2 + (pr.slz or 9) ^ 2),
+           rerr = pr.rerr or -1, lerr = pr.lerr or -1, shift = pr.shift or 0, ev = pr.ev or 0, hipy = pr.hipy or 0, my = pr.my or 0,
+           lreach = (findScript("tool_belt").viewState or {}).lreach or -1,
+           crouch = pw and pw.crouchAmount or 0, ground = pw and pw.grounded and 1 or 0, action = pr.action }
+end
+function FH.pct(v, q)
+  if #v == 0 then return 0 end
+  local s = {}
+  for i, x in ipairs(v) do s[i] = x end
+  table.sort(s)
+  return s[math.max(1, math.min(#s, math.floor(#s * q + 0.5)))]
+end
+function FH.stance_record(item, phase, secs, steer)
+  local list = {}
+  local t0, lt, dts = time, time, {}
+  while time - t0 < secs do
+    if steer then steer(time - t0) end
+    yield()
+    dts[#dts + 1] = time - lt
+    lt = time
+    local s = FH.stance_sample()
+    if s then list[#list + 1] = s end
+  end
+  local dtm = FH.pct(dts, 0.5) * 1000
+  if #list < 5 then FH.L("RESULT %s %s: %d frames", item, phase, #list); return end
+  if (params.fp_frames or 0) > 0 then
+    for i, s in ipairs(list) do
+      if s.t - list[1].t > 1.5 then break end
+      P("FS F %s %s %3d t %.4f hand %.4f %.4f %.4f neck %.4f %.4f %.4f sh %.3f %.3f err %.3f %.3f shift %.3f ev %.4f hip %.4f my %.4f crouch %.2f gnd %d",
+        item, phase, i, s.t - list[1].t, s.hx, s.hy, s.hz, s.nx, s.ny, s.nz, s.sr, s.sl, s.rerr, s.lerr, s.shift, s.ev, s.hipy, s.my, s.crouch, s.ground)
+    end
+  end
+  local function d2(key, k)
+    local v = {}
+    for i = 2, #list - 1 do v[#v + 1] = math.abs(list[i + 1][key] - 2 * list[i][key] + list[i - 1][key]) * k end
+    return FH.pct(v, 0.95), FH.pct(v, 1.0)
+  end
+  local function col(key) local v = {}; for _, s in ipairs(list) do v[#v + 1] = s[key] end; return v end
+  local sxp, sxm = d2("sx", 1)
+  local syp, sym = d2("sy", 1)
+  local nyp, nym = d2("ny", 1000)
+  local nzp, nzm = d2("nz", 1000)
+  local evp, evm = d2("ev", 1000)
+  P("FS RESULT %-7s %-9s jerk  %3d frames, dt %.1f ms | hand sx p95 %.2f max %.2f px, sy p95 %.2f max %.2f px | neck y p95 %.2f max %.2f mm, z p95 %.2f max %.2f mm | eye over capsule p95 %.2f max %.2f mm",
+    item, phase, #list, dtm, sxp, sxm, syp, sym, nyp, nym, nzp, nzm, evp, evm)
+  local sh = {}
+  for _, s in ipairs(list) do sh[#sh + 1] = math.min(s.sr, s.sl) end
+  P("FS RESULT %-7s %-9s clip  neck y max %.3f (p50 %.3f) z max %.3f (p50 %.3f) m | shoulder nearest %.3f m | body shift max %.3f m | action %s",
+    item, phase, FH.pct(col("ny"), 1.0), FH.pct(col("ny"), 0.5), FH.pct(col("nz"), 1.0), FH.pct(col("nz"), 0.5),
+    FH.pct(sh, 0.0), FH.pct(col("shift"), 1.0), tostring(list[#list].action))
+  local re, le = col("rerr"), col("lerr")
+  if FH.pct(re, 1.0) >= 0 then
+    local rp, rm = d2("rerr", 1000)
+    local lp, lm = d2("lerr", 1000)
+    P("FS RESULT %-7s %-9s grip  right off %.1f / %.1f mm (d2 p95 %.2f) left off %.1f / %.1f mm (d2 p95 %.2f) left shoulder to fore-grip p50 %.3f m",
+      item, phase, FH.pct(re, 0.95) * 1000, FH.pct(re, 1.0) * 1000, rp, FH.pct(le, 0.95) * 1000, FH.pct(le, 1.0) * 1000, lp, FH.pct(col("lreach"), 0.5))
+  end
+  local fb = findScript("fp_body", { quiet = true })
+  if fb then P("FS COST %-7s %-9s fp_body.afterCamera %.3f ms (eased, wall)", item, phase, fb.ms or -1) end
+end
+-- the stances, from a standing start on the yard's floor
+function FH.stances(item)
+  local pc, pw = findScript("planet_camera"), findScript("planet_walker")
+  local function reset(f)
+    pw.steer(0, 0, false, false, 0, false)
+    FH.put(f or -12, 0, 1.0)
+    FH.face(1, 0, 0, -0.08)
+    wait(0.8)
+  end
+  reset()
+  FH.stance_record(item, "stand", 1.5, function() pw.steer(0, 0, false) end)
+  FH.stance_record(item, "walk", 3.0, function() pw.steer(1, 0, false) end)
+  reset()
+  pw.steer(1, 0, true)
+  wait(1.0)
+  FH.stance_record(item, "sprint", 3.0, function() pw.steer(1, 0, true) end)
+  reset()
+  FH.stance_record(item, "crouchin", 1.0, function() pw.steer(0, 0, false, false, 0, true) end)
+  FH.stance_record(item, "crouch", 1.5, function() pw.steer(0, 0, false, false, 0, true) end)
+  FH.stance_record(item, "crouchwk", 3.0, function() pw.steer(1, 0, false, false, 0, true) end)
+  FH.stance_record(item, "crouchout", 1.0, function() pw.steer(0, 0, false, false, 0, false) end)
+  reset()
+  -- jumps in place: the take-off, the air and the landing in one record
+  FH.stance_record(item, "jump", 3.6, function(t)
+    local j = (t > 0.2 and t < 0.3) or (t > 1.9 and t < 2.0)
+    pw.steer(0, 0, false, j)
+  end)
+  reset()
+  pw.steer(1, 0, true)
+  wait(1.0)
+  FH.stance_record(item, "runjump", 3.0, function(t) pw.steer(1, 0, true, t > 0.3 and t < 0.4) end)
+  pw.steer(0, 0, false)
+  wait(0.4)
+  -- looking down while crouched and in a jump (the collar, the shoulders)
+  reset()
+  FH.face(1, 0, 0, -1.0)
+  FH.stance_record(item, "downcrch", 1.5, function() FH.face(1, 0, 0, -1.0); pw.steer(0, 0, false, false, 0, true) end)
+  pw.steer(0, 0, false, false, 0, false)
+  wait(0.6)
+end
+function FH.run_stance()
+  if not FH.setup() then return end
+  local pc = findScript("planet_camera")
+  pc.firstPerson = true
+  FH.put(-12, 0, 1.0)
+  wait(0.6)
+  -- ("fp_items", 2.0): only the second (digits pick: 13 = laser and medkit)
+  local only = tostring(math.floor(params.fp_items or 0))
+  for i, item in ipairs({ "laser", "empty", "medkit" }) do
+    if only == "0" or only:find(tostring(i), 1, true) then
+      FH.hold(item ~= "empty" and item or nil)
+      FH.stances(item)
+    end
+  end
+  findScript("planet_walker").steer(nil)
+  FH.L("DONE fpstance")
+end
+-- fpstshots: pictures of each stance, looking ahead and looking down
+-- (user://fpshots/st_<item>_<stance>_<view>_<i>.png); the back of the neck
+-- close up is suitshots.lua's on_back_close
+function FH.run_stshots()
+  if not FH.setup() then return end
+  local pc, pw = findScript("planet_camera"), findScript("planet_walker")
+  pc.firstPerson = true
+  local function reset()
+    pw.steer(0, 0, false, false, 0, false)
+    FH.put(-12, 0, 1.0)
+    FH.face(1, 0, 0, -0.08)
+    wait(0.8)
+  end
+  for _, item in ipairs({ "laser", "empty" }) do
+    FH.hold(item ~= "empty" and item or nil)
+    for _, view in ipairs({ { "ahead", -0.08 }, { "down", -1.1 } }) do
+      local p = view[2]
+      local nm = "st_" .. item .. "_"
+      reset()
+      FH.face(1, 0, 0, p)
+      FH.seq(nm .. "stand_" .. view[1], 1, 0.3, function() FH.face(1, 0, 0, p) end)
+      FH.seq(nm .. "sprint_" .. view[1], 2, 0.15, function() FH.face(1, 0, 0, p); pw.steer(1, 0, true) end)
+      reset()
+      FH.face(1, 0, 0, p)
+      FH.seq(nm .. "crouch_" .. view[1], 2, 0.6, function() FH.face(1, 0, 0, p); pw.steer(0, 0, false, false, 0, true) end)
+      FH.seq(nm .. "crouchwk_" .. view[1], 2, 0.25, function() FH.face(1, 0, 0, p); pw.steer(1, 0, false, false, 0, true) end)
+      reset()
+      FH.face(1, 0, 0, p)
+      pw.steer(0, 0, false, true)
+      FH.seq(nm .. "jump_" .. view[1], 4, 0.12, function() FH.face(1, 0, 0, p); pw.steer(0, 0, false, false) end)
+      FH.seq(nm .. "land_" .. view[1], 3, 0.1, function() FH.face(1, 0, 0, p) end)
+    end
+  end
+  pw.steer(0, 0, false, false, 0, false)
+  pw.steer(nil)
+  FH.L("DONE fpstshots")
 end

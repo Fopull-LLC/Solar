@@ -198,6 +198,18 @@ local function main()
   tour("off")
   view("off_head", "Head", 0.12, 0.62, 0.02, 0.14)
   view("off_head_side", "Head", 0.62, 0.20, 0.02, 0.14)
+  -- the back of the neck, close (playtest 2026-11-10: "a weird reddish square
+  -- on the back of the neck")
+  -- (cropped close, so the nape shows: hair "buzz" on the active crew member)
+  do
+    local F, C = findScript("crew_faces"), findScript("crew")
+    local l = F and C and F.lookOf and F.lookOf(C.activeId())
+    if l then l.hairStyle = "buzz" end
+    hold(1.0)
+  end
+  view("off_nape", "Head", 0.0, -0.42, 0.20, 0.02)
+  view("off_nape_q", "Head", 0.28, -0.36, 0.18, 0.02)
+  view("off_nape_low", "Head", -0.10, -0.40, 0.02, 0.02)
   -- first person bare-headed
   cam.setFreecam(false)
   cam.firstPerson = true
@@ -302,6 +314,8 @@ local function main()
   view("on_close2", "Head", 0.42, 0.85, -0.05, 0.02)
   view("on_torso", "Back", 0.25, 1.15, 0.05, -0.15)
   view("on_back_close", "Back", -0.35, -1.25, 0.25, -0.15)
+  view("on_nape", "Head", 0.0, -0.60, 0.10, 0.0)
+  view("on_nape_q", "Head", -0.30, -0.50, 0.12, 0.0)
   -- ── first person, holding a tool (the gloves and sleeves in view) ──
   if params.fptool > 0 then
     local ih = findScript("item_hand")

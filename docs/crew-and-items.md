@@ -638,7 +638,7 @@ heel strike, the sway once a stride) as a smooth curve, faded in with the gait
 | | |
 |---|---|
 | Drawn | the AstroModel stays in first person; the Face (and its hair) is hidden, the helmet, visor and lamps by suit.lua asking `fp_body.active` |
-| Set back | 0.02 m behind the eye, up to 0.15 m looking straight down, so the collar never crosses the view and the chest, belt and boots come into sight |
+| Set back | the neck 0.06 m behind the eye, up to 0.19 m looking straight down, so the collar never crosses the view and the chest, belt and boots come into sight (in every stance: see below) |
 | Facing | the torso square to the view (the walker snaps `face_yaw` in first person, and fp_body re-squares it to this frame's camera) |
 | When | `fp_body.afterCamera`, called by planet_camera right after it placed the view (and the rifle's optic turned it): every target is this frame's drawn pose, so the hands are pinned to the camera with no lag on the moving planet |
 | Cost | only in first person on foot: ~0.05-0.1 ms a frame (`fp_body.ms`) |
@@ -659,7 +659,29 @@ heel strike, the sway once a stride) as a smooth curve, faded in with the gait
 
 Probe: `tools/perf/fphandprobe.sh` (`fpjit`: the hand in the camera's frame
 every frame, flat and on a 10° ramp; `fpshots`: picture sequences of every
-action). Test: `tests/smoke_fp_hands.lua`.
+action; `fpstance` / `fpstshots`: every stance, below). Test:
+`tests/smoke_fp_hands.lua`.
+
+**Every stance, no steps, the tool in the hand** (Ty, 11-10 playtest: crouching
+and jumping clipped the body into the camera; the models moved in jittery
+steps; the held tool stayed frozen while the hands moved):
+
+| | |
+|---|---|
+| The neck under the eye | `fp_body` `stand_under_eye`: from the pose as it stands this frame, the Head bone's joint is put square under the eye across and `neck_behind` + `back` behind it (so the crouch's lean over the knees, a sprint's lean and a turn's bank are undone at the neck), and never higher than `neck_below` under it (a jump: the eye's ease lags the rise). Before this the neck was 7-14 cm IN FRONT of the eye in a crouch and above it in a jump |
+| The eye's path | up and down the body follows what the eye is off its nominal height (planet_camera eases the capsule's height and dips on a landing; the body rode the raw capsule), capped `follow_down` / `follow_up` |
+| The steps | walking, the skeleton goes up and down under the model (the walker's hips drop onto the lower foot over the clip's bob: 9 cm a stride with a 1-2 cm zigzag frame to frame, the Hip and the neck together); the neck's height under the eye is eased (`neck_ease`, at most `neck_ease_max`) and the body moved by what the ease takes out. The feet keep their footing: their reach targets are world points |
+| The tool | `tool_belt.fpHold`: the right hand reaches for where the grip should be, then the tool is placed from where that hand really is this frame (`anim:boneWorld` after the reach, paid only when the wrist target is past `FP_REACH_OK`, since nearer the reach lands exactly): the grip rides the hand, the tool turns with it and eases back to the aim (`view.gq`, held in the hand's frame); the left hand then reaches the fore-grip where the tool is. The hold sits closer, higher and further in (`FP_HOLD`: the gloves in sight at the bottom of the view) and the chest turns 0.65 rad, so the left hand reaches its fore-grip (it was 10 cm short in every phase). A landing's crouch brings the holds down with the body (`fp_body.neckDrop`, past the stride's bob only) |
+
+The reddish square on every crew member's nape (gen_faces `build_head`): the
+mouth's lining mask (dark red, vertex alpha) was a slab through the whole head
+at the mouth's height, so a mouth-wide strip on the back of the neck, facing
+away, counted as "behind the lips, facing back". It now stops 5.5 cm behind
+the head's centre (the throat's inside keeps it, the nape's outer skin is 7-10 cm
+back). Also the texture seam (`unseam`): u runs round the head from
+-pi to +pi, and the faces straddling the back midline squeezed the whole
+texture width into one face; those faces take their own copies of their low-u
+corners at the seam's high side.
 
 ### 4.2 What is switchable
 

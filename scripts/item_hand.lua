@@ -1382,6 +1382,9 @@ function fpCarry(cn, dt)
   local down = math.max(0, -F:dot(U))
   local fx = FP_FIST[1] + (v.sx or 0) + (v.bx or 0)
   local fy = FP_FIST[2] + (v.sy or 0) - (v.by or 0)
+  -- (down with the body under the eye: a landing's crouch, fp_body.neckDrop)
+  local fb = ref("fp_body")
+  fy = fy - math.min(0.2, (fb and fb.neckDrop) or 0) * 0.6
   local fz = FP_FIST[3] + 0.16 * math.max(0, down - 0.25)
   local fist = E + R * fx + Uc * fy + F * fz
   -- the case plumb under the fist, its long side along the flat view

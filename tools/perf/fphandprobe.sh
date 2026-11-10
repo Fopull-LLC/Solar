@@ -5,7 +5,7 @@
 # hand's drawn pose in the camera's frame while walking and sprinting on flat
 # ground and up a ramp, and picture sequences of every first-person action.
 #
-#   fphandprobe.sh <engine> [modes]   modes: fpjit fpshots (pictures: $WORK/proj/save/user/fpshots/)
+#   fphandprobe.sh <engine> [modes]   modes: fpjit fpshots fpstance fpstshots (pictures: $WORK/proj/save/user/fpshots/)
 #   env: WORK LOCK SOLAR TAG PATCHES BENCH_PARAMS as bench.sh (TMO defaults to 300 s a mode)
 #   BENCH_PARAMS='("fp_frames", 1.0)' prints every frame of the first 1.5 s of each phase;
 #   '("fp_body", 0.0)' runs the old view models (the A/B in one build).
@@ -28,7 +28,9 @@ s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
               '    elseif MODE == "plane" then run_plane()\n'
               '    elseif MODE == "fpjit" then FH.run_jit()\n'
-              '    elseif MODE == "fpshots" then FH.run_shots()')
+              '    elseif MODE == "fpshots" then FH.run_shots()\n'
+              '    elseif MODE == "fpstance" then FH.run_stance()\n'
+              '    elseif MODE == "fpstshots" then FH.run_stshots()')
 open(p, 'w').write(s)
 PY
 TMO=${TMO:-300} SOLAR=${SOLAR:-$(cd "$HERE/../.." && pwd)} WORK=$S bash $S/tools/bench.sh $eng ${*:-fpjit}

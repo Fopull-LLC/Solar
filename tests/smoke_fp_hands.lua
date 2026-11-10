@@ -108,6 +108,137 @@ env.setEnabled(false)
 env.update(node, 0.016)
 check(env.active == false, "fp_body: active while switched off")
 
+-- 3. THE BODY UNDER THE EYE in every stance (playtest 2026-11-10: "crouching
+-- in first person makes your body clip into the camera; jumping too"). A
+-- stub rig: the Astronaut at the origin (up +Y, unrotated), the model under
+-- it, its Head bone a fixed point in the model's frame (moved by a "stance");
+-- the camera at the eye over the capsule, looking along +Z.
+do
+  local V = {}
+  V.__index = V
+  local function v3(x, y, z) return setmetatable({ x = x, y = y, z = z }, V) end
+  V.__add = function(a, b) return v3(a.x + b.x, a.y + b.y, a.z + b.z) end
+  V.__sub = function(a, b) return v3(a.x - b.x, a.y - b.y, a.z - b.z) end
+  V.__mul = function(a, k) return v3(a.x * k, a.y * k, a.z * k) end
+  V.__unm = function(a) return v3(-a.x, -a.y, -a.z) end
+  function V.dot(a, b) return a.x * b.x + a.y * b.y + a.z * b.z end
+  function V.cross(a, b) return v3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x) end
+  function V.length(a) return math.sqrt(a:dot(a)) end
+  function V.normalized(a) local l = a:length(); return l > 0 and a * (1 / l) or a end
+  local e2 = setmetatable({}, { __index = _G })
+  e2.vec3 = v3
+  e2.params = { enabled = true, back = 0.02, back_down = 0.13, press_reach = 2.4, press_in = 0.17, press_hold = 0.12,
+                press_out = 0.32, arm_len = 0.62, neck_behind = 0.04, neck_below = 0.14, neck_max = 0.45,
+                follow_down = 0.14, follow_up = 0.10, neck_ease = 8.0, neck_ease_max = 0.06, neck_rest = 0.21, drop_dead = 0.10 }
+  e2.time = 1.0
+  e2.save = { get = function() return nil end, set = function() end }
+  local EYE_H = 0.73
+  local pc2 = { firstPerson = true, valid = true, params = { eye_height = EYE_H } }
+  local pw2 = { onFoot = true, valid = true, params = { face_offset = 0 }, eyeDrop = 0 }
+  e2.findScript = function(k)
+    if k == "planet_camera" then return pc2 end
+    if k == "planet_walker" then return pw2 end
+    return nil
+  end
+  e2.input = { pressed = function() return false end }
+  local head = v3(0, 0.55, 0.04)            -- the Head joint in the model's frame (a stance moves it)
+  local model = { name = "AstroModel", valid = true, x = 0, y = 0, z = 0, yaw = 0 }
+  local function m_world(v)
+    local c, s_ = math.cos(model.yaw), math.sin(model.yaw)
+    return v3(v.x * c + v.z * s_ + model.x, v.y + model.y, -v.x * s_ + v.z * c + model.z)
+  end
+  function model.toWorld(_, v) return m_world(v) end
+  function model.children() return {} end
+  local an = { reach = function() end, lookAt = function() end, addBoneRot = function() end }
+  function an.boneWorld(_, b) if b == "Head" then return m_world(head) end return nil end
+  function model.animator() return an end
+  local A = { valid = true, worldPos = v3(0, 0, 0) }
+  function A.children() return { model } end
+  function A.worldUp() return v3(0, 1, 0) end
+  function A.toLocal(_, v) return v end
+  local eye = v3(0, EYE_H, 0)
+  local cn = { valid = true }
+  cn.worldPos = eye
+  function cn.worldForward() return v3(0, 0, 1) end
+  function cn.worldRight() return v3(1, 0, 0) end
+  function cn.worldUp() return v3(0, 1, 0) end
+  assert(loadfile("solar/scripts/fp_body.lua", "t", e2))()
+  e2.start(A)
+  e2.update(A, 0.016)
+  check(e2.active == true, "stance: fp_body not active in the stub")
+  local function frame(walker_y)
+    model.y = walker_y or model.y            -- (the walker writes the height each update)
+    e2.afterCamera(cn, 0.016)
+    local h = m_world(head) - cn.worldPos
+    return h
+  end
+  -- standing: the neck behind and under the eye
+  local h = frame(0)
+  check(h.z <= -(0.04 + 0.02) + 1e-6 and h.z > -0.2, string.format("stance stand: neck %.3f m ahead of the eye", h.z))
+  check(h.y <= -0.14 + 1e-6, string.format("stance stand: neck %.3f m under the eye", h.y))
+  check(math.abs(h.x) < 1e-6, "stance stand: neck off to the side")
+  check(math.abs(model.y) < 1e-6, "stance stand: the body moved up or down with nothing to fix")
+  -- a crouch: the chest leans the neck 18 cm forward and the clip's drop is
+  -- 8 cm short of the eye's 25: the neck stays behind and under the eye, and
+  -- the soles are not lifted
+  pw2.eyeDrop = 0.25
+  cn.worldPos = v3(0, EYE_H - 0.25, 0)
+  head = v3(0, 0.55 - 0.17, 0.22)
+  h = frame(0)
+  check(h.z <= -0.059, string.format("stance crouch: neck %.3f m ahead of the eye (clips)", h.z))
+  check(h.y <= -0.14 + 1e-6, string.format("stance crouch: neck %.3f m under the eye (clips)", h.y))
+  -- a bank sideways (a turn at a sprint): the neck back under the eye
+  pw2.eyeDrop = 0
+  cn.worldPos = eye
+  head = v3(0.09, 0.55, 0.04)
+  h = frame(0)
+  check(math.abs(h.x) < 1e-6, string.format("stance bank: neck %.3f m to the side", h.x))
+  -- a jump: the eye's ease lags the rise by 9 cm (the capsule is higher than
+  -- the eye says): the body comes down to the eye, as far as its cap
+  head = v3(0, 0.55, 0.04)
+  cn.worldPos = v3(0, EYE_H - 0.09, 0)
+  h = frame(0)
+  check(h.y <= -0.14 + 1e-6, string.format("stance jump: neck %.3f m under the eye (clips)", h.y))
+  check(math.abs(model.y + 0.09) < 0.02, string.format("stance jump: body moved %.3f m (want the eye's lag, -0.09)", model.y))
+  -- a frame the walker did not rewrite the height: the shift does not build up
+  local y1 = model.y
+  frame(nil)
+  check(math.abs(model.y - y1) < 0.005, string.format("stance: the height built up (%.3f then %.3f)", y1, model.y))
+  -- a hard landing's dip (30 cm, past follow_down): the body goes down with
+  -- the knees as far as the collar needs, never past neck_max
+  cn.worldPos = v3(0, EYE_H - 0.30, 0)
+  h = frame(0)
+  check(h.y <= -0.14 + 1e-6, string.format("stance land: neck %.3f m under the eye (clips)", h.y))
+  check(model.y >= -0.45 - 1e-6 and model.y <= -0.14 + 1e-6, string.format("stance land: body moved %.3f m", model.y))
+  -- the steps: the skeleton zigzags 1.5 cm up and down frame to frame under
+  -- the model (the walker's hips on its re-sampled ground): the neck under
+  -- the eye moves less than a quarter of that
+  cn.worldPos = eye
+  local ys = {}
+  for i = 1, 40 do
+    head = v3(0, 0.55 + ((i % 2 == 0) and 0.015 or -0.015), 0.04)
+    ys[#ys + 1] = frame(0).y
+  end
+  local zz = 0
+  for i = 30, 39 do zz = math.max(zz, math.abs(ys[i + 1] - ys[i])) end
+  check(zz < 0.03 * 0.25, string.format("stance steps: the neck still jumps %.4f m a frame (skeleton 0.030)", zz))
+  head = v3(0, 0.55, 0.04)
+  -- the holds dip with the body only past the stride's bob: a walk's 4 cm
+  -- leaves them alone, a landing's 40 cm crouch brings them down
+  for i = 1, 30 do head = v3(0, 0.55 - 0.04 * (i % 2), 0.04); frame(0) end
+  check(e2.neckDrop < 0.005, string.format("stance: the holds bob with the stride (neckDrop %.3f)", e2.neckDrop))
+  for _ = 1, 30 do head = v3(0, 0.55 - 0.40, 0.04); frame(0) end
+  check(e2.neckDrop > 0.2, string.format("stance: the holds stay up in a landing's crouch (neckDrop %.3f)", e2.neckDrop))
+  head = v3(0, 0.55, 0.04)
+  for _ = 1, 30 do frame(0) end
+  -- out of first person: the model goes back where the capsule has it
+  cn.worldPos = eye
+  frame(0)
+  pc2.firstPerson = false
+  e2.update(A, 0.016)
+  check(math.abs(model.x) < 1e-6 and math.abs(model.z) < 1e-6, "stance: the body left set back after first person")
+end
+
 if #failures > 0 then
   for _, f in ipairs(failures) do print("FAIL " .. f) end
   print(string.format("smoke_fp_hands: %d passed, %d FAILED", passed, #failures))

@@ -50,10 +50,31 @@ defaults = {
   press_out = 0.32,
   --- the arm held out at most this far toward a far press (from the shoulder)
   arm_len = 0.62,
+  --- THE NECK UNDER THE EYE (every stance): the Head bone's joint is held
+  --- this far behind the eye (plus `back`, more looking down), square under
+  --- it across, and at least `neck_below` under it
+  neck_behind = 0.04,
+  neck_below = 0.14,
+  --- the most the body is moved to keep it there (m)
+  neck_max = 0.45,
+  --- the body follows the eye's eased height (and a landing's dip) this far
+  --- down and up off where the capsule has it (m)
+  follow_down = 0.14,
+  follow_up = 0.10,
+  --- the neck's height under the eye eased at this rate (1/s), taking out at
+  --- most neck_ease_max of the skeleton's steps and bob
+  neck_ease = 8.0,
+  neck_ease_max = 0.06,
+  --- the neck's standing place under the eye (m): below it is `neckDrop`
+  neck_rest = 0.21,
+  --- …and the stride's bob and a sprint's lean under it, which the holds ignore
+  drop_dead = 0.10,
 }
 
 active = false
 enabled = true
+neckDrop = 0.0  -- m the neck is under its standing place this frame (the holds dip with it)
+stance = true    -- probes: false leaves the body where the capsule puts it (the A/B)
 probe = { on = false, want = false }   -- want: a probe sets it to have the hands measured
 ms = 0.0
 
@@ -94,6 +115,14 @@ end
 -- is put back exactly when first person ends.
 local face_was = nil
 local set_back = 0.0
+local body_shift = 0.0
+local eye_h = nil       -- planet_camera's eye_height (m)
+local neck_s = nil      -- the neck's height under the eye, eased (m)
+local y_add, y_put = 0.0, nil     -- what stand_under_eye added to the model's height, and the height it left
+local function undo_height(m)
+  if y_put and m and m.valid and math.abs((m.y or 0) - y_put) < 1e-5 then m.y = m.y - y_add end
+  y_add, y_put = 0.0, nil
+end
 local function stow_head(on)
   if not (face_n and face_n.valid) then return end
   if on and face_was == nil then
@@ -116,6 +145,80 @@ local function place_body(m, back)
   m.x, m.z = -back * math.sin(y), -back * math.cos(y)
 end
 
+-- THE BODY UNDER THE EYE, IN EVERY STANCE (playtest 2026-11-10: "crouching in
+-- first person makes your body clip into the camera; jumping too"). The eye
+-- is the capsule's (planet_camera: a fixed height over its centre, lowered by
+-- the crouch, eased up and down, dipped on a landing), the body is the clips'
+-- and the walker's (a crouch leans the chest over the knees, a sprint leans
+-- into the run, a turn banks, a jump tucks the legs, the eye's ease lags a
+-- jump's rise): the two disagree by up to 20 cm, and the collar and the
+-- shoulders came up round the eye. So the body is put where the eye says the
+-- head is, this frame, from the pose as it stands: the Head bone's joint (the
+-- top of the neck) square under the eye across, `neck_behind` + `back` behind
+-- it along the flat view, and never higher than `neck_below` under it (it may
+-- be lower: the soles stay on the ground when the clip's crouch is deeper than
+-- the eye's). Measured from the pose, so whatever leans the chest is undone at
+-- the neck, and the hands (held in the camera's frame) and the body move as
+-- one: nothing of the body steps against the view. → the shift (m).
+local function stand_under_eye(m, an, E, U, Ff, Rf, back, dt)
+  if not stance then neck_s, neckDrop = nil, 0.0 return 0 end
+  local hd = an:boneWorld("Head")
+  if not hd then return 0 end
+  local A = self_n
+  -- Up and down the body first rides the eye's own path: the camera eases the
+  -- capsule's height (a kerb's pop, the ground's snap, the ticks' small hops)
+  -- and dips on a landing, the body rode the raw capsule, so the collar and
+  -- the arms stepped against a smooth view. What the eye is off its nominal
+  -- height (eye_height less the crouch's drop) the body is moved too, capped.
+  local fy = 0.0
+  local pc, pw = ref("planet_camera"), ref("planet_walker")
+  -- (the eye height is a scene param: read once, not through the handle every frame)
+  if not eye_h and pc and pc.params then eye_h = pc.params.eye_height end
+  local eh = eye_h
+  if eh then
+    local nominal = eh - ((pw and pw.eyeDrop) or 0)
+    fy = math.max(-params.follow_down, math.min(params.follow_up, (E - A.worldPos):dot(U) - nominal))
+  end
+  local d = hd + U * fy - E
+  local sz = -(params.neck_behind + back) - d:dot(Ff)
+  local sx = -d:dot(Rf)
+  -- THE STEPS (playtest 2026-11-10: "the first-person models move in jittery
+  -- steps"). Walking, the skeleton itself goes up and down under the model:
+  -- the walker drops the hips onto the lower foot (its rays re-sampling the
+  -- ground) on top of the clip's bob, 9 cm a stride and a 1-2 cm zigzag frame
+  -- to frame (fpstance `FS F`: the Hip and the neck together, the model node
+  -- smooth). Against a view that does not bob, that read as the body and the
+  -- arms stepping. The neck's height under the eye is eased here (a body-
+  -- frame value, frame-rate independent) and the body moved by what the ease
+  -- takes out, capped: the zigzag goes, a softer stride bob stays, and the
+  -- feet, IK'd to the ground in world points, keep their footing.
+  local ny = d:dot(U)
+  local ns = neck_s
+  if not ns or math.abs(ny - ns) > 0.15 then ns = ny end
+  ns = ns + (ny - ns) * (1 - math.exp(-params.neck_ease * dt))
+  local hp = math.max(-params.neck_ease_max, math.min(params.neck_ease_max, ns - ny))
+  neck_s = ny + hp
+  local sy = fy + hp + math.min(0, -params.neck_below - (ny + hp))
+  -- how far the neck sits under its standing place past the stride's own
+  -- bob (a landing's crouch, 30-50 cm): the hands' holds, in the camera's
+  -- frame, come down with it (`neckDrop`, eased), so the arms are not
+  -- stretched up to a tool the body has dropped away from
+  local below = -(ny + sy - fy) - params.neck_rest - params.drop_dead
+  neckDrop = neckDrop + (math.max(0, below) - neckDrop) * (1 - math.exp(-8 * dt))
+  local S = Ff * sz + Rf * sx + U * sy
+  local l = S:length()
+  if l < 1e-5 then return 0 end
+  if l > params.neck_max then S = S * (params.neck_max / l); l = params.neck_max end
+  -- into the model's parent's frame (the Astronaut's, unscaled)
+  local p = A:toLocal(A.worldPos + S)
+  m.x, m.z = m.x + p.x, m.z + p.z
+  -- (the walker writes the model's height every update: the add is undone
+  -- first on a frame it did not, so it never builds up)
+  m.y = m.y + p.y
+  y_add, y_put = p.y, m.y
+  return l
+end
+
 function setEnabled(on)
   enabled = on ~= false
   if save and save.set then pcall(save.set, "opt_fpBody", enabled and 1 or 0) end
@@ -125,6 +228,8 @@ local function leave()
   stow_head(false)
   local m = rig()
   if set_back ~= 0 and m then place_body(m, 0) end
+  undo_height(m)
+  body_shift, neck_s, neckDrop = 0.0, nil, 0.0
   probe.on = false
 end
 
@@ -300,7 +405,16 @@ function afterCamera(cn, dt)
       if lx * lx + lz * lz > 1e-8 then m.yaw = math.atan2(lx, lz) + (pw.params.face_offset or 0) end
     end
   end
-  place_body(m, params.back + params.back_down * math.max(0, -math.sin(pitch)))
+  local back = params.back + params.back_down * math.max(0, -math.sin(pitch))
+  place_body(m, back)
+  undo_height(m)
+  do
+    local Ff = Fc - U * Fc:dot(U)
+    if Ff:length() < 0.05 then Ff = m:toWorld(vec3(0, 0, 1)) - m:toWorld(vec3(0, 0, 0)) end
+    Ff = (Ff - U * Ff:dot(U)):normalized()
+    body_shift = stand_under_eye(m, an, cn.worldPos, U, Ff, U:cross(Ff), back, dt)
+  end
+  o = m:toWorld(vec3(0, 0, 0))
   -- the hands
   local tb, IH = ref("tool_belt"), ref("item_hand")
   local action, rt, lt = "free", nil, nil
@@ -394,6 +508,22 @@ function afterCamera(cn, dt)
   else probe.hx, probe.hy, probe.hz = probe.rx, probe.ry, probe.rz end
   local E = cn.worldPos
   probe.clear = math.min(hr and (hr - E):length() or 9, hl and (hl - E):length() or 9)
+  -- the body round the eye (the neck, the shoulders), in the camera's frame:
+  -- what would cross the view in a crouch, a jump or a landing
+  local hd = an:boneWorld("Head")
+  if hd then probe.nx, probe.ny, probe.nz = cam_frame(cn, hd) end
+  local sr2, sl2 = an:boneWorld("Upperarm.Right"), an:boneWorld("Upperarm.Left")
+  if sr2 then probe.srx, probe.sry, probe.srz = cam_frame(cn, sr2) end
+  if sl2 then probe.slx, probe.sly, probe.slz = cam_frame(cn, sl2) end
+  probe.shift = body_shift
+  -- the eye over the capsule's centre (the camera eases this; the body rides
+  -- the capsule): its steps are the body's against the view
+  probe.ev = (E - self_n.worldPos):dot(self_n:worldUp())
+  if probe.frames then
+    local hp = an:boneWorld("Hip")
+    probe.hipy = hp and select(2, cam_frame(cn, hp)) or 0
+    probe.my = m.y or 0
+  end
   local cc = cn.getcomponent and cn:getcomponent("Camera")
   probe.fov = (cc and (cc.fovY or 0) > 0.01 and cc.fovY) or 1.15
   ms = ms + ((clock() - c0) * 1000 - ms) * 0.05

@@ -226,6 +226,38 @@ def normals(P, F):
     return unit(N)
 
 
+def unseam(P, N, UV, C, W, F):
+    """THE BACK SEAM (playtest 2026-11-10: "every human has a weird reddish
+    square on the back of the neck"). u runs round the head from s = -pi to
+    +pi, so a face straddling the back of the head and the neck had its
+    corners at u near 1 and near 0: the whole width of the textures squeezed
+    into one face, and down the back midline every face showed a sliver of
+    the hairline field, the stubble and the brows. Each such face takes its
+    own copy of its low-u corners at the seam's high side (u 0.999; the
+    canonical layout is the same there: s = -pi is s = +pi), so it samples
+    only the back of the head. The copies go at the end, so every index the
+    rig and the rest pose use is unchanged. -> P, N, UV, C, W, F"""
+    UV = np.array(UV, float)
+    F = [list(f) for f in F]
+    extra = {}
+    for f in F:
+        us = UV[f, 0]
+        if us.max() - us.min() <= 0.5:
+            continue
+        for k, i in enumerate(f):
+            if UV[i, 0] < 0.5:
+                if i not in extra:
+                    extra[i] = len(P) + len(extra)
+                f[k] = extra[i]
+    if not extra:
+        return P, N, UV, C, W, [tuple(f) for f in F]
+    idx = np.array(sorted(extra, key=lambda i: extra[i]), np.int64)
+    uv2 = UV[idx].copy()
+    uv2[:, 0] = 0.999
+    return (np.vstack([P, np.asarray(P)[idx]]), np.vstack([N, np.asarray(N)[idx]]), np.vstack([UV, uv2]),
+            np.vstack([C, np.asarray(C)[idx]]), np.vstack([W, np.asarray(W)[idx]]), [tuple(f) for f in F])
+
+
 def tris(F):
     out = []
     for f in F:
@@ -420,14 +452,23 @@ def build_head(h):
     # just behind where the lips meet
     my_, mw_ = lm["mouth_y"], lm["mouth_w"]
     zfront = GB._surface_z(P, 0.0, my_, r=0.003)
-    zone = (np.abs(P[:, 0]) < mw_ + 0.004) & (P[:, 1] > my_ - 0.035) & (P[:, 1] < my_ + 0.03)
+    # (only the mouth's own depth: the zone was a slab through the whole
+    # head, so the back of the NECK at the mouth's height, a strip as wide as
+    # the mouth facing away, read as "behind the lips, facing back" and took
+    # the dark red lining: the reddish square on every crew member's nape,
+    # playtest 2026-11-10. The mouth bag and the throat run back to 4 cm
+    # behind the head's centre; the nape's outer skin is 7-10 cm behind it,
+    # with nothing of the head between.)
+    mouth_deep = P[:, 2] > -0.055
+    zone = (np.abs(P[:, 0]) < mw_ + 0.004) & (P[:, 1] > my_ - 0.035) & (P[:, 1] < my_ + 0.03) & mouth_deep
     inner = zone & (P[:, 2] < zfront - 0.0025 - 0.15 * (P[:, 0] / max(mw_, 1e-3)) ** 2 * 0.02) & (N[:, 2] < 0.35)
 
     # …and every surface in the mouth's box that is INSIDE the head: a ray
     # out along its normal hits the head again (the bag's walls, its back,
     # the throat's inside), where the outer skin's ray escapes. (The depth
     # measure is blind straight down, where the neck runs on under them.)
-    box = (np.abs(P[:, 0]) < 0.040) & (P[:, 1] > my_ - 0.045) & (P[:, 1] < my_ + 0.035) & (P[:, 2] < zfront - 0.004)
+    box = (np.abs(P[:, 0]) < 0.040) & (P[:, 1] > my_ - 0.045) & (P[:, 1] < my_ + 0.035) & (P[:, 2] < zfront - 0.004) \
+        & mouth_deep
     inside = enclosed(P, Q, N, np.where(box)[0])
     # (an outer surface under an overhang — the chin under the lower lip, the
     # lip under the nose — also sends its ray into the head: those are near
@@ -472,7 +513,7 @@ def build_head(h):
         e["W"].append(np.asarray(Wraw))
         e["I"].append(tris(F_) + e["n"])
         e["n"] += len(P_)
-    put("FaceSkin", P, N, np.stack([u, v], 1), C, W, Q)
+    put("FaceSkin", *unseam(P, N, np.stack([u, v], 1), C, W, Q))
     for sd, nm in ((1, "L"), (-1, "R")):
         c = hd["eyes"][nm]
         re = lm["re"] * 0.985

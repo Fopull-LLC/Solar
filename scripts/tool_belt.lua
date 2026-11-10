@@ -1313,10 +1313,11 @@ end
 -- it. The tool is a child of the body's model, so its place is kept in the
 -- body's frame between frames (tool_at reads it for the beam).
 -- → the right and left hands' targets (world), or nil.
+FP_REACH_OK = 0.46   -- m from the shoulder: a wrist target nearer than this the arm reaches exactly
 FP_HOLD = {
-  gravgun  = { low = { 0.17, -0.25, 0.42 }, aim = { 0.12, -0.20, 0.44 }, pitch = -0.20 },
-  laser    = { low = { 0.17, -0.25, 0.41 }, aim = { 0.11, -0.19, 0.43 }, pitch = -0.24 },
-  surveyor = { low = { 0.16, -0.26, 0.37 }, aim = { 0.10, -0.18, 0.39 }, pitch = -0.30 },
+  gravgun  = { low = { 0.10, -0.21, 0.32 }, aim = { 0.06, -0.165, 0.34 }, pitch = -0.20 },
+  laser    = { low = { 0.10, -0.21, 0.31 }, aim = { 0.06, -0.16, 0.33 }, pitch = -0.24 },
+  surveyor = { low = { 0.10, -0.22, 0.29 }, aim = { 0.06, -0.155, 0.31 }, pitch = -0.30 },
 }
 function fpHold(cn, dt)
   local m, an, node = crew_model()
@@ -1341,7 +1342,7 @@ function fpHold(cn, dt)
     an:addBoneRot("Back", -0.3, 0, 0, 1.0)
     if a0 and a1 then view.twist_sign = ((a1 - a0):dot(F) > 0) and 1 or -1 end
   end
-  an:addBoneRot("Back", 0.55 * (view.twist_sign or 1), 0, 0, 1.0)
+  an:addBoneRot("Back", 0.65 * (view.twist_sign or 1), 0, 0, 1.0)
   local sr = an:boneWorld("Upperarm.Right")
   local sl = an:boneWorld("Upperarm.Left")
   if not (sr and sl) then return nil end
@@ -1352,6 +1353,10 @@ function fpHold(cn, dt)
   local dip = swap_dip()
   local gx = fh.low[1] + (fh.aim[1] - fh.low[1]) * k + view.sx + (view.bx or 0)
   local gy = fh.low[2] + (fh.aim[2] - fh.low[2]) * k + view.sy - (view.by or 0) + view.kick * 0.2 - dip * 0.22
+  -- the body's drop under the eye (a landing's crouch, a sprint's lean:
+  -- fp_body.neckDrop) brings the hold down with the arms
+  local fb = ref("fp_body")
+  gy = gy - math.min(0.2, (fb and fb.neckDrop) or 0) * 0.6
   local gz = fh.low[3] + (fh.aim[3] - fh.low[3]) * k - view.kick
   -- a wall in front: how far the muzzle would go into it (the eye's ray, the
   -- crew's own body ignored), eased in fast and out slower
@@ -1359,7 +1364,9 @@ function fpHold(cn, dt)
   local h = raycast and raycast(E.x, E.y, E.z, F.x, F.y, F.z, reach + 0.05, node)
   local into = (h and h.distance) and math.max(0, math.min(0.3, reach - h.distance)) or 0
   view.pull = (view.pull or 0) + (into - (view.pull or 0)) * (1 - math.exp(-(into > (view.pull or 0) and 18 or 7) * dt))
-  gz = gz - view.pull * 0.85
+  -- (never nearer the eye than 0.2 m: the hold sits closer than it did, and
+  -- a full pull put the rifle's receiver in the lens; the tip-up does the rest)
+  gz = math.max(math.min(gz, 0.2), gz - view.pull * 0.85)
   gy = gy + view.pull * 0.25
   -- the barrel: toward the crosshair VIEW_TOE out, then the low-ready's droop
   -- (gone as it aims), the sway, the kick, the dip and the wall's tip-up
@@ -1384,22 +1391,71 @@ function fpHold(cn, dt)
   yu = (yu * math.cos(cant) + xr0 * math.sin(cant)):normalized()
   local xr = dir:cross(yu)
   local function tool_pt(p) return grip + xr * (p[1] - rg.grip[1]) + yu * (p[2] - rg.grip[2]) - dir * (p[3] - rg.grip[3]) end
+  local function off(base, d) return { base[1] + d[1], base[2] + d[2], base[3] + d[3] } end
+  local rw = m:toWorld(tool_pt(off(rg.grip, hd.rwrist)))
+  gripX, gripY, gripZ = rw.x, rw.y, rw.z
+  local Wd = function(v) return m:toWorld(v) - o end
+  local up_w, right_w, fwd_w = Wd(vec3(0, 1, 0)):normalized(), Wd(vec3(-1, 0, 0)):normalized(), Wd(vec3(0, 0, 1)):normalized()
+  -- THE GRIP HAND FIRST, THEN THE TOOL IN IT (playtest 2026-11-10: "the held
+  -- tool stays frozen while the hands move"). The right hand is put where the
+  -- grip should be; then the tool is placed from where that hand really is
+  -- this frame, after its reach (anim:boneWorld reads the IK back): the grip
+  -- rides the hand by its offset from the wrist, and the tool turns with the
+  -- hand, eased back to the aim (`view.gq`, held in the HAND's frame, never
+  -- in the world). Whatever moves the hand (an arm at its reach, the shoulder
+  -- riding the stride, the chest's turn) moves the tool with it in the same
+  -- frame; the left hand then reaches the fore-grip where the tool now is.
+  an:reach("Hand.Right", rw, { pole = sr - up_w * 0.4 + right_w * 0.48 - fwd_w * 0.12, weight = 1 })
+  local function fing(f) return Wd(xr * f[1] + yu * f[2] - dir * f[3]) end
+  local rf = fing(hd.rfing):normalized()
+  an:lookAt({ "Hand.Right" }, rw + rf, { axis = vec3(-0.996, 0.036, 0.08), limit = 85, weight = 0.85 })
+  local gw0 = m:toWorld(grip)                                     -- the tool's grip, wanted (world)
+  -- (within the arm's reach the reach lands the wrist exactly on its target,
+  -- so the tool is already in the hand: the read-back, which re-poses the
+  -- rig, is only paid when the arm falls short: a landing's crouch, a jump)
+  local hp, hy, hpt, hr
+  if (rw - sr):length() > FP_REACH_OK then hp, hy, hpt, hr = an:boneWorld("Hand.Right") else view.gq = nil end
+  if hp and hy and hpt and hr then
+    -- the hand's axes (YXZ: yaw about Y, then pitch about X, then roll about Z)
+    local cy, sy, cx, sx, cz, sz = math.cos(hy), math.sin(hy), math.cos(hpt), math.sin(hpt), math.cos(hr), math.sin(hr)
+    local ax = vec3(cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz)
+    local ay = vec3(-cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz)
+    local az = vec3(sy * cx, -sx, cy * cx)
+    local function into(v) return vec3(v:dot(ax), v:dot(ay), v:dot(az)) end
+    local function outof(v) return ax * v.x + ay * v.y + az * v.z end
+    local dw, uw = Wd(dir):normalized(), Wd(yu):normalized()
+    -- the grip where the hand is: the wanted grip's offset from the wanted
+    -- wrist, carried by the hand (all of it: the tool is in the fist)
+    local gw = hp + (gw0 - rw)
+    local wd, wu = into(dw), into(uw)
+    local q = view.gq
+    if not q or q.id ~= id or time - (q.t or -10) > 0.25 then
+      q = { id = id, d = wd, u = wu }
+      view.gq = q
+    else
+      local k = 1 - math.exp(-6 * dt)
+      q.d = (q.d + (wd - q.d) * k):normalized()
+      q.u = (q.u + (wu - q.u) * k):normalized()
+    end
+    q.t = time
+    dw = outof(q.d):normalized()
+    uw = outof(q.u)
+    uw = (uw - dw * uw:dot(dw)):normalized()
+    grip = m:toLocal(gw)
+    dir = m:toLocal(o + dw):normalized()
+    yu = m:toLocal(o + uw)
+    yu = (yu - dir * yu:dot(dir)):normalized()
+    xr = dir:cross(yu)
+    view.gripErr = (hp - rw):length()      -- (probes: how far the hand is off its wanted wrist)
+  end
   local origin = tool_pt({ 0, 0, 0 })
   tp.x, tp.y, tp.z = origin.x, origin.y, origin.z
   local yw, pt, rl = lookRotation(dir, yu)
   tp:setAngles(yw, pt, rl)
-  local function off(base, d) return { base[1] + d[1], base[2] + d[2], base[3] + d[3] } end
-  local rw = m:toWorld(tool_pt(off(rg.grip, hd.rwrist)))
   local lw = m:toWorld(tool_pt(off(rg.fore, hd.lwrist)))
-  gripX, gripY, gripZ = rw.x, rw.y, rw.z
   view.lreach, view.rreach = (lw - sl):length(), (rw - sr):length()   -- (probes: shoulder to wrist target, m)
-  local Wd = function(v) return m:toWorld(v) - o end
-  local up_w, right_w, fwd_w = Wd(vec3(0, 1, 0)):normalized(), Wd(vec3(-1, 0, 0)):normalized(), Wd(vec3(0, 0, 1)):normalized()
-  an:reach("Hand.Right", rw, { pole = sr - up_w * 0.4 + right_w * 0.48 - fwd_w * 0.12, weight = 1 })
   an:reach("Hand.Left", lw, { pole = sl - up_w * 0.4 - right_w * 0.45 - fwd_w * 0.05, weight = 1 })
-  local function fing(f) return Wd(xr * f[1] + yu * f[2] - dir * f[3]) end
-  local rf, lf = fing(hd.rfing):normalized(), fing(hd.lfing):normalized()
-  an:lookAt({ "Hand.Right" }, rw + rf, { axis = vec3(-0.996, 0.036, 0.08), limit = 85, weight = 0.85 })
+  local lf = fing(hd.lfing):normalized()
   an:lookAt({ "Hand.Left" }, lw + lf, { axis = vec3(0.996, 0.036, 0.08), limit = 85, weight = 0.85 })
   return rw, lw
 end
