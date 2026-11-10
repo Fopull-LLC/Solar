@@ -397,19 +397,78 @@ end
 
 -- ── controls and probes ─────────────────────────────────────────────────────
 local function touch(sid) local e = N[sid]; if e then step_struct(e, agency_now()); e.dirty = true; tick_t = -10 end end
-function setOn(sid, uid, on)
-  local d = nil
+-- the piece's record and def: → p, d
+local function piece(sid, uid)
   local ST = ref("structures")
   local rec = ST and ST.get(sid)
-  for _, q in ipairs(rec and rec.bp or {}) do if q.uid == uid then d = defs(q.id) end end
-  if not (d and d.fl) then return false end
+  for _, q in ipairs(rec and rec.bp or {}) do if q.uid == uid then return q, defs(q.id) end end
+  return nil, nil
+end
+-- "P-3" (its designation) or "the Transfer Pump" (part_info.called)
+local function called(sid, uid, d)
+  local PI = ref("part_info")
+  if PI and PI.called then local ok, n = pcall(PI.called, sid, uid); if ok and n then return n end end
+  return "the " .. tostring(d and d.label or "piece")
+end
+-- WHY NOT (docs/base-building.md, the interaction plan §3.2): would a HAND on
+-- the switch of piece `uid` refuse to make it `want` (true = running / open)?
+-- → nil, or the sentence the menu shows (its key dims, the press toasts it).
+-- Pure reads: the record, its state, the logic network's authority.
+function whyNot(sid, uid, want)
+  local p, d = piece(sid, uid)
+  if not p then return "that piece is gone" end
+  if not (d and d.fl) then return called(sid, uid, d) .. " is not on a fluid network" end
+  local k = d.fl.kind
+  if k ~= "pump" and k ~= "valve" then return called(sid, uid, d) .. " has no switch: it is a " .. tostring(k) end
+  if want and p.wr then
+    return called(sid, uid, d) .. " is knocked askew: repair it first (a Repair Kit, 4 s)"
+  end
+  local LN = ref("logic_net")
+  if LN and LN.whyNot then
+    local ok, w = pcall(LN.whyNot, sid, uid, want)
+    if ok and w then return w end
+  end
+  return nil
+end
+-- WARN: what making pump/valve (sid, uid) `want` does, or nil — never a
+-- refusal (Ty: the sandbox lets you do the thing that melts the core; the
+-- panel says what it will do). Reads the last solve.
+function warnOf(sid, uid, want)
+  if want then return nil end
+  local p, d = piece(sid, uid)
+  if not (d and d.fl) then return nil end
+  local E = netOf(sid, uid)
+  local o = E and readout(sid, uid)
+  if not (E and o) then return nil end
+  local q = math.abs(o.q or 0)
+  local prim = false
+  for _, node in ipairs(E.net.nodes or {}) do if node.tk == "primary" then prim = true end end
+  local verb = (d.fl.kind == "pump") and "stopping" or "closing"
+  if prim then return string.format("%s %s cuts the makeup to the reactor's primary loop", verb, called(sid, uid, d)) end
+  if q > 1e-4 then
+    local F = FL()
+    local sub = E.net.sub and F and F.SUB and F.SUB[E.net.sub] and F.SUB[E.net.sub].label or "fluid"
+    return string.format("%s %s stops %.2f kg/s of %s on its network", verb, called(sid, uid, d), q, tostring(sub):lower())
+  end
+  return nil
+end
+-- Switch a pump (on = running) or a valve (on = open). → ok, why. `by` =
+-- "hand" (a menu: whyNot first) | "logic" | nil (scenarios, probes: as before).
+function setOn(sid, uid, on, by)
+  local p, d = piece(sid, uid)
+  if not (d and d.fl) then return false, p and (called(sid, uid, d) .. " is not on a fluid network") or "that piece is gone" end
+  if by == "hand" then
+    local w = whyNot(sid, uid, on)
+    if w then return false, w end
+  end
+  local wn = warnOf(sid, uid, on)
   touch(sid)
   if d.fl.kind == "pump" then set_part_state(sid, uid, "off", (not on) or nil)
   elseif d.fl.kind == "valve" then set_part_state(sid, uid, "shut", (not on) or nil) end
   local BG = ref("base_grid")
   if BG and BG.markDirty then BG.markDirty() end
   if audio and audio.play then pcall(audio.play, "audio/foley/switch_2.ogg", { track = "UI", volume = 0.4 }) end
-  return true
+  return true, wn
 end
 function isOn(sid, uid)
   local st = part_state(sid, uid)
@@ -535,7 +594,9 @@ local function provider(t, ctx)
     end
   elseif fl.kind == "pump" or fl.kind == "valve" then
     out[#out + 1] = { id = "fl_on", type = "toggle", label = (fl.kind == "pump") and "Pump running" or "Valve open", group = G, keep = true,
-      on = function() return isOn(sid, uid) end, act = function(want) setOn(sid, uid, want) end,
+      on = function() return isOn(sid, uid) end, act = function(want) return setOn(sid, uid, want, "hand") end,
+      enabled = function() return whyNot(sid, uid, not isOn(sid, uid)) == nil end,
+      why = function() return whyNot(sid, uid, not isOn(sid, uid)) end,
       hint = function() local BG = ref("base_grid"); return (fl.kind == "pump" and BG and BG.partServed and BG.partServed(sid, uid) == false) and "no power" or nil end }
     out[#out + 1] = { id = "fl_flow", type = "info", label = "Flow", group = G, value = function()
       local o = readout(sid, uid)

@@ -740,7 +740,9 @@ function model(pl, ch, env, run)
   local ck = CAP.cond * Pr
   for _, r in ipairs(S.closed and S.rejects or {}) do
     local j = r.def.reject
-    if j.kind == "rad" then M.radA = M.radA + j.area; M.radEps = j.eps or 0.88
+    -- (a radiator's louvres shut: `run.radOff[uid]`, it sheds nothing)
+    if j.kind == "rad" then
+      if not (run.radOff and run.radOff[r.uid]) then M.radA = M.radA + j.area; M.radEps = j.eps or 0.88 end
     elseif j.kind == "tower" then
       local air = clamp(atm / 0.3, 0, 1)
       M.towerG = M.towerG + (j.g or 14) * 1000 * air * ((run.tower ~= false) and 1 or 0.15)

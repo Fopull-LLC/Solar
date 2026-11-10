@@ -518,6 +518,63 @@ do
       #logs, (FN.PROF and FN.PROF.errors) or 0, x0 or -1, after or -1))
 end
 
+-- ── fluid_net: a valve shut by hand opens again (Ty, an older build: "after
+-- turning a valve off I couldn't turn it back on"), its refusals say why ──
+do
+  -- tank (uid 1) → 3 m → gate valve (uid 2) → 3 m → tank (uid 3), with a
+  -- stopped pump (uid 4) on a branch to the second tank: the island of d153da1
+  local net0 = finish({ sub = "water", nodes = { liquid(1800, 2000, 1.13), liquid(200, 2000, 1.13), { kind = "junction" }, { kind = "junction" }, { kind = "junction" } },
+    els = { { kind = "cond", u = 1, v = 3, len = 3 }, { kind = "valve", u = 3, v = 4, len = 0.4, on = true, uid = 2 }, { kind = "cond", u = 4, v = 2, len = 3 },
+            { kind = "cond", u = 4, v = 5, len = 2 }, { kind = "pump", u = 5, v = 2, len = 0.4, on = false, uid = 4, q0 = 0.5, H0 = 6e5 } } })
+  local FF = setmetatable({ build = function() return { nets = { net0 }, byUid = {}, open = {} } end }, { __index = FL })
+  local bp = { { uid = 1, id = "tank" }, { uid = 2, id = "valve" }, { uid = 3, id = "tank" }, { uid = 4, id = "pump" }, { uid = 5, id = "wall" } }
+  local rec = { id = 1, bp = bp, st = {} }
+  local ST = { version = 1, list = function() return { rec } end, get = function() return rec end,
+    getPart = function(_, u) for _, p in ipairs(bp) do if p.uid == u then return p end end end,
+    partState = function(_, u) return rec.st[tostring(u)] end,
+    setPartState = function(_, u, t) rec.st[tostring(u)] = t; return true end }
+  local DEFS = { tank = { label = "Water Tank", ports = { {} }, fl = { kind = "tank", sub = "water" } },
+    valve = { label = "Gate Valve", ports = { {} }, fl = { kind = "valve" } },
+    pump = { label = "Transfer Pump", ports = { {} }, fl = { kind = "pump", kw = 1.5 } },
+    wall = { label = "Wall (steel)" } }
+  local clock = 0
+  local SCR = { fluids = FF, structures = ST, parts_base = { partInfo = function(id) return DEFS[id] end },
+    deployables = { agencyClock = function() return clock end } }
+  local E = env({}, SCR, {})
+  local FN = load_script("fluid_net.lua", E)
+  FN.start({ id = 1 })
+  E.time = 0; FN.update({ id = 1 }, 0.1)
+  E.time = 1; FN.update({ id = 1 }, 0.1)
+  local n = FN.nets(1)
+  local function step(k0, k1) for k = k0, k1 do clock = k; E.time = 1 + k; FN.update({ id = 1 }, 0.1) end end
+  step(1, 5)
+  local x_open = n[1].st.x[2]
+  local ok1, why1 = FN.setOn(1, 2, false, "hand")
+  step(6, 6)
+  local x_shut = n[1].st.x[2]
+  step(7, 20)
+  local held = n[1].st.x[2]
+  local o_shut = FN.readout(1, 2)
+  local ok2, why2 = FN.setOn(1, 2, true, "hand")
+  step(21, 30)
+  local x_again = n[1].st.x[2]
+  check(n and ok1 == true and why1 and why1:find("closing the Gate Valve stops", 1, true) and x_shut > 200 and near(held, x_shut, 1e-6) and ok2 == true and FN.isOn(1, 2) == true and x_again > held + 1e-3,
+    string.format("a gate valve shut by hand (warned: %s) holds (%.3f kg both reads), opens again and flows (%.3f -> %.3f kg)", tostring(why1), x_shut, held, x_again))
+  check(o_shut and o_shut.on == false, "…its readout says it is shut while it is")
+  -- the refusals: a piece with no fluid side, a knocked valve opening, a pump the hand switches
+  local okw, ww = FN.setOn(1, 5, true, "hand")
+  check(okw == false and ww and ww:find("not on a fluid network", 1, true), "a wall is not on a fluid network: " .. tostring(ww))
+  FN.setOn(1, 2, false, "hand")
+  bp[2].wr = true
+  local okk, wk = FN.setOn(1, 2, true, "hand")
+  check(okk == false and wk and wk:find("knocked askew", 1, true), "a knocked valve won't open by hand: " .. tostring(wk))
+  check(FN.whyNot(1, 2, false) == nil, "…but it can always be shut")
+  local okl = FN.setOn(1, 2, true)
+  check(okl == true, "…and a scenario or a probe (no `by`) still works it")
+  bp[2].wr = nil
+  check(FN.setOn(1, 4, true, "hand") == true and FN.isOn(1, 4), "the stopped pump starts by hand")
+end
+
 if #failures > 0 then
   print("FAIL smoke_fluids: " .. #failures .. " of " .. (#failures + passed))
   for _, m in ipairs(failures) do print("  - " .. m) end

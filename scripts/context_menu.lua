@@ -3,9 +3,13 @@
 --   RMB TAP      (press and let go without dragging: a held or dragged right
 --                button is still the camera's look) — the menu for what is
 --                under the cursor; in first person or the pilot's seat, for
---                what is under the crosshair; on nothing at all in first
---                person, your own suit's
---   pad Y        (the "Context" action) the same, at the crosshair / centre
+--                what is under the crosshair (there the pointer is locked and
+--                RMB is not the look: any press shorter than `tap_secs` is a
+--                tap, however the hand moved). On nothing in reach, no menu:
+--                a caption says so (no silent fallback to your own suit)
+--   U / pad Y    (the "ContextKey" action on foot, "Context" anywhere) the
+--                same, at the crosshair / centre; HELD `hold_secs`: your own
+--                suit's menu (and a tap on yourself in third person)
 --   ↑ ↓ ENTER    move and press (the rows are keys the engine's UI focus
 --                reaches); a pad's d-pad and A do the same
 --   ESC          back out of a sub-panel, then close (a rung on the pause
@@ -33,12 +37,19 @@
 -- and this one stands down while `game_manager.inputOwner` is the builder.
 --
 -- Probes: `openFor(target, actor)`, `pick(sx, sy)`, `press(id)`, `entries()`.
+-- DEBUG: `ctxDebug = true` logs one line per tap attempt ("context: tap …":
+-- the view, the pixel, what the ray hit and how far, the target or why not)
+-- and each change of what blocks the menus; `lastTap` keeps the last one.
 
 defaults = {
   --@range 0.1 1 --@units s
   tap_secs = 0.35,        -- an RMB press longer than this is a look, not a click
+  --@range 0.2 2 --@units s
+  tap_secs_locked = 0.8,  -- …with the pointer locked (first person) RMB is no look: only a long hold is not a tap (a slow frame or two must not eat a click)
   --@range 1 30 --@units px
-  tap_px = 6,             -- …and so is one that moved this far
+  tap_px = 10,            -- …and so is one that moved this far (third person; px at 720 lines, scaled by the screen)
+  --@range 0.2 2 --@units s
+  hold_secs = 0.4,        -- the Context key held this long opens your own suit's menu
   --@range 5 200 --@units m
   reach_foot = 60.0,      -- how far the pick ray goes from the crew
   --@range 20 2000 --@units m
@@ -55,6 +66,9 @@ target = nil
 actor = nil
 escTakenAt = -1
 lastOpen = nil            -- { kind, label, t } of the last menu opened (probes)
+ctxDebug = false          -- one log line per tap attempt, and each blocked() change
+lastTap = nil             -- { t, eyes, sx, sy, hit, parent, dist, recast, kind, label, why } (probes)
+lastBlocked = nil         -- the reason the menus stand down now, or nil
 
 local refs = {}
 local function ref(kind)
@@ -103,6 +117,23 @@ local function layer_size()
   return H * w / h, H
 end
 
+-- ── the tap rule (pure: tests/smoke_interact.lua) ───────────────────────────
+-- A right press `dt` s long that moved `px` physical pixels in all is a TAP
+-- when it is short, and — with the pointer free — when it barely moved (a
+-- drag is the camera's look). With the pointer LOCKED (first person, the
+-- seat, shift-lock) the movement is the head's look, not a drag: RMB is not
+-- the look button there, so only the time counts, and more of it
+-- (`tap_secs_locked`: an engine run under load once let a quick click span
+-- past 0.35 s and dropped it). `h` = the screen's height in physical pixels:
+-- the slack is `tap_px` at 720 lines, more on a bigger screen (a 1440p mouse
+-- moves twice the pixels for the same hand).
+function tapAccepts(dt, px, locked, h)
+  if locked then return (dt or 0) <= (params.tap_secs_locked or params.tap_secs) end
+  if (dt or 0) > params.tap_secs then return false end
+  local lim = params.tap_px * math.max(1, (h or 720) / 720)
+  return (px or 0) <= lim
+end
+
 -- ── who is asking ───────────────────────────────────────────────────────────
 -- The ACTOR: the craft being flown, or the crew member on foot. (One crew
 -- today; the roster will hand a node per member, and nothing below assumes
@@ -129,6 +160,16 @@ function actorNow()
       if ok and id then held = { id = id, n = 1 } end
     end
     return { kind = "crew", node = a, id = "astro", pack = "astro", held = held, aboard = false }
+  end
+  -- seated aboard a craft without its controls (a passenger's seat, a save
+  -- loaded aboard: Ty's slot1): the craft is still who asks, so a right tap
+  -- is never silently nothing
+  local C = ref("crew")
+  local okc, ac = false, nil
+  if C and C.avatarCraft then okc, ac = pcall(C.avatarCraft) end
+  if okc and ac and ac.node and ac.node.valid ~= false then
+    return { kind = "craft", vessel = ac, node = ac.node, id = "craft:" .. tostring(ac.node.id), seated = true,
+             crew = { { id = "astro", node = a } } }
   end
   return nil
 end
@@ -171,12 +212,33 @@ local function part_target(v, partNode, hx, hy, hz)
 end
 
 -- What a hit names. nil for the ground and the sky.
-function resolve(hit)
+-- Is node `n` the actor `a` or under it (up to 4 parents)? A collider that
+-- arrives with the suit, the helmet or a tool in hand is the crew, not a prop.
+function underActor(n, a)
+  if not (n and a) then return false end
+  local okA, aid = pcall(function() return a.id end)
+  if not okA or aid == nil then return false end
+  for _ = 0, 4 do
+    if not n then return false end
+    local ok, nid = pcall(function() return n.id end)
+    if ok and nid == aid then return true end
+    local okp, par = pcall(function() return n.parent end)
+    n = okp and par or nil
+  end
+  return false
+end
+
+function resolve(hit, actorNode)
   if not (hit and hit.node) then return nil end
   local n = hit.node
   local hx, hy, hz = hit.x, hit.y, hit.z
   if n.name == "Astronaut" then
     return { kind = "astro", node = n, pack = "astro", label = "Crew", wx = hx, wy = hy, wz = hz }
+  end
+  local an = actorNode
+  if an == nil and find then an = find("Astronaut") end
+  if an and underActor(n, an) then
+    return { kind = "astro", node = an, pack = "astro", label = "Crew", wx = hx, wy = hy, wz = hz }
   end
   -- another crew member on foot (a CrewBody): who they are, for the Medkit
   local cb = (n.name == "CrewBody" and n) or (n.parent and n.parent.name == "CrewBody" and n.parent) or nil
@@ -222,45 +284,95 @@ local function eyes()
   return pc ~= nil and (pc.firstPerson == true or pc.cockpit == true)
 end
 
--- PICK: a ray through a screen pixel → target (or nil). Global for probes.
+-- Is the pointer locked to the view (first person, the seat, shift-lock on
+-- foot)? Then the pick is the crosshair and mouse movement is the look.
+local function locked_view()
+  if eyes() then return true end
+  local pc = ref("planet_camera")
+  return pc ~= nil and pc.shiftlock == true and piloted() == nil
+end
+lockedView = locked_view
+
+local function node_name(n)
+  if not n then return nil end
+  local ok, nm = pcall(function() return n.name end)
+  return ok and nm or "?"
+end
+local function parent_name(n)
+  if not n then return nil end
+  local ok, p = pcall(function() return n.parent end)
+  return ok and p and node_name(p) or nil
+end
+
+-- PICK: a ray through a screen pixel → target, or nil and why. Global for
+-- probes. The third value is the instrument: { hit, parent, dist, recast }.
+REACH_EYES = 0.6     -- a first-person hit nearer the eye than this, on the crew themselves, is cast past
 function pick(sx, sy, who)
   who = who or actorNow()
-  if not (who and camera and camera.screenToRay) then return nil end
+  local info = { sx = sx, sy = sy }
+  if not (who and camera and camera.screenToRay) then return nil, "no actor", info end
   local ok, ox, oy, oz, dx, dy, dz = pcall(camera.screenToRay, sx, sy)
-  if not ok or not ox then return nil end
+  if not ok or not ox then return nil, "no ray", info end
   local range = who.kind == "craft" and params.reach_craft or params.reach_foot
   -- the camera can sit metres behind the crew: the reach is the crew's
   if who.node and who.node.worldPos then
     local w = who.node.worldPos
     range = range + math.sqrt((w.x - ox) ^ 2 + (w.y - oy) ^ 2 + (w.z - oz) ^ 2)
   end
+  local eyes_now = eyes()
   local opts = nil
-  if who.kind == "crew" and eyes() then opts = { ignore = who.node } end
+  -- from the crew's own eyes their whole body is behind the lens: the ray
+  -- passes the avatar AND everything under it (suit, helmet, the tool in
+  -- hand: `ignoreChildren`), so the first thing it meets is the world
+  if who.kind == "crew" and eyes_now and who.node then opts = { ignore = who.node, ignoreChildren = true } end
   -- flying, the crew riding in the craft is part of the furniture: a click
   -- on the pod is the pod, not the person sitting in it
   if who.kind == "craft" then
     local ig = {}
     for _, c in ipairs(who.crew or {}) do if c.node and c.node.valid ~= false then ig[#ig + 1] = c.node end end
-    if #ig > 0 then opts = { ignore = ig } end
+    if #ig > 0 then opts = { ignore = ig, ignoreChildren = true } end
   end
   local okr, hit = pcall(raycast, ox, oy, oz, dx, dy, dz, range, opts)
-  local t = okr and resolve(hit) or nil
-  if t then return t end
+  if not okr then hit = nil; info.err = tostring(hit) end
+  -- First person: a hit on the crew themselves, or anything of theirs right
+  -- at the lens, is cast past once, from REACH_EYES along the same ray (one
+  -- extra ray, on a tap only)
+  if hit and who.kind == "crew" and eyes_now and hit.node and underActor(hit.node, who.node)
+     and (hit.distance or 0) < 2.5 then
+    info.recast = node_name(hit.node)
+    local skip = math.max(REACH_EYES, (hit.distance or 0) + 0.05)
+    local okr2, h2 = pcall(raycast, ox + dx * skip, oy + dy * skip, oz + dz * skip, dx, dy, dz, range - skip, opts)
+    hit = okr2 and h2 or nil
+    if hit and hit.distance then hit.distance = hit.distance + skip end
+  end
+  if hit then
+    info.hit, info.parent, info.dist = node_name(hit.node) or "ground", parent_name(hit.node), hit.distance
+  end
+  local t = resolve(hit, who.node)
+  -- (from the eyes, the crew never pick themselves: that is the held key's)
+  if t and t.kind == "astro" and who.kind == "crew" and eyes_now then t = nil end
+  if t then return t, nil, info end
   -- The crew themselves, by eye: a ray can slip past a capsule at a glance,
   -- so a tap within ~40 px of the crew's chest on screen counts.
-  if who.kind == "crew" and camera.worldToScreen and not eyes() then
+  if who.kind == "crew" and camera.worldToScreen and not eyes_now and who.node and who.node.worldX then
     local a = who.node
     local up = a.up or vec3(0, 1, 0)
     local px, py, _, on = camera.worldToScreen(a.worldX + up.x * 0.3, a.worldY + up.y * 0.3, a.worldZ + up.z * 0.3)
     if on and math.abs(px - sx) < 40 and math.abs(py - sy) < 60 then
-      return { kind = "astro", node = a, pack = "astro", label = "Crew" }
+      return { kind = "astro", node = a, pack = "astro", label = "Crew" }, nil, info
     end
   end
-  -- Nothing under the crosshair in first person: your own suit.
-  if who.kind == "crew" and eyes() then
-    return { kind = "astro", node = who.node, pack = "astro", label = "Crew" }
-  end
-  return nil
+  -- Nothing to open: say what the ray met (no silent fallback to the suit)
+  if hit and hit.node == nil then return nil, "the ground", info end
+  if hit then return nil, "nothing to do with " .. tostring(info.hit), info end
+  return nil, "nothing in reach", info
+end
+
+-- Your own suit's menu (the Context key held; the crew strip's portrait).
+function selfTarget(who)
+  who = who or actorNow()
+  if not (who and who.kind == "crew" and who.node) then return nil end
+  return { kind = "astro", node = who.node, pack = "astro", label = "Crew" }
 end
 
 -- ── the rim light on the target ─────────────────────────────────────────────
@@ -397,17 +509,40 @@ end
 local PHOS = { 0.64, 0.93, 0.56 }
 local WARN = { 1.00, 0.80, 0.28 }
 local function live(v) local r = registry(); return r and r.live(v) or v end
+-- Words for a UI `text`: a provider may give a label or a hint as a function
+-- (live) — the engine's ui.make takes only plain values, and ONE function in
+-- one row made the whole plate fail to draw (the Reactor Control Console's
+-- "Console: next page" hint: its menu came up blank, Ty's "right-click the
+-- console" that did nothing). Resolved here, for every text the plate shows.
+local function words(v)
+  v = live(v)
+  if v == nil then return nil end
+  if type(v) == "string" then return v end
+  if type(v) == "number" or type(v) == "boolean" then return tostring(v) end
+  return nil
+end
+textOf = words
 
+local LONG = 20          -- an info value longer than this wraps under its legend
 local function readout(e, i)
-  local val = live(e.value)
+  local val = words(e.value)
   local warn = live(e.warn) == true
+  local lbl = words(e.label) or ""
+  -- a sentence (part_info's WHY, a consequence, a reason) wraps on its own
+  -- lines under a short legend instead of being cut off at the plate's edge
+  if e.type == "info" and type(val) == "string" and #val > LONG then
+    return { "col", key = "w" .. i, w = "100%", h = "fit", gap = 1, pad = 0,
+      { "text", key = "l", style = "hud/micro", w = "100%", h = 14, text = lbl, maxLines = 1, overflow = "ellipsis" },
+      { "text", key = "v", style = warn and "hud/valueWarn" or "hud/value", w = "100%", h = "fit", wrap = true, maxLines = 4,
+        overflow = "ellipsis", text = val } }
+  end
   local row = { "row", key = "r" .. i, w = "100%", h = "fit", gap = 6, pad = 0, align = "center",
     -- a short printed legend and a wide number; a long legend (a stack in a
     -- locker: "3 × Copper Ore") takes the width and the number fits beside it
-    { "text", key = "l", style = "hud/micro", w = (#(e.label or "") > 12) and "grow" or 78, h = 16, text = e.label or "",
+    { "text", key = "l", style = "hud/micro", w = (#lbl > 12) and "grow" or 78, h = 16, text = lbl,
       textValign = "center", maxLines = 1, overflow = "ellipsis" },
-    { "text", key = "v", style = warn and "hud/valueWarn" or "hud/value", w = (#(e.label or "") > 12) and 72 or "grow", h = 16,
-      textAlign = "end", textValign = "center", text = val and tostring(val) or "—", maxLines = 1, overflow = "ellipsis" } }
+    { "text", key = "v", style = warn and "hud/valueWarn" or "hud/value", w = (#lbl > 12) and 72 or "grow", h = 16,
+      textAlign = "end", textValign = "center", text = val or "—", maxLines = 1, overflow = "ellipsis" } }
   if e.type ~= "meter" then return row end
   local f = math.max(0, math.min(1, tonumber(live(e.frac)) or 0))
   local GW = W_MENU - 2 * 12 - 2 * 8
@@ -422,10 +557,10 @@ local function key_row(e, i, first)
   local r = registry()
   local ok, why = r.usable(e)
   local style = e.danger and "panel/danger" or "panel/row"
-  local hint = e.hint
+  local hint = words(e.hint)
   if e.type == "sub" then hint = hint or "▸" end
   local kids = {
-    { "text", key = "l", style = "panel/cell", w = "grow", h = 18, text = e.label, textValign = "center",
+    { "text", key = "l", style = "panel/cell", w = "grow", h = 18, text = words(e.label) or "", textValign = "center",
       maxLines = 1, overflow = "ellipsis" } }
   if e.type == "toggle" then
     local on = live(e.on) == true
@@ -436,7 +571,7 @@ local function key_row(e, i, first)
   end
   local b = { "button", key = "b" .. i, name = first and "CtxFirstRow" or nil, style = style, w = "100%", h = 26,
     dir = "row", gap = 6, pad = 4, align = "center", disabled = (not ok) or nil, opacity = (not ok) and 0.5 or nil,
-    tooltip = (not ok) and why or nil,
+    tooltip = (not ok) and words(why) or nil,
     onClicked = function() handle(e) end }
   for _, k in ipairs(kids) do b[#b + 1] = k end
   return b
@@ -445,10 +580,10 @@ end
 local function describe(list, title, subtitle)
   local rows = {}
   local h = 44
-  rows[#rows + 1] = { "text", key = "title", style = "panel/heading", w = "100%", h = 20, text = title or "—",
+  rows[#rows + 1] = { "text", key = "title", style = "panel/heading", w = "100%", h = 20, text = words(title) or "—",
     maxLines = 1, overflow = "ellipsis" }
   if subtitle then
-    rows[#rows + 1] = { "text", key = "sub", style = "panel/label", w = "100%", h = 14, text = subtitle,
+    rows[#rows + 1] = { "text", key = "sub", style = "panel/label", w = "100%", h = 14, text = words(subtitle) or "",
       maxLines = 1, overflow = "ellipsis" }
     h = h + 16
   end
@@ -463,11 +598,13 @@ local function describe(list, title, subtitle)
         h = h + 18
       end
       screen_rows[#screen_rows + 1] = readout(e, i)
-      h = h + (e.type == "meter" and 25 or 19)
+      local v = e.type == "info" and words(e.value)
+      local extra = (type(v) == "string" and #v > LONG) and (15 + 17 * math.min(4, math.ceil(#v / 30))) or 0
+      h = h + (e.type == "meter" and 25 or (extra > 0 and extra or 19))
     else
       screen_rows = nil
       if e.type == "header" then
-        rows[#rows + 1] = { "text", key = "h" .. i, style = "panel/label", w = "100%", h = 16, text = e.label,
+        rows[#rows + 1] = { "text", key = "h" .. i, style = "panel/label", w = "100%", h = 16, text = words(e.label) or "",
           textValign = "end", maxLines = 1, overflow = "ellipsis" }
         h = h + 20
       else
@@ -496,7 +633,7 @@ local function describe(list, title, subtitle)
   local recent = st.msg and (time or 0) - st.msg_t < 3.5
   rows[#rows + 1] = { "text", key = "foot", style = (recent and st.msg_bad) and "panel/hintWarn" or "panel/hint",
     w = "100%", h = "fit", wrap = true,
-    text = recent and st.msg or (#st.stack > 0 and "↑ ↓ ENTER  ·  ESC back" or "↑ ↓ ENTER  ·  ESC close") }
+    text = recent and (words(st.msg) or "") or (#st.stack > 0 and "↑ ↓ ENTER  ·  ESC back" or "↑ ↓ ENTER  ·  ESC close") }
   h = h + 24
   local W, H = layer_size()
   -- Flying, the instrument panel along the bottom is another UI layer, drawn
@@ -530,25 +667,40 @@ end
 -- ── each frame ──────────────────────────────────────────────────────────────
 -- Is something else up that owns the screen? (Then no menu, and an open one
 -- closes: the pause menu, a facility's panel, the pack, the map, the builder.)
-local function blocked()
+-- → the reason (a word) or nil. Logged once per change with ctxDebug.
+local function blocked_why()
   local gm = ref("game_manager")
-  if gm and (gm.loading or gm.inputOwner == "builder") then return true end
+  if gm and gm.loading then return "loading" end
+  if gm and gm.inputOwner == "builder" then return "builder" end
   local pm = ref("pause_menu")
-  if pm and pm.open then return true end
+  if pm and pm.open then return "pause_menu" end
   local fm = ref("facility_menu")
-  if fm and fm.isOpen and fm.isOpen() then return true end
+  if fm and fm.isOpen and fm.isOpen() then return "facility_menu" end
   local ob = ref("ops_board")
-  if ob and ob.isOpen and ob.isOpen() then return true end
+  if ob and ob.isOpen and ob.isOpen() then return "ops_board" end
   local ip = ref("inventory_panel")
-  if ip and ip.open then return true end
+  if ip and ip.open then return "inventory_panel" end
   -- (the map's own menus — a world or a craft right-clicked on it, opened by
   -- scripts/targeting.lua, `target.map` — are the one kind that stays up there)
   local om = ref("orbit_map")
-  if om and om.isOpen and om.isOpen() then return not (open and target and target.map == true) end
+  if om and om.isOpen and om.isOpen() then
+    if open and target and target.map == true then return nil end
+    return "orbit_map"
+  end
   local pc = ref("planet_camera")
-  if pc and (pc.freecam or pc.cinematic) then return true end
-  return false
+  if pc and pc.freecam then return "freecam" end
+  if pc and pc.cinematic then return "cinematic" end
+  return nil
 end
+local function blocked()
+  local why = blocked_why()
+  if why ~= lastBlocked then
+    if ctxDebug and log then log("context: blocked " .. tostring(lastBlocked) .. " -> " .. tostring(why)) end
+    lastBlocked = why
+  end
+  return why ~= nil
+end
+blockedWhy = blocked_why
 
 -- Still a menu worth showing? (The target can leave; the actor can walk off.)
 local function still_valid()
@@ -589,7 +741,7 @@ local function rmb_tap()
   local R = st.rmb
   if down and not R then
     local mx, my = input.mouse()
-    st.rmb = { t = time or 0, x = mx, y = my, moved = 0 }
+    st.rmb = { t = time or 0, x = mx, y = my, moved = 0, locked = locked_view() }
     return nil
   end
   if R and down then
@@ -599,7 +751,13 @@ local function rmb_tap()
   end
   if R and not down then
     st.rmb = nil
-    if (time or 0) - R.t <= params.tap_secs and R.moved <= params.tap_px then return R end
+    local _, _, _, h = screen()
+    local dt = (time or 0) - R.t
+    local locked = R.locked or locked_view()
+    if tapAccepts(dt, R.moved, locked, h) then return R end
+    if ctxDebug and log then
+      log(string.format("context: tap dropped: %.2f s, moved %.0f px (slack %.0f, %s)", dt, R.moved, params.tap_px * math.max(1, h / 720), locked and "locked" or "free"))
+    end
   end
   return nil
 end
@@ -706,19 +864,57 @@ function update(node, dt)
     wearTag, wear.tgt = nil, nil
     return
   end
-  -- the opening gestures
+  -- the opening gestures: a right tap, or the Context key (pad Y anywhere;
+  -- U on foot, "ContextKey": U is the craft's deploy key while flying).
+  -- The key opens on its RELEASE when it was short; held `hold_secs` it opens
+  -- your own suit's menu at once.
   local tap = rmb_tap()
+  local who0 = nil
   local pad = input.action ~= nil and input.action("Context") == true
-  local pad_edge = pad and not st.pad_prev
+  if not pad and input.action ~= nil and input.action("ContextKey") == true then
+    who0 = actorNow()
+    pad = who0 ~= nil and who0.kind == "crew"
+  end
+  local key_tap = false
+  local now_t = time or 0
+  if pad and not st.pad_prev then st.pad_t, st.pad_held = now_t, false end
+  if pad and st.pad_t and not st.pad_held and now_t - st.pad_t >= params.hold_secs then
+    st.pad_held = true
+    local who = who0 or actorNow()
+    local t = selfTarget(who)
+    if t and not (target and target.map) then openFor(t, who) end
+  end
+  if not pad and st.pad_prev and st.pad_t and not st.pad_held then key_tap = true end
   st.pad_prev = pad
-  if (tap or pad_edge) and not (target and target.map) then
+  if (tap or key_tap) and not (target and target.map) then
     if not (open and tap and mouse_in_menu()) then
-      local who = actorNow()
+      local who = who0 or actorNow()
+      if not who and ctxDebug and log then log("context: tap with no actor (not on foot, flying or aboard)") end
       if who then
         local sx, sy
-        if pad_edge or eyes() then sx, sy = crosshair() else sx, sy = tap.x, tap.y end
-        local t = pick(sx, sy, who)
-        if t then openFor(t, who, sx, sy) elseif open then close() end
+        if key_tap or locked_view() then sx, sy = crosshair() else sx, sy = tap.x, tap.y end
+        local t, why, info = pick(sx, sy, who)
+        lastTap = { t = now_t, eyes = eyes(), sx = sx, sy = sy, hit = info and info.hit, parent = info and info.parent,
+                    dist = info and info.dist, recast = info and info.recast, kind = t and t.kind, label = t and t.label,
+                    why = why, by = key_tap and "key" or "rmb" }
+        if ctxDebug and log then
+          log(string.format("context: tap %s eyes=%s at %.0f,%.0f hit %s<%s %.2f m%s -> %s", lastTap.by, tostring(lastTap.eyes), sx or -1, sy or -1,
+            tostring(lastTap.hit), tostring(lastTap.parent), lastTap.dist or -1, lastTap.recast and (" (cast past " .. lastTap.recast .. ")") or "",
+            t and (t.kind .. " " .. tostring(t.label)) or ("nothing: " .. tostring(why))))
+        end
+        if t then openFor(t, who, sx, sy)
+        else
+          if open then close() end
+          -- (said, not silent: from the eyes the crosshair was on nothing you can use)
+          if locked_view() and who.kind == "crew" then
+            local msg = (why == "nothing in reach") and "nothing in reach · aim at a part (hold U for your suit)"
+              or (tostring(why) .. " · aim at a part (hold U for your suit)")
+            if caption then pcall(caption, msg) end
+            local fx = ref("sfx")
+            if fx and fx.play then pcall(fx.play, "denied") end
+            lastTap.said = msg
+          end
+        end
       end
     end
   end

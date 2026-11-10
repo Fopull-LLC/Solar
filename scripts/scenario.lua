@@ -1333,6 +1333,26 @@ function validate(sc, ctx)
       for id in pairs(c.parts or {}) do if not ctx.partExists(id) then E(p .. ".parts." .. tostring(id), "no such part") end end
     end
   end
+  -- (the interaction plan §5.3) start.tags = { { struct, part | uid, name } }:
+  -- designations painted on pieces ("P-3"), shown on their menus and in every
+  -- refusal (scripts/part_info.lua reads them while the scenario runs)
+  if st.tags ~= nil and type(st.tags) ~= "table" then E("start.tags", "a list of { struct, part | uid, name }") end
+  local tagged = {}
+  for i, t in ipairs(type(st.tags) == "table" and st.tags or {}) do
+    local p = string.format("start.tags[%d]", i)
+    if type(t) ~= "table" then E(p, "a table { struct, part | uid, name }")
+    else
+      local sn = type(t.struct) == "string" and t.struct:gsub("^struct:", "") or nil
+      if not sn then E(p .. ".struct", "a structure's name")
+      elseif next(structs) and not structs[sn] then E(p .. ".struct", "no start.structures entry named " .. sn) end
+      if t.part == nil and t.uid == nil then E(p, "part or uid") end
+      if t.uid ~= nil and (type(t.uid) ~= "number" or t.uid < 1 or t.uid % 1 ~= 0) then E(p .. ".uid", "a piece's uid (a whole number)") end
+      if t.part ~= nil and type(t.part) ~= "string" then E(p .. ".part", "a part id (or its prefix)") end
+      if type(t.name) ~= "string" or not t.name:match("%S") or #t.name > 12 then E(p .. ".name", "a designation of 1 to 12 characters")
+      elseif tagged[t.name] then E(p .. ".name", "'" .. t.name .. "' is already start.tags[" .. tagged[t.name] .. "]")
+      else tagged[t.name] = i end
+    end
+  end
   for i, c in ipairs(st.craft or {}) do
     local p = string.format("start.craft[%d]", i)
     if type(c.file) ~= "string" then E(p .. ".file", "a craft JSON under scenarios/")

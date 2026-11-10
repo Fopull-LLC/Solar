@@ -2237,6 +2237,15 @@ function pickTarget(t)
     return r, r and ST.getPart(t._kit[1], t._kit[2])
   end
   local rec, part = pickAt(t.node, t.body, t.rx, t.ry, t.rz)
+  -- (a ruin's weathering — grime, streaks: film decals the ruin laid — is
+  -- not what a right tap on its wall means: the wall answers)
+  if rec and part and rec.ru then
+    local d = partInfo(part.id)
+    if d and d.film and not d.sign and not d.emblem then
+      local r2, p2 = ref("structures").partOfNode(t.node)
+      if r2 and p2 then rec, part = r2, p2 end
+    end
+  end
   t._kit = (rec and part) and { rec.id, part.uid } or false
   return rec, part
 end
@@ -2402,11 +2411,9 @@ local function provider(t, ctx)
     return string.format("%s back%s%s", money(amt), full and "" or " (fee kept)",
       n > 1 and string.format(" · takes %d part%s with it", n - 1, n > 2 and "s" or "") or "")
   end
+  -- (the piece's identity — its name, structure, condition — is part_info's,
+  -- the first provider: "structure 2 · 48 parts" said nothing of the piece)
   local rows = {
-    { id = "bk_what", type = "info", label = def.label or "Part", value = function()
-        local r = ST.get(sid)
-        return string.format("structure %d · %d part%s", sid, r and #r.bp or 0, (r and #r.bp or 0) == 1 and "" or "s")
-      end, group = "Base" },
     { id = "bk_decon", type = "action", label = "Deconstruct", group = "Base", danger = true, value = ask,
       hint = "3 s", enabled = function() return isEngineer() and removalBlocked(sid, { uid }) == nil end,
       why = function() return isEngineer() and (removalBlocked(sid, { uid }) or "in use") or "Engineers only" end,

@@ -30,6 +30,13 @@
                 enabled: true,
                 params: [],
             ),
+            // every kit piece's identity (title, condition, connections,
+            // why) and its designation: scripts/part_info.lua
+            (
+                kind: "part_info",
+                enabled: true,
+                params: [],
+            ),
         ],
     ),
 ]

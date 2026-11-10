@@ -752,6 +752,13 @@ end
 
 local function prop_provider(t, ctx)
   local out = {}
+  -- (a piece of a structure answers for itself: part_info's identity rows;
+  -- "the Gravity Gun can carry it" was never true of a wall)
+  local FB = ctx.ref and ctx.ref("field_builder")
+  if FB and FB.pickTarget and t.node then
+    local okp, rec = pcall(FB.pickTarget, t)
+    if okp and rec then return {} end
+  end
   local crew = ctx.actor and ctx.actor.kind == "crew" and ctx.actor.node or nil
   if crew and t.node and t.node.valid ~= false and crew.distanceTo then
     out[#out + 1] = { type = "info", id = "dist", label = "DISTANCE",

@@ -89,6 +89,9 @@ PROVIDERS = {}   -- kind → { { id, fn, order, n } … } sorted by order
 local seq = 0
 
 TYPES = { action = true, toggle = true, slider = true, info = true, meter = true, sub = true, header = true }
+-- group → rank (lower first; any other group: 50 when it has a switch or a
+-- key, 60 when it only reads)
+GROUP_RANK = { Piece = 0, Logic = 70, Base = 90 }
 
 -- Register (or replace, by id) a provider for a kind. Returns the id.
 function register(kind, fn, opts)
@@ -175,6 +178,25 @@ function entriesFor(target, ctx)
       end
     end
   end
+  -- The order a menu reads in (the interaction plan §2.2): the piece's
+  -- IDENTITY first, then what you OPERATE, then its wiring, then SALVAGE.
+  -- A stable sort by the group's rank; rows keep their order within a rank.
+  -- (an unranked group with a switch or a key in it comes before one that
+  -- only reads: the pump's own toggle above its plant's numbers)
+  local acts = {}
+  for _, e in ipairs(out) do
+    if e.group and (e.type == "toggle" or e.type == "action" or e.type == "slider") then acts[e.group] = true end
+  end
+  local function rank(e)
+    local g = e.group or ""
+    return GROUP_RANK[g] or ((e.group and not acts[g]) and 60 or 50)
+  end
+  for i, e in ipairs(out) do e._i = i end
+  table.sort(out, function(a, b)
+    local ra, rb = rank(a), rank(b)
+    if ra ~= rb then return ra < rb end
+    return a._i < b._i
+  end)
   -- Section headers where the group changes (a provider can also give its own).
   local final, last = {}, nil
   for _, e in ipairs(out) do

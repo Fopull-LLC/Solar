@@ -219,6 +219,52 @@ function wiresAt(sid, uid)
   return out
 end
 
+-- ── THE AUTHORITY: who works a device, a cable or a hand ────────────────────
+-- (the interaction plan §3.2) A device whose RUN / OPEN / ON / CLOSE terminal
+-- has a Signal Cable on it is the network's: the next edge on that cable
+-- re-drives it, so a hand on the switch is refused with the reason, until its
+-- "Local control" (part state `loc`) is on — then `apply` leaves it alone and
+-- the hand has it. What a cable may take over (doors keep their own holds):
+DRIVEN = { light = true, pump = true, valve = true, belt = true, breaker = true, rxpump = true, machine = true, refinery = true }
+-- The cable driving piece (sid, uid): → wire, the far end's words ("Sensor
+-- Q" / "Ladder Controller Y3"), or nil
+function drivenBy(sid, uid)
+  local rec, p, d = part_of(sid, uid)
+  local lg = d and d.lg
+  if not (lg and lg.kind == "device" and DRIVEN[lg.dev]) then return nil end
+  for _, w in ipairs(wiresAt(sid, uid)) do
+    local here = (w.a.sid == sid and w.a.uid == uid) and w.a or w.z
+    local q = pin_def(d, here.pin)
+    if q and q.io == "in" then
+      local o = (here == w.a) and w.z or w.a
+      local ST = ref("structures")
+      local op = ST and ST.getPart and ST.getPart(o.sid, o.uid)
+      local od = op and defs(op.id)
+      local who = od and od.label or "piece"
+      local PI = ref("part_info")
+      if PI and PI.designate then local ok, n = pcall(PI.designate, o.sid, o.uid); if ok and n then who = n end end
+      return w, string.format("%s %s", who, tostring(o.pin))
+    end
+  end
+  return nil
+end
+function localControl(sid, uid) local st = part_state(sid, uid); return st ~= nil and st.loc == true end
+function setLocal(sid, uid, on)
+  set_part_state(sid, uid, "loc", on and true or nil)
+  local m = META and META[keyOf(sid, uid)]
+  if m then m.loc = on and true or nil end
+  return true
+end
+-- WHY NOT: does the network refuse a hand making device (sid, uid) `want`?
+-- → nil, or "driven by the Signal Cable from Sensor Q: Local control takes it
+-- back". (Each system's own whyNot asks this first.)
+function whyNot(sid, uid, want)
+  if localControl(sid, uid) then return nil end
+  local w, from = drivenBy(sid, uid)
+  if not w then return nil end
+  return "driven by the Signal Cable from " .. from .. ": turn on Local control to work it by hand"
+end
+
 -- ── the settle: how a signal cable lies ─────────────────────────────────────
 -- What holds a cable up under a station of its run (structure frame `fr` of
 -- the cable): the tops of the floors, slabs, decks and blocks it passes over
@@ -483,7 +529,7 @@ local function build()
         local node = { key = key, kind = lg.kind, p = P, ins = ins, outs = outs, label = d.label }
         if lg.kind == "plc" then node.prog = type(st and st.prog) == "table" and st.prog or {} end
         nodes[#nodes + 1] = node
-        META[key] = { sid = rec.id, uid = p.uid, def = d, b = rec.b, dev = lg.dev, kind = lg.kind }
+        META[key] = { sid = rec.id, uid = p.uid, def = d, b = rec.b, dev = lg.dev, kind = lg.kind, loc = (st and st.loc == true) or nil }
         if lg.kind == "sensor" then TG[key] = resolve_target(rec, p, d, P) end
         if (lg.kind == "tx" or lg.kind == "rx") and fr then
           local bx, by, bz = to_body(fr, p.x or 0, p.y or 0, p.z or 0)
@@ -572,12 +618,14 @@ local function apply(c)
   if c.free or c.b == nil then return end
   local on = c.b == true
   local dev = m.dev
+  -- (Local control: the hand has it, the cable's edge passes it by)
+  if m.loc and DRIVEN[dev] then return end
   if dev == "light" then
     local KL = ref("kit_live")
     if KL and KL.setLight then KL.setLight(sid, uid, on) end
   elseif dev == "pump" or dev == "valve" then
     local FN = ref("fluid_net")
-    if FN and FN.setOn then FN.setOn(sid, uid, on) end
+    if FN and FN.setOn then FN.setOn(sid, uid, on, "logic") end
   elseif dev == "belt" then
     -- (X5) a conveyor's or a tube blower's RUN: off stops its whole line
     local LX = ref("logistics")
@@ -1591,6 +1639,9 @@ local function provider(t, ctx)
   local d = defs(part.id) or {}
   if not (d.lg and d.lg.kind ~= "wire") then return {} end
   local sid, uid = rec.id, part.uid
+  -- (a pump, a light, a door with no cable on it: nothing to say here — its
+  -- terminals show in the LOGIC overlay; part_info's Inspect lists cables)
+  if d.lg.kind == "device" and d.lg.dev ~= "rxconsole" and #wiresAt(sid, uid) == 0 then return {} end
   local key = keyOf(sid, uid)
   local kind = d.lg.kind
   local G = "Logic"
@@ -1705,6 +1756,15 @@ local function provider(t, ctx)
   elseif kind == "device" and d.lg.dev == "rxconsole" then
     out[#out + 1] = { id = "lg_sb", type = "action", label = "Setback power +5 %", group = G, keep = true, hint = function() return tostring(paramsOf(sid, uid, d).set or 30) .. " %" end,
       act = function() setParam(sid, uid, "set", math.min(100, (tonumber(paramsOf(sid, uid, d).set) or 30) + 5)); return true end }
+  end
+  -- (the authority) a device a cable drives: who drives it, and the hand's override
+  if kind == "device" and DRIVEN[d.lg.dev] and drivenBy(sid, uid) then
+    out[#out + 1] = { id = "lg_drv", type = "info", label = "Driven by", group = G, value = function()
+      local w, from = drivenBy(sid, uid)
+      if not w then return "nothing now" end
+      return from .. (localControl(sid, uid) and " · overridden: Local control" or "") end }
+    out[#out + 1] = { id = "lg_local", type = "toggle", label = "Local control (the hand, not the cable)", group = G, keep = true,
+      on = function() return localControl(sid, uid) end, act = function(want) return setLocal(sid, uid, want) end }
   end
   if #ws > 0 then
     out[#out + 1] = { id = "lg_up", type = "action", label = string.format("Take up its signal cable%s (%d)", #ws == 1 and "" or "s", #ws), group = G, danger = true, hint = "2 s",

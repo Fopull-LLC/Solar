@@ -122,15 +122,33 @@ local function light_on(e)
   local st = ST and ST.partState(e.sid, e.uid)
   return not (st and st.off)
 end
-function setLight(sid, uid, on)
+-- (the interaction plan §3) would a hand on this light's switch be refused?
+-- Only by a Signal Cable on its ON terminal (logic_net's authority). → nil | why
+function lightWhyNot(sid, uid, want)
+  local LN = ref("logic_net")
+  if LN and LN.whyNot then
+    local ok, w = pcall(LN.whyNot, sid, uid, want)
+    if ok and w then return w end
+  end
+  return nil
+end
+-- Switch a light. A light switched off stops drawing its power (base_grid
+-- reads `st.off` of every load). `by` = "hand" asks lightWhyNot first. → ok, why
+function setLight(sid, uid, on, by)
   local ST = ref("structures")
   if not ST then return false end
+  if by == "hand" then
+    local w = lightWhyNot(sid, uid, on)
+    if w then return false, w end
+  end
   local st = ST.partState(sid, uid) or {}
   local t = {}
   for k, v in pairs(st) do t[k] = v end
   t.off = (not on) or nil
   ST.setPartState(sid, uid, next(t) and t or nil)
   pool_t = -10
+  local BG = ref("base_grid")
+  if BG and BG.markDirty then BG.markDirty() end
   return true
 end
 -- every light of structure `sid`: on (true) or off; → how many
@@ -611,7 +629,13 @@ local function provider(t, ctx)
   if def.light then
     out[#out + 1] = { id = "kl_light", type = "toggle", label = "Light", group = "Fitting", keep = true,
       on = function() local e = E[key(sid, uid)]; return e and light_on(e) or false end,
-      act = function(want) setLight(sid, uid, want); if audio and audio.play then pcall(audio.play, "audio/foley/switch_2.ogg", { track = "UI", volume = 0.4 }) end end,
+      act = function(want)
+        local ok, why = setLight(sid, uid, want, "hand")
+        if ok and audio and audio.play then pcall(audio.play, "audio/foley/switch_2.ogg", { track = "UI", volume = 0.4 }) end
+        return ok, why
+      end,
+      enabled = function() local e = E[key(sid, uid)]; return lightWhyNot(sid, uid, not (e and light_on(e))) == nil end,
+      why = function() local e = E[key(sid, uid)]; return lightWhyNot(sid, uid, not (e and light_on(e))) end,
       hint = browned(sid) and "grid short" or nil }
   end
   if def.switch or def.light then

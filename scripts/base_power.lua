@@ -640,7 +640,13 @@ local function provider(t, ctx)
       end }
     out[#out + 1] = { id = "bp_on", type = "toggle", label = "Breaker closed", group = "Power", keep = true,
       on = function() return breakerState(sid, uid) == "closed" end,
-      act = function(want) setBreaker(sid, uid, want, "hand") end,
+      act = function(want)
+        local wn = BG and BG.warnOf and BG.warnOf(sid, uid, want) or nil
+        setBreaker(sid, uid, want, "hand")
+        return true, wn
+      end,
+      enabled = function() return not (BG and BG.whyNot) or BG.whyNot(sid, uid, breakerState(sid, uid) ~= "closed") == nil end,
+      why = function() return BG and BG.whyNot and BG.whyNot(sid, uid, breakerState(sid, uid) ~= "closed") end,
       hint = (breakerState(sid, uid) == "tripped") and "reset" or nil }
     if breakerState(sid, uid) == "tripped" then
       out[#out + 1] = { id = "bp_reset", type = "action", label = "Reset the breaker", group = "Power", hint = "E",

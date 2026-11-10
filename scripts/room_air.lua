@@ -1017,7 +1017,69 @@ function airlockReady(sid, uid)
 end
 -- (S8, logic_net) a life-support machine's run terminal: off, it makes nothing
 -- and draws nothing (its part state `off`)
-function setMachine(sid, uid, on)
+-- (the interaction plan §3) the life machines' switch: a scrubber, an O2
+-- Generator (a rack and a receiver are vessels, not machines: no switch).
+local function machine_def(sid, uid)
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  local d = p and defs(p.id)
+  return p, d
+end
+local function is_machine(d) return d and d.life and not d.life.store and not d.life.receiver end
+local function called(sid, uid, d)
+  local PI = ref("part_info")
+  if PI and PI.called then local ok, n = pcall(PI.called, sid, uid); if ok and n then return n end end
+  return "the " .. tostring(d and d.label or "machine")
+end
+-- WHY NOT: would a hand on machine (sid, uid)'s switch be refused making it
+-- `want` (true = running)? Knocked askew it won't start; a Signal Cable on its
+-- RUN terminal has it (logic_net's authority). → nil | sentence
+function whyNot(sid, uid, want)
+  local p, d = machine_def(sid, uid)
+  if not p then return "that piece is gone" end
+  if not is_machine(d) then return called(sid, uid, d) .. " has no switch" end
+  if want and p.wr then return called(sid, uid, d) .. " is knocked askew: repair it first (a Repair Kit, 4 s)" end
+  local LN = ref("logic_net")
+  if LN and LN.whyNot then
+    local ok, w = pcall(LN.whyNot, sid, uid, want)
+    if ok and w then return w end
+  end
+  return nil
+end
+-- Why machine (sid, uid) is not doing its job now, though switched on, or
+-- nil: no power, no sealed room, a dry water cell. (part_info's WHY line.)
+function runWhy(sid, uid)
+  local p, d = machine_def(sid, uid)
+  if not (p and is_machine(d)) then return nil end
+  if not machineOn(sid, uid) then return "switched off" end
+  local s = S[sid]
+  if not s then return "not in a sealed room: it does nothing here" end
+  local rid = nil
+  for _, l in ipairs(s.life) do if l.uid == uid then rid = l.rid end end
+  if not rid then return "not in a sealed room: it does nothing here" end
+  if not s.pow then return "no power: it runs on the base grid" end
+  if d.life.water and (s.cells[uid] or 0) <= 0.001 then return "its water cell is dry: pipe water to its back" end
+  return nil
+end
+-- WARN: what switching machine (sid, uid) off does to its room, or nil
+function warnOf(sid, uid, want)
+  if want then return nil end
+  local p, d = machine_def(sid, uid)
+  local s = S[sid]
+  if not (p and is_machine(d) and s) then return nil end
+  local rid = nil
+  for _, l in ipairs(s.life) do if l.uid == uid then rid = l.rid end end
+  if not rid then return nil end
+  if d.life.o2 then return string.format("Room %s loses %s's oxygen: O2 falls while anyone breathes", tostring(rid), called(sid, uid, d)) end
+  return string.format("Room %s loses %s: CO2 climbs while anyone breathes", tostring(rid), called(sid, uid, d))
+end
+function setMachine(sid, uid, on, by)
+  local wn = nil
+  if by == "hand" then
+    local w = whyNot(sid, uid, on)
+    if w then return false, w end
+    wn = warnOf(sid, uid, on)
+  end
   local s = S[sid]
   if s then advance_struct(sid, s, agency_now()) end
   set_part_state(sid, uid, "off", (not on) or nil)
@@ -1027,7 +1089,7 @@ function setMachine(sid, uid, on)
   end
   local BG = ref("base_grid")
   if BG and BG.markDirty then BG.markDirty() end
-  return true
+  return true, wn
 end
 function machineOn(sid, uid) local st = part_state(sid, uid); return not (st and st.off) end
 function isInterlocked(sid, uid) local s = S[sid]; return s ~= nil and s.dch[uid] ~= nil end
@@ -1429,8 +1491,15 @@ local function provider(t, ctx)
           value = function() local q = s.recv[uid] or { N = 0, x = 0, c = 0 }; local n = q.N + q.x + q.c
             return string.format("%.1f of %.0f atm·m³ (%.1f bar)", n, L.receiver, n / (L.receiver / 20)) end }
       else
+        out[#out + 1] = { id = "ra_run", type = "toggle", label = "Running", group = "Life support", keep = true,
+          on = function() return machineOn(sid, uid) end,
+          act = function(want) return setMachine(sid, uid, want, "hand") end,
+          enabled = function() return whyNot(sid, uid, not machineOn(sid, uid)) == nil end,
+          why = function() return whyNot(sid, uid, not machineOn(sid, uid)) end }
         out[#out + 1] = { id = "ra_state", type = "info", label = L.o2 and "O2" or "Scrubber", group = "Life support",
-          value = function() return s.pow and "running on the base grid" or "NO POWER (it runs on the base grid)" end }
+          value = function()
+            if not machineOn(sid, uid) then return "switched off" end
+            return s.pow and "running on the base grid" or "NO POWER (it runs on the base grid)" end }
         if L.water then
           out[#out + 1] = { id = "ra_water", type = "info", label = "Water cell", group = "Life support",
             value = function() local w = s.cells[uid] or 0

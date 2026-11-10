@@ -82,6 +82,14 @@ InputMap(
             ],
         ),
         Action(
+            name: "ContextKey",
+            bindings: [
+                Binding(
+                    source: Key(KeyU),
+                ),
+            ],
+        ),
+        Action(
             name: "Pause",
             bindings: [
                 Binding(

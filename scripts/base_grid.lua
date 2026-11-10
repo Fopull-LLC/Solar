@@ -243,9 +243,11 @@ function gridModel(g, pose, towerNeed, opts)
       M.C = M.C + (pw.cap or 0)
       effw, capw = effw + eff * (pw.cap or 0), capw + (pw.cap or 0)
     elseif pw and pw.kind == "load" and not M.mainsOff[r.id]
-           and not (e.def.life and r.st and type(r.st[tostring(p.uid)]) == "table" and r.st[tostring(p.uid)].off) then
-      -- (S8: a life-support machine switched off by its run terminal draws nothing)
-      M.loads[#M.loads + 1] = { kind = "load", need = pw.use or 0, label = e.def.label, sid = r.id }
+           and not (r.st and type(r.st[tostring(p.uid)]) == "table" and r.st[tostring(p.uid)].off) then
+      -- (S8: a life-support machine switched off by its run terminal draws
+      -- nothing; and so does a light switched off, or any load whose switch
+      -- is off: `st.off` is every piece's switch)
+      M.loads[#M.loads + 1] = { kind = "load", need = pw.use or 0, label = e.def.label, sid = r.id, uid = p.uid }
       M.need = M.need + (pw.use or 0)
     elseif pw and pw.kind == "plant" then
       -- (S6) a turbine-generator: what its plant makes now (reactor_plant
@@ -906,6 +908,59 @@ function partServed(sid, uid)
   local M, s = g and G.models[g.id], g and G.status[g.id]
   if not (M and s and s.served) then return nil end
   for i, l in ipairs(M.loads) do if l.sid == sid and l.uid == uid then return s.served[i] == true end end
+  return nil
+end
+-- (the interaction plan §3) WHY NOT: would a hand on piece (sid, uid)'s
+-- switch be refused making it `want`? A breaker can't be closed into its
+-- trip (Reset clears it); a cable on its CLOSE terminal has it (logic_net's
+-- authority). A load's switch is never refused: no power is a reason it
+-- doesn't RUN (`powerWhy`), not a reason it can't be switched. → nil | sentence
+function whyNot(sid, uid, want)
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  if not p then return "that piece is gone" end
+  local d = defs(p.id)
+  local pw = d and d.power
+  local PI = ref("part_info")
+  local who = "the " .. tostring(d and d.label or "piece")
+  if PI and PI.called then local ok, n = pcall(PI.called, sid, uid); if ok and n then who = n end end
+  if pw and pw.kind == "breaker" and want and breaker_state(sid, uid) == "tripped" then
+    return who .. " tripped: Reset it first (it closes on a fault otherwise)"
+  end
+  local LN = ref("logic_net")
+  if LN and LN.whyNot then
+    local ok, w = pcall(LN.whyNot, sid, uid, want)
+    if ok and w then return w end
+  end
+  return nil
+end
+-- WARN: what opening breaker (sid, uid) cuts, or nil (never a refusal)
+function warnOf(sid, uid, want)
+  if want then return nil end
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  local d = p and defs(p.id)
+  if not (d and d.power and d.power.kind == "breaker") then return nil end
+  local f = partFlow(sid, uid) or {}
+  if f.main then return string.format("opening it cuts its structure off the grid (%.1f kW of lights, air and pumps)", f.kW or 0) end
+  if (f.kW or 0) > 0.01 then return string.format("opening it stops %.1f kW across its cable", f.kW) end
+  return nil
+end
+-- Why piece (sid, uid) has no power now, or nil when it has (or draws none):
+-- "not on a base grid" | "the grid is short and its store is flat" | "its
+-- structure's main breaker is open".
+function powerWhy(sid, uid)
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  local d = p and defs(p.id)
+  local pw = d and d.power
+  if not (pw and (pw.kind == "load" or pw.kind == "aux")) then return nil end
+  local g = G.bySid[sid]
+  if not g then return "no power: not on a base grid (a tower within 150 m, or a Power Cable)" end
+  local M, s = G.models[g.id], G.status[g.id]
+  if M and M.mainsOff and M.mainsOff[sid] then return "no power: its structure's main breaker is open" end
+  local served = partServed(sid, uid)
+  if served == false then return "no power: the grid is short and its store is flat" end
   return nil
 end
 function model(gid) return G.models[gid] end

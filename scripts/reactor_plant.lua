@@ -149,6 +149,13 @@ local function run_of(e)
     local s = BG and BG.partServed and BG.partServed(e.sid, e.pl.pri.press.uid)
     run.press = run.press and s ~= false
   end
+  -- a radiator's louvres shut by hand (its part state `off`)
+  local ST0 = ref("structures")
+  run.radOff = {}
+  for _, r in ipairs(e.pl.sec.rejects or {}) do
+    local st = ST0 and ST0.partState and ST0.partState(e.sid, r.uid)
+    if r.def.reject.kind == "rad" and st and st.off then run.radOff[r.uid] = true end
+  end
   -- (S7) the primary's breaks (a pipe's part state `brk`: the share of its
   -- bore opened; a guillotine break is both ends: twice the bore) and the
   -- makeup fluid_net brings
@@ -169,6 +176,7 @@ end
 local function run_sig(run)
   local t = {}
   for uid, on in pairs(run.pumps) do t[#t + 1] = tostring(uid) .. (on and "+" or "-") end
+  for uid in pairs(run.radOff or {}) do t[#t + 1] = "r" .. tostring(uid) end
   table.sort(t)
   return table.concat(t, ",") .. (run.press and "P" or "p") .. (run.tower and "T" or "t") .. (run.turbine and "G" or "g") .. string.format("B%.6f", run.brkA or 0)
 end
@@ -457,7 +465,138 @@ end
 function setProtection(key, on) local e = entry(key); if e then e.S.prot = on and true or false; touch(e) end end
 function setCooldown(key, on) local e = entry(key); if e then e.S.cooldown = on and true or nil; touch(e) end end
 function setTurbine(key, on) local e = entry(key); if e then e.turbOn = on and true or false; rebuild_model(e, "turbine"); touch(e) end end
-function setPump(sid, uid, on)
+-- ── WHY NOT (the interaction plan §3): would a hand on piece (sid, uid)'s
+-- switch be refused making it `want`? Only for a PHYSICAL reason (Ty
+-- 2026-11-10: "if turning a valve would make the reactor explode we
+-- shouldn't prevent people"): a coolant pump not plumbed to a loop, knocked
+-- askew; a cooling tower's fan or a radiator's louvres only on a plant's
+-- secondary; a Signal Cable on the pump's RUN terminal (logic_net's
+-- authority, taken back by Local control on the same menu). Never because it
+-- is dangerous: `warn` says what will happen instead. → nil | why
+WARN_P = 0.05          -- above this share of its rating a lost sink or flow matters
+local function called(sid, uid, d)
+  local PI = ref("part_info")
+  if PI and PI.called then local ok, n = pcall(PI.called, sid, uid); if ok and n then return n end end
+  return "the " .. tostring(d and d.label or "piece")
+end
+local function loop_of_pump(e, uid)
+  for _, nm in ipairs({ "pri", "sec" }) do
+    for _, pu in ipairs(e.pl[nm] and e.pl[nm].pumps or {}) do if pu.uid == uid then return nm end end
+  end
+  return nil
+end
+local function reject_of(e, uid)
+  for _, r in ipairs(e.pl.sec and e.pl.sec.rejects or {}) do if r.uid == uid then return r end end
+  return nil
+end
+function whyNot(sid, uid, want)
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  if not p then return "that piece is gone" end
+  local d = defs(p.id) or {}
+  local e = plantOfPart(sid, uid)
+  if not e then return "no Reactor Vessel Base in this structure: " .. called(sid, uid, d) .. " has nothing to serve" end
+  if d.pump then
+    local lp = loop_of_pump(e, uid)
+    if not lp then return called(sid, uid, d) .. " is not plumbed to a loop: pipe it between the vessel and a steam generator" end
+    if want and p.wr then return called(sid, uid, d) .. " is knocked askew: repair it first (a Repair Kit)" end
+    local LN = ref("logic_net")
+    if LN and LN.whyNot then
+      local ok, w = pcall(LN.whyNot, sid, uid, want)
+      if ok and w then return w end
+    end
+    return nil
+  end
+  if d.reject then
+    if not reject_of(e, uid) then return called(sid, uid, d) .. " is not on the plant's secondary loop" end
+    if d.reject.kind == "tower" and want and p.wr then return called(sid, uid, d) .. " is knocked askew: repair it first (a Repair Kit)" end
+    return nil
+  end
+  return called(sid, uid, d) .. " has no switch"
+end
+-- WARN: what making piece (sid, uid) `want` will do to the plant, or nil.
+-- The panel shows it and the press toasts it; nothing is refused for it.
+function warnOf(sid, uid, want)
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  local d = p and defs(p.id) or {}
+  local e = p and plantOfPart(sid, uid)
+  if not (e and e.S) or e.S.melt then return nil end
+  local P = (e.o and e.o.P) or 0
+  local hot = P > WARN_P and not e.S.scram
+  local who = called(sid, uid, d)
+  if d.pump and not want then
+    local lp = loop_of_pump(e, uid)
+    if lp == "pri" then
+      local others = 0
+      for _, pu in ipairs(e.pl.pri.pumps or {}) do if pu.uid ~= uid and e.pumpsOn[pu.uid] ~= false then others = others + 1 end end
+      if others == 0 then
+        if e.S.prot == false then
+          return string.format("stopping %s leaves the core with no forced flow at %.0f %% and the protection is BYPASSED: nothing will stop a meltdown", who, 100 * P)
+        end
+        if hot then return string.format("stopping %s leaves the core with no forced flow at %.0f %%: the protection will trip the reactor", who, 100 * P) end
+        return string.format("stopping %s leaves the core on natural circulation: its decay heat still needs a sink", who)
+      end
+      return hot and string.format("the core runs on %d primary pump%s without %s: less margin", others, others == 1 and "" or "s", who) or nil
+    elseif lp == "sec" and hot then
+      return string.format("stopping %s starves the steam generators: the primary heats up", who)
+    end
+  elseif d.reject and not want and hot then
+    if d.reject.kind == "tower" then return "the condenser keeps only the tower's natural draught (15 %): the secondary heats up" end
+    return string.format("%s sheds no heat while its louvres are shut", who)
+  end
+  return nil
+end
+-- What bypassing the protection means (the console's row, its toast)
+function protectionWarn(key, on)
+  local e = entry(key)
+  if on or not e then return nil end
+  return "protection bypassed: nothing will trip the reactor, nothing will stop a meltdown"
+end
+-- A cooling tower's fan (the plant's: every tower of it) — off, the tower
+-- draws 0 kW and sheds only its natural draught (15 %). → ok, why
+function setTower(sid, uid, on, by)
+  if by == "hand" then local w = whyNot(sid, uid, on); if w then return false, w end end
+  local wn = warnOf(sid, uid, on)
+  local e = plantOfPart(sid, uid)
+  if not e then return false, "no plant" end
+  e.towerOn = on and true or false
+  rebuild_model(e, "tower")
+  publish(e)
+  local BG = ref("base_grid")
+  if BG and BG.markDirty then BG.markDirty() end
+  touch(e)
+  return true, wn
+end
+function towerOn(sid, uid) local e = plantOfPart(sid, uid); return not (e and e.towerOn == false) end
+-- A radiator's louvres: shut, the panel sheds nothing (a cold-soaked plant
+-- warms its condenser faster). → ok, why
+function setRadiator(sid, uid, on, by)
+  if by == "hand" then local w = whyNot(sid, uid, on); if w then return false, w end end
+  local wn = warnOf(sid, uid, on)
+  local e = plantOfPart(sid, uid)
+  local ST = ref("structures")
+  if not (e and ST and ST.partState and ST.setPartState) then return false, "no plant" end
+  local st = ST.partState(sid, uid) or {}
+  local t = {}
+  for k, v in pairs(st) do t[k] = v end
+  t.off = (not on) or nil
+  ST.setPartState(sid, uid, next(t) and t or nil)
+  rebuild_model(e, "radiator")
+  touch(e)
+  return true, wn
+end
+function radiatorOpen(sid, uid)
+  local ST = ref("structures")
+  local st = ST and ST.partState and ST.partState(sid, uid)
+  return not (st and st.off)
+end
+function setPump(sid, uid, on, by)
+  if by == "hand" then
+    local w = whyNot(sid, uid, on)
+    if w then return false, w end
+  end
+  local wn = warnOf(sid, uid, on)
   for _, e in pairs(PL) do
     if e.sid == sid then
       local found = false
@@ -469,11 +608,11 @@ function setPump(sid, uid, on)
         local BG = ref("base_grid")
         if BG and BG.markDirty then BG.markDirty() end
         touch(e)
-        return true
+        return true, wn
       end
     end
   end
-  return false
+  return false, "not plumbed to a reactor loop"
 end
 function pumpOn(sid, uid)
   for _, e in pairs(PL) do if e.sid == sid and e.pumpsOn[uid] ~= nil then return e.pumpsOn[uid] ~= false end end
@@ -800,8 +939,12 @@ local function provider(t, ctx)
   out[#out + 1] = { id = "rx_state", type = "info", label = "Reactor", group = "Reactor", value = function()
     local pg = page(e)
     return pg.title .. " · " .. (pg.lines[2] and pg.lines[2][1] or "") end }
-  out[#out + 1] = { id = "rx_core", type = "info", label = "Core", group = "Reactor", value = function() return page(e).lines[1][1] end }
-  out[#out + 1] = { id = "rx_lim", type = "info", label = "Limited by", group = "Reactor", value = function() return tostring(R.limitedBy(e.M, e.S, e.o or {})) end }
+  -- (the core and what limits it: at the console and the vessel; a pump or a
+  -- pipe of the plant carries the one-line state above)
+  if d.console or (nu and nu.role == "vessel") then
+    out[#out + 1] = { id = "rx_core", type = "info", label = "Core", group = "Reactor", value = function() return page(e).lines[1][1] end }
+    out[#out + 1] = { id = "rx_lim", type = "info", label = "Limited by", group = "Reactor", value = function() return tostring(R.limitedBy(e.M, e.S, e.o or {})) end }
+  end
   if d.console or (nu and nu.role == "vessel") then
     if e.S.scram then
       out[#out + 1] = { id = "rx_reset", type = "action", label = "Reset the trip", group = "Reactor",
@@ -832,7 +975,10 @@ local function provider(t, ctx)
         act = function() local k = consolePage(sid, uid) or 1; consolePage(sid, uid, k % #PAGE_NAMES + 1); return true end }
     end
     out[#out + 1] = { id = "rx_prot", type = "toggle", label = "Protection (automatic trips)", group = "Reactor", keep = true,
-      on = function() return e.S.prot ~= false end, act = function(want) setProtection(key, want) end }
+      on = function() return e.S.prot ~= false end, act = function(want) setProtection(key, want); return true, protectionWarn(key, want) end }
+    out[#out + 1] = { id = "rx_protw", type = "info", label = "Protection", group = "Reactor",
+      warn = function() return e.S.prot == false end,
+      value = function() return e.S.prot == false and "BYPASSED: nothing will stop a meltdown" or "armed: trips on power, fuel, subcooling, flow" end }
     out[#out + 1] = { id = "rx_cool", type = "toggle", label = "Cool down (steam dump open)", group = "Reactor", keep = true,
       on = function() return e.S.cooldown == true end, act = function(want) setCooldown(key, want) end }
     if e.M and e.M.turb then
@@ -842,7 +988,9 @@ local function provider(t, ctx)
   end
   if d.pump then
     out[#out + 1] = { id = "rx_pump", type = "toggle", label = "Pump running", group = "Pump", keep = true,
-      on = function() return pumpOn(sid, uid) end, act = function(want) setPump(sid, uid, want) end,
+      on = function() return pumpOn(sid, uid) end, act = function(want) return setPump(sid, uid, want, "hand") end,
+      enabled = function() return whyNot(sid, uid, not pumpOn(sid, uid)) == nil end,
+      why = function() return whyNot(sid, uid, not pumpOn(sid, uid)) end,
       hint = function() local BG = ref("base_grid"); return (BG and BG.partServed and BG.partServed(sid, uid) == false) and "no power" or nil end }
   end
   -- (S7) a primary pipe: the break (a cut for a test, a LOCA) and the weld
@@ -864,6 +1012,20 @@ local function provider(t, ctx)
         act = function() return true end,
         job = { secs = 8, label = "Cutting the coolant pipe", done = function() breakPipe(sid, uid, 1); return true end } }
     end
+  end
+  -- the heat sinks: a cooling tower's fan, a radiator's louvres
+  if d.reject and d.reject.kind == "tower" then
+    out[#out + 1] = { id = "rx_fan", type = "toggle", label = "Fan running", group = "Heat sink", keep = true,
+      on = function() return towerOn(sid, uid) end, act = function(want) return setTower(sid, uid, want, "hand") end,
+      enabled = function() return whyNot(sid, uid, not towerOn(sid, uid)) == nil end,
+      why = function() return whyNot(sid, uid, not towerOn(sid, uid)) end,
+      hint = function() return towerOn(sid, uid) and string.format("%.0f kW", d.reject.kw or 4) or "draught only" end }
+  elseif d.reject and d.reject.kind == "rad" then
+    out[#out + 1] = { id = "rx_shutter", type = "toggle", label = "Louvres open", group = "Heat sink", keep = true,
+      on = function() return radiatorOpen(sid, uid) end, act = function(want) return setRadiator(sid, uid, want, "hand") end,
+      enabled = function() return whyNot(sid, uid, not radiatorOpen(sid, uid)) == nil end,
+      why = function() return whyNot(sid, uid, not radiatorOpen(sid, uid)) end,
+      hint = function() return radiatorOpen(sid, uid) and string.format("%.0f m²", d.reject.area or 0) or "shut" end }
   end
   if d.turbine then
     out[#out + 1] = { id = "rx_turbinfo", type = "info", label = "Generator", group = "Turbine",

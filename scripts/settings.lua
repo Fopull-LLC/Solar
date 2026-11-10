@@ -1097,7 +1097,7 @@ end
 -- Actions Solar's scripts read (input.ron also carries the template's fighting
 -- motions — qcf, dp… — which nothing here uses and nobody should rebind).
 local REBINDABLE = { Jump = true, Interact = true, Sprint = true, Crouch = true, Fire = true,
-                     Pause = true, LookEnable = true, ShiftLock = true, Zoom = true }
+                     Pause = true, LookEnable = true, ShiftLock = true, Zoom = true, ContextKey = true }
 
 local function controls_rows(out)
   out[#out + 1] = choice("crouch", "Crouch key", { { label = "Toggle", value = true }, { label = "Hold", value = false } },

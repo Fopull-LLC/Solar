@@ -660,6 +660,7 @@ end
 local function write() if save and save.set then save.set("ruins.s", states()) end end
 function state(id) local s = states(); local e = s[id]; if not e then e = {}; s[id] = e end return e end
 local function peek(id) return states()[id] end
+function peekState(id) return peek(id) end   -- (part_info: read without making an entry)
 local function bump() version = version + 1 end
 
 local function home_list()

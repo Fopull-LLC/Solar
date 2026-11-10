@@ -89,6 +89,7 @@ local CONTROLS = {
     { keys = { "/" }, shown = "/", what = "the next objective: the contract, a milestone, a suit pack to recover  ·  or ◂ ▸ on the card" },
     { keys = { "escape" }, shown = "ESC", what = "back out of whatever is in front of you" },
     { keys = {}, shown = "RIGHT CLICK", what = "tap (don't drag) on your crew, a part of a craft or a crate: what you can do with it  ·  pad Y at the crosshair" },
+    { keys = { "u" }, shown = "U", what = "on foot: the same menu for what the crosshair is on  ·  hold U: your own suit's" },
   } },
   -- (scenario_ui.lua, ops_strip.lua, menu_scenarios.lua)
   { group = "Scenarios", col = 1, rows = {
