@@ -5,6 +5,9 @@
 --   BENCH_STRS='("branch", "alt")': the other branch: the protection left
 --   bypassed (no automatic trip: a SCRAM by hand), Dana woken, she starts the
 --   makeup herself, the weld late. Default: by the book.
+--   BENCH_STRS='("setback", "1")': as the book, plus a SETBACK at the act 3
+--   checkpoint (FW-C, docs/scenarios.md §4.3): a fail as PL-7's act opens,
+--   the card, the restage back to `loca` with the story's variables kept.
 local S = "Kerne Station"
 local GS = {}
 -- a camera in the station's own frame, re-placed every frame (docs/positions-and-frames.md)
@@ -242,6 +245,36 @@ function SOLVE(SP)
   step(sr, "back", 180)
   space.warp(1)
   line("back at 60 %")
+  if tostring(params.setback or "") == "1" then
+    until_(sr, function() local cp = save.get("scn.cpSnap"); return cp and cp.id == "loca" end, 20, "the act 3 checkpoint")
+    local snap = save.get("scn.cpSnap") or { vars = {} }
+    sr.fail("Probe: a setback at the act 3 checkpoint.")
+    wait(1.0)
+    SP.check("setback_card", sr.phaseNow() == "setback", "the fail is a setback (phase %s)", tostring(sr.phaseNow()))
+    SP.shot("a3_setback_card", true)
+    local sr2 = nil
+    local t0 = W()
+    while W() - t0 < 300 do
+      local s2 = findScript("scenario_run")
+      if s2 and s2 ~= sr and s2.isActive and s2.isActive() and s2.phaseNow and s2.phaseNow() == "running" then sr2 = s2 break end
+      yield()
+    end
+    local d = save.get("scn.done") or {}
+    SP.check("setback_restore", sr2 ~= nil and d.back ~= nil and d.loca == nil and sr2.var("kwh") == snap.vars.kwh and sr2.var("brg_fixed") == snap.vars.brg_fixed
+      and (tonumber(save.get("scn.setbacks")) or 0) == 1, "back at PL-7's act: back %s, loca %s, kwh %s (snap %s), brg_fixed %s, setbacks %s",
+      tostring(d.back ~= nil), tostring(d.loca), tostring(sr2 and sr2.var("kwh")), tostring(snap.vars.kwh), tostring(sr2 and sr2.var("brg_fixed")), tostring(save.get("scn.setbacks")))
+    sr = sr2 or SP.run_()
+    local gm = findScript("game_manager")
+    until_(sr, function() return gm and not gm.curtain end, 60, "the reveal")
+    RP, ST, RU = findScript("reactor_plant"), findScript("structures"), findScript("ruins")
+    _, sid = srec()
+    e = RP.plantOfPart(sid)
+    key = RP.keyOf(e.sid, e.uid)
+    local o = e.o or {}
+    SP.check("setback_plant", (o.P or 0) > 0.5, "the plant restaged at %.0f %% (turbine %s)", (o.P or 0) * 100, tostring(e.turbOn))
+    SP.stand("mark:console", 30)
+    line("after the setback")
+  end
   -- ── ACT 3 ──
   until_(sr, function() return sr.state().cutscene end, 60, "the trip")
   wait(1.5); SP.shot("a3_trip_pl7", true)

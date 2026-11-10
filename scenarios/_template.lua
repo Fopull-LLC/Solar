@@ -24,6 +24,35 @@ return {
   -- homeSeed picks an alien home; air = earth | rich | thin | none | random.
   -- gen = { planets = 4, moonchance = 1.0 } overrides a slider.
   world = { seed = 1911564384, scale = 4, names = 2, air = "earth" },
+  -- time = { at = "night", hold = true } in world holds the key light over the
+  -- site: night | dusk | dawn | morning | noon | afternoon | evening | degrees
+
+  -- CAST: who talks. A key per voice; `crew` ties one to a start.crew member.
+  -- portrait = "auto": their own face, photographed once the scenario is
+  -- staged (random, as every crew member is; `look = <seed>` pins one); the
+  -- fallback scenarios/<id>/<key>.png is baked by tools/perf/portraitbooth.sh.
+  -- radio = true: heard over the set; delay = secs: each line heard that long
+  -- after its beat (light-time); link = "craft:<name>": garbled with no path.
+  cast = {
+    okafor = { name = "Dele Okafor", tag = "ENGINEER", crew = "Okafor", portrait = "auto", expression = "focus" },
+    ops    = { name = "Harrow Ops", tag = "OPS · 3 S DELAY", radio = true, delay = 3 },
+  },
+  vars = { cold = 20 },
+  -- failure = "checkpoint" (the default: a fail goes back to the last
+  -- checkpoint with a card) | "end" (a fail ends the run: a challenge)
+  failure = "checkpoint",
+
+  -- METERS follow a reading into a variable; MODELS are numbers with a law
+  -- of their own (docs/scenarios.md §4.2). Both are data: no hooks.
+  meters = {
+    -- { var = "kwh", read = "reactor.genKW", struct = "Plant", mode = "integrate", scale = 0.000278 },
+    -- { var = "batt", read = "grid.battery", struct = "Shelter" },   -- also dose.msv, suit.o2, room.o2, part.hp, piece.<f>, var.<n>
+  },
+  models = {
+    -- { var = "cold", start = 20, rate = -0.2, rest = 20, tau = 60,
+    --   when = { kind = "power_read", struct = "Shelter", powered = false },
+    --   at = { { value = 5, down = true, beats = { { say = { who = "okafor", text = "It's freezing in here." } } } } } },
+  },
 
   start = {
     funds = 9000, rp = 0, safety = "rescue",   -- safety: rescue | death | invincible
@@ -55,6 +84,10 @@ return {
   },
 
   on_start = { { ops = "We're live. Take it slow." } },
+  -- story beats (docs/scenarios.md §5.1): say = { who, text, with = "<listener>" },
+  -- walk = { who, to = ref }, look = { who, at = ref | false }, face = { who,
+  -- emotion }, light = { ambient, fog, time, secs }, weather = { kind, secs },
+  -- breaker = { struct, part, closed }, wear = { craft, part, hp }, music = "audio/music/x.ogg" | false
 
   steps = {
     { id = "walk", text = "Walk to the marker.",
@@ -64,7 +97,7 @@ return {
       on_done = { { ops = "Good." } } },
     -- { id = "seal", text = "Close the shell.", goals = { { kind = "rooms", struct = "Shelter", sealed = 1 } },
     --   teach = { overlay = "ROOMS", catalogue = "WALL", ghost = "my_scenario/ghost.bp.txt", at = "mark:shelter" },
-    --   checkpoint = true, stage = { structures = { … } } },   -- RETRY restages from here
+    --   checkpoint = true, act = "Act 2 · the shell", stage = { structures = { … } } },   -- a setback comes back here
     -- optional = true: counts for nothing, blocks nothing; parallel = "jobs": open together
   },
 

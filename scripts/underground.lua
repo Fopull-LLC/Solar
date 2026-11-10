@@ -182,7 +182,7 @@ local function darken(k)
   local w = amb.wrote
   if not (w and near(r, w[1]) and near(g, w[2]) and near(b, w[3])) then amb.base = { r, g, b } end
   if not amb.base then return end
-  if k >= 0.9999 then
+  if math.abs(k - 1) <= 1e-4 then
     if w then l.ambientR, l.ambientG, l.ambientB = amb.base[1], amb.base[2], amb.base[3] end
     amb.wrote = nil
     return
@@ -342,10 +342,16 @@ function update(node, dt)
   end
 end
 
+-- A script's own share of the ambient on top (a scenario's `light` beat,
+-- scenario_run.lua: an interior, a dark scene), nil for none. One multiplier,
+-- written here, so the weather's write and ours never fight.
+scriptAmbient = nil
+
 -- After the weather has written this frame's ambient (its update).
 function lateUpdate(node, dt)
-  if params.on == false then return end
-  darken(ambientScale(enclosed, params.ambientFloor))
+  local k = params.on == false and 1 or ambientScale(enclosed, params.ambientFloor)
+  if scriptAmbient then k = k * scriptAmbient elseif params.on == false then return end
+  darken(k)
 end
 
 function onDestroy(node)

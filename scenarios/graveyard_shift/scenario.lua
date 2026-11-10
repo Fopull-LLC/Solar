@@ -27,9 +27,9 @@ return {
 
   cast = {
     ops   = { name = "Kessel Ops", tag = "OPS · 9 MIN DELAY", color = { 0.55, 0.85, 1.0 } },
-    dana  = { name = "Dana Kowalczyk", tag = "ENGINEER · OFF SHIFT", crew = "Kowalczyk", color = { 1.0, 0.78, 0.45 } },
-    priya = { name = "Dr Priya Anand", tag = "SCIENTIST", crew = "Anand", color = { 0.62, 0.92, 0.70 } },
-    me    = { name = "Halloran", tag = "ENGINEER · NIGHTS", crew = "Halloran", color = { 0.85, 0.88, 0.95 } },
+    dana  = { name = "Dana Kowalczyk", tag = "ENGINEER · OFF SHIFT", crew = "Kowalczyk", color = { 1.0, 0.78, 0.45 }, portrait = "auto", expression = "tired" },
+    priya = { name = "Dr Priya Anand", tag = "SCIENTIST", crew = "Anand", color = { 0.62, 0.92, 0.70 }, portrait = "auto" },
+    me    = { name = "Halloran", tag = "ENGINEER · NIGHTS", crew = "Halloran", color = { 0.85, 0.88, 0.95 }, portrait = "auto" },
     log   = { name = "Shift Log", tag = "TERMINAL · KERNE-1", color = { 1.0, 0.70, 0.25 } },
   },
 
@@ -37,6 +37,26 @@ return {
            kwh = 0, brg = 39, seized = false, dana_mu = false, welded_by = "", debriefed = false, read_log = false,
            handover = false, setback_first = true },
   hooks = "scn_graveyard_shift_hooks",       -- scripts/scn_graveyard_shift_hooks.lua on its prefab
+  -- (FW-C, docs/scenarios.md §4.2) FW-2's bearing, which the hooks keep in
+  -- `tick`, written as DATA, a model a mod could ship (not used here; the hook
+  -- stays the one in play). The hook's law: from 61 °C, +0.085 · (1 + (T −
+  -- 58) / 120) °C a second while FW-2 turns, settling toward 40 °C (τ 300 s)
+  -- while it is off, seizing at 115 °C; smoke_scenarios checks the curve.
+  --   models = {
+  --     { var = "brg", start = 61, rate = 0.085, accel = 0.008333, base = 58, rest = 40, tau = 300, round = 0.1,
+  --       active = { kind = "var", name = "brg_on", is = true },            -- set by the hum (with brg_fixed false)
+  --       when = { kind = "piece_state", struct = "Kerne Station", uid = 147, on = true, knocked = false },
+  --       at = { { value = 115, beats = { { var = { seized = true, brg_on = false } },
+  --                                       { knock = { struct = "Kerne Station", uid = 147, lean = 0,
+  --                                                   label = "Swap FW-2's seized bearing cartridge", secs = 30 } } } } } },
+  --   },
+  -- and its meters: energy to the grid, the dose, the peak after the break
+  --   meters = {
+  --     { var = "kwh", read = "reactor.genKW", struct = "Kerne Station", mode = "integrate", scale = 0.000278, round = 0.01 },
+  --     { var = "dose_msv", read = "dose.msv", who = "Halloran", delta = true, round = 0.1 },
+  --     { var = "peak_k", read = "reactor.fuelK", struct = "Kerne Station", mode = "peak", round = 1,
+  --       when = { kind = "var", name = "loca", is = true } },
+  --   },
 
   start = {
     funds = 0, rp = 0, safety = "death",
@@ -286,7 +306,7 @@ return {
 
   steps = {
     -- ACT 1: the hand-over and the climb
-    { id = "handover", text = "Hand-over. Hear Dana out.", run = "handover",
+    { id = "handover", text = "Hand-over. Hear Dana out.", run = "handover", act = "Act 1 · the hand-over",
       goals = { { kind = "var", name = "handover", is = true, label = "Dana's hand-over" } } },
     { id = "log", optional = true, text = "(optional) Read the shift log on the desk terminal.", mark = "mark:logdesk",
       goals = { { kind = "var", name = "read_log", is = true, label = "The shift log" } } },
@@ -307,7 +327,9 @@ return {
       hint = "Setpoint +10 % three more times. The turbine follows the steam.",
       on_done = { { run = "dana_off" } } },
     -- ACT 2: the bearing
-    { id = "diagnose", text = "Hold 60 %. Log the restart. Night shift.",
+    { id = "diagnose", text = "Hold 60 %. Log the restart. Night shift.", act = "Act 2 · the bearing", checkpoint = true,
+      -- (a setback here: the plant restaged at 60 % on line, as the climb left it)
+      stage = { plants = { { struct = "Kerne Station", standby = 0.6, hold = 600, turbine = true } } },
       goals = { { kind = "hook", fn = "bearing_read", label = "Feed pump bearings" } } },
     { id = "setback", text = "OP-14 step 1: setpoint to 40 % so FW-1 can carry the secondary alone.",
       goals = { { kind = "reactor", struct = "Kerne Station", power_below = 0.43, label = "Reactor at 40 %" } },
@@ -331,7 +353,13 @@ return {
       goals = { { kind = "at", who = "crew:Halloran", at = "mark:console", r = 2.5, label = "At the console" },
                 { kind = "reactor", struct = "Kerne Station", power_above = 0.57, label = "Reactor at 60 %" } } },
     -- ACT 3: PL-7
-    { id = "loca", text = "Hold 60 %. Four hours to day shift.",
+    -- (FW-C, PLAN §2 F5) a fail from here (the core melted, a death) goes back
+    -- to this checkpoint: the plant restaged at 60 % on line, FW-2 mended, the
+    -- story's variables as they were when it opened; protection back in if you
+    -- had restored it (its on_enter branch)
+    { id = "loca", text = "Hold 60 %. Four hours to day shift.", act = "Act 3 · PL-7", checkpoint = true,
+      stage = { plants = { { struct = "Kerne Station", standby = 0.6, hold = 600, turbine = true } } },
+      on_enter = { { branch = { var = "prot_ok", is = true, beats = { { reactor = { struct = "Kerne Station", protection = true } } } } } },
       goals = { { kind = "reactor", struct = "Kerne Station", power_below = 0.02, label = "Reactor shut down" } },
       hint = "Right-click the console: SCRAM drops every rod in two seconds." },
     { id = "stabilise", text = "Stop the loss of coolant and refill the primary.", mark = "mark:mu1",

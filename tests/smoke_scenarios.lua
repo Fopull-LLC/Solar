@@ -414,7 +414,8 @@ do
   store["base.body"], store["base.x"], store["base.y"], store["base.z"] = "Home", 0, 600, 0
   store.g_scenario = "_probe"
   local env = { save = SAVE, space = space, terrain = terrain, findScript = function(k) return SCRIPTS[k] end,
-                findScripts = function() return {} end, find = function(n) return n == "Astronaut" and ASTRO or nil end,
+                findScripts = function(k) return (FIND_SCRIPTS or {})[k] or {} end, find = function(n) return n == "Astronaut" and ASTRO or nil end,
+                scene = { load = function(n) SCENE_LOADS = (SCENE_LOADS or 0) + 1 end },
                 log = function(s) log_lines[#log_lines + 1] = s end, vec3 = function(x, y, z) return { x = x, y = y, z = z } end }
   setmetatable(env, { __index = function(_, k) if k == "time" then return T end return _G[k] end })
   local RUN = loadlib("scenario_run.lua", env)
@@ -625,6 +626,150 @@ do
   local heardGrumble = false
   for _, l in ipairs(log_lines) do if l:find("Fine. After.", 1, true) then heardGrumble = true end end
   check("story: the variable's event spoke", heardGrumble)
+
+  -- ── FW-C (work/scenarios2/PLAN.md §2): the story framework pack ──────────
+  -- a CrewBody stub for Reyes: it records what steerSelf is handed each frame
+  local steer_calls = {}
+  local reyes_cb = { doll = false, steerSelf = function(b, x, y, z) steer_calls[#steer_calls + 1] = { b = b, x = x, y = y, z = z, T = T }; return true end,
+                     arrived = function() return false end, steerStop = function() end, walkDist = function() return 99 end,
+                     lookSelf = function(fn) reyes_look = fn end }
+  local forced = {}
+  SCRIPTS.crew_faces = { force = function(id, name, w, secs) forced[#forced + 1] = tostring(id) .. ":" .. name end }
+  local S3 = fresh_run("_story")
+  S = S3
+  reyes_cb.memberId = nil
+  FIND_SCRIPTS = { crew_body = { reyes_cb } }
+  for _ = 1, 400 do tick() if S.phaseNow() == "running" then break end end
+  reyes_cb.memberId = store["scn.crew"].Reyes
+  -- the first line is two-speaker: Hale with Okafor beside her
+  tick(3)
+  local l1 = S.state().line
+  check("FW-C: say.with puts the listener on the line", l1 and l1.name == "Dr. Hale" and l1.with and l1.with.name == "Dele Okafor", l1 and l1.with and l1.with.name)
+  check("FW-C: the radio voice is not on screen yet (delay 3)", S.pendingLines() == 1, S.pendingLines())
+  -- play the intro through without skipping: Reyes's walk steers her body
+  for _ = 1, 900 do tick() if #steer_calls > 30 then break end end
+  check("FW-C: walk hands crew_body.steerSelf a target every frame", #steer_calls > 30, #steer_calls)
+  local ridge = store["scn.marks"].ridge
+  local okRel = #steer_calls > 0
+  for _, c in ipairs(steer_calls) do
+    if math.abs(c.x - ridge.x) > 0.6 or math.abs(c.y - ridge.y) > 0.6 or math.abs(c.z - ridge.z) > 0.6 or c.b ~= "Home" then okRel = false end
+  end
+  check("FW-C: …body-relative, the same point while the planet moved metres a tick (never a kept world point)", okRel,
+    steer_calls[1] and string.format("%.1f %.1f %.1f vs %.1f %.1f %.1f", steer_calls[1].x, steer_calls[1].y, steer_calls[1].z, ridge.x, ridge.y, ridge.z))
+  local rp3 = C.get(store["scn.crew"].Reyes)
+  check("FW-C: …and she is not teleported while she walks", math.abs((rp3.x or 0) - ridge.x) > 2 or math.abs((rp3.z or 0) - ridge.z) > 2)
+  check("FW-C: the look beat gave her body a per-frame point", type(reyes_look) == "function" and select(1, reyes_look()) ~= nil)
+  -- the radio line arrives 3 game seconds after its beat
+  local heardVance, vT = false, nil
+  for _ = 1, 4000 do
+    tick()
+    if S.state().choice then S.choose(1) end
+    local ln = S.state().line
+    if ln and ln.name == "Mara Vance" then heardVance, vT = true, T; break end
+  end
+  check("FW-C: the radio voice spoke after its delay, marked as radio", heardVance and S.state().line.radio == true, vT)
+  -- the fault: the meter counts the dark, the model cools the hut, a face is forced
+  for _ = 1, 600 do tick() if S.var("faulted") then break end end
+  for _ = 1, 30 do local bb = body_now(); ASTRO.x, ASTRO.y, ASTRO.z = bb.x + doorm.x, bb.y + doorm.y, bb.z + doorm.z; tick() end
+  for _ = 1, 400 do tick() if not S.state().cutscene then break end end
+  check("FW-C: the face beat forced Reyes's expression", forced[#forced] == tostring(store["scn.crew"].Reyes) .. ":worried", forced[#forced])
+  local cold = false
+  for _ = 1, 60 * 20 do tick() if (S.var("hut_c") or 99) < 12 then cold = true break end end
+  check("FW-C: a meter integrated the seconds in the dark", (S.var("dark_secs") or 0) > 5, S.var("dark_secs"))
+  check("FW-C: the model cooled the hut below 12 °C while the light was out", cold, S.var("hut_c"))
+  check("FW-C: …and its min meter followed it", (S.var("hut_min") or 99) <= (S.var("hut_c") or 0) + 0.5, S.var("hut_min"))
+  local said12 = false
+  for _ = 1, 600 do tick(); for _, l in ipairs(log_lines) do if l:find("getting cold", 1, true) then said12 = true end end if said12 then break end end
+  check("FW-C: the model's crossing spoke its line", said12)
+  check("FW-C: the checkpoint snapshot was taken as the fix opened", store["scn.cpSnap"] and store["scn.cpSnap"].id == "fix" and store["scn.cpSnap"].vars.trust == 1)
+  -- a SETBACK: a fail goes back to the checkpoint, the story kept
+  local loads0 = SCENE_LOADS or 0
+  SAVE.deleteSlot = function() for k in pairs(store) do if k:sub(1, 4) == "scn." then store[k] = nil end end end
+  S.fail("Okafor fell through the floor.")
+  tick(2)
+  check("FW-C: a fail in a story scenario is a setback, not the debrief", S.phaseNow() == "setback" and store["scn.outcome"] == nil, S.phaseNow())
+  check("FW-C: …with a card that says where you go back to", caught.caption[#caught.caption] == "BACK TO THE FIX", caught.caption[#caught.caption])
+  for _ = 1, 600 do tick() if (SCENE_LOADS or 0) > loads0 then break end end
+  check("FW-C: …then the run is put back (the slot restaged, the scene loaded)", (SCENE_LOADS or 0) > loads0)
+  check("FW-C: the restore kept the story: vars, the steps before, no opening again, the setback counted",
+    store["scn.vars"] and store["scn.vars"].trust == 1 and store["scn.vars"].faulted == true and (store["scn.done"] or {}).walk ~= nil
+    and (store["scn.done"] or {}).fix == nil and store["scn.started"] == true and store["scn.setbacks"] == 1 and store["scn.retryFrom"] == "fix",
+    tostring(store["scn.vars"] and store["scn.vars"].trust) .. " " .. tostring(store["scn.setbacks"]))
+  SAVE.deleteSlot = nil
+  FIND_SCRIPTS = nil
+  SCRIPTS.crew_faces = nil
+end
+
+-- ── FW-C: the new kinds, pure ───────────────────────────────────────────────
+do
+  local Wst = {
+    structId = function(n) return n == "Base" and 7 or nil end,
+    grid = function() return { supply = 4, need = 3, powered = true, stored = 30, cap = 100 } end,
+    breaker = function(t) return t.part == "breaker" and "tripped" or nil end,
+    partHp = function(g) return g.craft == "Kite" and 0.42 or nil end,
+    piece = function(g) return g.part == "pump" and { pumpOn = false, knocked = false, temp = 71 } or nil end,
+    rooms = function() return { { id = 1, sealed = true, m3 = 30 } } end,
+    roomAir = function() return { breathable = false, why = "CO2" } end,
+  }
+  local m, r = SCN.evalGoal({ kind = "power_read", struct = "Base", battery_below = 0.35, need_above = 2 }, Wst, {}, {})
+  check("power_read: battery share and draw", m == true and r:find("battery 30%%") and r:find("3.0 kW drawn"), r)
+  m, r = SCN.evalGoal({ kind = "power_read", struct = "Base", breaker = "breaker", state = "closed" }, Wst, {}, {})
+  check("power_read: a breaker's state", m == false and r == "breaker tripped", r)
+  m, r = SCN.evalGoal({ kind = "part_hp", craft = "Kite", part = "dish", below = 0.5 }, Wst, {}, {})
+  check("part_hp: a craft part's health", m == true and r == "hp 0.42", r)
+  m, r = SCN.evalGoal({ kind = "piece_state", struct = "Base", part = "pump", on = false, field = "temp", gt = 60 }, Wst, {}, {})
+  check("piece_state: running, and a field", m == true and r:find("off") and r:find("temp = 71"), r)
+  local mem = {}
+  m = SCN.evalGoal({ kind = "room_unbreathable", struct = "Base", secs = 10 }, Wst, mem, { now = 0 })
+  local m2, r2 = SCN.evalGoal({ kind = "room_unbreathable", struct = "Base", secs = 10 }, Wst, mem, { now = 11 })
+  check("room_unbreathable: true only after secs of bad air", m == false and m2 == true and r2:find("CO2"), r2)
+  -- meters
+  check("meter: integrate", SCN.stepMeter({ mode = "integrate", scale = 2 }, 1, 3, 0.5) == 4)
+  check("meter: peak and min", SCN.stepMeter({ mode = "peak" }, 5, 3, 1) == 5 and SCN.stepMeter({ mode = "min" }, 5, 3, 1) == 3)
+  check("meter: delta from the first reading, rounded", SCN.stepMeter({ delta = true, round = 0.1 }, nil, 1.234, 1, 1.0) == 0.2)
+  -- models: Graveyard's bearing as data reproduces its hook (scn_graveyard_shift_hooks.lua tick)
+  local md = { var = "brg", start = 61, rate = 0.085, accel = 0.008333, base = 58, at = { { value = 115 } } }
+  local T1, T2, crossedAt = 61, 61, nil
+  for k = 1, 4000 do
+    T1 = T1 + 0.085 * 0.25 * (1 + (T1 - 58) / 120)
+    local c
+    T2, c = SCN.stepModel(md, T2, true, 0.25)
+    if #c > 0 and not crossedAt then crossedAt = k end
+  end
+  check("model: Graveyard's bearing as a model follows its hook's curve", math.abs(T1 - T2) < 0.05 * T1, T1 .. " vs " .. T2)
+  check("model: …and fires its seize beat at 115", crossedAt ~= nil, crossedAt)
+  local v = SCN.stepModel({ rest = 40, tau = 300 }, 100, false, 300)
+  check("model: settles toward rest with its time constant", math.abs(v - (40 + 60 * math.exp(-1))) < 0.01, v)
+  -- radio, time, faces, portraits
+  check("garble: every third word lost, the rest kept", SCN.garble("one two three four five six", 0) == "one two — four five —", SCN.garble("one two three four five six", 0))
+  local x, y, z = SCN.heldSun({ x = 0, y = 1, z = 0 }, 30, { x = 1, y = 0, z = 0 })
+  check("heldSun: the held elevation, toward the star's azimuth", math.abs(math.deg(math.asin(y)) - 30) < 0.01 and x > 0.8, string.format("%.3f %.3f %.3f", x, y, z))
+  check("elevationOf: names and degrees", SCN.elevationOf("night") < 0 and SCN.elevationOf(12) == 12 and SCN.elevationOf("teatime") == nil)
+  check("portraitOf: auto is the booth's file", SCN.portraitOf({ id = "x" }, "hale", { portrait = "auto" }) == "x/hale.png")
+  -- the validator names every new field it refuses
+  local bad = SCN.load("_story", true)
+  local c2 = SCN.deepCopy(bad)
+  c2._file = "scenarios/_story/scenario.lua"
+  c2.cast.hale.radoi = true
+  c2.cast.vance.delay = -1
+  c2.cast.vance.link = "mark:x"
+  c2.world.time.at = "teatime"
+  c2.meters[1].read = "bogus.x"
+  c2.models[1].when = { kind = "nope" }
+  c2.sequences.intro[3] = { say = { who = "hale", with = "nobody", text = "x" } }
+  c2.sequences.fault[6] = { face = { who = "Reyes", emotion = "smug" } }
+  c2.sequences.fault[5] = { light = { ambient = "dim" } }
+  c2.sequences.now[2] = { weather = { kind = "sharknado" } }
+  c2.sequences.now[3] = { music = "loud" }
+  c2.failure = "maybe"
+  local okv, errs = SCN.validate(c2, CTX)
+  local txt = table.concat(errs, "\n")
+  for _, want in ipairs({ "scenarios/_story/scenario.lua: cast.hale.radoi", "cast.vance.delay", "cast.vance.link", "world.time.at",
+                          "meters[1].read", "models[1].when.kind", "sequences.intro[3].say.with", "sequences.fault[6].face.emotion",
+                          "sequences.fault[5].light.ambient", "sequences.now[2].weather.kind", "sequences.now[3].music", "failure" }) do
+    check("FW-C validation names " .. want, not okv and txt:find(want, 1, true) ~= nil, txt:sub(1, 300))
+  end
+  SCN.forget()
 end
 
 print(string.format("smoke_scenarios: %d checks, %d failed", count, failed))

@@ -68,6 +68,134 @@ end
 -- over on a switch.
 function velocityNow() return vel.x, vel.y, vel.z end
 
+-- ── STEERING (scenario `walk`, PLAN scenarios2 §2 F2) ───────────────────────
+-- steerTo(id, body, x, y, z, { speed }) walks member `id`'s body toward a
+-- point given BODY-RELATIVE (docs/positions-and-frames.md rule 1): the caller
+-- hands it again every frame from its ref, and a target not refreshed for
+-- half a second lets go. The walk is along the ground (a ray down each tick
+-- sets the feet), facing the way it goes, on the walk clip; the record is
+-- written once, where it stops. Any CrewBody's script routes the call to
+-- the member's own (each body runs its own copy).
+local steer = nil      -- { body, x, y, z, speed, t }
+local wpos = nil       -- the walking point, body-relative (the record's until it stops)
+local arrived_ = false
+local gait_on, gait_ph = false, 0.0
+local look_fn = nil
+local wface = nil      -- the way the walk faces (a plain table, written to the record at the stop)
+local STEER_STALE, ARRIVE_M, WALK_STRIDE = 0.5, 0.35, 1.6
+local STEP_UP, STEP_DOWN = 0.45, 1.2
+walkStats = { ticks = 0, stops = 0, metres = 0, game = 0 }   -- (probes)
+function steerSelf(body, x, y, z, opts)
+  if doll or not memberId or type(x) ~= "number" then return false end
+  if not steer then arrived_ = false end
+  steer = steer or {}
+  steer.body, steer.x, steer.y, steer.z = body, x, y, z
+  steer.speed = (opts and opts.speed) or 1.4
+  steer.t = time or 0
+  return true
+end
+function steerTo(id, body, x, y, z, opts)
+  if id == memberId and not doll then return steerSelf(body, x, y, z, opts) end
+  for _, s in ipairs(findScripts and findScripts("crew_body") or {}) do
+    if s.memberId == id and s.doll ~= true and s.steerSelf then return s.steerSelf(body, x, y, z, opts) end
+  end
+  return false
+end
+function arrived() return arrived_ end
+function walking() return steer ~= nil end
+-- metres from the walking point to a body-relative target (nil: not on that body)
+function walkDist(body, x, y, z)
+  local c = ref("crew")
+  local r = c and c.get and c.get(memberId)
+  if not (r and r.body == body) then return nil end
+  local p = wpos or r
+  local dx, dy, dz = x - (p.x or 0), y - (p.y or 0), z - (p.z or 0)
+  local l = math.sqrt(x * x + y * y + z * z)
+  local du = l > 1e-6 and (dx * x + dy * y + dz * z) / l or 0
+  -- → the straight distance, the distance along the ground, the height above the target
+  return math.sqrt(dx * dx + dy * dy + dz * dz), math.sqrt(math.max(0, dx * dx + dy * dy + dz * dz - du * du)), -du
+end
+-- the head turned to what `fn` names THIS frame (fn() → x, y, z, weight in
+-- world space, read when posed), nil lets go
+function lookSelf(fn) look_fn = fn end
+function lookNow() return look_fn end
+
+local function gait(on, dt, speed)
+  if not anim and model and model.valid ~= false and model.animator then anim = model:animator() end
+  if not anim then return end
+  if on then
+    if not gait_on then pcall(anim.setLayerWeight, anim, "Gait", 1.0); pcall(anim.setParam, anim, "gait", 0.0); gait_on = true end
+    gait_ph = (gait_ph + dt * (speed or 1.4) / WALK_STRIDE) % 1.0
+    pcall(anim.seek, anim, gait_ph * (anim:duration("run") or 1.0), "Gait")
+  elseif gait_on then
+    pcall(anim.setLayerWeight, anim, "Gait", 0.0); gait_on = false
+  end
+end
+
+-- one tick of a walk: → true while it walked (the node placed), false when it stopped
+local function steer_tick(node, c, r, dt)
+  local b = steer and space.body(steer.body or "")
+  if not (b and r.body == steer.body) then steer = nil; return false end
+  local stop = (time or 0) - (steer.t or 0) > STEER_STALE
+  local p = wpos or { x = r.x or 0, y = r.y or 0, z = r.z or 0 }
+  local l = math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z)
+  if l < 1e-6 then steer = nil; return false end
+  local ux, uy, uz = p.x / l, p.y / l, p.z / l
+  local dx, dy, dz = steer.x - p.x, steer.y - p.y, steer.z - p.z
+  local du = dx * ux + dy * uy + dz * uz
+  dx, dy, dz = dx - ux * du, dy - uy * du, dz - uz * du
+  local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if stop or d < ARRIVE_M then
+    if d < ARRIVE_M then arrived_ = true end
+    walkStats.stops = walkStats.stops + 1
+    if wpos then c.patch(memberId, { x = wpos.x, y = wpos.y, z = wpos.z, face = wface or false }) end
+    steer, wpos, wface = nil, nil, nil
+    gait(false)
+    return false
+  end
+  -- (paced by the game clock between ticks: a slow frame still walks the metres it owes)
+  local now_ = time or 0
+  local gdt = steer.lt and math.max(0, math.min(0.25, now_ - steer.lt)) or dt
+  steer.lt = now_
+  local step = math.min(d, (steer.speed or 1.4) * gdt)
+  walkStats.ticks, walkStats.metres, walkStats.game = walkStats.ticks + 1, walkStats.metres + step, walkStats.game + gdt
+  local fx, fy, fz = dx / d, dy / d, dz / d
+  local nx, ny, nz = p.x + fx * step, p.y + fy * step, p.z + fz * step
+  -- the feet on what is under the new point (ground, a floor), else the same height
+  local nl = math.sqrt(nx * nx + ny * ny + nz * nz)
+  local vx, vy, vz = nx / nl, ny / nl, nz / nl
+  local hh = P("half_h") + 0.02
+  -- a step up of STEP_UP at most, a step down of STEP_DOWN: the ray starts at
+  -- knee height over the feet, so a platform overhead or a tank's flank is
+  -- walked under or past, never climbed (a probe body went up 8 m of a tank)
+  local h = nil
+  if raycast then
+    local o = hh - STEP_UP
+    local ok, hit = pcall(raycast, b.x + nx - vx * o, b.y + ny - vy * o, b.z + nz - vz * o, -vx, -vy, -vz, STEP_UP + STEP_DOWN, node)
+    if ok then h = hit end
+  end
+  if h and h.distance and h.distance < STEP_UP + STEP_DOWN then
+    -- only how far down the ground is: the hit's own point may come from the
+    -- colliders' tick pose, a planet-step (metres) off the point we cast from
+    -- (docs/positions-and-frames.md rule 2)
+    local up = STEP_UP - h.distance
+    -- (no steeper than a stair: a rise of more than 0.8 m a metre is a wall
+    -- or a tank's flank, walked at the same height, not climbed)
+    if up <= step * 0.8 + 0.02 then nx, ny, nz = nx + vx * up, ny + vy * up, nz + vz * up end
+  end
+  wpos = { x = nx, y = ny, z = nz }
+  -- the suit looks along the node's +Z (crew.lua), and the standing pose
+  -- below turns the node's -Z to the record's `face`: so the walk turns -Z
+  -- against the way it goes, and the record keeps that at the stop
+  wface = { x = -fx, y = -fy, z = -fz }
+  node.x, node.y, node.z = b.x + nx, b.y + ny, b.z + nz
+  node.vx, node.vy, node.vz = 0, 0, 0
+  vel.x, vel.y, vel.z = 0, 0, 0
+  node:setUp(vec3(vx, vy, vz), vec3(-fx, -fy, -fz))
+  gait(true, gdt, steer.speed)
+  return true
+end
+
 function start(node)
   find_model(node)
 end
@@ -126,6 +254,11 @@ function fixedUpdate(node, dt)
   if not b then return end
   settle(node, c, r, b)
   r = c.get(memberId)
+  -- walking (a scenario's `walk`): the walk places the node this tick
+  if steer and not r.downed then
+    if steer_tick(node, c, r, dt) then return end
+    r = c.get(memberId)
+  end
   local x, y, z = b.x + (r.x or 0), b.y + (r.y or 0), b.z + (r.z or 0)
   -- at rest on the ground: velocities are in the planet's rails frame (the
   -- engine carries everything near it), so standing still is 0
@@ -174,7 +307,14 @@ end
 
 function lateUpdate(node, dt)
   if not bound(node) then return end
-  if not doll then return end
+  if not doll then
+    -- a scenario's `look`: the head to this frame's point (asked now, never kept)
+    if look_fn and anim then
+      local ok, x, y, z, w = pcall(look_fn)
+      if ok and x then pcall(anim.lookAt, anim, { "Head" }, vec3(x, y, z), { limit = 60, weight = w or 1 }) end
+    end
+    return
+  end
   local c = ref("crew")
   local p = c and c.dollPose and c.dollPose(memberId)
   local m = find_model(node)

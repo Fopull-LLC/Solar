@@ -125,7 +125,10 @@ function dialogueOpen() return D ~= nil end
 function cutsceneOn() return cut.on or cut.h > 0.5 end
 function busy() return D ~= nil or #Q > 0 or cutsceneOn() or cap ~= nil end
 function holdsEsc() return cut.on and cut.skippable ~= false end
-function isOpen() return D ~= nil end       -- (planet_camera: a panel that needs the pointer)
+-- (planet_camera: a panel that needs the pointer) — only a CHOICE takes it:
+-- while a plain line is up the camera still turns (Ty 2026-11-10); only a
+-- cutscene takes the camera, and that is scenario_run's
+function isOpen() return D ~= nil and #D.choices > 0 end
 function current() return D and { who = D.beat.who, text = D.lines[D.i], choices = D.choices, typed = D.typed } or nil end
 lastChoice = nil
 
@@ -300,16 +303,33 @@ end
 
 local function run_ref() return ref("scenario_run") end
 
+-- drop the says on screen and waiting, WITHOUT answering them (the runner
+-- has moved on: their reply would end the line it shows now)
+local function drop_stale_says()
+  local keep = {}
+  for _, q in ipairs(Q) do if q.beat.src ~= "say" then keep[#keep + 1] = q end end
+  Q = keep
+  if D and D.beat.src == "say" and #D.choices == 0 then
+    log_line(D.beat.who, D.lines[D.i])
+    D = nil
+    drawn_key = nil
+  end
+end
 function onSay(line)
   if type(line) ~= "table" then return false end
+  -- THE PLATE FOLLOWS THE RUNNER (Ty 2026-11-10: lines left half-typed, the
+  -- plate lagging the story): the runner's line is the one shown
+  drop_stale_says()
+  local w = type(line.with) == "table" and line.with or nil
   return dialogue({ who = line.name or line.who, role = line.tag, color = line.color, portrait = line.portrait,
-                    text = line.text, src = "say" },
+                    text = line.text, src = "say", radio = line.radio, garbled = line.garbled,
+                    with = w and { who = w.name or w.who, role = w.tag, portrait = w.portrait, radio = w.radio } or nil },
     function() local r = run_ref(); if r and r.lineDone then pcall(r.lineDone) end end)
 end
 
 function onChoice(c)
   if type(c) ~= "table" then return false end
-  return dialogue({ who = c.name or c.who, role = c.tag, color = c.color, portrait = c.portrait, text = c.prompt or "",
+  return dialogue({ who = c.name or c.who, role = c.tag, color = c.color, portrait = c.portrait, radio = c.radio, text = c.prompt or "",
                     choices = c.options, src = "choice", timeout = c.timeout, pause = c.pause },
     function(_, idx) local r = run_ref(); if r and r.choose and idx then pcall(r.choose, idx) end end)
 end
@@ -322,6 +342,14 @@ end
 -- without answering. scenario_ui calls this with the state it polls.
 function sync(st)
   if not (D and st) then return false end
+  -- the runner's line is over (its time ran out, or it was skipped): close it
+  if D.beat.src == "say" and #D.choices == 0 and (st.line == nil or st.line.text ~= D.beat.text) then
+    log_line(D.beat.who, D.lines[D.i])
+    D = nil
+    drawn_key = nil
+    open_next()
+    return true
+  end
   if D.beat.src == "choice" and st.choice == nil then
     log_line(D.beat.who, D.lines[D.i])
     D = nil
@@ -342,14 +370,32 @@ end
 
 -- ── the trees ───────────────────────────────────────────────────────────────
 
-local function portrait_tree(b)
+-- The speaker's picture (or role letter). A radio voice (cast `radio`) is
+-- seen through the set: the picture in phosphor green, and RADIO (or LINK
+-- LOST, a `link` with no path) by the name. `side` "with" is the
+-- listener's, smaller and dimmed on the right (say.with).
+local function portrait_tree(b, side)
   local p = portraitPath(b.portrait)
+  local size = side == "with" and 64 or 92
+  local key = side == "with" and "pw" or "pt"
+  local kid
   if p then
-    return { "box", key = "pt", style = "hud/instrument", w = 92, h = 92, pad = 4,
-      { "image", key = "img", inset = 4, texture = p, imageFit = "cover" } }
+    kid = { "image", key = "img", inset = 4, texture = p, imageFit = "cover",
+            tintR = (b.radio or b.garbled) and 0.62 or nil, tintB = (b.radio or b.garbled) and 0.72 or nil,
+            tintA = side == "with" and 0.55 or nil }
+  else
+    kid = { "text", key = "g", style = "scn/glyph", inset = 0, textAlign = "center", textValign = "center",
+            text = glyphOf(b.role), textSize = side == "with" and 30 or nil,
+            textColor = side == "with" and { 0.30, 0.42, 0.34, 1.0 } or nil }
   end
-  return { "box", key = "pt", style = "hud/instrument", w = 92, h = 92, pad = 0,
-    { "text", key = "g", style = "scn/glyph", inset = 0, textAlign = "center", textValign = "center", text = glyphOf(b.role) } }
+  return { "box", key = key, style = "hud/instrument", w = size, h = size, pad = p and 4 or 0, opacity = side == "with" and 0.5 or nil, kid }
+end
+-- the listener, on the right: the picture and the name under it, dimmed
+local function listener_tree(w)
+  return { "col", key = "lst", w = 72, h = "fit", pad = 0, gap = 4, align = "center",
+    portrait_tree(w, "with"),
+    { "text", key = "ln", style = "hud/micro", w = "100%", h = "fit", textAlign = "center", wrap = true, opacity = 0.6,
+      text = string.upper(tostring(w.who or "")) } }
 end
 
 local function dialogue_tree(d, y)
@@ -361,7 +407,8 @@ local function dialogue_tree(d, y)
     { "row", key = "who", w = "100%", h = "fit", pad = 0, gap = 10, align = "end",
       { "text", key = "n", style = "panel/heading", w = "fit", h = "fit", text = string.upper(tostring(b.who or "Ops")),
         textColor = type(b.color) == "table" and b.color or nil },
-      b.role and { "text", key = "r", style = "panel/label", w = "grow", h = "fit", text = string.upper(roleName(b.role)) } or nil },
+      b.role and { "text", key = "r", style = "panel/label", w = "grow", h = "fit", text = string.upper(roleName(b.role)) } or nil,
+      (b.radio or b.garbled) and { "text", key = "rad", style = "hud/micro", w = "fit", h = "fit", text = b.garbled and "◉ LINK LOST" or "◉ RADIO" } or nil },
     { "text", key = "t", name = "Scenario Dialogue Line", style = "panel/body", w = "100%", h = "fit", wrap = true, text = shown },
   }
   local last = d.i == #d.lines
@@ -382,7 +429,8 @@ local function dialogue_tree(d, y)
     dir = "row", pad = 14, gap = 14, align = "start", focusable = false,
     onClicked = function() if not (d.typed and last and #d.choices > 0) then advance() end end,
     portrait_tree(b),
-    { "col", key = "txt", w = "grow", h = "fit", pad = 0, gap = 6, align = "start", items = kids, function(k) return k end } }
+    { "col", key = "txt", w = "grow", h = "fit", pad = 0, gap = 6, align = "start", items = kids, function(k) return k end },
+    b.with and listener_tree(b.with) or nil }
 end
 
 local function stage_tree()
@@ -452,7 +500,12 @@ local function redraw(node)
 end
 
 local idle_drawn = false
+local last_wall = nil
 function update(node, dt)
+  -- (the wall clock, not the frame's dt: a choice pauses the world, and a
+  -- paused world's dt left a prompt typed to its first letter, Ty 2026-11-10)
+  local w = app and app.wallClock and app.wallClock() or nil
+  if w then dt = last_wall and math.max(0, math.min(0.1, w - last_wall)) or (dt or 0); last_wall = w end
   dt = dt or 0
   if not D and #Q == 0 and not cut.on and cut.h <= 0 and not cap and not alarm_on then
     if idle_drawn then redraw(node); idle_drawn = false; set_hud(false); hold_world(false) end
@@ -489,7 +542,7 @@ function update(node, dt)
   end
   if D then
     hold_world(D.pause == true)
-    if input and input.setMouseLocked then input.setMouseLocked(false) end
+    if #D.choices > 0 and input and input.setMouseLocked then input.setMouseLocked(false) end
     local line = D.lines[D.i] or ""
     if not D.typed then
       D.t = D.t + dt
@@ -511,7 +564,8 @@ function update(node, dt)
   else
     hold_world(false)
   end
-  local key = table.concat(key_parts, ",") .. (D and string.format("d%d.%d.%s.%d", D.i, #Q, tostring(D.typed), #D.choices) or "") ..
+  local key = table.concat(key_parts, ",") .. (D and string.format("d%d.%d.%s.%d.%s", D.i, #Q, tostring(D.typed), #D.choices,
+    tostring(D.beat.with and D.beat.with.who or "")) or "") ..
     (cap and ("c" .. tostring(cap.title) .. tostring(cap.sub)) or "") .. (cut.on and "on" or "off") .. (alarm_on and "A" or "")
   if key ~= drawn_key or drawn_key == nil then
     redraw(node)

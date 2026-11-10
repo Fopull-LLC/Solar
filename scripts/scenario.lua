@@ -612,6 +612,7 @@ local function pick_room(rooms, want)
   return nil
 end
 
+pickRoom = pick_room
 KINDS = {}
 local function kind(name, def) KINDS[name] = def end
 
@@ -807,6 +808,206 @@ kind("hook", { req = { "fn" }, eval = function(g, W)
   return W.hookGoal(g.fn, g)
 end })
 
+-- ── FW-C: reads a mod can write without hooks (PLAN §2 F6, F7) ──────────────
+-- A threshold table on a number: above / below (>= / <=). → ok, "a of b" bits
+local function bounds(v, g, lo, hi)
+  if type(v) ~= "number" then return false end
+  if g[lo] ~= nil and not (v >= g[lo]) then return false end
+  if g[hi] ~= nil and not (v <= g[hi]) then return false end
+  return true
+end
+-- power_read: a structure's grid and its breakers (base_grid, base_power).
+-- { struct, battery_above | battery_below (share of the store), need_above |
+-- need_below (kW drawn), supply_above | supply_below (kW made), powered =
+-- bool, breaker = part | uid, state = "closed" | "open" | "tripped" }
+kind("power_read", { req = { "struct" }, eval = function(g, W)
+  local sid = sid_of(W, g)
+  if not sid then return false, "no " .. tostring(g.struct) end
+  local s = W.grid(sid)
+  local parts, ok = {}, true
+  if g.battery_above or g.battery_below or g.need_above or g.need_below or g.supply_above or g.supply_below or g.powered ~= nil then
+    if not s then return false, "not on a grid" end
+    local frac = (s.cap or 0) > 0 and (s.stored or 0) / s.cap or 0
+    if g.battery_above or g.battery_below then
+      ok = ok and bounds(frac, g, "battery_above", "battery_below")
+      parts[#parts + 1] = string.format("battery %d%%", math.floor(frac * 100 + 0.5))
+    end
+    if g.need_above or g.need_below then
+      ok = ok and bounds(s.need or 0, g, "need_above", "need_below")
+      parts[#parts + 1] = string.format("%.1f kW drawn", s.need or 0)
+    end
+    if g.supply_above or g.supply_below then
+      ok = ok and bounds(s.supply or 0, g, "supply_above", "supply_below")
+      parts[#parts + 1] = string.format("%.1f kW made", s.supply or 0)
+    end
+    if g.powered ~= nil then
+      ok = ok and ((s.powered == true) == (g.powered == true))
+      parts[#parts + 1] = s.powered and "every load served" or "shedding"
+    end
+  end
+  if g.breaker ~= nil then
+    local st = W.breaker and W.breaker({ struct = g.struct, part = type(g.breaker) == "string" and g.breaker or nil,
+                                          uid = type(g.breaker) == "number" and g.breaker or nil })
+    if not st then return false, "no breaker " .. tostring(g.breaker) end
+    ok = ok and (g.state == nil or st == g.state)
+    parts[#parts + 1] = "breaker " .. st
+  end
+  return ok, table.concat(parts, " · ")
+end })
+-- part_hp: a craft part's health (vessel_controller.partHp, 1 whole … 0
+-- broken). { craft, part (id prefix) | uid, above | below }
+kind("part_hp", { req = { "craft" }, eval = function(g, W, mem)
+  local hp = W.partHp and W.partHp(g, mem)
+  if hp == nil then return false, "no such part aboard " .. tostring(g.craft) end
+  local ok = bounds(hp, g, "above", "below")
+  return ok, string.format("hp %.2f", hp)
+end })
+-- piece_state: a structure piece's live state: { struct, part | uid, on =
+-- bool (a pump or machine running), knocked = bool, field = "<st key>" with
+-- eq | ne | lt | gt | lte | gte | is }
+kind("piece_state", { req = { "struct" }, eval = function(g, W)
+  local p = W.piece and W.piece(g)
+  if not p then return false, "no such piece" end
+  local ok, parts = true, {}
+  if g.on ~= nil then
+    local on = p.pumpOn
+    if on == nil then on = not p.off end
+    ok = ok and (on == (g.on == true)); parts[#parts + 1] = on and "running" or "off"
+  end
+  if g.knocked ~= nil then ok = ok and ((p.knocked == true) == (g.knocked == true)); parts[#parts + 1] = p.knocked and "knocked" or "whole" end
+  if g.field then
+    local v = p[g.field]
+    ok = ok and varTest(v, g); parts[#parts + 1] = string.format("%s = %s", g.field, tostring(v))
+  end
+  return ok, table.concat(parts, " · ")
+end })
+-- (a fail) a room has been unbreathable for `secs`: { struct, room =
+-- largest | airlock | n, secs = 60 }
+kind("room_unbreathable", { fail = true, req = { "struct" }, eval = function(g, W, mem, ctx)
+  local sid = sid_of(W, g)
+  if not sid then return false, "no " .. tostring(g.struct) end
+  local r = pick_room(W.rooms(sid) or {}, g.room or "largest")
+  if not r then mem.since = nil; return false, "no sealed room" end
+  local a = W.roomAir(sid, r.id)
+  local now = ctx and ctx.now or 0
+  if not a or a.breathable then mem.since = nil; return false, "breathable" end
+  mem.since = mem.since or now
+  local held, secs = now - mem.since, g.secs or 60
+  return held >= secs, string.format("unbreathable %d s of %d (%s)", math.floor(held), math.floor(secs), tostring(a.why or "air"))
+end })
+
+-- ── FW-C: meters and models (PLAN §2 F6: what Graveyard's hooks did, as data)
+-- A METER is a variable that follows a published reading, sampled with the
+-- goals (EVAL_HZ, the agency clock):
+--   { var, read = "reactor.genKW" | "grid.battery" | "dose.msv" | …, struct,
+--     who, craft, part, uid, room, scale = 1, mode = "sample" | "integrate" |
+--     "peak" | "min", delta = true (count from the first reading), when =
+--     goal (only while it reads true), round = 0.1 }
+-- A MODEL is a number with its own law, for what the systems do not simulate
+-- (Graveyard's bearing): it runs while `active` reads true (always without
+-- it), climbs while `when` reads true by rate · (1 + accel · (v − base)) a
+-- second, and otherwise settles toward `rest` with time constant `tau` (or
+-- stays, without them); `at` fires beats once as it crosses a value.
+--   { var, start, active = goal, when = goal, rate, accel = 0, base = 0,
+--     rest, tau, min, max, round = 0.1, at = { { value, beats = {…} | run =
+--     "seq", down = true (crossing downward) } } }
+METER_READS = { reactor = true, grid = true, dose = true, suit = true, room = true, part = true, var = true, piece = true }
+METER_MODES = { sample = true, integrate = true, peak = true, min = true }
+local function round_to(v, q) if not q or q <= 0 then return v end return math.floor(v / q + 0.5) * q end
+-- → the meter's new value (cur: its value now; r: the reading; first: the
+-- first reading seen, for delta)
+function stepMeter(m, cur, r, dt, first)
+  if type(r) ~= "number" then return cur end
+  local v = r
+  if m.delta and type(first) == "number" then v = r - first end
+  v = v * (m.scale or 1)
+  local mode = m.mode or "sample"
+  local out
+  if mode == "integrate" then out = (tonumber(cur) or 0) + v * (dt or 0)
+  elseif mode == "peak" then out = (type(cur) == "number" and cur > v) and cur or v
+  elseif mode == "min" then out = (type(cur) == "number" and cur < v) and cur or v
+  else out = v end
+  return round_to(out, m.round)
+end
+-- → the model's new value, and the `at` entries crossed this step
+function stepModel(md, cur, rising, dt)
+  local v = tonumber(cur) or md.start or 0
+  local v0 = v
+  if rising then
+    v = v + (md.rate or 0) * dt * (1 + (md.accel or 0) * (v - (md.base or 0)))
+  elseif md.rest ~= nil and md.tau and md.tau > 0 then
+    v = md.rest + (v - md.rest) * math.exp(-dt / md.tau)
+  elseif md.fall then
+    v = v - md.fall * dt
+  end
+  if md.min and v < md.min then v = md.min end
+  if md.max and v > md.max then v = md.max end
+  local crossed = {}
+  for i, a in ipairs(md.at or {}) do
+    if type(a.value) == "number" then
+      if a.down then if v0 > a.value and v <= a.value then crossed[#crossed + 1] = i end
+      elseif v0 < a.value and v >= a.value then crossed[#crossed + 1] = i end
+    end
+  end
+  return round_to(v, md.round), crossed
+end
+
+-- ── FW-C: radio (PLAN §2 F3) ───────────────────────────────────────────────
+-- A line over a link with no path: every third word lost, deterministic.
+function garble(text, seed)
+  local out, i = {}, 0
+  local s = math.floor(tonumber(seed) or 0) % 3
+  for w in tostring(text):gmatch("%S+") do
+    i = i + 1
+    out[#out + 1] = ((i + s) % 3 == 0) and "—" or w
+  end
+  return table.concat(out, " ")
+end
+
+-- ── FW-C: time of day (PLAN §2 F4) ─────────────────────────────────────────
+-- world.time.at → the key light's elevation over the site's horizon, degrees
+TIMES = { night = -25, dusk = -3, dawn = 4, morning = 18, noon = 62, afternoon = 30, evening = 8 }
+function elevationOf(at)
+  if type(at) == "number" then return math.max(-90, math.min(90, at)) end
+  return TIMES[at]
+end
+-- The direction toward the key light held at elevation `el` (deg) over a
+-- site whose up is u, turned toward the real star's azimuth (sun, a unit
+-- direction, or nil: the site's north). → x, y, z (unit)
+function heldSun(u, el, sun)
+  local F = groundFrame(u.x, u.y, u.z)
+  local hx, hy, hz = F.fx, F.fy, F.fz
+  if sun then
+    local d = dot(sun.x, sun.y, sun.z, F.ux, F.uy, F.uz)
+    local tx, ty, tz = sun.x - F.ux * d, sun.y - F.uy * d, sun.z - F.uz * d
+    local l = len(tx, ty, tz)
+    if l > 1e-6 then hx, hy, hz = tx / l, ty / l, tz / l end
+  end
+  local a = math.rad(el)
+  return norm(hx * math.cos(a) + F.ux * math.sin(a), hy * math.cos(a) + F.uy * math.sin(a), hz * math.cos(a) + F.uz * math.sin(a))
+end
+
+-- ── FW-C: faces (crew_faces.EXPR, and two kinder names) ─────────────────────
+FACES = { neutral = true, focus = true, happy = true, excited = true, relief = true, delight = true, worried = true,
+          scared = true, panic = true, pain = true, strain = true, tired = true, bored = true, out = true, dead = true }
+FACE_ALIAS = { alarmed = "scared", smile = "happy", calm = "neutral", afraid = "scared", grim = "focus" }
+function faceName(n) return FACE_ALIAS[n] or n end
+
+-- ── FW-C: portraits (PLAN §2 F1): "auto" is the booth's picture ─────────────
+-- → the portrait's path relative to the scenarios folder, or nil
+function portraitOf(sc, key, c)
+  if type(c) ~= "table" or type(c.portrait) ~= "string" then return nil end
+  if c.portrait == "auto" then return (sc and sc.id or "?") .. "/" .. tostring(key) .. ".png" end
+  return c.portrait
+end
+
+-- ── FW-C: the checkpoint snapshot (PLAN §2 F5) ──────────────────────────────
+-- What a RETRY from a checkpoint keeps of the story: the variables, the
+-- events already fired, the objective texts, the clock so far.
+function checkpointSnap(id, vars, fired, obj, elapsed)
+  return { id = id, vars = copy(vars or {}), ev = copy(fired or {}), obj = copy(obj or {}), t = elapsed or 0 }
+end
+
 -- The missions kinds (missions.goalNow), passed through W.mission
 MISSION_KINDS = { altitude = true, speed = true, orbit = true, cargo = true, soi = true, land = true, flag = true,
                   dock = true, drive = true, home = true, recover = true, deliver = true, establish = true,
@@ -835,6 +1036,9 @@ function goalLabel(g)
   if k == "orbit" then return "Reach orbit" end
   if k == "land" then return "Land" end
   if k == "recover" then return "Recover the craft" end
+  if k == "power_read" then return g.breaker and "The breaker" or "The power" end
+  if k == "part_hp" then return string.format("%s on %s", tostring(g.part or g.uid or "part"), tostring(g.craft):gsub("^craft:", "")) end
+  if k == "piece_state" then return tostring(g.part or g.uid or "the piece") end
   return k
 end
 
@@ -907,6 +1111,8 @@ function score(sc, stats)
   end
   rows[#rows + 1] = { label = "Hints", value = tostring(stats.hints or 0), ok = (stats.hints or 0) == 0 }
   if stats.crewSafe ~= nil then rows[#rows + 1] = { label = "Crew", value = stats.crewSafe and "all safe" or "lost", ok = stats.crewSafe } end
+  -- FW-C: the times the run went back to a checkpoint (PLAN §2 F5)
+  if (stats.setbacks or 0) > 0 then rows[#rows + 1] = { label = "Setbacks", value = tostring(stats.setbacks), ok = false } end
   -- (flagship) score.rows = { { label, var, fmt, par, lte | gte } }: rows read off the run's variables
   for _, r in ipairs(S.rows or {}) do
     local v = (stats.vars or {})[r.var]
@@ -1025,8 +1231,16 @@ BEATS = { ops = "string", say = "table", caption = "table", camera = "table", wa
           -- v2: dialogue, cutscenes, the world
           choice = "table", run = "string", cutscene = "boolean", shot = "table", var = "table", add = "table",
           branch = "table", ["goto"] = "string", objective = "table", knock = "table", state = "table", power = "table",
-          spawn = "table", remove = "string", walk = "table", hook = "string", reactor = "table" }
+          spawn = "table", remove = "string", walk = "table", hook = "string", reactor = "table",
+          -- FW-C: direction, light, the world (PLAN §2 F2, F4, F7)
+          face = "table", look = "table", light = "table", weather = "table", breaker = "table", wear = "table",
+          music = "music" }
+-- FW-C cast fields (the rest is refused, so a typo is caught)
+CAST_FIELDS = { name = true, tag = true, color = true, crew = true, portrait = true, expression = true, look = true,
+                radio = true, delay = true, link = true }
 TEACH = { overlay = true, catalogue = true, ghost = true, at = true, mark = true, marker = true }
+WEATHERS = { clear = true, overcast = true, rain = true, storm = true, thunderstorm = true, hail = true, snow = true,
+             blizzard = true, dust = true, duststorm = true, ash = true, ashstorm = true, calm = true }
 SITES = { base = true, near_base = true, far_flat_lit = true, far_flat = true, far_flat_dark = true }
 -- ctx (all optional): partExists(id) → bool, readFile(path) → text|nil,
 -- decodeBp(code) → bp|nil, why, readJson(path) → value|nil, why
@@ -1046,6 +1260,14 @@ function validate(sc, ctx)
       if type(w.seed) ~= "number" then E("world.seed", "a number") end
       if w.home ~= nil and w.home ~= "alien" and w.home ~= "earth" then E("world.home", "\"alien\" or \"earth\"") end
       if w.air ~= nil and type(w.air) ~= "string" then E("world.air", "a word (earth, rich, thin, none, random)") end
+      -- FW-C: the time of day held over the site (PLAN §2 F4)
+      if w.time ~= nil then
+        if type(w.time) ~= "table" then E("world.time", "{ at = night | dusk | dawn | morning | noon | afternoon | evening | degrees, hold = true }")
+        else
+          if not elevationOf(w.time.at) then E("world.time.at", "night, dusk, dawn, morning, noon, afternoon, evening or degrees above the horizon") end
+          if w.time.hold ~= nil and type(w.time.hold) ~= "boolean" then E("world.time.hold", "true or false") end
+        end
+      end
     end
   end
   local st = sc.start or {}
@@ -1137,6 +1359,9 @@ function validate(sc, ctx)
   for _, s in ipairs(type(sc.steps) == "table" and sc.steps or {}) do pre(s.on_enter); pre(s.on_done) end
   for _, q in pairs(type(sc.sequences) == "table" and sc.sequences or {}) do pre(q) end
   for _, ev in ipairs(type(sc.events) == "table" and sc.events or {}) do pre(ev.beats) end
+  for _, md in ipairs(type(sc.models) == "table" and sc.models or {}) do
+    for _, a in ipairs(type(md) == "table" and type(md.at) == "table" and md.at or {}) do pre(a.beats) end
+  end
   local step_ids = {}
   for _, s in ipairs(type(sc.steps) == "table" and sc.steps or {}) do if type(s) == "table" and s.id then step_ids[s.id] = true end end
   local seqs = type(sc.sequences) == "table" and sc.sequences or {}
@@ -1171,6 +1396,8 @@ function validate(sc, ctx)
         local want = BEATS[key]
         local pk = p .. "." .. tostring(key)
         if not want then E(p, "unknown beat '" .. tostring(key) .. "'")
+        elseif want == "music" then
+          if val ~= false and not (type(val) == "string" and val:match("^audio/.+%.ogg$")) then E(pk, "\"audio/music/<file>.ogg\" or false") end
         elseif type(val) ~= want then E(pk, "a " .. want)
         else
           if key == "camera" or key == "shot" then
@@ -1182,6 +1409,39 @@ function validate(sc, ctx)
           elseif key == "say" then
             if type(val.text or val[2]) ~= "string" then E(pk .. ".text", "missing") end
             check_who(pk .. ".who", val.who or val[1])
+            -- FW-C: the listener beside the speaker; a line's own delay
+            if val.with ~= nil then check_who(pk .. ".with", val.with) end
+            if val.delay ~= nil and (type(val.delay) ~= "number" or val.delay < 0) then E(pk .. ".delay", "seconds, 0 or more") end
+          elseif key == "face" then
+            check_who(pk .. ".who", val.who)
+            if val.who == nil then E(pk .. ".who", "missing") end
+            if type(val.emotion) ~= "string" or not FACES[faceName(val.emotion)] then
+              E(pk .. ".emotion", "one of neutral, focus, happy, excited, relief, delight, worried, scared, panic, pain, strain, tired, bored (or alarmed, smile, calm, grim)")
+            end
+            if val.weight ~= nil and type(val.weight) ~= "number" then E(pk .. ".weight", "0..1") end
+            if val.secs ~= nil and type(val.secs) ~= "number" then E(pk .. ".secs", "seconds") end
+          elseif key == "look" then
+            check_who(pk .. ".who", val.who)
+            if val.who == nil then E(pk .. ".who", "missing") end
+            if val.at ~= false then check_ref(pk .. ".at", val.at); if val.at == nil then E(pk .. ".at", "a ref, or false to let go") end end
+          elseif key == "light" then
+            for lk in pairs(val) do if not ({ ambient = 1, fog = 1, time = 1, secs = 1 })[lk] then E(pk .. "." .. tostring(lk), "ambient, fog, time or secs") end end
+            if val.ambient ~= nil and val.ambient ~= false and type(val.ambient) ~= "number" then E(pk .. ".ambient", "a share of the world's ambient (0..2), or false") end
+            if val.fog ~= nil and val.fog ~= false and type(val.fog) ~= "number" then E(pk .. ".fog", "a fog bank 0..1, or false") end
+            if val.time ~= nil and val.time ~= false and not elevationOf(val.time) then E(pk .. ".time", "night, dusk, dawn, morning, noon, afternoon, evening, degrees, or false") end
+          elseif key == "weather" then
+            if val.kind ~= false and not WEATHERS[tostring(val.kind)] then E(pk .. ".kind", "clear, overcast, rain, storm, thunderstorm, hail, snow, blizzard, dust, duststorm, ash, ashstorm, or false (the world's own)") end
+            if val.secs ~= nil and type(val.secs) ~= "number" then E(pk .. ".secs", "seconds") end
+            if val.k ~= nil and type(val.k) ~= "number" then E(pk .. ".k", "0..1") end
+          elseif key == "breaker" then
+            check_struct(pk .. ".struct", val.struct)
+            if not (val.part or val.uid) then E(pk, "part (an id prefix) or uid") end
+            if val.closed == nil and not val.trip then E(pk .. ".closed", "true, false, or trip = true") end
+          elseif key == "wear" then
+            check_ref(pk .. ".craft", (type(val.craft) == "string" and not val.craft:find(":", 1, true)) and ("craft:" .. val.craft) or val.craft)
+            if val.craft == nil then E(pk .. ".craft", "missing") end
+            if not (val.part or val.uid) then E(pk, "part (an id prefix) or uid") end
+            if type(val.hp) ~= "number" then E(pk .. ".hp", "0.05..1") end
           elseif key == "choice" then
             check_who(pk .. ".who", val.who)
             if type(val.options) ~= "table" or #val.options < 1 then E(pk .. ".options", "at least one") end
@@ -1265,6 +1525,8 @@ function validate(sc, ctx)
       end
     end
     if s.mark ~= nil then check_ref(p .. ".mark", s.mark) end
+    if s.act ~= nil and type(s.act) ~= "string" then E(p .. ".act", "the words a setback card goes back to (\"ACT 3\")") end
+    if s.stage ~= nil and type(s.stage) ~= "table" then E(p .. ".stage", "a start-like table restaged on a return to this checkpoint") end
   end
   if required == 0 and #(sc.steps or {}) > 0 then E("steps", "every step is optional") end
   for i, s in ipairs(sc.steps or {}) do
@@ -1291,10 +1553,66 @@ function validate(sc, ctx)
     end
   end
   if sc.after ~= nil and sc.after ~= "freeplay" and sc.after ~= "menu" then E("after", "freeplay or menu") end
+  if sc.failure ~= nil and sc.failure ~= "checkpoint" and sc.failure ~= "end" then E("failure", "\"checkpoint\" (a fail goes back to the last checkpoint) or \"end\" (a fail ends the run)") end
   -- v2: the cast, the sequences, the events, the hooks
   for k, c in pairs(cast) do
-    if type(c) ~= "table" then E("cast." .. tostring(k), "a table { name, tag, color, crew, portrait }")
-    elseif c.crew and not names[c.crew] then E("cast." .. tostring(k) .. ".crew", "no crew member named " .. tostring(c.crew)) end
+    local pc = "cast." .. tostring(k)
+    if type(c) ~= "table" then E(pc, "a table { name, tag, color, crew, portrait, radio, delay, link }")
+    else
+      if c.crew and not names[c.crew] then E(pc .. ".crew", "no crew member named " .. tostring(c.crew)) end
+      -- FW-C (PLAN §2 F1, F3)
+      for f in pairs(c) do if not CAST_FIELDS[f] then E(pc .. "." .. tostring(f), "unknown cast field (name, tag, color, crew, portrait, expression, look, radio, delay, link)") end end
+      if c.portrait ~= nil and type(c.portrait) ~= "string" then E(pc .. ".portrait", "\"auto\" (the booth's picture) or a file under scenarios/") end
+      if c.portrait == "auto" and not c.crew and type(c.look) ~= "number" then E(pc .. ".portrait", "\"auto\" needs crew = <name> or look = <seed>") end
+      -- (a missing picture is not an error: the plate draws the role letter)
+      if c.expression ~= nil and not (type(c.expression) == "string" and FACES[faceName(c.expression)]) then E(pc .. ".expression", "a face (neutral, tired, alarmed, focus, worried, happy…)") end
+      if c.look ~= nil and type(c.look) ~= "number" then E(pc .. ".look", "a face seed (a number)") end
+      if c.radio ~= nil and type(c.radio) ~= "boolean" then E(pc .. ".radio", "true or false") end
+      if c.delay ~= nil and (type(c.delay) ~= "number" or c.delay < 0) then E(pc .. ".delay", "seconds, 0 or more") end
+      if c.link ~= nil then
+        local lk = parseRef(c.link)
+        if lk ~= "craft" and lk ~= "crew" then E(pc .. ".link", "craft:<name> or crew:<name>") else check_ref(pc .. ".link", c.link) end
+      end
+    end
+  end
+  -- FW-C: meters and models (PLAN §2 F6)
+  for i, m in ipairs(type(sc.meters) == "table" and sc.meters or {}) do
+    local p = string.format("meters[%d]", i)
+    if type(m) ~= "table" then E(p, "a table { var, read, … }")
+    else
+      if type(m.var) ~= "string" then E(p .. ".var", "the variable it keeps") end
+      local src, fld = tostring(m.read or ""):match("^(%a+)%.?([%w_]*)$")
+      if not (src and METER_READS[src]) then E(p .. ".read", "reactor.<field>, grid.supply|need|stored|battery, dose.msv, suit.o2, room.p|o2|co2, part.hp, piece.<field> or var.<name>")
+      elseif (src == "reactor" or src == "grid" or src == "room" or src == "piece") and m.struct == nil then E(p .. ".struct", "the structure it reads")
+      elseif (src == "dose" or src == "suit") and m.who == nil then E(p .. ".who", "the crew member it reads")
+      elseif src == "part" and m.craft == nil then E(p .. ".craft", "the craft it reads") end
+      if m.struct then check_struct(p .. ".struct", m.struct) end
+      if m.mode ~= nil and not METER_MODES[m.mode] then E(p .. ".mode", "sample, integrate, peak or min") end
+      if m.when ~= nil then
+        if type(m.when) ~= "table" or not KINDS[m.when.kind] then E(p .. ".when.kind", "a goal table (any kind)") end
+      end
+      if m.scale ~= nil and type(m.scale) ~= "number" then E(p .. ".scale", "a number") end
+    end
+  end
+  for i, md in ipairs(type(sc.models) == "table" and sc.models or {}) do
+    local p = string.format("models[%d]", i)
+    if type(md) ~= "table" then E(p, "a table { var, start, rate, when, … }")
+    else
+      if type(md.var) ~= "string" then E(p .. ".var", "the variable it keeps") end
+      for _, f in ipairs({ "start", "rate", "accel", "base", "rest", "tau", "fall", "min", "max", "round" }) do
+        if md[f] ~= nil and type(md[f]) ~= "number" then E(p .. "." .. f, "a number") end
+      end
+      for _, f in ipairs({ "active", "when" }) do
+        if md[f] ~= nil and (type(md[f]) ~= "table" or not KINDS[md[f].kind]) then E(p .. "." .. f .. ".kind", "a goal table (any kind)") end
+      end
+      for j, a in ipairs(md.at or {}) do
+        local pa = string.format("%s.at[%d]", p, j)
+        if type(a.value) ~= "number" then E(pa .. ".value", "a number") end
+        if a.run then check_seq(pa .. ".run", a.run) end
+        if not (a.run or a.beats) then E(pa, "run or beats") end
+        check_beats(pa .. ".beats", a.beats)
+      end
+    end
   end
   if sc.vars ~= nil and type(sc.vars) ~= "table" then E("vars", "a table of name = value") end
   if sc.sequences ~= nil and type(sc.sequences) ~= "table" then E("sequences", "a table of name = { beats }") end

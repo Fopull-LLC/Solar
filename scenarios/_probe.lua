@@ -54,6 +54,7 @@ return {
   score = { par = 120, budget = { funds = 7000 },
             medals = { gold = { time = 1.0, hints = 0 }, silver = { time = 2.0 }, bronze = "done" } },
   after = "freeplay",
+  failure = "end",                -- a challenge: a fail ends the run (the story default goes back to a checkpoint)
   freeplay = { contracts = true, programme = true },
   debrief = { gold = "Probe gold.", silver = "Probe silver.", bronze = "Probe bronze.", fail = "Probe failed." },
 }

@@ -249,7 +249,7 @@ function W.grid(sid)
   local BG = ref("base_grid")
   local g = BG and BG.gridOfStruct and BG.gridOfStruct(sid)
   local s = g and BG.status(g.id)
-  return s and { supply = s.supply, need = s.need, powered = s.powered, stored = s.stored } or nil
+  return s and { supply = s.supply, need = s.need, powered = s.powered, stored = s.stored, cap = s.cap } or nil
 end
 function W.parts(sid) local ST = ref("structures"); local r = ST and ST.get(sid); return r and r.bp or {} end
 function W.partsNear(r, rad)
@@ -342,26 +342,68 @@ function var(name) return vars()[name] end
 function setVar(name, v) local t = vars(); t[name] = v; sset("scn.vars", t); bump() end
 W.var = function(name) return var(name) end
 
--- who → { name, tag, color, portrait } (the cast, a crew name, or Ops)
+-- who → { name, tag, color, portrait, radio, delay, link } (the cast, a crew
+-- name, or Ops). FW-C: portrait = "auto" is the booth's picture
+-- (<id>/<key>.png, tools/perf/portraitbooth.sh); radio, delay and link are the
+-- cast's (PLAN §2 F3).
+local function cast_speaker(k, c, who)
+  local pt = rulebook().portraitOf(sc, k, c)
+  local tex = c.portrait == "auto" and portraitTex and portraitTex(k) or nil
+  return { who = k, name = c.name or who, tag = c.tag, color = c.color, portrait = tex or (pt and (sc._dir .. pt)) or nil,
+           radio = c.radio == true or nil, delay = c.delay, link = c.link, crew = c.crew }
+end
 local function speaker(who)
   who = who or "ops"
   local c = sc and sc.cast and sc.cast[who]
-  if c then return { who = who, name = c.name or who, tag = c.tag, color = c.color, portrait = c.portrait and (sc._dir .. c.portrait) or nil } end
+  if c then return cast_speaker(who, c, who) end
   if who == "ops" then return { who = "ops", name = "Ops", tag = "OPS", color = { 0.55, 0.85, 1.0 } } end
   if sc and sc.cast then
-    for k, cc in pairs(sc.cast) do if cc.crew == who then return { who = k, name = cc.name or who, tag = cc.tag, color = cc.color, portrait = cc.portrait and (sc._dir .. cc.portrait) or nil } end end
+    for k, cc in pairs(sc.cast) do if cc.crew == who then return cast_speaker(k, cc, who) end end
   end
   local C = ref("crew")
   local id = member_id(who)
   local r = C and id and C.get(id)
   return { who = who, name = r and r.name or tostring(who), tag = r and r.role and string.upper(r.role) or nil }
 end
+speakerOf = speaker
 local function chirp()
   if audio and audio.play then pcall(audio.play, "audio/sfx/crew_chime.ogg", { track = "UI", volume = 0.25 }) end
 end
-local function show_line(who, text, secs)
+-- FW-C: a radio voice over a link (`link = "craft:<name>" | "crew:<name>"`):
+-- false when that craft (or the craft the member rides) reads no comms path
+local function link_up(ref_)
+  local k, n = rulebook().parseRef(ref_)
+  local net = ref("comms")
+  if not (net and net.statusOf) then return true end
+  local v
+  if k == "craft" then
+    for _, vc in ipairs(vessels()) do if vc.craftName == n and not (vc.isLost and vc.isLost()) then v = vc end end
+    if not v then return false end
+  elseif k == "crew" then
+    local C = ref("crew")
+    v = C and C.craftOf and C.craftOf(member_id(n)) or nil
+    if not v then return true end      -- (on foot: the suit's own radio, line of sight)
+  else return true end
+  local s = v.node and net.statusOf(v.node.id)
+  return s == nil or s.connected ~= false
+end
+linkUp = link_up
+local garbled_n = 0
+local function show_line(who, text, secs, opts)
   local s = speaker(who)
   s.text = tostring(text)
+  if s.link and not link_up(s.link) then
+    garbled_n = garbled_n + 1
+    s.text = rulebook().garble(s.text, garbled_n)
+    s.garbled = true
+    if audio and audio.play then pcall(audio.play, "audio/foley/radio_squelch.ogg", { track = "UI", volume = 0.35 }) end
+  end
+  if s.radio and audio and audio.play then pcall(audio.play, "audio/foley/radio_crackle.ogg", { track = "UI", volume = 0.18 }) end
+  -- the listener, dimmed on the right of the plate (say.with)
+  if opts and opts.with then
+    local w = speaker(opts.with)
+    s.with = { who = w.who, name = w.name, tag = w.tag, color = w.color, portrait = w.portrait, radio = w.radio }
+  end
   s.t0 = now()
   s.secs = secs or (1.5 + 0.06 * #s.text)
   line = s
@@ -437,7 +479,48 @@ end
 -- THE SHOT: the camera point, the point looked at and up, all from refs read
 -- this frame. orbit = ref (dist, height, turn° over secs) | from/to (dolly)
 -- + look | look + from.
+-- KEEPING CLEAR (Ty 2026-11-10: the camera inside Dana's face): a shot's
+-- camera keeps SHOT_MIN m from the point it looks at, and a ray out to the
+-- camera over the outer half of the line pulls the camera in front of
+-- whatever stands there: a body, a wall, a part. The pull is
+-- instant, the let-go eased, so a crowd passing does not pump the lens.
+SHOT_MIN, SHOT_CLEAR, SHOT_SKIN, SHOT_NEAR = 1.1, 0.55, 0.3, 1.5
+local function keep_clear(st, cx, cy, cz, lx, ly, lz)
+  local dx, dy, dz = cx - lx, cy - ly, cz - lz
+  local L = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if L < 1e-4 then return cx, cy, cz end
+  dx, dy, dz = dx / L, dy / L, dz / L
+  local want = math.max(L, SHOT_MIN)
+  -- (the ray starts half way out: the subject itself, a hut the camera
+  -- orbits or the body it frames, never pulls the camera inside it)
+  local s0 = math.max(SHOT_CLEAR, 0.5 * want)
+  local t = now()
+  -- (the ray ten times a second: what it keeps is a distance along the
+  -- shot's line, never a point)
+  if raycast and want > s0 + 0.05 and (not st.rt or t - st.rt >= 0.1 or t < st.rt) then
+    st.rt = t
+    local ok, hit = pcall(raycast, lx + dx * s0, ly + dy * s0, lz + dz * s0, dx, dy, dz, want - s0)
+    st.cap = nil
+    if ok and hit and hit.distance then
+      -- a body anywhere on the line pulls the camera in front of it; a piece
+      -- only when the camera is in it or against it (within SHOT_NEAR): the
+      -- far wall of a station the shot looks into from outside is not in
+      -- the way of anything (Graveyard's fly-in looked at a wall)
+      local nm = hit.node and hit.node.valid ~= false and tostring(hit.node.name or "") or ""
+      local body = nm == "CrewBody" or nm == "Astronaut" or nm:match("^Crew") ~= nil
+      if body or (want - (s0 + hit.distance)) < SHOT_NEAR then st.cap = math.max(s0, s0 + hit.distance - SHOT_SKIN) end
+    end
+  end
+  if st.cap then want = math.min(want, st.cap) end
+  local dt = st.t and math.max(0, math.min(0.1, t - st.t)) or 0
+  st.t = t
+  if not st.d or want < st.d then st.d = want else st.d = math.min(want, st.d + 2.5 * dt) end
+  return lx + dx * st.d, ly + dy * st.d, lz + dz * st.d
+end
+keepClear = keep_clear
+
 local function shot_fn(c, t0, secs)
+  local clear = {}
   return function()
     local k = math.max(0, math.min(1, (now() - t0) / math.max(secs, 0.01)))
     local e = k * k * (3 - 2 * k)
@@ -449,7 +532,8 @@ local function shot_fn(c, t0, secs)
       local dx = F.fx * math.cos(a) + F.rx * math.sin(a)
       local dy = F.fy * math.cos(a) + F.ry * math.sin(a)
       local dz = F.fz * math.cos(a) + F.rz * math.sin(a)
-      return px - dx * dist + F.ux * h, py - dy * dist + F.uy * h, pz - dz * dist + F.uz * h, px, py, pz, F.ux, F.uy, F.uz
+      local qx, qy, qz = keep_clear(clear, px - dx * dist + F.ux * h, py - dy * dist + F.uy * h, pz - dz * dist + F.uz * h, px, py, pz)
+      return qx, qy, qz, px, py, pz, F.ux, F.uy, F.uz
     end
     local ax, ay, az, F = world_at(c.from, c.offset or { 0, 2, 0 })
     if not ax then return nil end
@@ -460,6 +544,7 @@ local function shot_fn(c, t0, secs)
     end
     local lx, ly, lz = world_at(c.look or c.to or c.from, c.lookOffset, 1.2)
     if not lx then return nil end
+    cx, cy, cz = keep_clear(clear, cx, cy, cz, lx, ly, lz)
     return cx, cy, cz, lx, ly, lz, F.ux, F.uy, F.uz
   end
 end
@@ -593,7 +678,9 @@ end
 -- beats that change the world: a skipped cutscene still runs these
 WORLD_BEATS = { reactor = true, knock = true, state = true, power = true, var = true, add = true, spawn = true, remove = true, walk = true,
                 give = true, funds = true, unlock = true, mark = true, ["goto"] = true, objective = true, branch = true,
-                run = true, alarm = true, fail = true, done = true, hook = true }
+                run = true, alarm = true, fail = true, done = true, hook = true,
+                -- FW-C: what changes the world (or the light it is seen in)
+                light = true, weather = true, breaker = true, wear = true, music = true }
 local stage_one        -- set by the staging section: (kind, entry, out)
 local walks = {}       -- id → { to = ref, offset, t1 }
 
@@ -628,6 +715,287 @@ local function test(v, t)
   return true
 end
 
+-- ── FW-C: the story framework pack (PLAN §2 F2–F4, F7) ──────────────────────
+-- DELAYED LINES: { t (agency), b = a say beat } kept in `scn.dl` (a reload
+-- keeps them); each is queued behind what is playing once its time comes and
+-- no cutscene is on (a line from far away never cuts into one).
+local delayed = nil
+local function dl_list()
+  if delayed == nil then local t = sget("scn.dl"); delayed = type(t) == "table" and t or {} end
+  return delayed
+end
+function delay_line(sayb, d)
+  local L = dl_list()
+  local b = {}
+  for k2, x in pairs(sayb) do b[k2] = x end
+  b._now = true
+  L[#L + 1] = { t = agency_now() + d, b = b }
+  sset("scn.dl", L)
+end
+local function delays_tick()
+  local L = delayed
+  if not L or #L == 0 or cut then return end
+  local t = agency_now()
+  local i, changed = 1, false
+  while i <= #L do
+    if t >= L[i].t then
+      beatq[#beatq + 1] = { b = { say = L[i].b }, src = "delay" }
+      table.remove(L, i); changed = true
+    else i = i + 1 end
+  end
+  if changed then sset("scn.dl", L) end
+end
+function pendingLines() return #(dl_list()) end
+
+-- the scripts of a member's body: their CrewBody (crew_body), their Face
+local function body_script(kind, id)
+  for _, s in ipairs(findScripts and findScripts(kind) or {}) do
+    if s.memberId == id and s.doll ~= true then return s end
+  end
+  return nil
+end
+-- a beat's `who` (a crew name, crew:<name>, or a cast key with crew =) → id
+function who_id(who)
+  if type(who) ~= "string" then return member_id(who) end
+  who = who:gsub("^crew:", "")
+  local c = sc and sc.cast and sc.cast[who]
+  if c and c.crew then return member_id(c.crew) end
+  return member_id(who)
+end
+-- FACE: { who, emotion, weight, secs } — crew_faces holds the expression
+local function face_beat(v)
+  local CF = ref("crew_faces")
+  local id = who_id(v.who)
+  if CF and CF.force and id then CF.force(id, rulebook().faceName(v.emotion), v.weight or 1, v.secs or 6) end
+end
+-- LOOK: { who, at = ref | false } — the head (crew_body) and the eyes (face)
+-- turn to the ref, re-read every frame they are posed (never a kept point)
+local function look_beat(v)
+  local id = who_id(v.who)
+  if not id then return end
+  local fn = nil
+  if v.at then
+    local target = v.at
+    fn = function() local x, y, z = pointOf(target); if not x then return nil end return x, y, z, 1 end
+  end
+  local cb = body_script("crew_body", id)
+  if cb and cb.lookSelf then pcall(cb.lookSelf, fn) end
+  local fc = body_script("face", id)
+  if fc then fc.gaze = fn end
+end
+
+-- LIGHT AND TIME (PLAN §2 F4). In Stars mode the engine lights the ground
+-- from the star bodies, re-read every frame (floptle-editor shading.rs
+-- sun_vec / star_uniforms: Light.direction is ignored while env.stars is
+-- on), so holding the time of day switches the Lighting node to its
+-- directional sun for the run and points it from the site: the real star's
+-- azimuth, the held elevation, the star's colour and its strength at the
+-- site (star_col_at: colour × min(k/d², 4)). A world does not spin (its day
+-- is its year), so the direction is re-asserted with the goals (4 Hz) and
+-- every frame only while an ease runs. Ambient goes through underground.lua's
+-- one multiplier (scriptAmbient), a fog bank through weather.forceMist.
+local LT = { hold = false }
+local function lit_comp()
+  local ln = find and find("Lighting")
+  return ln and ln:getcomponent("Light") or nil
+end
+local function star_info()
+  local h = sget("system.home")
+  local n = type(h) == "table" and h.star and find and find(h.star)
+  local cb = n and n:getcomponent("CelestialBody")
+  if not cb then return nil end
+  return n, cb
+end
+local function ease_val(e, t)
+  if not e then return nil end
+  local k = math.max(0, math.min(1, (t - e.t0) / math.max(e.secs, 0.01)))
+  k = k * k * (3 - 2 * k)
+  return e.from + (e.to - e.from) * k, k >= 1
+end
+local function site_up()
+  -- the controlled member's staged spot, else the spaceport: body-relative,
+  -- so its direction holds while the world moves
+  local spots = sget("scn.spots") or {}
+  for _, c in ipairs((sc.start and sc.start.crew) or {}) do
+    if c.control and spots[c.name] then local s = spots[c.name]; return s.b, s.x, s.y, s.z end
+  end
+  local p = pos_of("base")
+  if p then return p.body, p.x, p.y, p.z end
+  return nil
+end
+local function apply_time(el)
+  local l = lit_comp()
+  if not l then return end
+  local bn, ux, uy, uz = site_up()
+  local b = bn and space.body(bn)
+  local sn, cb = star_info()
+  if not b then return end
+  if LT.saved == nil then
+    LT.saved = { stars = l.stars, dx = l.directionX, dy = l.directionY, dz = l.directionZ, i = l.intensity,
+                 r = l.colorR, g = l.colorG, b = l.colorB }
+  end
+  local R_ = rulebook()
+  local ul = math.sqrt(ux * ux + uy * uy + uz * uz)
+  local u = { x = ux / ul, y = uy / ul, z = uz / ul }
+  local sun, k = nil, 4
+  if sn then
+    local sx, sy, sz = sn.x - (b.x + ux), sn.y - (b.y + uy), sn.z - (b.z + uz)
+    local d = math.sqrt(sx * sx + sy * sy + sz * sz)
+    if d > 1 then sun = { x = sx / d, y = sy / d, z = sz / d }; k = math.min((cb.luminosity or 1) * 1e6 / (d * d), 4) end
+  end
+  local x, y, z = R_.heldSun(u, el, sun)
+  l.stars = false
+  l.directionX, l.directionY, l.directionZ = x, y, z
+  -- the star's own colour (weather dims it under cloud), its strength here,
+  -- fading out as the held sun goes under the horizon
+  local fade = math.max(0, math.min(1, (el + 3) / 5))
+  if cb then l.colorR, l.colorG, l.colorB = cb.starColorR or 1, cb.starColorG or 1, cb.starColorB or 1 end
+  l.intensity = k * fade * (params and params.hold_gain or 1)
+  local AT = ref("atmosphere")
+  if AT then AT.sunUpOverride = math.sin(math.rad(el)) end
+  LT.el = el
+end
+local function release_time()
+  local l = lit_comp()
+  local s = LT.saved
+  if l and s then
+    l.stars = s.stars ~= false
+    l.directionX, l.directionY, l.directionZ, l.intensity = s.dx, s.dy, s.dz, s.i
+    l.colorR, l.colorG, l.colorB = s.r, s.g, s.b
+  end
+  LT.saved, LT.el, LT.hold, LT.elE = nil, nil, false, nil
+  local AT = ref("atmosphere")
+  if AT then AT.sunUpOverride = nil end
+end
+local function set_ambient(k)
+  local UG = ref("underground")
+  if UG then UG.scriptAmbient = k end
+  LT.amb = k
+end
+-- per frame only while an ease runs (a `light` beat with secs); else with the goals
+local function light_tick(every_frame)
+  local t = now()
+  if LT.elE then
+    local v, fin = ease_val(LT.elE, t)
+    apply_time(v)
+    if fin then LT.elE = nil end
+  elseif LT.hold and not every_frame and LT.el then apply_time(LT.el) end
+  if LT.ambE then
+    local v, fin = ease_val(LT.ambE, t)
+    set_ambient(v)
+    if fin then LT.ambE = nil; if LT.amb and math.abs(LT.amb - 1) < 1e-3 then set_ambient(nil) end end
+  end
+end
+local function light_beat(v)
+  local secs = v.secs or 0
+  if v.time ~= nil then
+    if v.time == false then release_time()
+    else
+      local el = rulebook().elevationOf(v.time)
+      LT.hold = true
+      if secs > 0 and LT.el then LT.elE = { from = LT.el, to = el, t0 = now(), secs = secs } else LT.elE = nil; apply_time(el) end
+    end
+  end
+  if v.ambient ~= nil then
+    local to = v.ambient == false and 1 or v.ambient
+    local from = LT.amb or 1
+    if secs > 0 then LT.ambE = { from = from, to = to, t0 = now(), secs = secs } else LT.ambE = nil; set_ambient(v.ambient ~= false and to or nil) end
+  end
+  if v.fog ~= nil then
+    local wx = ref("weather")
+    if wx and wx.forceMist then wx.forceMist(v.fog ~= false and v.fog or nil) end
+    LT.fog = v.fog ~= false and v.fog or nil
+  end
+end
+lightState = LT
+
+-- WEATHER: { kind, secs, k = 1 } eased in with the goals (weather.force),
+-- kind = false hands the sky back
+local WX = nil
+local function weather_beat(v)
+  local wx = ref("weather")
+  if not (wx and wx.force) then return end
+  if v.kind == false then WX = nil; wx.force(nil); return end
+  local kind = v.kind == "calm" and "clear" or v.kind
+  if (v.secs or 0) > 0 then WX = { kind = kind, k = v.k or 1, t0 = agency_now(), secs = v.secs }; wx.force(kind, 0.05)
+  else WX = nil; wx.force(kind, v.k or 1) end
+end
+local function weather_tick()
+  if not WX then return end
+  local wx = ref("weather")
+  local k = math.max(0, math.min(1, (agency_now() - WX.t0) / WX.secs))
+  if wx and wx.force then wx.force(WX.kind, math.max(0.05, WX.k * k)) end
+  if k >= 1 then WX = nil end
+end
+
+-- BREAKER: { struct, part | uid, closed, trip } through base_power.setBreaker
+local function breaker_beat(v)
+  local BP = ref("base_power")
+  local sid, uid = piece_of(v)
+  if not (BP and BP.setBreaker and sid) then say_log("breaker: no " .. tostring(v.part or v.uid)); return end
+  BP.setBreaker(sid, uid, v.closed ~= false, v.trip and "trip" or "hand")
+end
+W.breaker = function(t)
+  local BP = ref("base_power")
+  local sid, uid = piece_of(t)
+  if not (BP and BP.breakerState and sid) then return nil end
+  return BP.breakerState(sid, uid)
+end
+-- a craft's part: { craft, part (id prefix) | uid } → the controller, uid
+local function craft_part(t, mem)
+  local name = tostring(t.craft or ""):gsub("^craft:", "")
+  local v
+  for _, vc in ipairs(vessels()) do if vc.craftName == name and not (vc.isLost and vc.isLost()) then v = vc end end
+  if not v then return nil end
+  if t.uid then return v, t.uid end
+  if mem and mem.uid and mem.vid == (v.node and v.node.id) then return v, mem.uid end
+  for _, d in ipairs((v.fleetParts and v.fleetParts()) or {}) do
+    local id = tostring(d.id or "")
+    if id == t.part or id:sub(1, #t.part + 1) == t.part .. "." then
+      if mem then mem.uid, mem.vid = d.uid, v.node and v.node.id end
+      return v, d.uid
+    end
+  end
+  return nil
+end
+-- WEAR: { craft, part | uid, hp } (vessel_controller.wearPart)
+local function wear_beat(v)
+  local vc, uid = craft_part(v)
+  if not (vc and vc.wearPart) then say_log("wear: no " .. tostring(v.part or v.uid) .. " on " .. tostring(v.craft)); return end
+  vc.wearPart(uid, v.hp)
+end
+W.partHp = function(g, mem)
+  local vc, uid = craft_part(g, mem)
+  return vc and vc.partHp and vc.partHp(uid) or nil
+end
+-- MUSIC: a piece now (soundscape hushed while it plays) | false: silence
+local music_h = nil
+local function music_beat(v)
+  local ss = ref("soundscape")
+  if music_h and music_h.stop then pcall(music_h.stop, music_h) end
+  music_h = nil
+  if v == false then if ss and ss.hush then ss.hush(600) end return end
+  if ss and ss.hush then ss.hush(400) end
+  if audio and audio.play then
+    local ok, h = pcall(audio.play, v, { track = "Music", volume = 0.8, mode = "Flat" })
+    if ok then music_h = h end
+  end
+end
+
+-- a structure piece's live state (copies): the hooks' api.piece and the
+-- piece_state goal read this
+local function piece_read(struct, part, uid)
+  local sid, uid_, p = piece_of({ struct = struct, part = part, uid = uid })
+  if not sid then return nil end
+  local ST, RP = ref("structures"), ref("reactor_plant")
+  local st = ST and ST.partState and ST.partState(sid, uid_) or {}
+  local c = { id = p.id, uid = uid_, knocked = p.wr == true }
+  for k, v in pairs(st) do if type(v) ~= "table" then c[k] = v end end
+  if RP and RP.plantOfPart and RP.plantOfPart(sid, uid_) and RP.pumpOn then c.pumpOn = RP.pumpOn(sid, uid_) end
+  return c
+end
+W.piece = function(g) return piece_read(g.struct, g.part, g.uid) end
+
 local hooks_api
 local function run_beat(b, e)
   local k, v = next(b)
@@ -635,13 +1003,23 @@ local function run_beat(b, e)
   if k == "cutscene" then if e and e.cs then cut_begin(e.cs) end
   elseif k == "ops" then local s = ops_line(v); beat_busy = { kind = "line", t1 = now() + s.secs }
   elseif k == "say" then
-    local s = show_line(v.who or v[1], v.text or v[2], v.secs)
+    -- FW-C: a voice with a light-time (cast `delay`, or the line's own) is
+    -- heard that many game seconds after its beat; the queue does not wait
+    local who = v.who or v[1]
+    local d = v.delay
+    if d == nil then local s0 = speaker(who); d = s0.delay end
+    if not v._now and type(d) == "number" and d > 0 then
+      delay_line({ who = who, text = v.text or v[2], secs = v.secs, with = v.with, wait = v.wait }, d)
+      return nil
+    end
+    local s = show_line(who, v.text or v[2], v.secs, v)
     if v.wait ~= false then beat_busy = { kind = "line", t1 = now() + s.secs } end
   elseif k == "choice" then
     local s = speaker(v.who)
     local texts = {}
     for i, o in ipairs(v.options or {}) do texts[i] = o.text end
-    choice = { who = s.who, name = s.name, color = s.color, prompt = v.prompt, options = texts, opts = v.options or {},
+    choice = { who = s.who, name = s.name, color = s.color, tag = s.tag, portrait = s.portrait, radio = s.radio,
+               prompt = v.prompt, options = texts, opts = v.options or {},
                t0 = now(), timeout = v.timeout, default = v.default or 1 }
     say_log("choice up: " .. tostring(v.prompt))
     bump()
@@ -694,8 +1072,8 @@ local function run_beat(b, e)
     local ST = ref("structures")
     if sid and ST then ST.remove(sid) end
   elseif k == "walk" then
-    local id = member_id(v.who)
-    if id then walks[id] = { to = v.to, offset = v.offset, t1 = now() + (v.secs or 20), who = v.who } end
+    local id = who_id(v.who)
+    if id then walks[id] = { to = v.to, offset = v.offset, t1 = now() + (v.secs or 20), who = v.who, speed = v.speed } end
   elseif k == "give" then give(v)
   elseif k == "funds" then local co = ref("company"); if co then if v >= 0 then co.earn(v, "scenario") else co.spend(-v, "scenario") end end
   elseif k == "unlock" then local rs = ref("research"); if rs and rs.grant then rs.grant(v, "scenario") end
@@ -717,6 +1095,14 @@ local function run_beat(b, e)
     local H = hooks_of()
     local f = H and H[v]
     if type(f) == "function" then local ok, err = pcall(f, hooks_api()); if not ok then say_log("hook " .. v .. ": " .. tostring(err)) end end
+  -- FW-C
+  elseif k == "face" then face_beat(v)
+  elseif k == "look" then look_beat(v)
+  elseif k == "light" then light_beat(v)
+  elseif k == "weather" then weather_beat(v)
+  elseif k == "breaker" then breaker_beat(v)
+  elseif k == "wear" then wear_beat(v)
+  elseif k == "music" then music_beat(v)
   end
   return nil
 end
@@ -752,10 +1138,30 @@ local function walks_tick()
           local m = math.max(math.abs(f), math.abs(s), 1e-3)
           pw.steer(f / m, s / m)
         end
-      elseif not active_ and now() > w.t1 - (w.instant and w.t1 or 0) then
-        local l = math.sqrt((x - b.x) ^ 2 + (y - b.y) ^ 2 + (z - b.z) ^ 2)
-        if C.setDown then C.setDown(id, b.x + (x - b.x) * (l + 0.5) / l, b.y + (y - b.y) * (l + 0.5) / l, b.z + (z - b.z) * (l + 0.5) / l) end
-        walks[id] = nil
+      elseif not active_ then
+        -- FW-C: their CrewBody walks there (crew_body.steerTo: the target
+        -- handed over body-relative, re-read from the ref every frame); a
+        -- walk out of time, skipped, or with no body in range is set down
+        -- (the body's script found once a walk, not a scene walk a frame)
+        if not (w.cb and w.cb.valid ~= false and w.cb.memberId == id) and now() >= (w.look_t or 0) then
+          w.cb = body_script("crew_body", id)
+          if not w.cb then w.look_t = now() + 0.5 end
+        end
+        local cb = (not w.instant and now() <= w.t1) and w.cb or nil
+        if cb and cb.steerSelf and cb.steerSelf(p.body, x - b.x, y - b.y, z - b.z, { speed = w.speed }) then
+          w.steered = true
+          if cb.arrived and cb.arrived() then walks[id] = nil end
+        elseif now() > w.t1 - (w.instant and w.t1 or 0) then
+          local cb2 = w.steered and w.cb or nil
+          if cb2 and cb2.steerStop then cb2.steerStop() end
+          local far = true
+          if cb2 and cb2.walkDist then local d = cb2.walkDist(p.body, x - b.x, y - b.y, z - b.z); far = d == nil or d > 2.0 end
+          if far or w.instant then
+            local l = math.sqrt((x - b.x) ^ 2 + (y - b.y) ^ 2 + (z - b.z) ^ 2)
+            if C.setDown then C.setDown(id, b.x + (x - b.x) * (l + 0.5) / l, b.y + (y - b.y) * (l + 0.5) / l, b.z + (z - b.z) * (l + 0.5) / l) end
+          end
+          walks[id] = nil
+        end
       end
     end
   end
@@ -779,7 +1185,7 @@ function skipCutscene()
   if choice then local c = choice; choice = nil; apply_choice(c.opts[c.default or 1]) end
   for _, e in ipairs(run_now) do
     local k, v = next(e.b)
-    if k == "walk" then local id2 = member_id(v.who); if id2 then walks[id2] = { to = v.to, offset = v.offset, t1 = now(), instant = true } end
+    if k == "walk" then local id2 = who_id(v.who); if id2 then walks[id2] = { to = v.to, offset = v.offset, t1 = now(), instant = true } end
     else run_beat(e.b, { cs = nil }) end
   end
   for id2, w in pairs(walks) do w.t1 = now(); w.instant = true end
@@ -969,6 +1375,14 @@ local function stage_crew(list, out)
       map[c.name] = id
       C.rename(id, c.name)
       if c.role then C.patch(id, { role = c.role }) end
+      -- FW-C: a cast `look` seed pins this member's face (else the generator's, random)
+      local CF = ref("crew_faces")
+      for _, cc in pairs((sc and sc.cast) or {}) do
+        if cc.crew == c.name and type(cc.look) == "number" and CF and CF.lookFor then
+          local okl, L = pcall(CF.lookFor, cc.look, id, c.name)
+          if okl and type(L) == "table" then C.patch(id, { look = L }) end
+        end
+      end
       local inv = ref("inventory")
       for _, it in ipairs(c.pack or {}) do
         if inv then
@@ -1412,6 +1826,7 @@ local function stage_all()
     local s = i and sc.steps[i]
     if s and s.stage then stage_table(s.stage, out) end
     sset("scn.retryFrom", false)
+    retried = true      -- (a return to a checkpoint goes straight back in: no briefing)
   end
   -- what the run is measured against
   local co, ST = ref("company"), ref("structures")
@@ -1516,7 +1931,14 @@ local function open_step(i)
   open_seen[s.id] = true
   step_t0[s.id] = agency_now()
   progress_t[s.id] = agency_now()
-  if s.checkpoint then sset("scn.cp", s.id) end
+  if s.checkpoint then
+    sset("scn.cp", s.id)
+    -- FW-C (PLAN §2 F5): what a RETRY from here keeps of the story
+    local snap = rulebook().checkpointSnap(s.id, vars(), sget("scn.ev"), sget("scn.obj"),
+                                           agency_now() - (tonumber(sget("scn.t0")) or agency_now()))
+    snap.mat, snap.m0 = sget("scn.mat"), sget("scn.m0")
+    sset("scn.cpSnap", snap)
+  end
   queue_beats(s.on_enter, s.id)
   if s.run then run_seq(s.run, false) end
   call_hook("on_step", s.id)
@@ -1570,7 +1992,7 @@ local function stats_now()
   local safe = not W.crewDead(nil)
   return { secs = agency_now() - t0, spent = math.max(0, (tonumber(sget("scn.f0")) or 0) - (co and co.balance() or 0)),
            hints = tonumber(sget("scn.hints")) or 0, pieces = math.max(0, pieces - (tonumber(sget("scn.p0")) or pieces)),
-           crewSafe = safe, vars = vars() }
+           crewSafe = safe, vars = vars(), setbacks = tonumber(sget("scn.setbacks")) or 0 }
 end
 statsNow = stats_now
 
@@ -1608,8 +2030,43 @@ local function finish_now()
   end
 end
 
+-- A SETBACK (PLAN §2 F5, Ty 2026-11-10: "you can fail but it just goes
+-- back to your last checkpoint"): the default for every scenario but those
+-- with `failure = "end"`. A card says what happened and where you go back
+-- to ("BACK TO ACT 3", the checkpoint step's `act`, else its text), then the
+-- run is put back (checkpoint_restore). The DEBRIEF is only for the end.
+setback = nil          -- { text, act, to, t1 } while the card is up
+local function setback_start(why)
+  local cp = sget("scn.cp")
+  local i = cp and rulebook().stepIndex(sc, cp)
+  local s = i and sc.steps[i]
+  local act = s and (s.act or s.text) or "the start"
+  local n = (tonumber(sget("scn.setbacks")) or 0) + 1
+  sset("scn.setbacks", n)
+  setback = { text = why or "That went wrong.", act = act, to = cp, t1 = now() + ((params and params.setback_secs) or 4.5), n = n }
+  say_log(string.format("SETBACK %d: %s → back to %s", n, tostring(why), tostring(cp or "the start")))
+  beatq, beat_busy, line, choice = {}, nil, nil, nil
+  local stg = ref("scenario_stage")
+  if stg and stg.dropSays then pcall(stg.dropSays) end
+  if cut then cut_end() end
+  camera_end()
+  set_phase("setback")
+  if not emit("setback", setback) then
+    local bc = ref("big_caption")
+    if bc and bc.show then bc.show("BACK TO " .. string.upper(tostring(act)), setback.text, 5.0) end
+  end
+end
+local function setback_tick()
+  if setback and now() >= setback.t1 then
+    local to, n = setback.to, setback.n
+    setback = nil
+    checkpoint_restore(to, { setbacks = n })
+  end
+end
+
 function fail(why)
-  if not sc or phase == "done" or phase == "failed" then return end
+  if not sc or phase == "done" or phase == "failed" or phase == "setback" then return end
+  if (sc.failure or "checkpoint") ~= "end" then setback_start(why); return end
   fail_text = why or "The scenario failed."
   local st = stats_now()
   stats_final = st
@@ -1622,6 +2079,88 @@ function fail(why)
   if not listeners.phase then
     local bc = ref("big_caption")
     if bc and bc.show then bc.show("FAILED · " .. tostring(sc.title), fail_text, 8.0) end
+  end
+end
+
+-- FW-C: METERS and MODELS (scenario.lua stepMeter / stepModel), with the goals
+local function strip_struct(n) return tostring(n or ""):gsub("^struct:", "") end
+local function meter_read(m, i)
+  local src, fld = tostring(m.read or ""):match("^(%a+)%.?([%w_]*)$")
+  if src == "var" then return tonumber(var(fld)) end
+  if src == "reactor" then
+    local sid = struct_id(strip_struct(m.struct)); local r = sid and W.reactor(sid)
+    return r and tonumber(r[fld]) or nil
+  elseif src == "grid" then
+    local sid = struct_id(strip_struct(m.struct)); local s = sid and W.grid(sid)
+    if not s then return nil end
+    if fld == "battery" then return (s.cap or 0) > 0 and (s.stored or 0) / s.cap or 0 end
+    return tonumber(s[fld])
+  elseif src == "dose" then
+    -- millisieverts (a lethal dose, 1.0 of the crew's dose, is 5 Sv)
+    local C, id = ref("crew"), who_id(m.who)
+    local d = C and id and C.doseOf and C.doseOf(id)
+    return d and d * 5000 or nil
+  elseif src == "suit" then return W.suitO2(tostring(m.who or ""):gsub("^crew:", ""))
+  elseif src == "room" then
+    local sid = struct_id(strip_struct(m.struct))
+    local r = sid and rulebook().pickRoom(W.rooms(sid), m.room or "largest")
+    local a = r and W.roomAir(sid, r.id)
+    return a and tonumber(a[fld]) or nil
+  elseif src == "part" then
+    mem["mpart:" .. i] = mem["mpart:" .. i] or {}
+    return W.partHp(m, mem["mpart:" .. i])
+  elseif src == "piece" then
+    local p = piece_read(m.struct, m.part, m.uid)
+    local v = p and p[fld]
+    if type(v) == "boolean" then return v and 1 or 0 end
+    return tonumber(v)
+  end
+  return nil
+end
+local mm_last = nil
+local function meters_models(t, ctx)
+  local dt = mm_last and math.max(0, math.min(5, t - mm_last)) or 0
+  mm_last = t
+  if not (sc.meters or sc.models) then return end
+  local R_ = rulebook()
+  local m0 = sget("scn.m0") or {}
+  for i, m in ipairs(sc.meters or {}) do
+    local ok = true
+    if m.when then mem["mw:" .. i] = mem["mw:" .. i] or {}; ok = R_.evalGoal(m.when, W, mem["mw:" .. i], ctx) end
+    if ok then
+      local r = meter_read(m, i)
+      if type(r) == "number" then
+        if m.delta and m0[tostring(i)] == nil then m0[tostring(i)] = r; sset("scn.m0", m0) end
+        local cur = var(m.var)
+        local nv = R_.stepMeter(m, cur, r, dt, m0[tostring(i)])
+        if nv ~= cur then setVar(m.var, nv) end
+      end
+    end
+  end
+  local fired = nil
+  for i, md in ipairs(sc.models or {}) do
+    local act = true
+    if md.active then mem["ma:" .. i] = mem["ma:" .. i] or {}; act = R_.evalGoal(md.active, W, mem["ma:" .. i], ctx) end
+    if var(md.var) == nil and md.start ~= nil then setVar(md.var, md.start) end
+    if act and dt > 0 then
+      local rising = true
+      if md.when then mem["mr:" .. i] = mem["mr:" .. i] or {}; rising = R_.evalGoal(md.when, W, mem["mr:" .. i], ctx) end
+      local cur = var(md.var)
+      local nv, crossed = R_.stepModel(md, cur, rising, dt)
+      if nv ~= cur then setVar(md.var, nv) end
+      for _, j in ipairs(crossed) do
+        fired = fired or sget("scn.mat") or {}
+        local key = i .. ":" .. j
+        local a = md.at[j]
+        if a.once == false or not fired[key] then
+          fired[key] = t
+          sset("scn.mat", fired)
+          say_log(string.format("model %s crossed %s", md.var, tostring(a.value)))
+          if a.run then run_seq(a.run, false) end
+          if a.beats then queue_beats(a.beats, "model") end
+        end
+      end
+    end
   end
 end
 
@@ -1658,6 +2197,9 @@ local function evaluate()
     if s.hint2 and hint_shown[s.id] == 1 and t - (progress_t[s.id] or t) >= R_.HINT2_SECS then hint_shown[s.id] = 2; bump() end
   end
   call_hook("tick", t)
+  meters_models(t, ctx)
+  weather_tick()
+  light_tick(false)
   -- the scripted events
   local fired = sget("scn.ev") or {}
   for i, ev in ipairs(sc.events or {}) do
@@ -1709,7 +2251,7 @@ local function build_state()
     outcome = outcome or nil, medal = med or nil, failText = sget("scn.failText") or nil,
     after = sc.after or "freeplay", checkpoint = sget("scn.cp") or nil, version = version,
     mark = s and s.mark,
-    line = line, choice = choice and { who = choice.who, name = choice.name, color = choice.color, prompt = choice.prompt,
+    line = line, choice = choice and { who = choice.who, name = choice.name, color = choice.color, tag = choice.tag, portrait = choice.portrait, prompt = choice.prompt,
                                       options = choice.options, t0 = choice.t0, timeout = choice.timeout } or nil,
     cutscene = cut ~= nil, letterbox = cut ~= nil, alarm = alarm_on, vars = vars(),
   }
@@ -1753,7 +2295,7 @@ end
 
 -- The objectives card's step (objectives.lua `scn:` source): → step | nil
 function cardStep()
-  if not (active and sc) or (phase ~= "running" and phase ~= "briefing") then return nil end
+  if not (active and sc) or (phase ~= "running" and phase ~= "briefing" and phase ~= "setback") then return nil end
   local s = state()
   if not s.stepText then return nil end
   local goals = {}
@@ -1776,8 +2318,15 @@ function go()
   if phase ~= "briefing" and phase ~= "staging_done" then return false end
   if physics and physics.pause and paused_by_us then physics.pause(false) end
   paused_by_us = false
-  if not sget("scn.t0") then sset("scn.t0", agency_now()) end
+  if not sget("scn.t0") then sset("scn.t0", agency_now() - (tonumber(sget("scn.t0off")) or 0)) end
   set_phase("running")
+  start_portraits()
+  -- FW-C: world.time held over the site (PLAN §2 F4)
+  local wt = type(sc.world) == "table" and sc.world.time
+  if type(wt) == "table" and wt.hold ~= false and not LT.hold then
+    local el = rulebook().elevationOf(wt.at)
+    if el then LT.hold = true; apply_time(el) end
+  end
   if not sget("scn.started") then
     sset("scn.started", true)
     queue_beats(sc.on_start, "start")
@@ -1787,13 +2336,26 @@ function go()
 end
 paused_by_us = false
 
-local function reload_slot(retryFrom)
+-- THE CHECKPOINT RESTORE (PLAN §2 F5), the one place a run is put back.
+-- Today it RESTAGES: slot `scn` is wiped and staged again from the start
+-- table, the checkpoint step's `stage` table on top, the steps before it
+-- latched, and the story's state (variables, fired events, objective texts,
+-- model crossings, the clock so far) written back from the snapshot taken
+-- when the checkpoint opened; the opening is not played again. When engine
+-- card 0681 lands (save.copySlot, save.slots, terrain.copySaveDir), this is
+-- the function that copies `scn.cp` and its terrain back over `scn` instead.
+-- retryFrom nil: from the very start (a RESTART, or a setback before any
+-- checkpoint). keep = { setbacks = n } carried across.
+function checkpoint_restore(retryFrom, keep)
   local R_ = rulebook()
   local id = sc and sc.id or sget("g_scenario")
   camera_end()
+  release_time()
   if physics and physics.pause then physics.pause(false) end
-  local ok, err = R_.prepareSlot(id)
+  local snap = retryFrom and sget("scn.cpSnap") or nil
+  local ok, err = R_.prepareSlot(id, { save = save, terrain = terrain })
   if not ok then say_log("restart failed: " .. tostring(err)); return false end
+  if keep and keep.setbacks then save.set("scn.setbacks", keep.setbacks) end
   if retryFrom then
     local s2 = R_.load(id)
     local d = {}
@@ -1801,10 +2363,21 @@ local function reload_slot(retryFrom)
     save.set("scn.done", d)
     save.set("scn.retryFrom", retryFrom)
     save.set("scn.cp", retryFrom)
+    if type(snap) == "table" and snap.id == retryFrom then
+      save.set("scn.vars", snap.vars or {})
+      if snap.ev then save.set("scn.ev", snap.ev) end
+      if snap.obj then save.set("scn.obj", snap.obj) end
+      if snap.mat then save.set("scn.mat", snap.mat) end
+      if snap.m0 then save.set("scn.m0", snap.m0) end
+      save.set("scn.t0off", snap.t or 0)
+      save.set("scn.started", true)
+      save.set("scn.cpSnap", snap)
+    end
   end
   scene.load("system")
   return true
 end
+local function reload_slot(retryFrom) return checkpoint_restore(retryFrom) end
 function restart() return reload_slot(nil) end
 function retry()
   local cp = sget("scn.cp")
@@ -1814,6 +2387,11 @@ function continueFreeplay()
   set_phase("freeplay")
   sset("scn.freeplay", true)
   camera_end()
+  -- the world's own light, sky and music again
+  release_time()
+  if LT.amb then set_ambient(nil) end
+  if LT.fog then local wx = ref("weather"); if wx and wx.forceMist then wx.forceMist(nil) end; LT.fog = nil end
+  WX = nil
 end
 function toMenu()
   local gm = ref("game_manager")
@@ -1892,6 +2470,225 @@ function dumpStart()
   if assets and assets.writeText then pcall(assets.writeText, path, text) end
   say_log("dumped the world to " .. path)
   return path, text
+end
+
+-- ── FW-C: PORTRAITS (PLAN §2 F1; Ty 2026-11-10: "captured since every human
+-- should be random") ──────────────────────────────────────────────────────
+-- A cast member with `portrait = "auto"` and `crew = <name>` is photographed
+-- once, after staging, from their own body in this playthrough (the face the
+-- generator gave them, or the one their `look` seed pins): a camera of our
+-- own a little in front of the face, re-placed EVERY FRAME from the body's
+-- pose until the capture answers (the planet moves metres a tick: a camera
+-- placed once would drift off the face before the picture is drawn), then
+-- camera.captureTexture → "img:N", the plate's picture for the rest of the
+-- session. One member at a time, off the per-frame path (a job). A member
+-- with no body in range keeps the booth's png (<id>/<key>.png), which
+-- tools/perf/portraitbooth.sh bakes with the same rig (opts.bytes).
+local portraits = {}      -- cast key → texture name
+local pcam = nil          -- { node, target = { id | node }, back, done } while a capture runs
+PROF.portrait_ms, PROF.portraits = 0, 0
+function portraitTex(key) return portraits[key] end
+local function body_node(id)
+  local C = ref("crew")
+  if not (C and id) then return nil end
+  if id == (C.activeId and C.activeId()) then
+    local pw = ref("planet_walker")
+    if pw and pw.onFoot == false then return nil end
+    return find and find("Astronaut") or nil
+  end
+  local n = C.bodyOf and C.bodyOf(id)
+  if n and n.valid ~= false then return n end
+  return nil
+end
+-- the body's helmet parts by name (suit.lua's attachments under the AstroModel)
+local function find_named(n, names, out, depth)
+  if depth > 6 or not (n and n.children) then return out end
+  for _, c in ipairs(n:children() or {}) do
+    if names[c.name] then out[#out + 1] = c end
+    find_named(c, names, out, depth + 1)
+  end
+  return out
+end
+-- the face's point and the way the face looks, THIS frame
+local function face_frame(n, id)
+  local x, y, z = n.x, n.y, n.z
+  if n.worldPos then local p = n.worldPos; if p and p.x then x, y, z = p.x, p.y, p.z end end
+  local d = space.dominant(x, y, z)
+  local b = d and space.body(d)
+  if not b then return nil end
+  local ux, uy, uz = x - b.x, y - b.y, z - b.z
+  local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+  ux, uy, uz = ux / l, uy / l, uz / l
+  -- the way the face looks: the suit model's +Z (crew.lua: "the rig looks
+  -- along its node's +Z"), this frame
+  local fx, fy, fz = nil, nil, nil
+  for _, ch in ipairs(n.children and n:children() or {}) do
+    if ch.name == "AstroModel" and ch.worldForward then
+      local f = ch:worldForward()
+      fx, fy, fz = -f.x, -f.y, -f.z
+    end
+  end
+  -- the head itself where it can be read (the Face rides the Head bone): a
+  -- head turned with the view (the player's) is met face on
+  if not (params and params.portrait_face_node == false) then
+    local fn = find_named(n, { Face = true }, {}, 0)[1]
+    if fn and fn.worldForward and fn.worldPos then
+      local f = fn:worldForward()
+      local hx, hy, hz = -f.x, -f.y, -f.z
+      -- (only if it agrees with the body within 100°: a rig whose axes differ is not trusted)
+      if fx == nil or hx * fx + hy * fy + hz * fz > -0.17 then fx, fy, fz = hx, hy, hz end
+    end
+  end
+  if not fx then
+    local f = n.toWorld and n:toWorld(vec3(0, 0, 1)) or nil
+    if f then fx, fy, fz = f.x - x, f.y - y, f.z - z else fx, fy, fz = 1, 0, 0 end
+  end
+  local du = fx * ux + fy * uy + fz * uz
+  fx, fy, fz = fx - ux * du, fy - uy * du, fz - uz * du
+  local fl = math.sqrt(fx * fx + fy * fy + fz * fz)
+  if fl < 1e-6 then return nil end
+  fx, fy, fz = fx / fl, fy / fl, fz / fl
+  local hh = (params and params.portrait_head) or 0.70
+  return x + ux * hh, y + uy * hh, z + uz * hh, fx, fy, fz, ux, uy, uz
+end
+local function pcam_place()
+  local c = pcam
+  if not (c and c.node and c.node.valid ~= false) then return end
+  local n = c.target
+  if not (n and n.valid ~= false) then return end
+  local hx, hy, hz, fx, fy, fz, ux, uy, uz = face_frame(n, c.id)
+  if not hx then return end
+  -- head and shoulders: a little under the eyes, from a step away
+  local dist, lift, aim = c.dist or 0.95, 0.0, -0.06
+  -- a wall, a pipe or a console in front of the face: the camera comes in
+  -- before it (the head's own body is not in the way: the ray starts clear of it)
+  -- and if the way in front is shut (a console, a wall), a three-quarter
+  -- view from the most open side (kept for the rest of the capture)
+  if raycast then
+    local function clearance(ax, ay, az)
+      local ok, hit = pcall(raycast, hx + ax * 0.12, hy + ay * 0.12, hz + az * 0.12, ax, ay, az, dist - 0.12, n)
+      if ok and hit and hit.distance then return 0.12 + hit.distance - 0.06 end
+      return dist
+    end
+    local rx, ry, rz = uy * fz - uz * fy, uz * fx - ux * fz, ux * fy - uy * fx
+    local best_a, best_c = c.side or 0, -1
+    for _, a in ipairs(c.side and { c.side } or { 0, 35, -35, 70, -70 }) do
+      local ca, sa = math.cos(math.rad(a)), math.sin(math.rad(a))
+      local cl = clearance(fx * ca + rx * sa, fy * ca + ry * sa, fz * ca + rz * sa)
+      if cl > best_c + 0.05 then best_a, best_c = a, cl end
+      if cl >= dist - 0.01 then break end
+    end
+    c.side = best_a
+    local ca, sa = math.cos(math.rad(best_a)), math.sin(math.rad(best_a))
+    fx, fy, fz = fx * ca + rx * sa, fy * ca + ry * sa, fz * ca + rz * sa
+    dist = math.max(0.3, best_c)
+  end
+  -- (the same head-and-shoulders frame however near: the lens widens)
+  if c.fdist ~= dist then
+    c.fdist = dist
+    local cc = c.node.getcomponent and c.node:getcomponent("Camera")
+    if cc then pcall(function() cc.fovY = 2 * math.atan(0.2 / dist) end) end
+  end
+  c.node.pos = vec3(hx + fx * dist + ux * lift, hy + fy * dist + uy * lift, hz + fz * dist + uz * lift)
+  c.node:lookAt(vec3(hx + ux * aim, hy + uy * aim, hz + uz * aim), vec3(ux, uy, uz))
+end
+local HIDE_FOR_PORTRAIT = { ["Helmet Visor"] = true, ["Helmet Lamps"] = true }
+-- capturePortrait(id, { look = seed, expression, bytes = true, w }, cb):
+-- cb(tex | bytes | nil, why). `look` borrows the body's face for the shot.
+function capturePortrait(id, opts, cb)
+  opts = opts or {}
+  if pcam then return false, "busy" end
+  local n = body_node(id)
+  if not (n and createNode and camera) then if cb then cb(nil, "no body") end return false, "no body" end
+  local CF = ref("crew_faces")
+  if opts.expression and CF and CF.force then CF.force(id, rulebook().faceName(opts.expression), 1, 4) end
+  local fc = opts.look and body_script("face", id) or nil
+  if fc and fc.setLook and CF and CF.lookFor then pcall(fc.setLook, CF.lookFor(opts.look, id, "booth")) end
+  local w = opts.w or 256
+  -- the gold sun visor and the lamps up for the picture (a face, not a reflection)
+  -- the head square to the camera for the picture (a `look` let go, put back after)
+  local cbl = body_script("crew_body", id)
+  local prev_look = cbl and cbl.lookNow and cbl.lookNow() or nil
+  -- (eyes and head to the portrait camera, wherever it is this frame)
+  local function at_cam()
+    local cn = pcam and pcam.node
+    if not (cn and cn.valid ~= false) then return nil end
+    local p = cn.pos
+    return p.x, p.y, p.z, 1
+  end
+  if cbl and cbl.lookSelf then cbl.lookSelf(at_cam) end
+  local fcl = body_script("face", id)
+  local prev_gaze = fcl and fcl.gaze or nil
+  if fcl then fcl.gaze = at_cam end
+  -- the player's own gold visor up (suit.lua keeps the Astronaut's helmet parts)
+  local su, visor0 = ref("suit"), nil
+  local C_ = ref("crew")
+  if C_ and id == (C_.activeId and C_.activeId()) and su and su.visorDown and su.setVisor then
+    local okv, down = pcall(su.visorDown)
+    if okv and down then visor0 = true; pcall(su.setVisor, false) end
+  end
+  local hidden = {}
+  for _, h in ipairs(find_named(n, opts.noHelmet and { Helmet = true } or HIDE_FOR_PORTRAIT, {}, 0)) do
+    if h.visible ~= false then h.visible = false; hidden[#hidden + 1] = h end
+  end
+  pcam = { target = n, id = id, making = true, fc = fc, w0 = wall(), hidden = hidden, f0 = wall(), dist = opts.dist }
+  local c = pcam
+  createNode("Scenario Portrait Cam", nil, function(cn)
+    c.node = cn
+    pcall(function() cn:setCamera { width = w, height = w, fovY = 0.42, active = false, near = 0.05, far = 400 } end)
+    pcam_place()
+    local function answer(v, why)
+      if c.fc and c.fc.setLook then pcall(c.fc.setLook, nil) end
+      for _, h in ipairs(c.hidden or {}) do if h.valid ~= false then h.visible = true end end
+      if visor0 then pcall(su.setVisor, true) end
+      if cbl and cbl.lookSelf then pcall(cbl.lookSelf, prev_look) end
+      if fcl then fcl.gaze = prev_gaze end
+      if cn.valid ~= false then pcall(cn.destroy, cn) end
+      PROF.portrait_ms = PROF.portrait_ms + (wall() - c.w0) * 1000
+      PROF.portraits = PROF.portraits + 1
+      pcam = nil
+      if cb then pcall(cb, v, why) end
+    end
+    local okc, err
+    if opts.bytes then okc, err = pcall(camera.capture, cn, { w = w, h = w }, answer)
+    else okc, err = pcall(camera.captureTexture, cn, { w = w, h = w }, answer) end
+    if not okc then answer(nil, tostring(err)) end
+  end)
+  return true
+end
+-- the job: every auto cast member with a body, one after another
+local function portrait_job()
+  for _ = 1, 30 do coroutine.yield() end          -- (the bodies set down and posed first)
+  local keys = {}
+  for k, c in pairs(sc.cast or {}) do if c.portrait == "auto" and c.crew then keys[#keys + 1] = k end end
+  table.sort(keys)
+  for _, k in ipairs(keys) do
+    local c = sc.cast[k]
+    local id = member_id(c.crew)
+    -- a quiet moment: no cutscene (its looks and walks turn heads), not walking
+    local t1q = wall() + 60
+    while wall() < t1q do
+      local cb = id and body_script("crew_body", id)
+      if not cut and not (cb and cb.walking and cb.walking()) and not walks[id] then break end
+      coroutine.yield()
+    end
+    local got = false
+    local ok = id and capturePortrait(id, { expression = c.expression }, function(tex) if tex then portraits[k] = tex; bump() end got = true end)
+    if ok then
+      local t1 = wall() + 5
+      while not got and wall() < t1 do coroutine.yield() end
+    end
+    coroutine.yield()
+  end
+  say_log(string.format("portraits: %d captured (%.1f ms of capture waits)", PROF.portraits, PROF.portrait_ms))
+end
+local portraits_started = false
+function start_portraits()
+  if portraits_started or not (sc and sc.cast) then return end
+  portraits_started = true
+  for _, c in pairs(sc.cast) do
+    if c.portrait == "auto" and c.crew then jobs[#jobs + 1] = coroutine.create(portrait_job); return end
+  end
 end
 
 -- ── the frame ───────────────────────────────────────────────────────────────
@@ -1980,7 +2777,7 @@ function update(node, dt)
     if not ok then say_log("STAGING ERROR " .. tostring(err)); lastStage = { error = tostring(err) }; sset("scn.staged", true) end
     if coroutine.status(co_stage) == "dead" then
       co_stage = nil
-      if want_brief then
+      if want_brief and not retried then
         set_phase("briefing")
         if physics and physics.pause then physics.pause(true); paused_by_us = true end
       else
@@ -2000,16 +2797,26 @@ function update(node, dt)
   end
   if phase ~= "loading" and phase ~= "staging" then
     beats_tick()
+    if delayed and #delayed > 0 then delays_tick() elseif delayed == nil and phase == "running" then dl_list() end
+    if LT.elE or LT.ambE then light_tick(true) end
     if next(walks) then walks_tick() end
     if #jobs > 0 then jobs_tick() end
     input_tick()
   end
   if finishing and #beatq == 0 and not cam and not beat_busy then finish_now() end
+  if phase == "setback" then setback_tick() end
   -- Ctrl+F10: the goal readings on screen
   if input and input.pressed and input.pressed("f10") and input.key and input.key("ctrl") then overlay = not overlay end
 end
 
 function lateUpdate(node, dt)
+  if pcam then
+    pcam_place()
+    -- the hitch a capture costs: the longest frame while one runs
+    local t = wall()
+    if pcam.f0 then PROF.portrait_worst_ms = math.max(PROF.portrait_worst_ms or 0, (t - pcam.f0) * 1000) end
+    pcam.f0 = t
+  end
   if active and (line or choice or cut or alarm_on) then draw_builtin() end
   if not (active and overlay and draw and draw.text and sc) then return end
   local lines = { string.format("SCENARIO %s · %s · step %s", sc.id, tostring(phase), tostring(state().stepId)) }

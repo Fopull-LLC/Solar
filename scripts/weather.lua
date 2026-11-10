@@ -436,7 +436,9 @@ function force(kind, k)
   local f = FORCE[kind]
   if not f then print("weather: no such weather '" .. tostring(kind) .. "'"); return end
   k = k or 1
-  forced = { def = f, I = 0.3 + (f.I - 0.3) * k, name = kind }
+  -- (forced again with the same kind, a ramp: the eased intensity carries on)
+  local eased = forced and forced.name == kind and forced.eased or nil
+  forced = { def = f, I = 0.3 + (f.I - 0.3) * k, name = kind, eased = eased }
   if kind == "clear" or kind == "overcast" then forced.I = f.I end
 end
 

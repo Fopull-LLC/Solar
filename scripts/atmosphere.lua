@@ -448,6 +448,10 @@ function snapWeather() snap_weather = true end
 local dbg_t = -100
 local done_at = nil   -- the `time` of the frame already followed
 
+-- The star's elevation (sine) to use instead of the real one, or nil: a
+-- scenario that holds the time of day sets it (scenario_run.lua, FW-C).
+sunUpOverride = nil
+
 local warned = false
 local function lighting()
   if lit and lightNode and lightNode.valid then return lit end
@@ -484,6 +488,8 @@ local function air_here(x, y, z)
     local ql = math.sqrt(qx * qx + qy * qy + qz * qz)
     if ql > 1e-6 then sunUp = (dx * qx + dy * qy + dz * qz) / (d * ql) end
   end
+  -- a scenario holding the time of day (scenario_run, world.time / light.time)
+  if sunUpOverride then sunUp = sunUpOverride end
   return rho, w, b.radius or 100, h, sunUp, dom
 end
 

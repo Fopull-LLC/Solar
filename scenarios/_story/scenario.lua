@@ -1,21 +1,33 @@
--- THE STORY PROBE (v2 framework test, and a small worked example of the
--- story features: docs/scenarios.md §5). A folder scenario
--- (scenarios/_story/scenario.lua), never listed. A cast with a voice off the
--- roster, a variable set by a choice, a cutscene with an orbit, a dolly and a
--- crew walk, a fault on a timer (knock), an event on a variable, a branch,
--- a goto and a hook goal. Played by tests/smoke_scenarios.lua and
--- tools/perf/scnprobe.sh (BENCH_STRS='("scn", "_story")').
+-- THE STORY PROBE (the framework's test, and a small worked example of the
+-- story features: docs/scenarios.md §4–§6). A folder scenario
+-- (scenarios/_story/scenario.lua), never listed. Played by
+-- tests/smoke_scenarios.lua and tools/perf/scnprobe.sh (_story).
+--
+--   v2  a cast with a voice off the roster, a variable set by a choice, a
+--       cutscene with an orbit and a dolly, a fault on a timer (knock), an
+--       event on a variable, a branch, a goto and a hook goal
+--   FW-C (work/scenarios2/PLAN.md §2): a `walk` that steers Reyes's body
+--       along the ground; `look` and `face`; two speakers on one plate
+--       (say.with); a radio voice three seconds away (cast radio, delay);
+--       the time of day held at evening (world.time); a `light` beat that
+--       dims the hut's ambient while the light is out; a METER (seconds in
+--       the dark, the hut's air) and a MODEL (the hut cooling while the
+--       light is out, with a line when it crosses 12 °C)
 return {
-  id = "_story", title = "Story Probe", v = 1, order = 998,
+  id = "_story", title = "Story Probe", v = 2, order = 998,
   teaches = { "dialogue", "cutscenes", "events" },
   blurb = "The story features, end to end.",
-  brief = { "Night shift at the hut. The light keeps failing.", "Hale has the plant; you have the hut." },
-  world = { seed = 1911564384, scale = 4, names = 2, air = "earth" },
+  brief = { "Evening at the hut. The light keeps failing.", "Hale has the plant; you have the hut." },
+  world = { seed = 1911564384, scale = 4, names = 2, air = "earth", time = { at = "evening", hold = true } },
   cast = {
-    hale = { name = "Dr. Hale", tag = "SITE CHIEF", color = { 1.0, 0.78, 0.45 } },
-    okafor = { name = "Dele Okafor", tag = "ENGINEER", crew = "Okafor" },
+    hale = { name = "Dr. Hale", tag = "SITE CHIEF", color = { 1.0, 0.78, 0.45 }, portrait = "auto", look = 1907, expression = "tired" },
+    okafor = { name = "Dele Okafor", tag = "ENGINEER", crew = "Okafor", portrait = "auto" },
+    reyes = { name = "Ana Reyes", tag = "PILOT", crew = "Reyes", color = { 0.62, 0.92, 0.70 }, portrait = "auto" },
+    -- a voice on the radio, three seconds of light-time away: her lines are
+    -- heard 3 game seconds after their beat, and the queue does not wait
+    vance = { name = "Mara Vance", tag = "HARROW RELAY · RADIO", color = { 0.55, 0.85, 1.0 }, radio = true, delay = 3 },
   },
-  vars = { trust = 0 },
+  vars = { trust = 0, dark_secs = 0, hut_c = 18 },
   hooks = "scn_story_hooks",       -- scripts/scn_story_hooks.lua on prefabs/scn_story_hooks (game scenarios only)
   start = {
     funds = 5000, safety = "rescue", contracts = false, programme = false, weather = "calm",
@@ -26,18 +38,37 @@ return {
     marks = {
       hut = { at = "crew:Okafor", offset = { -10, 0, 8 } },
       door = { at = "struct:Story Hut", offset = { 1, 0, 5 } },
-      ridge = { at = "crew:Okafor", offset = { 20, 0, -20 } },
+      ridge = { at = "crew:Okafor", offset = { 14, 0, -10 } },
     },
     structures = { { bp = "_story/hut.bp.txt", name = "Story Hut", at = "mark:hut", yaw = 0, air = true } },
+  },
+  -- METERS: variables that follow a reading (no hooks)
+  meters = {
+    -- seconds the light has been out: the piece's knocked flag (1 or 0), integrated
+    { var = "dark_secs", read = "piece.knocked", struct = "Story Hut", part = "lightFitting", mode = "integrate", round = 0.1 },
+    -- the hut's oxygen share, sampled
+    { var = "hut_o2", read = "room.o2", struct = "Story Hut", round = 0.01 },
+    -- the coldest the hut got (the model's variable, its minimum)
+    { var = "hut_min", read = "var.hut_c", mode = "min" },
+  },
+  -- MODELS: a number with its own law (what the systems do not simulate)
+  models = {
+    -- the hut cools a degree every 2.5 s with the light (and its heater) out,
+    -- and settles back toward 18 °C once it is fixed; under 12 °C Hale says so
+    { var = "hut_c", start = 18, rate = -0.4, rest = 18, tau = 20, min = -10, round = 0.1,
+      when = { kind = "piece_state", struct = "Story Hut", part = "lightFitting", knocked = true },
+      at = { { value = 12, down = true, beats = { { say = { who = "hale", text = "It's getting cold in there, Dele." } } } } } },
   },
   sequences = {
     intro = {
       { cutscene = true },
       { shot = { orbit = "struct:Story Hut", dist = 22, height = 8, turn = 50, secs = 4, wait = false } },
-      { say = { who = "hale", text = "That light has failed three nights running." } },
-      { walk = { who = "Reyes", to = "mark:ridge", secs = 6 } },
+      { say = { who = "hale", with = "okafor", text = "That light has failed three nights running." } },
+      -- Reyes walks to the ridge: her body steers there along the ground
+      { walk = { who = "Reyes", to = "mark:ridge", secs = 30 } },
+      { look = { who = "Reyes", at = "struct:Story Hut" } },
       { shot = { from = "mark:ridge", to = "mark:door", look = "struct:Story Hut", secs = 3 } },
-      { say = { who = "okafor", text = "I'll look at it." } },
+      { say = { who = "okafor", with = "hale", text = "I'll look at it." } },
     },
     ask = {
       { choice = { who = "hale", prompt = "Do it now, or after the shift?",
@@ -51,8 +82,10 @@ return {
       { alarm = true },
       { knock = { struct = "Story Hut", part = "lightFitting" } },
       { hook = "markFault" },
+      { light = { ambient = 0.5, secs = 1.5 } },
+      { face = { who = "Reyes", emotion = "worried", secs = 6 } },
       { shot = { look = "struct:Story Hut", secs = 2 } },
-      { say = { who = "hale", text = "And there it goes again." } },
+      { say = { who = "hale", with = "reyes", text = "And there it goes again." } },
       { alarm = false },
     },
   },
@@ -60,17 +93,27 @@ return {
     { id = "fault", when = { kind = "timer", secs = 3, from = "step:walk" }, run = "fault" },
     { id = "grumble", when = { kind = "var", name = "trust", lt = 0 }, beats = { { say = { who = "hale", text = "Fine. After." } } } },
   },
-  on_start = { { run = "intro" }, { run = "ask" } },
+  on_start = {
+    { say = { who = "vance", text = "Harrow relay. I have you on the mast, Dele." } },
+    { run = "intro" }, { run = "ask" },
+  },
   steps = {
     { id = "walk", text = "Walk to the hut's door.", mark = "mark:door",
       goals = { { kind = "at", who = "crew:Okafor", at = "mark:door", r = 4 } } },
-    { id = "fix", text = "The light is out. Repair it.",
+    -- a CHECKPOINT: a setback from here comes back to the fix, the light
+    -- knocked again (the restaged hut is whole; the story's `faulted` is kept)
+    { id = "fix", text = "The light is out. Repair it.", checkpoint = true, act = "the fix",
+      on_enter = { { branch = { var = "faulted", is = true, beats = { { knock = { struct = "Story Hut", part = "lightFitting" } } } } } },
       goals = { { kind = "piece_ok", struct = "Story Hut", part = "lightFitting" }, { kind = "hook", fn = "faultSeen" } },
-      on_done = { { say = { who = "hale", text = "Lit. Thank you." } }, { done = true } } },
+      on_done = { { light = { ambient = false } }, { look = { who = "Reyes", at = false } },
+                  { say = { who = "hale", with = "okafor", text = "Lit. Thank you." } },
+                  { say = { who = "vance", text = "Mast sees the hut lit. Harrow out." } }, { done = true } } },
     { id = "late", text = "The shift is over.", goals = { { kind = "var", name = "trust", lt = 0 } } },
   },
   fail = { { kind = "crew_dead", any = true, text = "Okafor did not make it." } },
-  score = { par = 120, medals = { gold = { time = 1.0 }, silver = { time = 2.0 }, bronze = "done" } },
+  score = { par = 120, medals = { gold = { time = 1.0 }, silver = { time = 2.0 }, bronze = "done" },
+            rows = { { label = "In the dark", var = "dark_secs", fmt = "%.0f s", lte = 60 },
+                     { label = "Coldest", var = "hut_min", fmt = "%.1f °C" } } },
   after = "freeplay",
   debrief = { gold = "Lit.", silver = "Lit, eventually.", bronze = "Lit.", fail = "Dark." },
 }
