@@ -554,7 +554,13 @@ function GS.run()
           local T = TOGGLES[v]
           if T then pcall(T.on, c) end
           wait(2)
-          local okm, em = pcall(GS.measure, sc, tostring(params.gfx or "High") .. "_" .. v)
+          -- (a repeated variant, e.g. "base" again at the end to check drift, gets its own record:
+          -- a record name measured twice would return the first one's numbers)
+          GS.seen = GS.seen or {}
+          local key = sc .. "_" .. v
+          GS.seen[key] = (GS.seen[key] or 0) + 1
+          local lbl = v .. (GS.seen[key] > 1 and tostring(GS.seen[key]) or "")
+          local okm, em = pcall(GS.measure, sc, tostring(params.gfx or "High") .. "_" .. lbl)
           -- what grows round the crew in this variant: per species, props by distance and LOD, est. triangles
           pcall(flora_inventory, sc .. "_" .. v)
           if not okm then P("GS ERROR variant %s: %s", v, tostring(em)) end
