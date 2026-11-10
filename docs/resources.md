@@ -74,6 +74,33 @@ slot keeps the geology below, whatever photograph it is baked from.
 | 27 | hematite | hematite (bulk "Hematite Earth") |
 | 30 | shale | shale |
 
+**Photographs (worlds plan W1, 2026-11-10).** Every slot is its own photograph
+except by recipe: 5 veinstone and 6 magma are both made from Rock058, 7 and 8
+are druzy crystal grown in Rock035, and 28 tundra and 32 litter are Grass004
+worn through to soil. Slots 3, 9, 11, 12, 13, 17, 18, 19, 21, 24, 26, 29 and 30
+were re-sourced from re-grades of a shared photo to CC0 sets of their own
+(ambientCG and Poly Haven). Each one keeps the mean colour it had (the importer's
+`hold`), so `far_bodies` PAL, the map and the mining tints do not move. The
+slot numbers and materials above are unchanged, so saves keep their ground.
+
+**The library (33+).** `tools/import_textures.py` also bakes 28 layers that are
+on no palette line yet, numbered 33 to 60 as stable names:
+
+- cave wall, flowstone, dripstone and soot;
+- frost, clear ice, dirty ice and firn;
+- tuff, columnar basalt, clinker, obsidian and scoria;
+- halite;
+- gossan, pitchblende (black, not glowing), a native-sulfur vein and quartz druzy;
+- red beds, mudstone, chalk, schist, gneiss and marble;
+- black sand, red regolith, loess and lag gravel.
+
+Each has a `role` in the manifest (rock, loose, veg, sand, snow, ice, ore,
+crystal, cavewall, flowstone, evaporite, volcanic, glow), which sets its height
+blending and says where a geology may put it. They reach a world through wildcard
+slots (`terrain.setSlotMaterial` on a palette line with no picture, from W2) or
+per-terrain palettes (engine slot-materials stage 5). `--sheet DIR` draws them
+by slot, by source photograph and by role.
+
 How a cut is paid:
 
 1. Each laser bite's receipt (`terrain.dig`) goes to

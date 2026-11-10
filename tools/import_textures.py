@@ -11,6 +11,10 @@
                                                   # palettes' slots at their local versions, lay
                                                   # the local overlays (OVERLAYS) over textures/base
     python3 tools/import_textures.py --lib PATH   # another library folder
+    python3 tools/import_textures.py --extra-lib PATH  # a folder of fetched CC0 sets (EXTRA_LIBS):
+                                                  # ambientCG zips and Poly Haven ph/<asset>/ folders;
+                                                  # only their terrain layers are baked
+    Run it with `python3 -I` when a library holds downloaded data.
     python3 tools/import_textures.py --means --write  # far_bodies.lua's PAL (each layer's mean
                                                   # colour) from the committed layers
 
@@ -62,6 +66,12 @@ Its maps (maps/, layer_maps) come from the same set at the same size. Slot
 numbers are what mining reads (materials.lua SLOT), so each slot keeps its
 geology.
 
+TERRAIN entries 33 and up are the LIBRARY (worlds plan W1): layers baked and committed the
+same way but on no palette line (PALETTE_SLOTS); each entry has a `role` (HEIGHT_ROLES). A
+re-sourced slot's grade can `hold` its old mean colour (linear rgb) so far_bodies PAL and
+the mining tints keep it. Recipes beside the plain bake: veins/magma, copper, crystal,
+patchy, and (W1) soot, gossan, sulfurvein, pitchblende, columnar (RECIPES).
+
 Idempotent: each output folder holds a `.import` stamp (the source's size and
 time, the recipe, this file's IMPORTER_VERSION); a set whose stamp matches is
 skipped. Uses numpy + Pillow only.
@@ -83,6 +93,10 @@ from PIL import Image
 IMPORTER_VERSION = 4
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB = "/mnt/disks/3tb/Art+Assets/AAA_TEXTURES/gametexturesdotcom"
+# CC0 sets fetched for the terrain (worlds plan W1, 2026-11-10: ambientCG `Name_2K-PNG.zip` and
+# Poly Haven ph/<asset>/ folders, each page's licence checked: NOTES in work/worlds_w01). Read only,
+# like LIB; a folder that is not there is skipped. `--extra-lib PATH` adds or replaces it.
+EXTRA_LIBS = ["/mnt/disks/3tb/.floptle-shared/solar/work/worlds_w01/dl"]
 OUT_CC0 = "textures/env"            # committed
 OUT_LOCAL = "textures/env_local"    # git-ignored
 MANIFEST = "textures/env/manifest.json"
@@ -109,7 +123,7 @@ Image.MAX_IMAGE_PIXELS = 20000 * 20000
 KINDS = [
     (r"^(Rock|Rocks|Old_Rocks|Mossy_Rock|Rock_Wall|Stone_01|MarsSmoothRock|Onyx)", "rock"),
     (r"^(Ground|Dirt|Dirty_Grass|Grass|FineClumpySand|MossAndSmallFerns|White_Stones|Potato)", "ground"),
-    (r"^Snow", "snow"),
+    (r"^(Snow|snow_)", "snow"),
     (r"^(Metal|DiamondPlate|Diamond_Plate|Galvanized|AgedPolishedCopper|MetalCrate)", "metal"),
     (r"^(Concrete|Dirty_Concrete|New_Concrete)", "concrete"),
     (r"^(Road|Cracked_Asphalt|Red_Asphalt|Regular_Pavement|Stone_Pavement)", "road"),
@@ -164,84 +178,147 @@ PLANNED = {
 G = dict  # shorthand
 TERRAIN = [
     # 1–12: the original set (6–8 glow). Names kept: generator and saves use the numbers.
-    dict(slot=1, name="rust", was="planet_rust_rock", mat="rustrock", scale=1.6, blend=0.8, rough=0.7,
+    dict(slot=1, name="rust", role="rock", was="planet_rust_rock", mat="rustrock", scale=1.6, blend=0.8, rough=0.7,
          cc0=("Rocks011", G(sat=1.2, tint=(1.0, 0.42, 0.26), contrast=1.15)),
          local=("MarsSmoothRock", G(sat=0.75, tint=(1.0, 0.7, 0.58)))),
-    dict(slot=2, name="soil", was="planet_purple_dirt", mat="soil", scale=2.2, blend=1.2, rough=0.7,
+    dict(slot=2, name="soil", role="loose", was="planet_purple_dirt", mat="soil", scale=2.2, blend=1.2, rough=0.7,
          cc0=("Ground039", G())),
-    dict(slot=3, name="flagstone", was="planet_purple_slate", mat="slate", scale=1.4, blend=0.8, rough=0.7,
-         cc0=("Rocks011", G(sat=0.6, gain=1.6, contrast=1.15)), local=("Old_Rocks", G(sat=0.7))),
-    dict(slot=4, name="onyx", was="planet_banded_onyx", mat="onyx", scale=1.2, blend=0.8, rough=0.7,
+    dict(slot=3, name="flagstone", role="rock", was="planet_purple_slate", mat="slate", scale=1.4, blend=0.8, rough=0.7,
+         cc0=("Rock023", G(sat=0.6, contrast=1.1, hold=(0.173, 0.166, 0.149))), local=("Old_Rocks", G(sat=0.7))),
+    dict(slot=4, name="onyx", role="rock", was="planet_banded_onyx", mat="onyx", scale=1.2, blend=0.8, rough=0.7,
          cc0=("Onyx006", G(sat=0.85, flatten=0.0))),
-    dict(slot=5, name="veinstone", was="cave_orange_veinstone", mat="veinstone", scale=1.6, blend=0.8, rough=0.7,
+    dict(slot=5, name="veinstone", role="ore", was="cave_orange_veinstone", mat="veinstone", scale=1.6, blend=0.8, rough=0.7,
          cc0=("Rock058", G(make="copper", cover=0.48))),
-    dict(slot=6, name="magma", was="cave_magma_veins", mat="uranium", scale=1.4, glow=True,
+    dict(slot=6, name="magma", role="glow", was="cave_magma_veins", mat="uranium", scale=1.4, glow=True,
          cc0=("Rock058", G(make="magma"))),
     # The crystal seams (resonant crystal, phasite, cryovolt): druzy crystal in its host
     # rock, lit like stone (playtest 2026-11-06: the old self-lit faceted ornament band read as
     # flat neon polygons). Not glow slots any more: they take maps, blend and anti-tiling.
-    dict(slot=7, name="amethyst", was="cave_amethyst", mat="crystal", scale=1.3, blend=0.8, rough=0.9,
+    dict(slot=7, name="amethyst", role="crystal", was="cave_amethyst", mat="crystal", scale=1.3, blend=0.8, rough=0.9,
          rfloor=0.12, cc0=("Rock035", G(make="crystal", tint=(0.36, 0.22, 0.46), pale=(0.74, 0.71, 0.76), seed=7))),
-    dict(slot=8, name="bluecrystal", was="cave_blue_crystal", mat="crystal", scale=1.3, blend=0.8, rough=0.9,
+    dict(slot=8, name="bluecrystal", role="crystal", was="cave_blue_crystal", mat="crystal", scale=1.3, blend=0.8, rough=0.9,
          rfloor=0.12, cc0=("Rock035", G(make="crystal", tint=(0.20, 0.32, 0.46), pale=(0.72, 0.76, 0.79), seed=8))),
-    dict(slot=9, name="slate", was="moon_silver_slate", mat="slate", scale=1.6, blend=0.8, rough=0.7,
-         cc0=("Rock058", G(sat=0.15, gain=2.0, contrast=1.1)), local=("Rock_Wall", G(sat=0.5))),
-    dict(slot=10, name="gravelregolith", was="moon_gray_regolith", mat="regolith", scale=2.2, blend=1.2, rough=0.7,
+    dict(slot=9, name="slate", role="rock", was="moon_silver_slate", mat="slate", scale=1.6, blend=0.8, rough=0.7,
+         cc0=("dark_rock", G(sat=0.3, contrast=1.05, hold=(0.162, 0.165, 0.169))), local=("Rock_Wall", G(sat=0.5))),
+    dict(slot=10, name="gravelregolith", role="loose", was="moon_gray_regolith", mat="regolith", scale=2.2, blend=1.2, rough=0.7,
          cc0=("Ground110", G(sat=0.12, gain=0.9))),
-    dict(slot=11, name="dust", was="moon_crater_dust", mat="regolith", scale=2.0, blend=1.2, rough=0.7,
-         cc0=("Ground093B", G(sat=0.25, contrast=1.6, flatten=0.3))),
-    dict(slot=12, name="bandedice", was="moon_teal_ice", mat="ice", scale=1.2, blend=1.6, rough=0.7, rfloor=0.3,
+    dict(slot=11, name="dust", role="loose", was="moon_crater_dust", mat="regolith", scale=2.0, blend=1.2, rough=0.7,
+         cc0=("moon_dusted_01", G(sat=0.4, contrast=1.7, flatten=0.2, hold=(0.519, 0.490, 0.444)))),
+    dict(slot=12, name="bandedice", role="ice", was="moon_teal_ice", mat="ice", scale=1.2, blend=1.6, rough=0.7, rfloor=0.3,
          drift=G(own=1.0, soften=0.012, lobew=0.6, finew=0.0),
-         cc0=("Onyx006", G(sat=0.25, tint=(0.75, 0.95, 1.0), gain=1.9, contrast=0.6))),
+         cc0=("Rock019", G(sat=0.25, tint=(0.75, 0.95, 1.0), contrast=0.8, hold=(0.279, 0.362, 0.384)))),
     # 13–32: the geology set.
-    dict(slot=13, name="basalt", was="geo_basalt", mat="basalt", scale=1.5, blend=0.8, rough=0.7,
-         cc0=("Rock035", G(sat=0.25, gain=5.0, contrast=0.9))),
-    dict(slot=14, name="granite", was="geo_granite", mat="granite", scale=1.8, blend=0.8, rough=0.7,
+    dict(slot=13, name="basalt", role="rock", was="geo_basalt", mat="basalt", scale=1.5, blend=0.8, rough=0.7,
+         cc0=("Rock050", G(sat=0.3, contrast=1.35, hold=(0.045, 0.051, 0.054)))),
+    dict(slot=14, name="granite", role="rock", was="geo_granite", mat="granite", scale=1.8, blend=0.8, rough=0.7,
          cc0=("Rock060", G(sat=0.7, gain=1.8, contrast=1.15)), local=("Rock_05", G())),
-    dict(slot=15, name="sandstone", was="geo_sandstone", mat="sandstone", scale=1.0, blend=0.8, rough=0.7,
+    dict(slot=15, name="sandstone", role="rock", was="geo_sandstone", mat="sandstone", scale=1.0, blend=0.8, rough=0.7,
          cc0=("Onyx010", G(sat=0.55, tint=(1.0, 0.78, 0.55), contrast=0.75)), local=("Mossy_Rock", G(contrast=1.1))),
-    dict(slot=16, name="sand", was="geo_sand", mat="sand", scale=2.0, blend=1.2, rough=0.7,
+    dict(slot=16, name="sand", role="sand", was="geo_sand", mat="sand", scale=2.0, blend=1.2, rough=0.7,
          cc0=("Ground093B", G(contrast=1.4, flatten=0.3, ripples=dict(count=16, amp=0.16)))),
-    dict(slot=17, name="regolith", was="geo_regolith", mat="regolith", scale=2.0, blend=1.2, rough=0.7,
-         cc0=("Ground039", G(sat=0.2, contrast=1.1))),
-    dict(slot=18, name="salt", was="geo_salt", mat="salt", scale=1.2, blend=1.2, rough=0.7,
-         cc0=("Snow014", G(sat=0.0, tint=(1.0, 0.97, 0.9), gain=0.92, contrast=1.4)),
+    dict(slot=17, name="regolith", role="loose", was="geo_regolith", mat="regolith", scale=2.0, blend=1.2, rough=0.7,
+         cc0=("moon_meteor_01", G(sat=0.4, contrast=1.3, flatten=0.4, hold=(0.218, 0.205, 0.203)))),
+    dict(slot=18, name="salt", role="sand", was="geo_salt", mat="salt", scale=1.2, blend=1.2, rough=0.7,
+         cc0=("Ground031", G(sat=0.05, contrast=1.2, flatten=0.5, hold=(0.424, 0.411, 0.382))),
          local=("Cracked_Asphalt", G(sat=0.15, tint=(1.0, 0.97, 0.92), gain=2.3, contrast=0.7))),
-    dict(slot=19, name="mudcrack", was="geo_mudcrack", mat="clay", scale=1.6, blend=1.2, rough=0.7,
-         cc0=("Ground039", G(sat=0.8, tint=(1.0, 0.8, 0.6), gain=1.15, contrast=1.2)),
+    dict(slot=19, name="mudcrack", role="loose", was="geo_mudcrack", mat="clay", scale=1.6, blend=1.2, rough=0.7,
+         cc0=("mud_cracked_dry_riverbed_002", G(sat=0.9, contrast=1.1, hold=(0.348, 0.224, 0.159))),
          local=("MarsSmoothRock", G(sat=0.6, gain=1.15))),
-    dict(slot=20, name="moss", was="geo_moss", mat="soil", scale=1.8, blend=1.2, rough=0.7,
+    dict(slot=20, name="moss", role="veg", was="geo_moss", mat="soil", scale=1.8, blend=1.2, rough=0.7,
          cc0=("Ground037", G()), local=("MossAndSmallFerns", G(contrast=1.15))),
-    dict(slot=21, name="ash", was="geo_ash", mat="ash", scale=2.2, blend=1.2, rough=0.7,
-         cc0=("Ground110", G(sat=0.2, gain=0.6, contrast=1.1))),
-    dict(slot=22, name="snow", was="geo_snow", mat="ice", scale=1.8, blend=3.0, rough=0.7, drift=G(own=1.0, soften=0.008, finew=0.5),
+    dict(slot=21, name="ash", role="loose", was="geo_ash", mat="ash", scale=2.2, blend=1.2, rough=0.7,
+         cc0=("Gravel043", G(sat=0.2, contrast=1.1, hold=(0.076, 0.073, 0.070)))),
+    dict(slot=22, name="snow", role="snow", was="geo_snow", mat="ice", scale=1.8, blend=3.0, rough=0.7, drift=G(own=1.0, soften=0.008, finew=0.5),
          cc0=("Snow014", G(contrast=1.3))),
-    dict(slot=23, name="glacier", was="geo_glacier", mat="ice", scale=1.0, blend=2.0, rough=0.7, rfloor=0.25,
+    dict(slot=23, name="glacier", role="ice", was="geo_glacier", mat="ice", scale=1.0, blend=2.0, rough=0.7, rfloor=0.25,
          drift=G(own=1.0, soften=0.012, lobew=0.5, finew=0.2),
          cc0=("Snow008A", G(sat=1.0, tint=(0.82, 0.93, 1.0), gain=0.6, contrast=3.0, flatten=0.0))),
-    dict(slot=24, name="scree", was="geo_scree", mat="gravel", scale=1.8, blend=1.2, rough=0.7,
-         cc0=("Ground110", G(sat=0.7))),
-    dict(slot=25, name="limestone", was="geo_limestone", mat="limestone", scale=1.5, blend=0.8, rough=0.7,
+    dict(slot=24, name="scree", role="loose", was="geo_scree", mat="gravel", scale=1.8, blend=1.2, rough=0.7,
+         cc0=("Rocks006", G(sat=0.7, hold=(0.127, 0.110, 0.093)))),
+    dict(slot=25, name="limestone", role="rock", was="geo_limestone", mat="limestone", scale=1.5, blend=0.8, rough=0.7,
          cc0=("Rock051", G(sat=0.45, gain=1.6)), local=("Rock_04", G(sat=0.6))),
-    dict(slot=26, name="sulfur", was="geo_sulfur", mat="sulfur", scale=1.6, blend=0.8, rough=0.7,
-         cc0=("Rocks011", G(sat=1.4, tint=(1.0, 0.85, 0.22), gain=1.3, contrast=1.2)),
+    dict(slot=26, name="sulfur", role="ore", was="geo_sulfur", mat="sulfur", scale=1.6, blend=0.8, rough=0.7,
+         cc0=("Rock055", G(sat=1.2, contrast=1.1, hold=(0.179, 0.138, 0.027))),
          local=("Potato", G(sat=0.75, tint=(1.0, 0.92, 0.45), gain=0.85, contrast=1.3))),
-    dict(slot=27, name="hematite", was="geo_hematite", mat="hematite", scale=2.0, blend=0.8, rough=0.7,
+    dict(slot=27, name="hematite", role="ore", was="geo_hematite", mat="hematite", scale=2.0, blend=0.8, rough=0.7,
          cc0=("Ground085", G(sat=1.2, tint=(1.0, 0.5, 0.35)))),
-    dict(slot=28, name="tundra", was="geo_tundra", mat="soil", scale=1.6, blend=1.2, rough=0.7,
+    dict(slot=28, name="tundra", role="veg", was="geo_tundra", mat="soil", scale=1.6, blend=1.2, rough=0.7,
          cc0=("Grass004", G(make="patchy", sat=0.55, tint=(1.0, 0.92, 0.7), contrast=1.2,
                             under=("Ground039", G(sat=0.45, tint=(1.0, 0.9, 0.75), gain=0.85)), cover=0.68)),
          local=("Dirty_Grass", G(sat=0.6))),
-    dict(slot=29, name="pahoehoe", was="geo_pahoehoe", mat="basalt", scale=1.25, blend=0.8, rough=0.7,
-         cc0=("Rock058", G(sat=0.3, gain=0.6, contrast=1.3))),
-    dict(slot=30, name="shale", was="geo_shale", mat="shale", scale=1.5, blend=0.8, rough=0.7,
-         cc0=("Rock051", G(sat=0.15, gain=0.95, contrast=1.2)), local=("Rock_03", G())),
-    dict(slot=31, name="peat", was="geo_peat", mat="soil", scale=1.4, blend=1.2, rough=0.7,
+    dict(slot=29, name="pahoehoe", role="rock", was="geo_pahoehoe", mat="basalt", scale=1.25, blend=0.8, rough=0.7,
+         cc0=("Rock041", G(sat=0.3, contrast=1.7, flatten=0.4, hold=(0.049, 0.051, 0.053)))),
+    dict(slot=30, name="shale", role="rock", was="geo_shale", mat="shale", scale=1.5, blend=0.8, rough=0.7,
+         cc0=("Rock022", G(sat=0.3, contrast=1.15, hold=(0.168, 0.167, 0.162))), local=("Rock_03", G())),
+    dict(slot=31, name="peat", role="veg", was="geo_peat", mat="soil", scale=1.4, blend=1.2, rough=0.7,
          cc0=("Rock063", G(sat=0.7, gain=0.55))),
-    dict(slot=32, name="litter", was="geo_litter", mat="soil", scale=2.0, blend=1.2, rough=0.7,
+    dict(slot=32, name="litter", role="veg", was="geo_litter", mat="soil", scale=2.0, blend=1.2, rough=0.7,
          cc0=("Grass004", G(make="patchy", sat=0.85, gain=0.8, contrast=1.15,
                             under=("Ground085", G(sat=0.8, gain=0.85)), cover=0.5))),
+    # 33+: the LIBRARY layers (worlds plan W1, §3.1): baked and committed, but on no palette
+    # line yet (PALETTE_SLOTS). The planet generator lays them through wildcard slots
+    # (terrain.setSlotMaterial on a picture-less line, W2) or a per-terrain palette (engine
+    # slot-materials stage 5, W9). Numbers are stable names, not palette lines. Mostly
+    # underground: cave walls, flowstone, frost, volcanic and evaporite rock, ore host rock.
+    dict(slot=33, name="cavewall", role="cavewall", mat="limestone", scale=1.4, blend=0.8, rough=0.7, rfloor=0.45,
+         cc0=("quarry_wall", G(sat=0.35, gain=0.8, contrast=1.35, flatten=0.5))),
+    dict(slot=34, name="flowstone", role="flowstone", mat="limestone", scale=1.2, blend=1.0, rough=0.7, rfloor=0.3,
+         cc0=("marble_cliff_05", G(sat=0.9, tint=(1.0, 0.86, 0.66), gain=0.95, flatten=0.4))),
+    dict(slot=35, name="dripstone", role="flowstone", mat="limestone", scale=1.3, blend=1.0, rough=0.7, rfloor=0.22,
+         cc0=("marble_rock_01", G(sat=0.5, tint=(1.0, 0.95, 0.86), gain=0.9))),
+    dict(slot=36, name="soot", role="cavewall", mat="basalt", scale=1.4, blend=0.8, rough=0.7,
+         cc0=("quarry_wall_02", G(make="soot", cover=0.7))),
+    dict(slot=37, name="frost", role="snow", mat="ice", scale=1.4, blend=1.6, rough=0.7, rfloor=0.35,
+         cc0=("Snow013", G(sat=0.5, tint=(0.92, 0.97, 1.0), contrast=1.2))),
+    dict(slot=38, name="tuff", role="volcanic", mat="basalt", scale=1.5, blend=0.8, rough=0.7,
+         cc0=("rock_05", G(sat=0.45, tint=(1.0, 0.86, 0.78), gain=1.3))),
+    dict(slot=39, name="columnar", role="volcanic", mat="basalt", scale=1.0, blend=0.8, rough=0.7, antitile=0.3,
+         cc0=("Rock050", G(make="columnar", cells=6))),
+    dict(slot=40, name="halite", role="evaporite", mat="salt", scale=1.2, blend=1.2, rough=0.7, rfloor=0.4,
+         cc0=("mud_cracked_dry_03", G(sat=0.1, tint=(1.0, 0.97, 0.93), gain=2.2, contrast=0.8))),
+    dict(slot=41, name="clearice", role="ice", mat="ice", scale=1.0, blend=1.6, rough=0.7, rfloor=0.12,
+         cc0=("Snow006", G(sat=1.0, tint=(0.72, 0.88, 1.0), gain=0.8, contrast=1.8, flatten=0.3))),
+    dict(slot=42, name="gossan", role="ore", mat="hematite", scale=1.6, blend=0.8, rough=0.7,
+         cc0=("Rock056", G(make="gossan", cover=0.75))),
+    dict(slot=43, name="pitchblende", role="ore", mat="uranium", scale=1.6, blend=0.8, rough=0.7, rfloor=0.3,
+         cc0=("Rock048", G(make="pitchblende"))),
+    dict(slot=44, name="redbeds", role="rock", mat="sandstone", scale=1.2, blend=0.8, rough=0.7, antitile=0.25,
+         cc0=("cliff_side", G(sat=1.0, flatten=0.5))),
+    dict(slot=45, name="mudstone", role="rock", mat="shale", scale=1.5, blend=0.8, rough=0.7, antitile=0.3,
+         cc0=("Ground105", G(sat=0.15, gain=0.85))),
+    dict(slot=46, name="chalk", role="rock", mat="limestone", scale=1.4, blend=0.8, rough=0.7,
+         cc0=("Rock018", G(sat=0.4))),
+    dict(slot=47, name="clinker", role="volcanic", mat="basalt", scale=1.6, blend=1.0, rough=0.7,
+         cc0=("rocks_ground_09", G(sat=0.4, tint=(1.0, 0.8, 0.7), gain=0.45, contrast=1.3))),
+    dict(slot=48, name="obsidian", role="volcanic", mat="obsidian", scale=1.3, blend=0.8, rough=0.7, rfloor=0.12,
+         cc0=("dark_rock_02", G(sat=0.1, gain=0.35, contrast=1.4))),
+    dict(slot=49, name="scoria", role="volcanic", mat="basalt", scale=1.5, blend=0.8, rough=0.7,
+         cc0=("rock_06", G(sat=0.6, tint=(1.0, 0.6, 0.5), gain=0.45, contrast=1.2))),
+    dict(slot=50, name="schist", role="rock", mat="slate", scale=1.5, blend=0.8, rough=0.7,
+         cc0=("Rock045", G(sat=0.6))),
+    dict(slot=51, name="gneiss", role="rock", mat="granite", scale=1.3, blend=0.8, rough=0.7, antitile=0.4,
+         cc0=("marble_cliff_04", G(sat=0.6, flatten=0.4))),
+    dict(slot=52, name="marble", role="rock", mat="limestone", scale=1.4, blend=0.8, rough=0.7, rfloor=0.4,
+         cc0=("marble_rock_02", G(sat=0.35, gain=1.1))),
+    dict(slot=53, name="blacksand", role="sand", mat="sand", scale=2.0, blend=1.2, rough=0.7,
+         cc0=("dense_sand", G(sat=0.15, gain=0.32, contrast=1.4, ripples=dict(count=14, amp=0.14)))),
+    dict(slot=54, name="redregolith", role="loose", mat="regolith", scale=2.0, blend=1.2, rough=0.7,
+         cc0=("gravelly_sand", G(sat=0.75, tint=(1.0, 0.62, 0.45), contrast=1.3))),
+    dict(slot=55, name="loess", role="loose", mat="soil", scale=2.0, blend=1.2, rough=0.7,
+         cc0=("Ground102", G(sat=0.8))),
+    dict(slot=56, name="laggravel", role="loose", mat="gravel", scale=1.8, blend=1.2, rough=0.7,
+         cc0=("sandy_gravel_02", G(sat=0.8, gain=0.8, contrast=1.5, flatten=0.5))),
+    dict(slot=57, name="dirtyice", role="ice", mat="ice", scale=1.2, blend=1.6, rough=0.7, rfloor=0.25,
+         cc0=("Snow012", G(sat=0.45, gain=0.85, contrast=0.55, flatten=0.8))),
+    dict(slot=58, name="firn", role="snow", mat="ice", scale=1.6, blend=2.5, rough=0.7,
+         cc0=("snow_02", G(contrast=1.2))),
+    dict(slot=59, name="sulfurvein", role="ore", mat="sulfur", scale=1.5, blend=0.8, rough=0.7,
+         cc0=("rock_05", G(make="sulfurvein", cover=0.35))),
+    dict(slot=60, name="quartzdruzy", role="crystal", mat="quartz", scale=1.3, blend=0.8, rough=0.9, rfloor=0.12,
+         cc0=("Rock048", G(make="crystal", tint=(0.80, 0.80, 0.78), pale=(0.86, 0.86, 0.84), seed=60))),
 ]
+# Palette lines: slots 1..PALETTE_SLOTS go to terrain/system.palette; the rest are the library.
+PALETTE_SLOTS = 32
 # planetoid.palette: the first 12 slots (the legacy archetype scene).
 PLANETOID_SLOTS = 12
 
@@ -327,16 +404,16 @@ def lum(c):
 
 # ── the library ──────────────────────────────────────────────────────────────
 MAPS = [  # (map, regex on the member's file name, case-insensitive), first match wins
-    ("color", r"(_Color|_basecolor|_ALBEDO|_albedo)\.(png|jpe?g)$"),
+    ("color", r"(_Color|_basecolor|_ALBEDO|_albedo|_diff_\dk)\.(png|jpe?g)$"),
     ("diff", r"_DIFF\.(png|jpe?g)$"),
-    ("normal_gl", r"_NormalGL\.png$"),
-    ("normal_dx", r"_NormalDX\.png$"),
+    ("normal_gl", r"(_NormalGL|_nor_gl_\dk)\.png$"),
+    ("normal_dx", r"(_NormalDX|_nor_dx_\dk)\.png$"),
     ("normal", r"(_normal|_NRM|_NRML)\.(png|jpe?g)$"),
-    ("rough", r"(_Roughness|_RGH)\.(png|jpe?g)$"),
+    ("rough", r"(_Roughness|_RGH|_rough_\dk)\.(png|jpe?g)$"),
     ("spec", r"_SPEC\.(png|jpe?g)$"),
     ("metal", r"(_Metalness|_metallic|_MTL)\.(png|jpe?g)$"),
-    ("ao", r"(_AmbientOcclusion|_ambientocclusion|_OCC)\.(png|jpe?g)$"),
-    ("height", r"(_Displacement|_height|_DISP|_Height)\.(png|jpe?g)$"),
+    ("ao", r"(_AmbientOcclusion|_ambientocclusion|_OCC|_ao_\dk)\.(png|jpe?g)$"),
+    ("height", r"(_Displacement|_height|_DISP|_Height|_disp_\dk)\.(png|jpe?g)$"),
     ("opacity", r"_opacity\.png$|_Opacity\.png$"),
     ("emissive", r"_emissive\.png$"),
 ]
@@ -356,10 +433,12 @@ def set_id(item):
 
 
 def licence_of(item):
-    return "CC0" if re.search(r"_2K-PNG", item) else "commercial"
+    return "CC0" if re.search(r"_2K-PNG", item) or item.startswith(PH_DIR + "/") else "commercial"
 
 
 def fmt_of(item):
+    if item.startswith(PH_DIR + "/"):
+        return "polyhaven"
     if re.search(r"_2K-PNG", item):
         return "ambientCG"
     if "PbrGenericMetallic" in item:
@@ -376,8 +455,48 @@ def kind_of(sid):
     return "rock"
 
 
-def scan(lib):
+# Poly Haven (CC0): a library's ph/<asset>/ folder holds the asset's 2k PNG maps as Poly Haven
+# names them (<asset>_diff_2k.png, _nor_gl_2k, _rough_2k, _disp_2k, _ao_2k). The set id is the
+# asset's name (dark_rock).
+PH_DIR = "ph"
+
+
+def _members(names):
+    members = {}
+    for key, rx in MAPS:
+        hits = [n for n in names if re.search(rx, os.path.basename(n), re.I)]
+        # Older sets ship a _DIFF2 / _DISP2 / _RGH_Dirty beside the main one: prefer the plain name.
+        hits.sort(key=len)
+        if hits and key not in members:
+            members[key] = hits[0]
+    return members
+
+
+def scan_ph(lib, sets, extra):
+    d = os.path.join(lib, PH_DIR)
+    if not os.path.isdir(d):
+        return
+    for aid in sorted(os.listdir(d)):
+        ad = os.path.join(d, aid)
+        if not os.path.isdir(ad):
+            continue
+        names = sorted(f for f in os.listdir(ad) if f.lower().endswith((".png", ".jpg", ".jpeg")))
+        if not names:
+            continue
+        sid = re.sub(r"[^A-Za-z0-9_-]+", "_", aid).strip("_")
+        sts = [os.stat(os.path.join(ad, f)) for f in names]
+        item = PH_DIR + "/" + aid
+        sets[sid] = dict(id=sid, item=item, note="", licence=licence_of(item), format="polyhaven", kind=kind_of(sid),
+                         members=_members(names), size=sum(x.st_size for x in sts), mtime=int(max(x.st_mtime for x in sts)),
+                         lib=lib, extra=extra)
+
+
+def scan(lib, extra=False):
+    """The sets of one library folder. `extra`: a library of CC0 sets fetched for the terrain
+    (EXTRA_LIBS): only their terrain layers are baked (no sets/<id>/ folder), which keeps the
+    public repo small."""
     sets = {}
+    scan_ph(lib, sets, extra)
     for item in sorted(os.listdir(lib)):
         p = os.path.join(lib, item)
         if not os.path.isfile(p) or not item.lower().endswith((".zip", ".png")):
@@ -388,26 +507,35 @@ def scan(lib):
         if item.lower().endswith(".zip"):
             with zipfile.ZipFile(p) as z:
                 names = [n for n in z.namelist() if not n.endswith("/")]
-            for key, rx in MAPS:
-                hits = [n for n in names if re.search(rx, os.path.basename(n), re.I)]
-                # Older sets ship a _DIFF2 / _DISP2 / _RGH_Dirty beside the main one: prefer the plain name.
-                hits.sort(key=len)
-                if hits and key not in members:
-                    members[key] = hits[0]
+            members = _members(names)
         else:
             members["color"] = None
         lic = licence_of(item)
         kind = kind_of(sid)
         sets[sid] = dict(id=sid, item=item, note=note, licence=lic, format=fmt_of(item), kind=kind,
-                         members=members, size=st.st_size, mtime=int(st.st_mtime))
+                         members=members, size=st.st_size, mtime=int(st.st_mtime), lib=lib, extra=extra)
+    return sets
+
+
+def scan_all(lib, extra_libs):
+    """The main library and the fetched CC0 ones; a set id found twice keeps the main one."""
+    sets = {}
+    for xl in extra_libs:
+        if os.path.isdir(xl):
+            sets.update(scan(xl, extra=True))
+    if os.path.isdir(lib):
+        sets.update(scan(lib))
     return sets
 
 
 def read_map(lib, s, key):
+    lib = s.get("lib", lib)
     p = os.path.join(lib, s["item"])
     m = s["members"].get(key, "missing")
     if m == "missing":
         return None
+    if s["format"] == "polyhaven":
+        return to_float(Image.open(os.path.join(p, m)))
     if m is None:  # a loose PNG
         return to_float(Image.open(p))
     with zipfile.ZipFile(p) as z:
@@ -896,6 +1024,138 @@ def make_patchy(alb, n, ao, g, sets, mask_only=False):
     return np.clip(top * m + bot * (1 - m), 0, 1)
 
 
+def _noise(N, rng, sigma):
+    f = blur_wrap(rng.standard_normal((N, N)), sigma)
+    return (f - f.mean()) / (f.std() + 1e-9)
+
+
+def _streak(a, length):
+    """Smear a tileable map down the rows (a box of `length` rows, wrapping): runs and drips."""
+    out = np.zeros_like(a)
+    for k in range(int(length)):
+        out += np.roll(a, k, axis=0)
+    return out / max(1, int(length))
+
+
+def _grain(rock):
+    L = np.maximum(lum(rock), 1e-4)
+    return np.clip(L / L.mean(), 0.45, 1.6)[..., None]
+
+
+def make_soot(alb, n, ao, g):
+    """Soot and black crust on a cave or vent wall (library layer 36): the host rock graded grey,
+    coated over `cover` of the tile by a matte black film that runs in streaks down the face and
+    sits thickest in the hollows (the set's AO), the rock's grain kept under it so it reads as a
+    coating, not paint. A few bare ribs show the rock through."""
+    N = alb.shape[0]
+    rng = np.random.default_rng(36)
+    rock = grade(alb, n, ao, dict(sat=0.2, flatten=0.6)) * 0.7
+    grain = _grain(rock)
+    streaks = _streak(_noise(N, rng, 2.0), N / 6)
+    streaks = streaks / (streaks.std() + 1e-9)
+    field = _noise(N, rng, N / 14) * 0.6 + _noise(N, rng, N / 40) * 0.4 + streaks * 0.5 + (1 - ao) * 2.0
+    thr = np.percentile(field, 100 * (1 - g.get("cover", 0.7)))
+    s = (np.clip((field - thr) * 0.9, 0, 1) * 0.85)[..., None]
+    soot = srgb_to_lin(np.array([0.14, 0.13, 0.12], np.float32)) * grain
+    return np.clip(rock * (1 - s) + soot * s, 0, 1)
+
+
+def make_gossan(alb, n, ao, g):
+    """Gossan (library layer 42): the rusty cap rock over a weathered sulphide body, iron's
+    prospecting sign. The host rock (the set's own) leached pale, then stained over `cover` of the
+    tile by hematite red, goethite ochre and limonite yellow-brown in broad patches, with dark
+    boxwork (the cell walls left where the sulphide grains dissolved) through the strongest."""
+    N = alb.shape[0]
+    rng = np.random.default_rng(42)
+    rock = grade(alb, n, ao, dict(sat=0.25, flatten=0.6)) * 1.1
+    grain = _grain(rock)
+    field = _noise(N, rng, N / 16) * 0.8 + _noise(N, rng, N / 45) * 0.5 + (1 - ao) * 0.8
+    thr = np.percentile(field, 100 * (1 - g.get("cover", 0.75)))
+    st = np.clip((field - thr) * 1.1, 0, 1) * 0.9
+    hue = np.clip(_noise(N, rng, N / 12) * 0.5 + 0.5, 0, 1)[..., None]
+    hem = srgb_to_lin(np.array([0.46, 0.13, 0.06], np.float32))
+    goe = srgb_to_lin(np.array([0.70, 0.42, 0.14], np.float32))
+    lim = srgb_to_lin(np.array([0.58, 0.44, 0.22], np.float32))
+    col = hem * (1 - hue) ** 2 + goe * 2 * hue * (1 - hue) + lim * hue ** 2
+    c = rock * (1 - st[..., None]) + col * grain * st[..., None]
+    _, d1, d2, _, _ = _worley(N, 22, rng)
+    wall = np.clip(1 - (d2 - d1) / 2.5, 0, 1) * np.clip(st * 1.5 - 0.5, 0, 1)
+    c *= (1 - 0.6 * wall)[..., None]
+    return np.clip(c, 0, 1)
+
+
+def make_sulfurvein(alb, n, ao, g):
+    """Native sulfur along fractures (library layer 59): the host rock graded to a grey, its
+    cracks (Voronoi fracture lines and the set's own deepest hollows) filled with yellow sulfur
+    crust, a pale efflorescence bloom (white sulfates) feathering out from each, and a few broad
+    crust patches over `cover` of the tile."""
+    N = alb.shape[0]
+    rng = np.random.default_rng(59)
+    rock = grade(alb, n, ao, dict(sat=0.2, flatten=0.6)) * 0.95
+    grain = _grain(rock)
+    _, d1, d2, _, _ = _worley(N, 9, rng)
+    warp = _noise(N, rng, N / 40)
+    crack = np.clip(1 - (d2 - d1 + warp * 2.0) / 3.0, 0, 1) ** 2
+    crack = np.maximum(crack, np.clip((0.55 - ao) * 3, 0, 1))
+    patch = _noise(N, rng, N / 10) + _noise(N, rng, N / 40) * 0.4
+    patch = np.clip((patch - np.percentile(patch, 100 * (1 - g.get("cover", 0.35)))) * 0.9, 0, 1)
+    vein = np.clip(np.maximum(crack, patch * 0.7), 0, 1) * np.clip(0.55 + 0.6 * _noise(N, rng, 3.0) * 0.5 + 0.25, 0, 1)
+    bloom = np.clip(blur_wrap(vein, 6.0) * 1.6 - vein, 0, 1) * 0.6
+    yel = srgb_to_lin(np.array([0.80, 0.70, 0.24], np.float32))
+    wht = srgb_to_lin(np.array([0.90, 0.88, 0.80], np.float32))
+    c = rock * (1 - bloom[..., None]) + wht * grain * 0.8 * bloom[..., None]
+    c = c * (1 - vein[..., None]) + yel * np.clip(grain, 0.55, 1.5) * vein[..., None]
+    return np.clip(c, 0, 1)
+
+
+def make_pitchblende(alb, n, ao, g):
+    """Pitchblende (uraninite, library layer 43): black, pitchy, botryoidal (round clustered
+    knobs, each lit on its upper side and shining a little at its crown) in a dark host rock,
+    with sparse yellow-green flecks of autunite and orange-yellow gummite where it weathers.
+    Realistic: it does NOT glow (worlds plan §3.4; the dosimeter finds it)."""
+    N = alb.shape[0]
+    rng = np.random.default_rng(43)
+    host = grade(alb, n, ao, dict(sat=0.2, flatten=0.5))
+    host = host * (0.06 / max(1e-4, float(lum(host).mean())))
+    _, d1, d2, ox, oy = _worley(N, 28, rng)
+    r = np.clip(d1 / (0.5 * (d1 + d2) + 1e-6), 0, 1)
+    dome = np.sqrt(np.clip(1 - r ** 2, 0, 1))
+    lit = np.clip(0.5 - oy / (N / 28) * 0.8, 0, 1)
+    body = np.clip(_noise(N, rng, N / 14) * 0.5 + _noise(N, rng, N / 40) * 0.4 + (1 - ao) * 0.8 + 0.3, 0, 1) ** 1.5
+    pitch = srgb_to_lin(np.array([0.07, 0.07, 0.065], np.float32))
+    c_b = pitch * (0.55 + 0.6 * dome * (0.5 + lit))[..., None] + (dome ** 12 * 0.06)[..., None]
+    c = host * (1 - body[..., None]) + c_b * body[..., None]
+    fleck = np.clip((_noise(N, rng, 1.6) - 2.6) * 2.0, 0, 1) * np.clip(_noise(N, rng, N / 14) + 0.3, 0, 1)
+    aut = srgb_to_lin(np.array([0.72, 0.80, 0.22], np.float32))
+    gum = srgb_to_lin(np.array([0.85, 0.55, 0.12], np.float32))
+    mix = np.clip(_noise(N, rng, N / 20) * 0.5 + 0.5, 0, 1)[..., None]
+    fc = aut * (1 - mix) + gum * mix
+    c = c * (1 - fleck[..., None]) + fc * 0.8 * fleck[..., None]
+    return np.clip(c, 0, 1)
+
+
+def make_columnar(alb, n, ao, g):
+    """Columnar basalt seen end-on (library layer 39): the set's basalt cut into 5-7-sided
+    column tops (Voronoi cells, `cells` across the tile, ~0.75 m at scale 1), each column its own
+    shade and a slight tilt of light, the joints between them dark and a little rusty."""
+    N = alb.shape[0]
+    rng = np.random.default_rng(39)
+    rock = grade(alb, n, ao, dict(sat=0.25, flatten=0.6))
+    cells = int(g.get("cells", 6))
+    cid, d1, d2, ox, oy = _worley(N, cells, rng)
+    shade = rng.uniform(0.75, 1.2, cells * cells)[cid]
+    tilt = (ox * rng.uniform(-1, 1, cells * cells)[cid] + oy * rng.uniform(-1, 1, cells * cells)[cid]) / (N / cells)
+    c = rock * (shade * (1 + 0.12 * tilt))[..., None]
+    joint = np.clip(1 - (d2 - d1) / (N / cells * 0.06 + 1.0), 0, 1)
+    rust = srgb_to_lin(np.array([0.20, 0.12, 0.08], np.float32)) * 0.4
+    c = c * (1 - joint[..., None] * 0.85) + rust * joint[..., None] * 0.3
+    return np.clip(c, 0, 1)
+
+
+RECIPES = {"soot": make_soot, "gossan": make_gossan, "sulfurvein": make_sulfurvein,
+           "pitchblende": make_pitchblende, "columnar": make_columnar}
+
+
 def slot_mapped(t):
     """Does this slot carry surface maps? Every photographic slot does; the glow
     slots (self-lit: magma, the crystals) keep their look."""
@@ -919,6 +1179,8 @@ def _bake_colour(sets, src, loaded, relief):
             return make_patchy(alb, n, ao, g, sets)
         if mk == "copper":
             return make_copper(alb, n, ao, g)
+        if mk in RECIPES:
+            return RECIPES[mk](alb, n, ao, g)
         return grade(alb, n, ao, g)
     finally:
         _RELIEF[0] = 1.0
@@ -942,6 +1204,14 @@ def bake_layer(lib, sets, src, mapped=False):
             out = np.clip(out + k * (out - blur_wrap(out, 0.9)), 0, 1)
         return out
     out = reduce(c, LAYER, g.get("sharpen", SHARPEN_MADE if mk else SHARPEN))
+    if g.get("hold"):
+        # A slot re-sourced to another photograph keeps the mean colour it had (linear, per
+        # channel), so far_bodies PAL, the map, the mining tints and the far ground do not move.
+        lin = srgb_to_lin(out)
+        for _ in range(3):   # a few rounds: clipping at 1 pulls a bright channel's mean back
+            m = lin.reshape(-1, 3).mean(axis=0)
+            lin = np.clip(lin * (np.array(g["hold"], np.float32) / np.maximum(m, 1e-6)), 0, 1)
+        return lin_to_srgb(lin)
     # Kept at the mean of the layer as it was baked before the maps (256, fully
     # baked relief, its sharpening then): the slot's average colour does not move
     # (far_bodies PAL, the map, the mining tints, the far ground).
@@ -1115,7 +1385,9 @@ def map_job(args):
     if dry:
         return map_stem(t, which), which, "would bake"
     n, orm, h = layer_maps(LIB_PATH[0], sets, t, which)
-    if not drift_only(t, which):   # else the set's own job writes the shared normal and ORM
+    # else the set's own job writes the shared normal and ORM; a set no other slot takes any more
+    # (slot 22 snow keeps Snow014's since slot 18 moved to its own photo) has them written here
+    if not drift_only(t, which) or not (os.path.exists(paths["normal"]) and os.path.exists(paths["orm"])):
         save_png(n, paths["normal"], "RGB")
         save_png(orm, paths["orm"], "RGB")
     if h is not None:
@@ -1166,7 +1438,8 @@ LIB_PATH = [LIB]
 def RECIPE_HASH():
     """The layer recipes' own code, so changing one re-bakes its layers."""
     import inspect
-    src = "".join(inspect.getsource(f) for f in (grade, ripple_field, make_veins, make_crystal, crystal_fields, _worley, make_patchy, _bake_colour, bake_layer, load_for_layer, convert_set))
+    src = "".join(inspect.getsource(f) for f in (grade, ripple_field, make_veins, make_crystal, crystal_fields, _worley, make_patchy, _bake_colour, bake_layer, load_for_layer, convert_set,
+                                                 _noise, _streak, _grain) + tuple(RECIPES.values()))
     return hashlib.sha1(src.encode()).hexdigest()[:12]
 
 
@@ -1212,6 +1485,12 @@ HEIGHT_ROLES = {
     "ore":     dict(k=0.6, mean=0.10, sd=0.50),    # painted veins (hematite, veinstone, sulfur): ragged, but a
                                                    # thin seam keeps its painted width against the host rock
     "crystal": dict(k=0.6, mean=0.10, sd=0.60),    # druzy points stand out of the host rock at a deposit's rim
+    # worlds plan W1 roles (the library layers 33+); they also say where a geology may put a layer
+    "cavewall":  dict(k=0.5, mean=0.0, sd=0.50),   # cave rock: ledges and knobs, a little smoother than a cliff
+    "flowstone": dict(k=0.55, mean=0.06, sd=0.25), # calcite skins: smooth, they drape over the rock beside them
+    "evaporite": dict(k=0.55, mean=-0.12, sd=0.15),  # salt and gypsum crusts: flat, fill the low ground
+    "volcanic":  dict(k=0.5, mean=0.0, sd=0.55),   # lava, tuff, clinker: rock-like
+    # "glow": magma; no height flags (GLOW_HEIGHT_BIAS)
 }
 # A glow slot (magma) keeps its look and has no height map, so it counts as half
 # height plus its bias: against a height-blended rock a small pocket was overrun
@@ -1244,10 +1523,20 @@ HEIGHT_ROLE = {
 }
 
 
+def role_of(t):
+    """A layer's role (TERRAIN `role`; HEIGHT_ROLE for an entry written without one)."""
+    return t.get("role") or HEIGHT_ROLE.get(t["name"], "")
+
+
+def palette_slots():
+    """The TERRAIN entries that are palette lines (1..PALETTE_SLOTS), in order."""
+    return [t for t in TERRAIN if t["slot"] <= PALETTE_SLOTS]
+
+
 def height_flags(t, height_file):
     """The |heightblend= |heightbias= |contrast= suffix for slot t, from its own
     height map (absolute path): '' for a glow slot or one without a role or map."""
-    role = HEIGHT_ROLES.get(HEIGHT_ROLE.get(t["name"], ""))
+    role = HEIGHT_ROLES.get(role_of(t))
     if t.get("glow") or not role or not height_file or not os.path.exists(height_file):
         return ""
     h = np.asarray(Image.open(height_file).convert("L"), dtype=np.float32) / 255.0
@@ -1291,7 +1580,7 @@ def write_palettes(dry, root_dir=None, local=False):
     layers only. `local` (for --stage) names a slot's local layer where root_dir has it."""
     root_dir = root_dir or ROOT
     lines = []
-    for t in TERRAIN:
+    for t in palette_slots():
         path, which = layer_path(OUT_CC0, t), "cc0"
         if local and t.get("local") and os.path.exists(os.path.join(root_dir, layer_path(OUT_LOCAL, t))):
             path, which = layer_path(OUT_LOCAL, t), "local"
@@ -1338,10 +1627,13 @@ def write_texture_settings(dry, root_dir=None):
 def layer_means():
     """Mean linear colour of each committed layer (far_bodies.lua PAL)."""
     out = []
-    for t in TERRAIN:
+    for t in palette_slots():
         a = srgb_to_lin(to_float(Image.open(os.path.join(ROOT, layer_path(OUT_CC0, t)))))
         out.append(tuple(round(float(v), 3) for v in a.reshape(-1, 3).mean(axis=0)))
     return out
+
+
+SOURCE_PAGE = {"ambientCG": "https://ambientcg.com/view?id={id}", "polyhaven": "https://polyhaven.com/a/{id}"}
 
 
 def write_manifest(sets, results, dry):
@@ -1354,6 +1646,9 @@ def write_manifest(sets, results, dry):
                 if t[which][1].get("under"):
                     uses.setdefault(t[which][1]["under"][0], []).append(
                         "terrain slot %d %s (%s), the ground under its cover" % (t["slot"], t["name"], t["mat"]))
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:   # run with python -I, the script's own folder is not on the path
+        sys.path.insert(0, here)
     for mod in ("base_pbr", "parts_pbr"):  # the base wave's and the parts wave's sets
         try:
             m = __import__(mod)
@@ -1364,10 +1659,13 @@ def write_manifest(sets, results, dry):
     rows = []
     for sid, s in sorted(sets.items()):
         r = results.get(sid, {})
+        ex = bool(s.get("extra"))
         rows.append(dict(
             id=sid, source=s["item"], note=s["note"] or None, licence=s["licence"], format=s["format"], kind=s["kind"],
-            committed=s["licence"] == "CC0", out="%s/sets/%s/" % (out_root(s), sid),
-            resolution=RES[s["kind"]][0 if s["licence"] == "CC0" else 1],
+            committed=s["licence"] == "CC0", out=None if ex else "%s/sets/%s/" % (out_root(s), sid),
+            page=SOURCE_PAGE.get(s["format"], "").format(id=sid) or None,
+            fetched="worlds W1 2026-11-10: terrain layers only" if ex else None,
+            resolution=None if ex else RES[s["kind"]][0 if s["licence"] == "CC0" else 1],
             maps=sorted(k for k in s["members"]), conversion=r or None,
             use=uses.get(sid) or [PLANNED.get(s["kind"], "reserve")],
         ))
@@ -1375,7 +1673,8 @@ def write_manifest(sets, results, dry):
         m = slot_maps(t, which, ROOT) if which == "cc0" else (
             {k: map_path(OUT_LOCAL, t, which, k) for k in MAP_KINDS} if slot_mapped(t) else None)
         return m or None
-    layers = [dict(slot=t["slot"], name=t["name"], material=t["mat"], was_psx=t["was"],
+    layers = [dict(slot=t["slot"], name=t["name"], role=role_of(t), palette=t["slot"] <= PALETTE_SLOTS,
+                   material=t["mat"], was_psx=t.get("was"),
                    cc0=dict(set=t["cc0"][0], file=layer_path(OUT_CC0, t), maps=maps_of(t, "cc0")),
                    local=dict(set=t["local"][0], file=layer_path(OUT_LOCAL, t), maps=maps_of(t, "local"))
                    if t.get("local") else None,
@@ -1455,28 +1754,63 @@ def sheets(outdir):
     if os.path.realpath(outdir).startswith(os.path.realpath(ROOT) + os.sep):
         raise SystemExit("--sheet: contact sheets hold commercial pixels; write them outside the repo")
     os.makedirs(outdir, exist_ok=True)
+
+    def tile(root, t, which):
+        p = os.path.join(ROOT, layer_path(root, t))
+        if not os.path.exists(p):
+            return None
+        im = Image.open(p).convert("RGB")
+        big = Image.new("RGB", (im.width * 2, im.height * 2))
+        for i in range(2):
+            for j in range(2):
+                big.paste(im, (i * im.width, j * im.height))
+        return ("%02d %s (%s)" % (t["slot"], t["name"], t[which][0]), big)
+
+    def sheet(name, rows):
+        """rows: [(heading or None, [tiles])]; each heading starts a new row."""
+        cols = 8
+        nrow = sum(max(1, (len(ts) + cols - 1) // cols) for _, ts in rows)
+        S = Image.new("RGB", (cols * 256, nrow * 288), (16, 16, 16))
+        d = ImageDraw.Draw(S)
+        y = 0
+        for head, ts in rows:
+            if head:
+                d.text((3, y + 2), head, fill=(255, 220, 120))
+            for k, (label, im) in enumerate(ts):
+                if k and k % cols == 0:
+                    y += 288
+                x = (k % cols) * 256
+                S.paste(im.resize((256, 256), Image.LANCZOS), (x, y + 16))
+                d.text((x + 3, y + 274), label, fill=(255, 255, 255))
+            y += 288
+        S.save(os.path.join(outdir, name))
+        print("sheet", os.path.join(outdir, name))
+
     for which, root in (("cc0", OUT_CC0), ("local", OUT_LOCAL)):
-        tiles = []
-        for t in TERRAIN:
-            p = os.path.join(ROOT, layer_path(root, t))
-            if os.path.exists(p):
-                im = Image.open(p).convert("RGB")
-                big = Image.new("RGB", (512, 512))
-                for i in range(2):
-                    for j in range(2):
-                        big.paste(im, (i * 256, j * 256))
-                tiles.append(("%02d %s (%s)" % (t["slot"], t["name"], t[which][0]), big))
+        tiles = [(t, tile(root, t, which)) for t in TERRAIN if t.get(which)]
+        tiles = [(t, x) for t, x in tiles if x]
         if not tiles:
             continue
-        cols = 8
-        S = Image.new("RGB", (cols * 256, ((len(tiles) + cols - 1) // cols) * 272), (16, 16, 16))
-        d = ImageDraw.Draw(S)
-        for k, (label, im) in enumerate(tiles):
-            x, y = (k % cols) * 256, (k // cols) * 272
-            S.paste(im.resize((256, 256), Image.LANCZOS), (x, y))
-            d.text((x + 3, y + 258), label, fill=(255, 255, 255))
-        S.save(os.path.join(outdir, "terrain_%s.png" % which))
-        print("sheet", os.path.join(outdir, "terrain_%s.png" % which))
+        sheet("terrain_%s.png" % which, [(None, [x for t, x in tiles if t["slot"] <= PALETTE_SLOTS]),
+                                          ("library (33+, on no palette line yet)", [x for t, x in tiles if t["slot"] > PALETTE_SLOTS])])
+        # by source photograph: the palette slots that share one show side by side
+        by = {}
+        for t, x in tiles:
+            if t["slot"] <= PALETTE_SLOTS:
+                by.setdefault(t[which][0], []).append(x)
+        rows, single = [], []
+        for sid, ts in sorted(by.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            if len(ts) > 1:
+                rows.append(("%s: %d slots" % (sid, len(ts)), ts))
+            else:
+                single += ts
+        rows.append(("one photograph each: %d slots" % len(single), single))
+        sheet("terrain_%s_by_source.png" % which, rows)
+        # by role (the whole library)
+        roles = {}
+        for t, x in tiles:
+            roles.setdefault(role_of(t), []).append(x)
+        sheet("terrain_%s_by_role.png" % which, [("role " + r, ts) for r, ts in sorted(roles.items())])
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -1488,6 +1822,7 @@ def main():
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--lib", default=LIB)
+    ap.add_argument("--extra-lib", action="append", help="a folder of fetched CC0 sets (default EXTRA_LIBS)")
     ap.add_argument("--jobs", type=int, default=6)
     ap.add_argument("--sheet")
     ap.add_argument("--stage")
@@ -1515,13 +1850,16 @@ def main():
     if a.sheet:
         sheets(a.sheet)
         return
+    extra = a.extra_lib or EXTRA_LIBS
     if not os.path.isdir(a.lib):
         print("no library at %s: nothing to convert; palettes and manifest left as they are" % a.lib)
         return
-    sets = scan(a.lib)
+    sets = scan_all(a.lib, extra)
     print("library: %d sets (%d CC0, %d commercial)" % (len(sets), sum(s["licence"] == "CC0" for s in sets.values()),
                                                         sum(s["licence"] != "CC0" for s in sets.values())))
-    pick = [s for s in sets.values() if not a.only or s["id"] in a.only]
+    # a fetched CC0 set gives only its terrain layers (no sets/<id>/ folder: the repo is public
+    # and its size counts; worlds plan §7.1 Repo)
+    pick = [s for s in sets.values() if (not a.only or s["id"] in a.only) and not s.get("extra")]
     results = {}
     with ProcessPoolExecutor(max_workers=a.jobs, initializer=_init, initargs=(a.lib,)) as ex:
         for sid, what, size, info in ex.map(write_set, [(a.lib, s, a.dry, a.force) for s in pick]):

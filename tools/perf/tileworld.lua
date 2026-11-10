@@ -22,12 +22,12 @@
 -- border (1: painted slot pairs br_rock | br_soil, br_sand | br_rock2, br_snow | br_rock
 -- and a br_crystal seam in br_host rock, from 0.6, 1.5, 3 and 30 m: `_b<pair>_*`; snowice 1
 -- adds br_snow | br_grass `snowgrass` and br_ice | br_rock `icerock`), snowice 2: only the snow
--- and ice pairs.
+-- and ice pairs. wild / warm: see wildcards() and main() (palprobe.sh, worlds plan W0/W1).
 defaults = { first = 1, last = 99, settle = 3, quit = 1, cave = 0, graze = 0,
   smin = 0.55, smax = 0.85, dist = 0, phys = 0, pcol = 1, loadwatch = 0, trace = 0,
   seam = 0, seam_a = 2, seam_b = 15, seam_c = 1, seam_d = 13, night = 1, only = 0,
   border = 0, br_rock = 14, br_soil = 20, br_sand = 16, br_rock2 = 15, br_snow = 22, br_host = 13, br_crystal = 7,
-  snowice = 0, br_grass = 28, br_ice = 23 }
+  snowice = 0, br_grass = 28, br_ice = 23, warm = 0 }
 
 local W = function() return app.wallClock and app.wallClock() or os.clock() end
 local W0 = W()
@@ -107,8 +107,58 @@ local function view(cam, eye, at, up, name)
   shot(name)
 end
 
+-- WILD (prepended by palprobe.sh): { { slot=, texture=, normalMap=, roughnessMap= }, ... }, each
+-- given to terrain.setSlotMaterial at the start (a palette line with flags and no picture takes
+-- the Material's pictures: the wildcard-slot bridge, worlds PLAN §3.6). Logged: textureBytes
+-- before, and each frame's time and textureBytes for 4 s after, so the background reads show.
+local function wildcards()
+  if perf.enable then perf.enable(true) end   -- textureBytes is counted with collection on
+  local function tb()
+    local c = perf.counts(); local v = (c and c.textureBytes) or 0
+    local f = perf.frames and perf.frames(1); f = f and f[1]
+    local w = f and f.counts and f.counts.textureBytes or 0
+    return math.max(v, w)
+  end
+  if not WILD or #WILD == 0 then P("WILD none; textureBytes %d (%.1f MiB)", tb(), tb() / 1048576); return end
+  local b0 = tb()
+  P("WILD textureBytes before %d (%.1f MiB)", b0, b0 / 1048576)
+  local t0 = W()
+  for _, m in ipairs(WILD) do
+    local s = m.slot
+    local mat = {}
+    for k, v in pairs(m) do if k ~= "slot" then mat[k] = v end end
+    local ok, err = pcall(terrain.setSlotMaterial, s, mat)
+    if not ok then P("WILD slot %d refused: %s", s, tostring(err)) end
+  end
+  P("WILD set %d slots in %.2f ms", #WILD, (W() - t0) * 1000)
+  local last, worst, n = W(), 0, 0
+  local tEnd = W() + 4
+  local prevB = b0
+  while W() < tEnd do
+    yield()
+    local now = W()
+    local dt = now - last
+    last = now
+    n = n + 1
+    if dt > worst then worst = dt end
+    local b = tb()
+    if b ~= prevB or dt > 0.034 then P("WILD frame %d dt %.1f ms textureBytes %d (%.1f MiB)", n, dt * 1000, b, b / 1048576) end
+    prevB = b
+  end
+  local b1 = tb()
+  P("WILD after 4 s: %d frames, worst %.1f ms, textureBytes %d (%.1f MiB, %+.1f MiB)", n, worst * 1000, b1, b1 / 1048576, (b1 - b0) / 1048576)
+  for _, m in ipairs(WILD) do
+    local got = terrain.slotMaterial(m.slot)
+    P("WILD slot %d reads back texture=%s", m.slot, got and tostring(got.texture) or "nil")
+  end
+end
+
 local function main()
   local cam = find("Camera")
+  wildcards()
+  -- warm (s): wait before the first world, so a palette read cold (a first run after a
+  -- re-bake: the palette cache is empty) has landed before the first shot
+  if params.warm > 0 then hold(params.warm) end
   if params.phys > 0 then
     local k = params.pcol   -- the Material colour (1 = white)
     find("Planet"):setMaterial { color = { k, k, k }, shading = "physical", roughness = 1.0, metallic = 0.0 }
@@ -134,7 +184,7 @@ local function main()
       end
     end
     wait_for(function() return not terrain.busy() end, 240)
-    P("FILLED %s", w.name); countsDump("world " .. wi .. " filled")
+    P("FILLED %s textureBytes %.1f MiB", w.name, ((perf.counts() or {}).textureBytes or 0) / 1048576); countsDump("world " .. wi .. " filled")
     local top = (w.peak or 100) + 60
     -- slope over ~6 m at directions 35-60 deg from the sun
     local flat, flat_s, steep, steep_s

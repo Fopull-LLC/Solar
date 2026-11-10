@@ -11,6 +11,8 @@
    "kind": "metal",
    "committed": false,
    "out": "textures/env_local/sets/AgedPolishedCopper/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -22,14 +24,7 @@
     "opacity",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "metal map",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)"
    ]
@@ -43,6 +38,8 @@
    "kind": "bark",
    "committed": true,
    "out": "textures/env/sets/Bark016/",
+   "page": "https://ambientcg.com/view?id=Bark016",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -73,6 +70,8 @@
    "kind": "wood",
    "committed": false,
    "out": "textures/env_local/sets/Basic_Wood_Grain/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "color",
@@ -80,14 +79,7 @@
     "normal",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 4: crates, props and felled-log ends"
    ]
@@ -101,6 +93,8 @@
    "kind": "crystal",
    "committed": true,
    "out": "textures/env/sets/ChristmasTreeOrnament021/",
+   "page": "https://ambientcg.com/view?id=ChristmasTreeOrnament021",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "color",
@@ -131,6 +125,8 @@
    "kind": "concrete",
    "committed": false,
    "out": "textures/env_local/sets/Concrete_02/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "color",
@@ -138,14 +134,7 @@
     "normal",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 2: base pads, foundations and buildings (replace textures/base concrete)"
    ]
@@ -159,6 +148,8 @@
    "kind": "road",
    "committed": false,
    "out": "textures/env_local/sets/Cracked_Asphalt/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -167,16 +158,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 18 salt (salt), local builds"
    ]
@@ -190,6 +172,8 @@
    "kind": "wood",
    "committed": false,
    "out": "textures/env_local/sets/Damaged_Wood_Grain/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "color",
@@ -197,14 +181,7 @@
     "normal",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 4: crates, props and felled-log ends"
    ]
@@ -218,6 +195,8 @@
    "kind": "foliage",
    "committed": false,
    "out": "textures/env_local/sets/DeadLeafBranches/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -229,14 +208,7 @@
     "opacity",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "metal map",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 4: leaf cards (replace textures/flora foliage_*)"
    ]
@@ -250,6 +222,8 @@
    "kind": "metal",
    "committed": true,
    "out": "textures/env/sets/DiamondPlate008C/",
+   "page": "https://ambientcg.com/view?id=DiamondPlate008C",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -281,6 +255,8 @@
    "kind": "metal",
    "committed": false,
    "out": "textures/env_local/sets/Diamond_Plate/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "color",
@@ -289,14 +265,7 @@
     "metal",
     "rough"
    ],
-   "conversion": {
-    "normal": "made from the height map",
-    "roughness": "roughness map",
-    "ao": "from height",
-    "metal": "metal map",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)"
    ]
@@ -310,6 +279,8 @@
    "kind": "ground",
    "committed": false,
    "out": "textures/env_local/sets/Dirt/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -319,16 +290,7 @@
     "rough",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain variety reserve: later palettes and ground decals"
    ]
@@ -342,6 +304,8 @@
    "kind": "ground",
    "committed": false,
    "out": "textures/env_local/sets/Dirty_Concrete/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "diff",
@@ -350,16 +314,7 @@
     "rough",
     "spec"
    ],
-   "conversion": {
-    "normal": "DX -> GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 2: base concrete (textures/base/concrete), local builds"
    ]
@@ -373,22 +328,15 @@
    "kind": "ground",
    "committed": false,
    "out": "textures/env_local/sets/Dirty_Grass/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "diff",
     "height",
     "spec"
    ],
-   "conversion": {
-    "normal": "made from the height map",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 28 tundra (soil), local builds"
    ]
@@ -402,6 +350,8 @@
    "kind": "ground",
    "committed": false,
    "out": "textures/env_local/sets/FineClumpySand/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -413,14 +363,7 @@
     "opacity",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "metal map",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain variety reserve: later palettes and ground decals"
    ]
@@ -434,22 +377,15 @@
    "kind": "metal",
    "committed": false,
    "out": "textures/env_local/sets/Galvanized_Metal/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "diff",
     "height",
     "spec"
    ],
-   "conversion": {
-    "normal": "made from the height map",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "from height",
-    "metal": "constant 1.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)"
    ]
@@ -463,6 +399,8 @@
    "kind": "pattern",
    "committed": false,
    "out": "textures/env_local/sets/Generated_Checker_Tiles/",
+   "page": null,
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -471,16 +409,7 @@
     "normal",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 512
-   },
+   "conversion": null,
    "use": [
     "test pattern only (scale checks)"
    ]
@@ -494,6 +423,8 @@
    "kind": "ground",
    "committed": true,
    "out": "textures/env/sets/Grass004/",
+   "page": "https://ambientcg.com/view?id=Grass004",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -517,6 +448,56 @@
    ]
   },
   {
+   "id": "Gravel043",
+   "source": "Gravel043_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Gravel043",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 21 ash (ash)"
+   ]
+  },
+  {
+   "id": "Ground031",
+   "source": "Ground031_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "ground",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Ground031",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 18 salt (salt)"
+   ]
+  },
+  {
    "id": "Ground037",
    "source": "Ground037_2K-PNG.zip",
    "note": null,
@@ -525,6 +506,8 @@
    "kind": "ground",
    "committed": true,
    "out": "textures/env/sets/Ground037/",
+   "page": "https://ambientcg.com/view?id=Ground037",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -555,6 +538,8 @@
    "kind": "ground",
    "committed": true,
    "out": "textures/env/sets/Ground039/",
+   "page": "https://ambientcg.com/view?id=Ground039",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -574,8 +559,6 @@
    },
    "use": [
     "terrain slot 2 soil (soil)",
-    "terrain slot 17 regolith (regolith)",
-    "terrain slot 19 mudcrack (clay)",
     "terrain slot 28 tundra (soil), the ground under its cover"
    ]
   },
@@ -588,6 +571,8 @@
    "kind": "ground",
    "committed": true,
    "out": "textures/env/sets/Ground085/",
+   "page": "https://ambientcg.com/view?id=Ground085",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -619,6 +604,8 @@
    "kind": "ground",
    "committed": true,
    "out": "textures/env/sets/Ground093B/",
+   "page": "https://ambientcg.com/view?id=Ground093B",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -637,8 +624,57 @@
     "size": 512
    },
    "use": [
-    "terrain slot 11 dust (regolith)",
     "terrain slot 16 sand (sand)"
+   ]
+  },
+  {
+   "id": "Ground102",
+   "source": "Ground102_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "ground",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Ground102",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 55 loess (soil)"
+   ]
+  },
+  {
+   "id": "Ground105",
+   "source": "Ground105_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "ground",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Ground105",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 45 mudstone (shale)"
    ]
   },
   {
@@ -650,6 +686,8 @@
    "kind": "ground",
    "committed": true,
    "out": "textures/env/sets/Ground110/",
+   "page": "https://ambientcg.com/view?id=Ground110",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -668,9 +706,7 @@
     "size": 512
    },
    "use": [
-    "terrain slot 10 gravelregolith (regolith)",
-    "terrain slot 21 ash (ash)",
-    "terrain slot 24 scree (gravel)"
+    "terrain slot 10 gravelregolith (regolith)"
    ]
   },
   {
@@ -682,6 +718,8 @@
    "kind": "foliage",
    "committed": true,
    "out": "textures/env/sets/LeafSet024/",
+   "page": "https://ambientcg.com/view?id=LeafSet024",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "color",
@@ -712,6 +750,8 @@
    "kind": "foliage",
    "committed": true,
    "out": "textures/env/sets/LeafSet030/",
+   "page": "https://ambientcg.com/view?id=LeafSet030",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "color",
@@ -742,6 +782,8 @@
    "kind": "rock",
    "committed": false,
    "out": "textures/env_local/sets/MarsSmoothRock/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -753,14 +795,7 @@
     "opacity",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "metal map",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 1 rust (rustrock), local builds",
     "terrain slot 19 mudcrack (clay), local builds"
@@ -775,6 +810,8 @@
    "kind": "metal",
    "committed": true,
    "out": "textures/env/sets/Metal034/",
+   "page": "https://ambientcg.com/view?id=Metal034",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "color",
@@ -805,6 +842,8 @@
    "kind": "metal",
    "committed": true,
    "out": "textures/env/sets/Metal048C/",
+   "page": "https://ambientcg.com/view?id=Metal048C",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "color",
@@ -835,6 +874,8 @@
    "kind": "metal",
    "committed": true,
    "out": "textures/env/sets/Metal050A/",
+   "page": "https://ambientcg.com/view?id=Metal050A",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "color",
@@ -865,6 +906,8 @@
    "kind": "metal",
    "committed": true,
    "out": "textures/env/sets/Metal052C/",
+   "page": "https://ambientcg.com/view?id=Metal052C",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "color",
@@ -896,6 +939,8 @@
    "kind": "metal",
    "committed": true,
    "out": "textures/env/sets/Metal053B/",
+   "page": "https://ambientcg.com/view?id=Metal053B",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "color",
@@ -926,6 +971,8 @@
    "kind": "metal",
    "committed": false,
    "out": "textures/env_local/sets/MetalCrateXCorrugatedPainted/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -937,14 +984,7 @@
     "opacity",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "metal map",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "reserve: later props and station hardware (wave 3 dressed the parts from the CC0 metals, tools/parts_pbr.py)"
    ]
@@ -958,6 +998,8 @@
    "kind": "metal",
    "committed": true,
    "out": "textures/env/sets/MetalWalkway014/",
+   "page": "https://ambientcg.com/view?id=MetalWalkway014",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -990,6 +1032,8 @@
    "kind": "ground",
    "committed": false,
    "out": "textures/env_local/sets/MossAndSmallFerns/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1001,14 +1045,7 @@
     "opacity",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "metal map",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 20 moss (soil), local builds"
    ]
@@ -1022,6 +1059,8 @@
    "kind": "rock",
    "committed": false,
    "out": "textures/env_local/sets/Mossy_Rock/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1030,16 +1069,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "DX -> GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 15 sandstone (sandstone), local builds"
    ]
@@ -1053,6 +1083,8 @@
    "kind": "concrete",
    "committed": false,
    "out": "textures/env_local/sets/New_Concrete/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "diff",
@@ -1060,16 +1092,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 2: base pads, foundations and buildings (replace textures/base concrete)"
    ]
@@ -1083,6 +1106,8 @@
    "kind": "rock",
    "committed": false,
    "out": "textures/env_local/sets/Old_Rocks/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1092,14 +1117,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 3 flagstone (slate), local builds"
    ]
@@ -1113,6 +1131,8 @@
    "kind": "wood",
    "committed": false,
    "out": "textures/env_local/sets/Old_Wood/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1121,16 +1141,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 4: crates, props and felled-log ends"
    ]
@@ -1144,6 +1155,8 @@
    "kind": "wood",
    "committed": false,
    "out": "textures/env_local/sets/Olive_Wood/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "color",
@@ -1151,14 +1164,7 @@
     "normal",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 4: crates, props and felled-log ends"
    ]
@@ -1172,6 +1178,8 @@
    "kind": "rock",
    "committed": true,
    "out": "textures/env/sets/Onyx006/",
+   "page": "https://ambientcg.com/view?id=Onyx006",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "color",
@@ -1189,8 +1197,7 @@
     "size": 512
    },
    "use": [
-    "terrain slot 4 onyx (onyx)",
-    "terrain slot 12 bandedice (ice)"
+    "terrain slot 4 onyx (onyx)"
    ]
   },
   {
@@ -1202,6 +1209,8 @@
    "kind": "rock",
    "committed": true,
    "out": "textures/env/sets/Onyx010/",
+   "page": "https://ambientcg.com/view?id=Onyx010",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "color",
@@ -1231,6 +1240,8 @@
    "kind": "bark",
    "committed": false,
    "out": "textures/env_local/sets/OrangePineTreeBark/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1242,14 +1253,7 @@
     "opacity",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "metal map",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 4: tree bark (replace textures/flora bark_*)"
    ]
@@ -1263,6 +1267,8 @@
    "kind": "ground",
    "committed": false,
    "out": "textures/env_local/sets/Potato/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "color",
@@ -1270,14 +1276,7 @@
     "normal",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 26 sulfur (sulfur), local builds"
    ]
@@ -1291,22 +1290,15 @@
    "kind": "road",
    "committed": false,
    "out": "textures/env_local/sets/Red_Asphalt/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "diff",
     "height",
     "normal"
    ],
-   "conversion": {
-    "normal": "DX -> GL (measured against its height map)",
-    "roughness": "constant 0.90",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 2: base roads and pads (replace textures/base asphalt)"
    ]
@@ -1320,6 +1312,8 @@
    "kind": "road",
    "committed": false,
    "out": "textures/env_local/sets/Regular_Pavement/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "diff",
@@ -1328,16 +1322,7 @@
     "rough",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 2: base roads and pads (replace textures/base asphalt)"
    ]
@@ -1351,6 +1336,8 @@
    "kind": "road",
    "committed": true,
    "out": "textures/env/sets/Road008C/",
+   "page": "https://ambientcg.com/view?id=Road008C",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1381,6 +1368,8 @@
    "kind": "road",
    "committed": true,
    "out": "textures/env/sets/Road009A/",
+   "page": "https://ambientcg.com/view?id=Road009A",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1411,6 +1400,8 @@
    "kind": "road",
    "committed": true,
    "out": "textures/env/sets/Road010A/",
+   "page": "https://ambientcg.com/view?id=Road010A",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1442,6 +1433,8 @@
    "kind": "road",
    "committed": true,
    "out": "textures/env/sets/Road011A/",
+   "page": "https://ambientcg.com/view?id=Road011A",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1464,6 +1457,106 @@
    ]
   },
   {
+   "id": "Rock018",
+   "source": "Rock018_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rock018",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 46 chalk (limestone)"
+   ]
+  },
+  {
+   "id": "Rock019",
+   "source": "Rock019_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rock019",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 12 bandedice (ice)"
+   ]
+  },
+  {
+   "id": "Rock022",
+   "source": "Rock022_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rock022",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 30 shale (shale)"
+   ]
+  },
+  {
+   "id": "Rock023",
+   "source": "Rock023_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rock023",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 3 flagstone (slate)"
+   ]
+  },
+  {
    "id": "Rock035",
    "source": "Rock035_2K-PNG.zip",
    "note": null,
@@ -1472,6 +1565,8 @@
    "kind": "rock",
    "committed": true,
    "out": "textures/env/sets/Rock035/",
+   "page": "https://ambientcg.com/view?id=Rock035",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1492,8 +1587,109 @@
    "use": [
     "terrain slot 7 amethyst (crystal)",
     "terrain slot 8 bluecrystal (crystal)",
-    "terrain slot 13 basalt (basalt)",
     "wave 3: thermal tile pores (textures/parts/tiles)"
+   ]
+  },
+  {
+   "id": "Rock041",
+   "source": "Rock041_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rock041",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 29 pahoehoe (basalt)"
+   ]
+  },
+  {
+   "id": "Rock045",
+   "source": "Rock045_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rock045",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 50 schist (slate)"
+   ]
+  },
+  {
+   "id": "Rock048",
+   "source": "Rock048_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rock048",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 43 pitchblende (uranium)",
+    "terrain slot 60 quartzdruzy (quartz)"
+   ]
+  },
+  {
+   "id": "Rock050",
+   "source": "Rock050_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rock050",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 13 basalt (basalt)",
+    "terrain slot 39 columnar (basalt)"
    ]
   },
   {
@@ -1505,6 +1701,8 @@
    "kind": "rock",
    "committed": true,
    "out": "textures/env/sets/Rock051/",
+   "page": "https://ambientcg.com/view?id=Rock051",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1524,8 +1722,57 @@
     "size": 512
    },
    "use": [
-    "terrain slot 25 limestone (limestone)",
-    "terrain slot 30 shale (shale)"
+    "terrain slot 25 limestone (limestone)"
+   ]
+  },
+  {
+   "id": "Rock055",
+   "source": "Rock055_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rock055",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 26 sulfur (sulfur)"
+   ]
+  },
+  {
+   "id": "Rock056",
+   "source": "Rock056_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rock056",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 42 gossan (hematite)"
    ]
   },
   {
@@ -1537,6 +1784,8 @@
    "kind": "rock",
    "committed": true,
    "out": "textures/env/sets/Rock058/",
+   "page": "https://ambientcg.com/view?id=Rock058",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1556,9 +1805,7 @@
    },
    "use": [
     "terrain slot 5 veinstone (veinstone)",
-    "terrain slot 6 magma (uranium)",
-    "terrain slot 9 slate (slate)",
-    "terrain slot 29 pahoehoe (basalt)"
+    "terrain slot 6 magma (uranium)"
    ]
   },
   {
@@ -1570,6 +1817,8 @@
    "kind": "rock",
    "committed": true,
    "out": "textures/env/sets/Rock060/",
+   "page": "https://ambientcg.com/view?id=Rock060",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1600,6 +1849,8 @@
    "kind": "rock",
    "committed": true,
    "out": "textures/env/sets/Rock063/",
+   "page": "https://ambientcg.com/view?id=Rock063",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1631,6 +1882,8 @@
    "kind": "rock",
    "committed": false,
    "out": "textures/env_local/sets/Rock_01/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1639,16 +1892,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain variety reserve: later palettes, boulders and cave props"
    ]
@@ -1662,6 +1906,8 @@
    "kind": "rock",
    "committed": false,
    "out": "textures/env_local/sets/Rock_02/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1670,16 +1916,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain variety reserve: later palettes, boulders and cave props"
    ]
@@ -1693,6 +1930,8 @@
    "kind": "rock",
    "committed": false,
    "out": "textures/env_local/sets/Rock_03/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1701,16 +1940,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 30 shale (shale), local builds"
    ]
@@ -1724,6 +1954,8 @@
    "kind": "rock",
    "committed": false,
    "out": "textures/env_local/sets/Rock_04/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1732,16 +1964,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 25 limestone (limestone), local builds"
    ]
@@ -1755,6 +1978,8 @@
    "kind": "rock",
    "committed": false,
    "out": "textures/env_local/sets/Rock_05/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1764,16 +1989,7 @@
     "rough",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 14 granite (granite), local builds"
    ]
@@ -1787,6 +2003,8 @@
    "kind": "rock",
    "committed": false,
    "out": "textures/env_local/sets/Rock_Wall/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1795,18 +2013,34 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain slot 9 slate (slate), local builds"
+   ]
+  },
+  {
+   "id": "Rocks006",
+   "source": "Rocks006_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Rocks006",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 24 scree (gravel)"
    ]
   },
   {
@@ -1818,6 +2052,8 @@
    "kind": "rock",
    "committed": true,
    "out": "textures/env/sets/Rocks011/",
+   "page": "https://ambientcg.com/view?id=Rocks011",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1836,9 +2072,32 @@
     "size": 512
    },
    "use": [
-    "terrain slot 1 rust (rustrock)",
-    "terrain slot 3 flagstone (slate)",
-    "terrain slot 26 sulfur (sulfur)"
+    "terrain slot 1 rust (rustrock)"
+   ]
+  },
+  {
+   "id": "Snow006",
+   "source": "Snow006_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "snow",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Snow006",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 41 clearice (ice)"
    ]
   },
   {
@@ -1850,6 +2109,8 @@
    "kind": "snow",
    "committed": true,
    "out": "textures/env/sets/Snow008A/",
+   "page": "https://ambientcg.com/view?id=Snow008A",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1872,6 +2133,56 @@
    ]
   },
   {
+   "id": "Snow012",
+   "source": "Snow012_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "snow",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Snow012",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 57 dirtyice (ice)"
+   ]
+  },
+  {
+   "id": "Snow013",
+   "source": "Snow013_2K-PNG.zip",
+   "note": null,
+   "licence": "CC0",
+   "format": "ambientCG",
+   "kind": "snow",
+   "committed": true,
+   "out": null,
+   "page": "https://ambientcg.com/view?id=Snow013",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_dx",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 37 frost (ice)"
+   ]
+  },
+  {
    "id": "Snow014",
    "source": "Snow014_2K-PNG.zip",
    "note": null,
@@ -1880,6 +2191,8 @@
    "kind": "snow",
    "committed": true,
    "out": "textures/env/sets/Snow014/",
+   "page": "https://ambientcg.com/view?id=Snow014",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1898,7 +2211,6 @@
     "size": 512
    },
    "use": [
-    "terrain slot 18 salt (salt)",
     "terrain slot 22 snow (ice)"
    ]
   },
@@ -1911,6 +2223,8 @@
    "kind": "snow",
    "committed": true,
    "out": "textures/env/sets/Snow015/",
+   "page": "https://ambientcg.com/view?id=Snow015",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -1941,6 +2255,8 @@
    "kind": "scifi",
    "committed": false,
    "out": "textures/env_local/sets/SpaceLabWallOld/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1952,14 +2268,7 @@
     "opacity",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "metal map",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)"
    ]
@@ -1973,6 +2282,8 @@
    "kind": "scifi",
    "committed": false,
    "out": "textures/env_local/sets/SpaceStationWallKit5Metallic/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -1984,14 +2295,7 @@
     "opacity",
     "rough"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "roughness map",
-    "ao": "AO map",
-    "metal": "metal map",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)"
    ]
@@ -2005,6 +2309,8 @@
    "kind": "rock",
    "committed": false,
    "out": "textures/env_local/sets/Stone_01/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -2012,16 +2318,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "assumed GL (no height map to test against)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain variety reserve: later palettes, boulders and cave props"
    ]
@@ -2035,6 +2332,8 @@
    "kind": "road",
    "committed": false,
    "out": "textures/env_local/sets/Stone_Pavement/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -2043,16 +2342,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 2: base roads and pads (replace textures/base asphalt)"
    ]
@@ -2066,6 +2356,8 @@
    "kind": "ground",
    "committed": false,
    "out": "textures/env_local/sets/White_Stones/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "ao",
@@ -2074,16 +2366,7 @@
     "normal",
     "spec"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "1 - 0.8 x specular map",
-    "ao": "AO map",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "terrain variety reserve: later palettes and ground decals"
    ]
@@ -2097,6 +2380,8 @@
    "kind": "wood",
    "committed": true,
    "out": "textures/env/sets/Wood062/",
+   "page": "https://ambientcg.com/view?id=Wood062",
+   "fetched": null,
    "resolution": 512,
    "maps": [
     "ao",
@@ -2127,22 +2412,15 @@
    "kind": "wood",
    "committed": false,
    "out": "textures/env_local/sets/Wood_Grain_02/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "diff",
     "height",
     "normal"
    ],
-   "conversion": {
-    "normal": "GL (measured against its height map)",
-    "roughness": "constant 0.75",
-    "ao": "from height",
-    "metal": "constant 0.0",
-    "notes": [
-     "albedo from _DIFF (may carry baked light)"
-    ],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "wave 4: crates, props and felled-log ends"
    ]
@@ -2156,20 +2434,135 @@
    "kind": "scifi",
    "committed": false,
    "out": "textures/env_local/sets/bolted-fan-housing-wall-001/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "color"
    ],
-   "conversion": {
-    "normal": "flat (no normal or height)",
-    "roughness": "constant 0.60",
-    "ao": "none (white)",
-    "metal": "constant 0.0",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)"
+   ]
+  },
+  {
+   "id": "cliff_side",
+   "source": "ph/cliff_side",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/cliff_side",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 44 redbeds (sandstone)"
+   ]
+  },
+  {
+   "id": "dark_rock",
+   "source": "ph/dark_rock",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/dark_rock",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 9 slate (slate)"
+   ]
+  },
+  {
+   "id": "dark_rock_02",
+   "source": "ph/dark_rock_02",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/dark_rock_02",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 48 obsidian (obsidian)"
+   ]
+  },
+  {
+   "id": "dense_sand",
+   "source": "ph/dense_sand",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/dense_sand",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 53 blacksand (sand)"
+   ]
+  },
+  {
+   "id": "gravelly_sand",
+   "source": "ph/gravelly_sand",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/gravelly_sand",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 54 redregolith (regolith)"
    ]
   },
   {
@@ -2181,20 +2574,400 @@
    "kind": "scifi",
    "committed": false,
    "out": "textures/env_local/sets/maintenance-hatch-floor-001/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "color"
    ],
-   "conversion": {
-    "normal": "flat (no normal or height)",
-    "roughness": "constant 0.60",
-    "ao": "none (white)",
-    "metal": "constant 0.0",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)"
+   ]
+  },
+  {
+   "id": "marble_cliff_04",
+   "source": "ph/marble_cliff_04",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/marble_cliff_04",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 51 gneiss (granite)"
+   ]
+  },
+  {
+   "id": "marble_cliff_05",
+   "source": "ph/marble_cliff_05",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/marble_cliff_05",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 34 flowstone (limestone)"
+   ]
+  },
+  {
+   "id": "marble_rock_01",
+   "source": "ph/marble_rock_01",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/marble_rock_01",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 35 dripstone (limestone)"
+   ]
+  },
+  {
+   "id": "marble_rock_02",
+   "source": "ph/marble_rock_02",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/marble_rock_02",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 52 marble (limestone)"
+   ]
+  },
+  {
+   "id": "moon_02",
+   "source": "ph/moon_02",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/moon_02",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain variety reserve: later palettes, boulders and cave props"
+   ]
+  },
+  {
+   "id": "moon_dusted_01",
+   "source": "ph/moon_dusted_01",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/moon_dusted_01",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 11 dust (regolith)"
+   ]
+  },
+  {
+   "id": "moon_meteor_01",
+   "source": "ph/moon_meteor_01",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/moon_meteor_01",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 17 regolith (regolith)"
+   ]
+  },
+  {
+   "id": "mud_cracked_dry_03",
+   "source": "ph/mud_cracked_dry_03",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/mud_cracked_dry_03",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 40 halite (salt)"
+   ]
+  },
+  {
+   "id": "mud_cracked_dry_riverbed_002",
+   "source": "ph/mud_cracked_dry_riverbed_002",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/mud_cracked_dry_riverbed_002",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 19 mudcrack (clay)"
+   ]
+  },
+  {
+   "id": "quarry_wall",
+   "source": "ph/quarry_wall",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/quarry_wall",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 33 cavewall (limestone)"
+   ]
+  },
+  {
+   "id": "quarry_wall_02",
+   "source": "ph/quarry_wall_02",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/quarry_wall_02",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 36 soot (basalt)"
+   ]
+  },
+  {
+   "id": "rock_05",
+   "source": "ph/rock_05",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/rock_05",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 38 tuff (basalt)",
+    "terrain slot 59 sulfurvein (sulfur)"
+   ]
+  },
+  {
+   "id": "rock_06",
+   "source": "ph/rock_06",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/rock_06",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 49 scoria (basalt)"
+   ]
+  },
+  {
+   "id": "rocks_ground_09",
+   "source": "ph/rocks_ground_09",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/rocks_ground_09",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 47 clinker (basalt)"
+   ]
+  },
+  {
+   "id": "sandy_gravel_02",
+   "source": "ph/sandy_gravel_02",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "rock",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/sandy_gravel_02",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 56 laggravel (gravel)"
+   ]
+  },
+  {
+   "id": "snow_02",
+   "source": "ph/snow_02",
+   "note": null,
+   "licence": "CC0",
+   "format": "polyhaven",
+   "kind": "snow",
+   "committed": true,
+   "out": null,
+   "page": "https://polyhaven.com/a/snow_02",
+   "fetched": "worlds W1 2026-11-10: terrain layers only",
+   "resolution": null,
+   "maps": [
+    "ao",
+    "color",
+    "height",
+    "normal_gl",
+    "rough"
+   ],
+   "conversion": null,
+   "use": [
+    "terrain slot 58 firn (ice)"
    ]
   },
   {
@@ -2206,18 +2979,13 @@
    "kind": "scifi",
    "committed": false,
    "out": "textures/env_local/sets/worn-safety-stripes-001/",
+   "page": null,
+   "fetched": null,
    "resolution": 1024,
    "maps": [
     "color"
    ],
-   "conversion": {
-    "normal": "flat (no normal or height)",
-    "roughness": "constant 0.60",
-    "ao": "none (white)",
-    "metal": "constant 0.0",
-    "notes": [],
-    "size": 1024
-   },
+   "conversion": null,
    "use": [
     "reserve: station interiors (their baked panel layouts fight the meshes' own seams; wave 3 left them out)"
    ]
@@ -2227,6 +2995,8 @@
   {
    "slot": 1,
    "name": "rust",
+   "role": "rock",
+   "palette": true,
    "material": "rustrock",
    "was_psx": "planet_rust_rock",
    "cc0": {
@@ -2254,6 +3024,8 @@
   {
    "slot": 2,
    "name": "soil",
+   "role": "loose",
+   "palette": true,
    "material": "soil",
    "was_psx": "planet_purple_dirt",
    "cc0": {
@@ -2273,15 +3045,17 @@
   {
    "slot": 3,
    "name": "flagstone",
+   "role": "rock",
+   "palette": true,
    "material": "slate",
    "was_psx": "planet_purple_slate",
    "cc0": {
-    "set": "Rocks011",
+    "set": "Rock023",
     "file": "textures/env/terrain/03_flagstone.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Rocks011_normal.png",
-     "orm": "textures/env/terrain/maps/Rocks011_orm.png",
-     "height": "textures/env/terrain/maps/Rocks011_height.png"
+     "normal": "textures/env/terrain/maps/Rock023_normal.png",
+     "orm": "textures/env/terrain/maps/Rock023_orm.png",
+     "height": "textures/env/terrain/maps/Rock023_height.png"
     }
    },
    "local": {
@@ -2300,6 +3074,8 @@
   {
    "slot": 4,
    "name": "onyx",
+   "role": "rock",
+   "palette": true,
    "material": "onyx",
    "was_psx": "planet_banded_onyx",
    "cc0": {
@@ -2319,6 +3095,8 @@
   {
    "slot": 5,
    "name": "veinstone",
+   "role": "ore",
+   "palette": true,
    "material": "veinstone",
    "was_psx": "cave_orange_veinstone",
    "cc0": {
@@ -2338,6 +3116,8 @@
   {
    "slot": 6,
    "name": "magma",
+   "role": "glow",
+   "palette": true,
    "material": "uranium",
    "was_psx": "cave_magma_veins",
    "cc0": {
@@ -2353,6 +3133,8 @@
   {
    "slot": 7,
    "name": "amethyst",
+   "role": "crystal",
+   "palette": true,
    "material": "crystal",
    "was_psx": "cave_amethyst",
    "cc0": {
@@ -2372,6 +3154,8 @@
   {
    "slot": 8,
    "name": "bluecrystal",
+   "role": "crystal",
+   "palette": true,
    "material": "crystal",
    "was_psx": "cave_blue_crystal",
    "cc0": {
@@ -2391,15 +3175,17 @@
   {
    "slot": 9,
    "name": "slate",
+   "role": "rock",
+   "palette": true,
    "material": "slate",
    "was_psx": "moon_silver_slate",
    "cc0": {
-    "set": "Rock058",
+    "set": "dark_rock",
     "file": "textures/env/terrain/09_slate.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Rock058_normal.png",
-     "orm": "textures/env/terrain/maps/Rock058_orm.png",
-     "height": "textures/env/terrain/maps/Rock058_height.png"
+     "normal": "textures/env/terrain/maps/dark_rock_normal.png",
+     "orm": "textures/env/terrain/maps/dark_rock_orm.png",
+     "height": "textures/env/terrain/maps/dark_rock_height.png"
     }
    },
    "local": {
@@ -2418,6 +3204,8 @@
   {
    "slot": 10,
    "name": "gravelregolith",
+   "role": "loose",
+   "palette": true,
    "material": "regolith",
    "was_psx": "moon_gray_regolith",
    "cc0": {
@@ -2437,15 +3225,17 @@
   {
    "slot": 11,
    "name": "dust",
+   "role": "loose",
+   "palette": true,
    "material": "regolith",
    "was_psx": "moon_crater_dust",
    "cc0": {
-    "set": "Ground093B",
+    "set": "moon_dusted_01",
     "file": "textures/env/terrain/11_dust.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Ground093B_normal.png",
-     "orm": "textures/env/terrain/maps/Ground093B_orm.png",
-     "height": "textures/env/terrain/maps/Ground093B_height.png"
+     "normal": "textures/env/terrain/maps/moon_dusted_01_normal.png",
+     "orm": "textures/env/terrain/maps/moon_dusted_01_orm.png",
+     "height": "textures/env/terrain/maps/moon_dusted_01_height.png"
     }
    },
    "local": null,
@@ -2456,10 +3246,12 @@
   {
    "slot": 12,
    "name": "bandedice",
+   "role": "ice",
+   "palette": true,
    "material": "ice",
    "was_psx": "moon_teal_ice",
    "cc0": {
-    "set": "Onyx006",
+    "set": "Rock019",
     "file": "textures/env/terrain/12_bandedice.png",
     "maps": {
      "normal": "textures/env/terrain/maps/12_bandedice_normal.png",
@@ -2475,15 +3267,17 @@
   {
    "slot": 13,
    "name": "basalt",
+   "role": "rock",
+   "palette": true,
    "material": "basalt",
    "was_psx": "geo_basalt",
    "cc0": {
-    "set": "Rock035",
+    "set": "Rock050",
     "file": "textures/env/terrain/13_basalt.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Rock035_normal.png",
-     "orm": "textures/env/terrain/maps/Rock035_orm.png",
-     "height": "textures/env/terrain/maps/Rock035_height.png"
+     "normal": "textures/env/terrain/maps/Rock050_normal.png",
+     "orm": "textures/env/terrain/maps/Rock050_orm.png",
+     "height": "textures/env/terrain/maps/Rock050_height.png"
     }
    },
    "local": null,
@@ -2494,6 +3288,8 @@
   {
    "slot": 14,
    "name": "granite",
+   "role": "rock",
+   "palette": true,
    "material": "granite",
    "was_psx": "geo_granite",
    "cc0": {
@@ -2521,6 +3317,8 @@
   {
    "slot": 15,
    "name": "sandstone",
+   "role": "rock",
+   "palette": true,
    "material": "sandstone",
    "was_psx": "geo_sandstone",
    "cc0": {
@@ -2548,6 +3346,8 @@
   {
    "slot": 16,
    "name": "sand",
+   "role": "sand",
+   "palette": true,
    "material": "sand",
    "was_psx": "geo_sand",
    "cc0": {
@@ -2567,15 +3367,17 @@
   {
    "slot": 17,
    "name": "regolith",
+   "role": "loose",
+   "palette": true,
    "material": "regolith",
    "was_psx": "geo_regolith",
    "cc0": {
-    "set": "Ground039",
+    "set": "moon_meteor_01",
     "file": "textures/env/terrain/17_regolith.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Ground039_normal.png",
-     "orm": "textures/env/terrain/maps/Ground039_orm.png",
-     "height": "textures/env/terrain/maps/Ground039_height.png"
+     "normal": "textures/env/terrain/maps/moon_meteor_01_normal.png",
+     "orm": "textures/env/terrain/maps/moon_meteor_01_orm.png",
+     "height": "textures/env/terrain/maps/moon_meteor_01_height.png"
     }
    },
    "local": null,
@@ -2586,15 +3388,17 @@
   {
    "slot": 18,
    "name": "salt",
+   "role": "sand",
+   "palette": true,
    "material": "salt",
    "was_psx": "geo_salt",
    "cc0": {
-    "set": "Snow014",
+    "set": "Ground031",
     "file": "textures/env/terrain/18_salt.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Snow014_normal.png",
-     "orm": "textures/env/terrain/maps/Snow014_orm.png",
-     "height": "textures/env/terrain/maps/Snow014_height.png"
+     "normal": "textures/env/terrain/maps/Ground031_normal.png",
+     "orm": "textures/env/terrain/maps/Ground031_orm.png",
+     "height": "textures/env/terrain/maps/Ground031_height.png"
     }
    },
    "local": {
@@ -2613,15 +3417,17 @@
   {
    "slot": 19,
    "name": "mudcrack",
+   "role": "loose",
+   "palette": true,
    "material": "clay",
    "was_psx": "geo_mudcrack",
    "cc0": {
-    "set": "Ground039",
+    "set": "mud_cracked_dry_riverbed_002",
     "file": "textures/env/terrain/19_mudcrack.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Ground039_normal.png",
-     "orm": "textures/env/terrain/maps/Ground039_orm.png",
-     "height": "textures/env/terrain/maps/Ground039_height.png"
+     "normal": "textures/env/terrain/maps/mud_cracked_dry_riverbed_002_normal.png",
+     "orm": "textures/env/terrain/maps/mud_cracked_dry_riverbed_002_orm.png",
+     "height": "textures/env/terrain/maps/mud_cracked_dry_riverbed_002_height.png"
     }
    },
    "local": {
@@ -2640,6 +3446,8 @@
   {
    "slot": 20,
    "name": "moss",
+   "role": "veg",
+   "palette": true,
    "material": "soil",
    "was_psx": "geo_moss",
    "cc0": {
@@ -2667,15 +3475,17 @@
   {
    "slot": 21,
    "name": "ash",
+   "role": "loose",
+   "palette": true,
    "material": "ash",
    "was_psx": "geo_ash",
    "cc0": {
-    "set": "Ground110",
+    "set": "Gravel043",
     "file": "textures/env/terrain/21_ash.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Ground110_normal.png",
-     "orm": "textures/env/terrain/maps/Ground110_orm.png",
-     "height": "textures/env/terrain/maps/Ground110_height.png"
+     "normal": "textures/env/terrain/maps/Gravel043_normal.png",
+     "orm": "textures/env/terrain/maps/Gravel043_orm.png",
+     "height": "textures/env/terrain/maps/Gravel043_height.png"
     }
    },
    "local": null,
@@ -2686,6 +3496,8 @@
   {
    "slot": 22,
    "name": "snow",
+   "role": "snow",
+   "palette": true,
    "material": "ice",
    "was_psx": "geo_snow",
    "cc0": {
@@ -2705,6 +3517,8 @@
   {
    "slot": 23,
    "name": "glacier",
+   "role": "ice",
+   "palette": true,
    "material": "ice",
    "was_psx": "geo_glacier",
    "cc0": {
@@ -2724,15 +3538,17 @@
   {
    "slot": 24,
    "name": "scree",
+   "role": "loose",
+   "palette": true,
    "material": "gravel",
    "was_psx": "geo_scree",
    "cc0": {
-    "set": "Ground110",
+    "set": "Rocks006",
     "file": "textures/env/terrain/24_scree.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Ground110_normal.png",
-     "orm": "textures/env/terrain/maps/Ground110_orm.png",
-     "height": "textures/env/terrain/maps/Ground110_height.png"
+     "normal": "textures/env/terrain/maps/Rocks006_normal.png",
+     "orm": "textures/env/terrain/maps/Rocks006_orm.png",
+     "height": "textures/env/terrain/maps/Rocks006_height.png"
     }
    },
    "local": null,
@@ -2743,6 +3559,8 @@
   {
    "slot": 25,
    "name": "limestone",
+   "role": "rock",
+   "palette": true,
    "material": "limestone",
    "was_psx": "geo_limestone",
    "cc0": {
@@ -2770,15 +3588,17 @@
   {
    "slot": 26,
    "name": "sulfur",
+   "role": "ore",
+   "palette": true,
    "material": "sulfur",
    "was_psx": "geo_sulfur",
    "cc0": {
-    "set": "Rocks011",
+    "set": "Rock055",
     "file": "textures/env/terrain/26_sulfur.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Rocks011_normal.png",
-     "orm": "textures/env/terrain/maps/Rocks011_orm.png",
-     "height": "textures/env/terrain/maps/Rocks011_height.png"
+     "normal": "textures/env/terrain/maps/Rock055_normal.png",
+     "orm": "textures/env/terrain/maps/Rock055_orm.png",
+     "height": "textures/env/terrain/maps/Rock055_height.png"
     }
    },
    "local": {
@@ -2797,6 +3617,8 @@
   {
    "slot": 27,
    "name": "hematite",
+   "role": "ore",
+   "palette": true,
    "material": "hematite",
    "was_psx": "geo_hematite",
    "cc0": {
@@ -2816,6 +3638,8 @@
   {
    "slot": 28,
    "name": "tundra",
+   "role": "veg",
+   "palette": true,
    "material": "soil",
    "was_psx": "geo_tundra",
    "cc0": {
@@ -2843,15 +3667,17 @@
   {
    "slot": 29,
    "name": "pahoehoe",
+   "role": "rock",
+   "palette": true,
    "material": "basalt",
    "was_psx": "geo_pahoehoe",
    "cc0": {
-    "set": "Rock058",
+    "set": "Rock041",
     "file": "textures/env/terrain/29_pahoehoe.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Rock058_normal.png",
-     "orm": "textures/env/terrain/maps/Rock058_orm.png",
-     "height": "textures/env/terrain/maps/Rock058_height.png"
+     "normal": "textures/env/terrain/maps/Rock041_normal.png",
+     "orm": "textures/env/terrain/maps/Rock041_orm.png",
+     "height": "textures/env/terrain/maps/Rock041_height.png"
     }
    },
    "local": null,
@@ -2862,15 +3688,17 @@
   {
    "slot": 30,
    "name": "shale",
+   "role": "rock",
+   "palette": true,
    "material": "shale",
    "was_psx": "geo_shale",
    "cc0": {
-    "set": "Rock051",
+    "set": "Rock022",
     "file": "textures/env/terrain/30_shale.png",
     "maps": {
-     "normal": "textures/env/terrain/maps/Rock051_normal.png",
-     "orm": "textures/env/terrain/maps/Rock051_orm.png",
-     "height": "textures/env/terrain/maps/Rock051_height.png"
+     "normal": "textures/env/terrain/maps/Rock022_normal.png",
+     "orm": "textures/env/terrain/maps/Rock022_orm.png",
+     "height": "textures/env/terrain/maps/Rock022_height.png"
     }
    },
    "local": {
@@ -2889,6 +3717,8 @@
   {
    "slot": 31,
    "name": "peat",
+   "role": "veg",
+   "palette": true,
    "material": "soil",
    "was_psx": "geo_peat",
    "cc0": {
@@ -2908,6 +3738,8 @@
   {
    "slot": 32,
    "name": "litter",
+   "role": "veg",
+   "palette": true,
    "material": "soil",
    "was_psx": "geo_litter",
    "cc0": {
@@ -2922,6 +3754,594 @@
    "local": null,
    "size": 512,
    "scale": 2.0,
+   "glow": false
+  },
+  {
+   "slot": 33,
+   "name": "cavewall",
+   "role": "cavewall",
+   "palette": false,
+   "material": "limestone",
+   "was_psx": null,
+   "cc0": {
+    "set": "quarry_wall",
+    "file": "textures/env/terrain/33_cavewall.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/33_cavewall_normal.png",
+     "orm": "textures/env/terrain/maps/33_cavewall_orm.png",
+     "height": "textures/env/terrain/maps/33_cavewall_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.4,
+   "glow": false
+  },
+  {
+   "slot": 34,
+   "name": "flowstone",
+   "role": "flowstone",
+   "palette": false,
+   "material": "limestone",
+   "was_psx": null,
+   "cc0": {
+    "set": "marble_cliff_05",
+    "file": "textures/env/terrain/34_flowstone.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/34_flowstone_normal.png",
+     "orm": "textures/env/terrain/maps/34_flowstone_orm.png",
+     "height": "textures/env/terrain/maps/34_flowstone_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.2,
+   "glow": false
+  },
+  {
+   "slot": 35,
+   "name": "dripstone",
+   "role": "flowstone",
+   "palette": false,
+   "material": "limestone",
+   "was_psx": null,
+   "cc0": {
+    "set": "marble_rock_01",
+    "file": "textures/env/terrain/35_dripstone.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/35_dripstone_normal.png",
+     "orm": "textures/env/terrain/maps/35_dripstone_orm.png",
+     "height": "textures/env/terrain/maps/35_dripstone_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.3,
+   "glow": false
+  },
+  {
+   "slot": 36,
+   "name": "soot",
+   "role": "cavewall",
+   "palette": false,
+   "material": "basalt",
+   "was_psx": null,
+   "cc0": {
+    "set": "quarry_wall_02",
+    "file": "textures/env/terrain/36_soot.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/quarry_wall_02_normal.png",
+     "orm": "textures/env/terrain/maps/quarry_wall_02_orm.png",
+     "height": "textures/env/terrain/maps/quarry_wall_02_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.4,
+   "glow": false
+  },
+  {
+   "slot": 37,
+   "name": "frost",
+   "role": "snow",
+   "palette": false,
+   "material": "ice",
+   "was_psx": null,
+   "cc0": {
+    "set": "Snow013",
+    "file": "textures/env/terrain/37_frost.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/37_frost_normal.png",
+     "orm": "textures/env/terrain/maps/37_frost_orm.png",
+     "height": "textures/env/terrain/maps/37_frost_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.4,
+   "glow": false
+  },
+  {
+   "slot": 38,
+   "name": "tuff",
+   "role": "volcanic",
+   "palette": false,
+   "material": "basalt",
+   "was_psx": null,
+   "cc0": {
+    "set": "rock_05",
+    "file": "textures/env/terrain/38_tuff.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/rock_05_normal.png",
+     "orm": "textures/env/terrain/maps/rock_05_orm.png",
+     "height": "textures/env/terrain/maps/rock_05_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.5,
+   "glow": false
+  },
+  {
+   "slot": 39,
+   "name": "columnar",
+   "role": "volcanic",
+   "palette": false,
+   "material": "basalt",
+   "was_psx": null,
+   "cc0": {
+    "set": "Rock050",
+    "file": "textures/env/terrain/39_columnar.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock050_normal.png",
+     "orm": "textures/env/terrain/maps/Rock050_orm.png",
+     "height": "textures/env/terrain/maps/Rock050_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.0,
+   "glow": false
+  },
+  {
+   "slot": 40,
+   "name": "halite",
+   "role": "evaporite",
+   "palette": false,
+   "material": "salt",
+   "was_psx": null,
+   "cc0": {
+    "set": "mud_cracked_dry_03",
+    "file": "textures/env/terrain/40_halite.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/40_halite_normal.png",
+     "orm": "textures/env/terrain/maps/40_halite_orm.png",
+     "height": "textures/env/terrain/maps/40_halite_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.2,
+   "glow": false
+  },
+  {
+   "slot": 41,
+   "name": "clearice",
+   "role": "ice",
+   "palette": false,
+   "material": "ice",
+   "was_psx": null,
+   "cc0": {
+    "set": "Snow006",
+    "file": "textures/env/terrain/41_clearice.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/41_clearice_normal.png",
+     "orm": "textures/env/terrain/maps/41_clearice_orm.png",
+     "height": "textures/env/terrain/maps/41_clearice_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.0,
+   "glow": false
+  },
+  {
+   "slot": 42,
+   "name": "gossan",
+   "role": "ore",
+   "palette": false,
+   "material": "hematite",
+   "was_psx": null,
+   "cc0": {
+    "set": "Rock056",
+    "file": "textures/env/terrain/42_gossan.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock056_normal.png",
+     "orm": "textures/env/terrain/maps/Rock056_orm.png",
+     "height": "textures/env/terrain/maps/Rock056_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.6,
+   "glow": false
+  },
+  {
+   "slot": 43,
+   "name": "pitchblende",
+   "role": "ore",
+   "palette": false,
+   "material": "uranium",
+   "was_psx": null,
+   "cc0": {
+    "set": "Rock048",
+    "file": "textures/env/terrain/43_pitchblende.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/43_pitchblende_normal.png",
+     "orm": "textures/env/terrain/maps/43_pitchblende_orm.png",
+     "height": "textures/env/terrain/maps/43_pitchblende_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.6,
+   "glow": false
+  },
+  {
+   "slot": 44,
+   "name": "redbeds",
+   "role": "rock",
+   "palette": false,
+   "material": "sandstone",
+   "was_psx": null,
+   "cc0": {
+    "set": "cliff_side",
+    "file": "textures/env/terrain/44_redbeds.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/cliff_side_normal.png",
+     "orm": "textures/env/terrain/maps/cliff_side_orm.png",
+     "height": "textures/env/terrain/maps/cliff_side_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.2,
+   "glow": false
+  },
+  {
+   "slot": 45,
+   "name": "mudstone",
+   "role": "rock",
+   "palette": false,
+   "material": "shale",
+   "was_psx": null,
+   "cc0": {
+    "set": "Ground105",
+    "file": "textures/env/terrain/45_mudstone.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground105_normal.png",
+     "orm": "textures/env/terrain/maps/Ground105_orm.png",
+     "height": "textures/env/terrain/maps/Ground105_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.5,
+   "glow": false
+  },
+  {
+   "slot": 46,
+   "name": "chalk",
+   "role": "rock",
+   "palette": false,
+   "material": "limestone",
+   "was_psx": null,
+   "cc0": {
+    "set": "Rock018",
+    "file": "textures/env/terrain/46_chalk.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock018_normal.png",
+     "orm": "textures/env/terrain/maps/Rock018_orm.png",
+     "height": "textures/env/terrain/maps/Rock018_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.4,
+   "glow": false
+  },
+  {
+   "slot": 47,
+   "name": "clinker",
+   "role": "volcanic",
+   "palette": false,
+   "material": "basalt",
+   "was_psx": null,
+   "cc0": {
+    "set": "rocks_ground_09",
+    "file": "textures/env/terrain/47_clinker.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/rocks_ground_09_normal.png",
+     "orm": "textures/env/terrain/maps/rocks_ground_09_orm.png",
+     "height": "textures/env/terrain/maps/rocks_ground_09_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.6,
+   "glow": false
+  },
+  {
+   "slot": 48,
+   "name": "obsidian",
+   "role": "volcanic",
+   "palette": false,
+   "material": "obsidian",
+   "was_psx": null,
+   "cc0": {
+    "set": "dark_rock_02",
+    "file": "textures/env/terrain/48_obsidian.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/48_obsidian_normal.png",
+     "orm": "textures/env/terrain/maps/48_obsidian_orm.png",
+     "height": "textures/env/terrain/maps/48_obsidian_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.3,
+   "glow": false
+  },
+  {
+   "slot": 49,
+   "name": "scoria",
+   "role": "volcanic",
+   "palette": false,
+   "material": "basalt",
+   "was_psx": null,
+   "cc0": {
+    "set": "rock_06",
+    "file": "textures/env/terrain/49_scoria.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/rock_06_normal.png",
+     "orm": "textures/env/terrain/maps/rock_06_orm.png",
+     "height": "textures/env/terrain/maps/rock_06_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.5,
+   "glow": false
+  },
+  {
+   "slot": 50,
+   "name": "schist",
+   "role": "rock",
+   "palette": false,
+   "material": "slate",
+   "was_psx": null,
+   "cc0": {
+    "set": "Rock045",
+    "file": "textures/env/terrain/50_schist.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Rock045_normal.png",
+     "orm": "textures/env/terrain/maps/Rock045_orm.png",
+     "height": "textures/env/terrain/maps/Rock045_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.5,
+   "glow": false
+  },
+  {
+   "slot": 51,
+   "name": "gneiss",
+   "role": "rock",
+   "palette": false,
+   "material": "granite",
+   "was_psx": null,
+   "cc0": {
+    "set": "marble_cliff_04",
+    "file": "textures/env/terrain/51_gneiss.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/marble_cliff_04_normal.png",
+     "orm": "textures/env/terrain/maps/marble_cliff_04_orm.png",
+     "height": "textures/env/terrain/maps/marble_cliff_04_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.3,
+   "glow": false
+  },
+  {
+   "slot": 52,
+   "name": "marble",
+   "role": "rock",
+   "palette": false,
+   "material": "limestone",
+   "was_psx": null,
+   "cc0": {
+    "set": "marble_rock_02",
+    "file": "textures/env/terrain/52_marble.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/52_marble_normal.png",
+     "orm": "textures/env/terrain/maps/52_marble_orm.png",
+     "height": "textures/env/terrain/maps/52_marble_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.4,
+   "glow": false
+  },
+  {
+   "slot": 53,
+   "name": "blacksand",
+   "role": "sand",
+   "palette": false,
+   "material": "sand",
+   "was_psx": null,
+   "cc0": {
+    "set": "dense_sand",
+    "file": "textures/env/terrain/53_blacksand.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/53_blacksand_normal.png",
+     "orm": "textures/env/terrain/maps/53_blacksand_orm.png",
+     "height": "textures/env/terrain/maps/53_blacksand_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 2.0,
+   "glow": false
+  },
+  {
+   "slot": 54,
+   "name": "redregolith",
+   "role": "loose",
+   "palette": false,
+   "material": "regolith",
+   "was_psx": null,
+   "cc0": {
+    "set": "gravelly_sand",
+    "file": "textures/env/terrain/54_redregolith.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/gravelly_sand_normal.png",
+     "orm": "textures/env/terrain/maps/gravelly_sand_orm.png",
+     "height": "textures/env/terrain/maps/gravelly_sand_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 2.0,
+   "glow": false
+  },
+  {
+   "slot": 55,
+   "name": "loess",
+   "role": "loose",
+   "palette": false,
+   "material": "soil",
+   "was_psx": null,
+   "cc0": {
+    "set": "Ground102",
+    "file": "textures/env/terrain/55_loess.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/Ground102_normal.png",
+     "orm": "textures/env/terrain/maps/Ground102_orm.png",
+     "height": "textures/env/terrain/maps/Ground102_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 2.0,
+   "glow": false
+  },
+  {
+   "slot": 56,
+   "name": "laggravel",
+   "role": "loose",
+   "palette": false,
+   "material": "gravel",
+   "was_psx": null,
+   "cc0": {
+    "set": "sandy_gravel_02",
+    "file": "textures/env/terrain/56_laggravel.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/sandy_gravel_02_normal.png",
+     "orm": "textures/env/terrain/maps/sandy_gravel_02_orm.png",
+     "height": "textures/env/terrain/maps/sandy_gravel_02_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.8,
+   "glow": false
+  },
+  {
+   "slot": 57,
+   "name": "dirtyice",
+   "role": "ice",
+   "palette": false,
+   "material": "ice",
+   "was_psx": null,
+   "cc0": {
+    "set": "Snow012",
+    "file": "textures/env/terrain/57_dirtyice.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/57_dirtyice_normal.png",
+     "orm": "textures/env/terrain/maps/57_dirtyice_orm.png",
+     "height": "textures/env/terrain/maps/57_dirtyice_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.2,
+   "glow": false
+  },
+  {
+   "slot": 58,
+   "name": "firn",
+   "role": "snow",
+   "palette": false,
+   "material": "ice",
+   "was_psx": null,
+   "cc0": {
+    "set": "snow_02",
+    "file": "textures/env/terrain/58_firn.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/snow_02_normal.png",
+     "orm": "textures/env/terrain/maps/snow_02_orm.png",
+     "height": "textures/env/terrain/maps/snow_02_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.6,
+   "glow": false
+  },
+  {
+   "slot": 59,
+   "name": "sulfurvein",
+   "role": "ore",
+   "palette": false,
+   "material": "sulfur",
+   "was_psx": null,
+   "cc0": {
+    "set": "rock_05",
+    "file": "textures/env/terrain/59_sulfurvein.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/rock_05_normal.png",
+     "orm": "textures/env/terrain/maps/rock_05_orm.png",
+     "height": "textures/env/terrain/maps/rock_05_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.5,
+   "glow": false
+  },
+  {
+   "slot": 60,
+   "name": "quartzdruzy",
+   "role": "crystal",
+   "palette": false,
+   "material": "quartz",
+   "was_psx": null,
+   "cc0": {
+    "set": "Rock048",
+    "file": "textures/env/terrain/60_quartzdruzy.png",
+    "maps": {
+     "normal": "textures/env/terrain/maps/60_quartzdruzy_normal.png",
+     "orm": "textures/env/terrain/maps/60_quartzdruzy_orm.png",
+     "height": "textures/env/terrain/maps/60_quartzdruzy_height.png"
+    }
+   },
+   "local": null,
+   "size": 512,
+   "scale": 1.3,
    "glow": false
   }
  ]
