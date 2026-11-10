@@ -198,6 +198,7 @@ function GS.measure(scene, lv)
   }
   local cn = perf.counts() or {}
   o.shadowVolumes, o.shadowProxies, o.lightsDropped, o.textureMB = cn.shadowVolumes, cn.shadowProxies, cn.lightsDropped, (cn.textureBytes or 0) / 1048576
+  o.sunMapDraws, o.sunMapCulled, o.triangles = cm.sunMapDraws, cm.sunMapCulled, cm.triangles
   o.t1, o.secs = W() - W0, params.gssecs or 8
   local pl = {}
   for _, e in ipairs(topk(ps, 16)) do pl[#pl + 1] = string.format("%s %.2f", e[1], e[2]) end

@@ -18,7 +18,7 @@ PASSES = [
     ("glass", "glass"),
     ("particles", "particles"),
     ("reflection capture + overlays", "refl"),
-    ("post (AO, bloom, blur…)", "post"),
+    ("post total", "post"),   # the old "post (…)" row + every "post: " sub-row (engine .1463+)
 ]
 ORDER = ["Low", "Medium", "High", "Ultra"]
 SCENES = ["base", "runway", "meadow", "forest", "far", "bigbase", "vab", "alien", "alienfar"]
@@ -49,7 +49,8 @@ def avg(rows):
     res = {}
     for k, lst in out.items():
         m = dict(lst[0])
-        for f in ("gpu", "p50", "p95", "draws", "instances", "props", "chunks", "lights", "scripts", "render"):
+        for f in ("gpu", "p50", "p95", "draws", "instances", "props", "chunks", "lights", "scripts", "render",
+                  "sunMapDraws", "sunMapCulled", "triangles"):
             vals = [x.get(f) for x in lst if isinstance(x.get(f), (int, float))]
             m[f] = sum(vals) / len(vals) if vals else None
         ps = {}
@@ -57,9 +58,16 @@ def avg(rows):
             for n, v in (x.get("passes") or {}).items():
                 ps.setdefault(n, []).append(v)
         m["passes"] = {n: sum(v) / len(v) for n, v in ps.items()}
+        # since engine .1463 the timer splits post into "post: AO", "post: FXAA", …; the old
+        # "post (…)" row is left a sliver. "post total" is the two summed, on any engine.
+        m["passes"]["post total"] = sum(v for n, v in m["passes"].items() if n.startswith("post"))
         m["n"] = len(lst)
         res[k] = m
     return res
+
+
+def tris(v):
+    return "-" if v is None else f"{v / 1e6:.2f} M"
 
 
 def f(v, d=2):
@@ -85,8 +93,8 @@ def tables(res):
             if any_:
                 print(f"| {sc} | " + " | ".join(cells) + " |")
         print(f"\n### {rs}: per pass (ms), draws / instances / props\n")
-        print("| scene | preset | scale | GPU | " + " | ".join(s for _, s in PASSES) + " | draws | inst | props | lights |")
-        print("|---|---|---|---|" + "---|" * (len(PASSES) + 4))
+        print("| scene | preset | scale | GPU | " + " | ".join(s for _, s in PASSES) + " | draws | inst | props | lights | sun-map draws / culled | tris |")
+        print("|---|---|---|---|" + "---|" * (len(PASSES) + 6))
         for sc in SCENES:
             for pr in ORDER:
                 m = res.get((rs, sc, pr))
@@ -95,7 +103,18 @@ def tables(res):
                 ps = m["passes"]
                 print(f"| {sc} | {pr} | {f(m.get('scale'))} | {f(m['gpu'])} | "
                       + " | ".join(f(ps.get(n)) for n, _ in PASSES)
-                      + f" | {f(m['draws'], 0)} | {f(m['instances'], 0)} | {f(m['props'], 0)} | {f(m['lights'], 0)} |")
+                      + f" | {f(m['draws'], 0)} | {f(m['instances'], 0)} | {f(m['props'], 0)} | {f(m['lights'], 0)}"
+                      + f" | {f(m.get('sunMapDraws'), 0)} / {f(m.get('sunMapCulled'), 0)} | {tris(m.get('triangles'))} |")
+        subs = sorted({n for m in res.values() if m["w"] == int(rs.split("x")[0]) for n in m["passes"] if n.startswith("post: ")})
+        if subs:
+            print(f"\n### {rs}: post sub-rows (ms)\n")
+            print("| scene | preset | " + " | ".join(n[6:] for n in subs) + " | total |")
+            print("|---|---|" + "---|" * (len(subs) + 1))
+            for sc in SCENES:
+                for pr in ORDER:
+                    m = res.get((rs, sc, pr))
+                    if m:
+                        print(f"| {sc} | {pr} | " + " | ".join(f(m["passes"].get(n)) for n in subs) + f" | {f(m['passes']['post total'])} |")
 
 
 def ab(before, after):

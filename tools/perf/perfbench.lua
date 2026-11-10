@@ -138,7 +138,8 @@ local function fmtk(list) local o = {}; for _, e in ipairs(list) do o[#o + 1] = 
 -- rc25): chunks held at full detail, those edited since generation (dug,
 -- raised, painted: kept and saved for life), and coarse stand-ins
 local SUMMARY_COUNTS = { "draws", "unbatched", "nodes", "instances", "chunks", "props", "decals", "decalTris", "particles", "lights", "rays", "sweeps",
-                         "fieldChunks", "fieldEdited", "fieldStandIns", "effects", "voices", "decalsRelaid" }
+                         "fieldChunks", "fieldEdited", "fieldStandIns", "effects", "voices", "decalsRelaid",
+                         "sunMapDraws", "sunMapCulled", "triangles" }   -- (the last three: engine .1463+)
 
 local function measure()
   local now = W()
