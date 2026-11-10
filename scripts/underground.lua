@@ -397,26 +397,41 @@ end
 -- toward a random side, finds the roof or a wall within 14 m (a groan looks
 -- out to 30 m: it is farther off and deeper), and the sound plays there as a
 -- 3D source held in the planet's frame while it rings (the planet moves
--- metres a tick: docs/positions-and-frames.md rule 1). A groan's minDistance
+-- metres a tick: docs/positions-and-frames.md rule 1); a ray that misses is
+-- tried again (see creak_spot). A groan's minDistance
 -- is large: low sound carries through rock and a far groan is still felt.
 -- No rock found that way: off to one side, flat, as before. In vacuum there
 -- is no air to carry a creak: only the groans, faint, muffled and flat,
 -- through the boots.
 creakLog = { played = 0, spatial = 0, last = nil }   -- for probes and tests
 
+-- One ray can miss in an enclosed cave: tipped toward a tunnel or the mouth it
+-- runs out along open air past `reach` (the gritprobe's chamber sits at the end
+-- of a 24 m sloping tunnel, and its creak once played flat that way). So up to
+-- CREAK_TRIES random directions are tried, then straight up, before falling
+-- back; at most five rays every 18-50 s.
+CREAK_TRIES = 4
 local function creak_spot(ex, ey, ez, ux, uy, uz, reach)
   if not (terrain and terrain.raycast) then return nil end
   local tx, ty, tz, sx, sy, sz = tangents(ux, uy, uz)
-  local a = math.random() * 6.283
-  local th = math.rad(20 + 60 * math.random())
-  local c, sn = math.cos(th), math.sin(th)
-  local dx = ux * c + (tx * math.cos(a) + sx * math.sin(a)) * sn
-  local dy = uy * c + (ty * math.cos(a) + sy * math.sin(a)) * sn
-  local dz = uz * c + (tz * math.cos(a) + sz * math.sin(a)) * sn
-  local ok, h = pcall(terrain.raycast, vec3(ex, ey, ez), vec3(dx, dy, dz), reach)
-  if not (ok and h and h.pos and (h.distance or 0) > 0.5) then return nil end
-  -- a hand's breadth out of the rock, so the source is in the air of the cave
-  return h.pos.x - dx * 0.15, h.pos.y - dy * 0.15, h.pos.z - dz * 0.15, h.distance
+  creakLog.ray = { tries = 0 }
+  for k = 1, CREAK_TRIES + 1 do
+    local c, sn, a = 1.0, 0.0, 0.0                  -- the last try: straight up
+    if k <= CREAK_TRIES then
+      local th = math.rad(20 + 60 * math.random())
+      c, sn, a = math.cos(th), math.sin(th), math.random() * 6.283
+    end
+    local dx = ux * c + (tx * math.cos(a) + sx * math.sin(a)) * sn
+    local dy = uy * c + (ty * math.cos(a) + sy * math.sin(a)) * sn
+    local dz = uz * c + (tz * math.cos(a) + sz * math.sin(a)) * sn
+    local ok, h, why, wd = pcall(terrain.raycast, vec3(ex, ey, ez), vec3(dx, dy, dz), reach)
+    creakLog.ray = { tries = k, ok = ok, hit = h ~= nil, why = tostring(why), wd = wd, dist = h and h.distance, up = c }
+    if ok and h and h.pos and (h.distance or 0) > 0.5 then
+      -- a hand's breadth out of the rock, so the source is in the air of the cave
+      return h.pos.x - dx * 0.15, h.pos.y - dy * 0.15, h.pos.z - dz * 0.15, h.distance
+    end
+  end
+  return nil
 end
 
 local function creaks(ex, ey, ez, ux, uy, uz, name, b, vac)

@@ -203,6 +203,36 @@ do
     end
   end
   ok(vg >= 1 and vbad == 0, "in vacuum only muffled groans, through the boots (" .. vg .. " groans, " .. vbad .. " wrong)")
+  -- a chamber whose tipped rays all run out along open tunnels (only straight
+  -- up, the enclosure's own 40-degree sky rays and level rays meet rock): the
+  -- creak still finds the roof by trying again, and is still a 3D source
+  api.findScript = function(k)
+    if k == "planet_walker" then return { valid = true, onFoot = true } end
+    if k == "vfx" then return { valid = true, airAt = function() return 1.0 end } end
+  end
+  local cave_ray = api.terrain.raycast
+  api.terrain = { raycast = function(o, d, far)
+    local px, py, pz = o.x - B.x, o.y - B.y, o.z - B.z
+    local r = math.sqrt(px * px + py * py + pz * pz)
+    local radial = (px * d.x + py * d.y + pz * d.z) / r
+    if radial > 0.05 and radial < 0.99 and math.abs(radial - math.cos(math.rad(40))) > 0.01 then return nil, "air" end
+    return cave_ray(o, d, far)
+  end }
+  local G4 = load("solar/scripts/underground.lua", api)
+  G4.params.effects = false
+  n0 = #plays
+  for step = 1, 1200 do api.time = 300 + step * 0.05; G4.update({}, 0.05) end
+  local tc, tsp = 0, 0
+  for i = n0 + 1, #plays do
+    local p = plays[i]
+    if p.clip:find("cave_creak_") or p.clip:find("cave_groan_") then
+      tc = tc + 1
+      if p.x and p.o and p.o.mode == "Spatial" then tsp = tsp + 1 end
+    end
+  end
+  ok(G4.cave and tc >= 1 and tsp == tc, "tipped rays lost down tunnels: the creak tries again and is still 3D (" .. tsp .. "/" .. tc .. ")")
+  ok(G4.creakLog.ray and G4.creakLog.ray.tries == G4.CREAK_TRIES + 1, "found by the last, straight-up try")
+  api.terrain = { raycast = cave_ray }
 end
 for _, f in ipairs({ "cave_creak_1", "cave_creak_2", "cave_creak_3", "cave_groan_1", "cave_groan_2" }) do
   local h = io.open("solar/audio/ambience/" .. f .. ".ogg", "rb")

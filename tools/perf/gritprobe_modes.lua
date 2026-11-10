@@ -409,6 +409,9 @@ function GR.run_cave()
   P("GR CREAKS: played %d, spatial %d; last: %s, groan %s, %s m off, spatial %s, handle %s",
     cl.played or -1, cl.spatial or -1, tostring(cr.clip), tostring(cr.groan), cr.dist and string.format("%.1f", cr.dist) or "-",
     tostring(cr.spatial), tostring(cr.handle))
+  local ry = cl.ray or {}
+  P("GR CREAK RAY: vac %s, tries %s, ok %s hit %s why %s at %s, dist %s, cos-off-up %s",
+    tostring(cr.vac), tostring(ry.tries), tostring(ry.ok), tostring(ry.hit), tostring(ry.why), tostring(ry.wd), tostring(ry.dist), tostring(ry.up))
   look(t, -0.1, "cave_late_deep")
   local hb = find("Helmet Lamp Beam")
   local hl = hb and hb:getcomponent("PointLight")
