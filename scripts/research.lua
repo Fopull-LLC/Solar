@@ -92,6 +92,8 @@ TECH = {
   -- (its mirror). RP prices join in X6.
   telescopeS   = { cost = 3200, label = "Space Telescope", mat = "silica", rp = 200 },
   scanner      = { cost = 4500, label = "Orbital Scanner", after = "probe", rp = 80 },
+  -- (X7) the field from orbit, after the scanner
+  gravimeter   = { cost = 5200, label = "Gravimeter", after = "scanner", rp = 60 },
   -- THE REFINERIES (expansion X6; scripts/machines.lua, parts_kit REFINERY):
   -- money and research points. The crusher, the furnace and its radiators
   -- first; the kiln and the mixer want a silica sample; the electrolyser and

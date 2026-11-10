@@ -639,6 +639,9 @@ local function step_world(w, a, obs)
     end
   end
   if RF and RF.after then RF.after(w, rep, dt) end
+  -- (X7) what each base mined, worked and sent down a chute (base_roles stats)
+  local BR = ref("base_roles")
+  if BR and BR.creditStep then pcall(BR.creditStep, w, rep) end
   -- (X6) settled? (nothing flowed, worked or was made: the next step can be skipped)
   if sig and #(rep.flows or {}) == 0 and #((rep.R and rep.R.convs) or {}) == 0 and next(rep.made) == nil then
     w.settled = { ver = inv.bagVer, sig = sig }

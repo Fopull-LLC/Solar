@@ -2353,7 +2353,7 @@ end
 -- bigger, with its dish tipped off the mast head and its name; a second ring
 -- round the foot when it is powered (a ground station). Teal with a path
 -- home, red without. The home base (#0) is the station's own ring.
-local bases_ref = nil
+local bases_ref, roles_ref = nil, nil
 local function map_bases(px_at, label, lk, show)
   if not (bases_ref and bases_ref.valid ~= false) then bases_ref = findScript and findScript("base_tower") or nil end
   local bt = bases_ref
@@ -2379,8 +2379,11 @@ local function map_bases(px_at, label, lk, show)
       if label and (show.markers or show.links) then
         local px, py, _, on = camera.worldToScreen(tx, ty, tz)
         if on then
-          label(px, py - 16 * (lk or 1), string.format("%s · %s", e.name or "Base", e.powered and "ground station" or "mast"),
-            11 * (lk or 1))
+          -- (X7) what the base is for: its two strongest roles (base_roles)
+          if not (roles_ref and roles_ref.valid ~= false) then roles_ref = findScript and findScript("base_roles") or nil end
+          local what = (roles_ref and roles_ref.strongest and #roles_ref.strongest(e.roles) > 0) and roles_ref.roleLine(e.roles, 2)
+            or (e.powered and "ground station" or "mast")
+          label(px, py - 16 * (lk or 1), string.format("%s · %s", e.name or "Base", what), 11 * (lk or 1))
         end
       end
     end

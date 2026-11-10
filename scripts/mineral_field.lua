@@ -861,7 +861,7 @@ end
 
 -- One vein's record laid along its strike from (x, z) in the patch's plane,
 -- or nil when its middle falls outside the patch or on the base's paving.
-local function vein_build(p, r, vi, x, z, depth, ore, R, key)
+local function vein_build(p, r, vi, x, z, depth, ore, R, key, noclear)
   local gem = out_look(ore).cluster
   local buried = depth > 0
   local L = buried and r:range(10.0, 26.0) or (gem and r:range(3.0, 5.5) or r:range(6.0, 15.0))
@@ -892,7 +892,7 @@ local function vein_build(p, r, vi, x, z, depth, ore, R, key)
   local f2, g2, u2, v2 = project(c[1] * R, c[2] * R, c[3] * R, R)
   local seed = r:int(1, 999983)
   if f2 == p.face and g2 == p.sgn and math.floor(u2 / p.P) == p.i and math.floor(v2 / p.P) == p.j
-     and not kept_clear(c[1] * R, c[2] * R, c[3] * R) then
+     and (noclear or not kept_clear(c[1] * R, c[2] * R, c[3] * R)) then
     return { i = vi, key = key or ("v" .. vi), ore = ore, pts = pts, len = L, width = wd, seed = seed, lx = x, lz = z,
              depth = depth, buried = buried }
   end
@@ -1049,6 +1049,52 @@ local function veins_of(p, w, R)
   home_copper(R)
   copper_into(p, w, R, out)
   return out
+end
+
+-- (X7, the orbital scanner's res_map) THE VEINS OF THE PATCH UNDER A
+-- DIRECTION on ANY world, from its seed: the same rolls veins_of makes when
+-- the patch is laid out (the same rng sequence, vein_build included), so
+-- what the scanner reports is what is in the ground. No nodes, no save, no
+-- paint; the base's paving is not consulted (a coarse read), and the home
+-- world's extra copper is not added. → { [ore] = veins }, n veins, buried
+function patchOres(bname, ux, uy, uz)
+  local w = save and save.get and save.get("world." .. tostring(bname))
+  if type(w) ~= "table" then return {}, 0, 0 end
+  local mats = ref("materials")
+  if not (mats and mats.bodyOres and mats.pickVeinOre and rng) or params.vein_rate <= 0 then return {}, 0, 0 end
+  local R = w.radius or 100
+  local P = math.max(150, math.min(260, R * params.patch))
+  local face, sgn, u, v = project(ux * R, uy * R, uz * R, R)
+  local i, j = math.floor(u / P), math.floor(v / P)
+  local cx, cy, cz = unproject(face, sgn, (i + 0.5) * P, (j + 0.5) * P, R)
+  local _, _, _, ex, _, ez = patch_frame(face, cx, cy, cz)
+  local ax, ay, az = unproject(face, sgn, i * P, (j + 0.5) * P, R)
+  local bx, by, bz = unproject(face, sgn, (i + 1) * P, (j + 0.5) * P, R)
+  local p = { face = face, sgn = sgn, i = i, j = j, P = P, cx = cx * R, cy = cy * R, cz = cz * R, ex = ex, ez = ez,
+              half = len(ax - bx, ay - by, az - bz) * R * 0.5 * 1.15 }
+  local ores, total = mats.bodyOres(bname, w.kind or "barren")
+  if not total or total <= 0 then return {}, 0, 0 end
+  local r = rng(hash(w.seed or 1, p.face, p.sgn + 2, p.i + 70000, p.j + 70000, 9173 + VEIN_V))
+  local n = math.floor(params.vein_rate * (0.35 + 1.3 * r:next()) + 0.5)
+  local out, count, buried = {}, 0, 0
+  for vi = 1, n do
+    local x = (r:next() * 2 - 1) * p.half * 0.85
+    local z = (r:next() * 2 - 1) * p.half * 0.85
+    local depth = 0
+    if r:next() >= params.vein_surface then depth = 4 + 42 * r:next() ^ 1.4 end
+    local ore = mats.pickVeinOre(ores, depth, r:next())
+    if not ore and depth <= 0 then
+      depth = 4 + 20 * r:next()
+      ore = mats.pickVeinOre(ores, depth, r:next())
+    end
+    local vv = vein_build(p, r, vi, x, z, depth, ore or "iron", R, nil, true)
+    if vv then
+      out[vv.ore] = (out[vv.ore] or 0) + 1
+      count = count + 1
+      if vv.buried then buried = buried + 1 end
+    end
+  end
+  return out, count, buried
 end
 
 -- The ground under a vein's points (body-relative), read from the ground's

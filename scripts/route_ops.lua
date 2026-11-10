@@ -549,8 +549,13 @@ local function run_tick(now)
       r.t0 = now
     end
     if r then
-      local st0, ph0 = r.state, r.ph
-      local n = Rm.advance(r, W, now)
+      local st0, ph0, cy0 = r.state, r.ph, r.cycles or 0
+      local n, done = Rm.advance(r, W, now)
+      -- (X7) what the run moved in and out of each base, and its cycles (base_roles stats)
+      if n > 0 then
+        local BR = ref("base_roles")
+        if BR and BR.creditRun then pcall(BR.creditRun, r, done, (r.cycles or 0) - cy0) end
+      end
       if r.state == "cancelled" then finish_cancel(r) break end
       if n > 0 or r.state ~= st0 or r.ph ~= ph0 or (r.state == "waiting" and r.why ~= last_ph[id]) then
         last_ph[id] = r.why

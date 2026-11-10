@@ -321,6 +321,8 @@ function bases(opts)
                         linked = true, strength = 1, hops = 0, coverage = cov_of(bf.baseBody),
                         structures = count_near(bf.baseBody, sx - b.x, sy - b.y, sz - b.z),
                         crew = crew_at(bf.baseBody, sx - b.x, sy - b.y, sz - b.z, true) }
+      local hr = save and save.get and save.get("bases.home")
+      if type(hr) == "table" then out[#out].roles, out[#out].stats = hr.roles, hr.stats end
     end
   end
   if B then
@@ -341,7 +343,9 @@ function bases(opts)
                           -- (step 8, M6: its grid)
                           grid = pw.grid, draw = pw.draw, stored = pw.stored, cap = pw.cap, gridStructures = pw.structures,
                           cables = pw.cables, towers = pw.towers, solar = pw.solar, rtg = pw.rtg, short = pw.short,
-                          gridLine = gridLine(pw), crew = crew_at(r.b, T.gx, T.gy, T.gz, false) }
+                          gridLine = gridLine(pw), crew = crew_at(r.b, T.gx, T.gy, T.gz, false),
+                          -- (X7) what it is for (base_roles.lua; saved on the record)
+                          roles = r.roles, stats = r.stats }
       end
     end
   end

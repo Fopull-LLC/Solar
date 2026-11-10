@@ -3207,3 +3207,176 @@ The numbers and pictures are in `work/expansion_x6/NOTES.md` and `shots/`.
 - `tools/perf/refineryprobe.sh <engine>` (PATCHES=funds.patch): the whole
   slice in the engine. `RX PASS|FAIL` lines, pictures in
   `save/user/refineryshots/`.
+
+## 25. Expansion X7: base roles, reach contracts and Survey II
+
+Built 2026-11-09 (`work/expansion/PLAN.md` §1, §7.2, the X7 row of §11; Ty
+11-09: "purposeful bases encourage expanding far: refuelling stations,
+resource pipelines shipping home, mining/quarry bases, energy bases,
+refineries, science labs, defense bases"). The rules are
+`scripts/base_roles.lua` (pure half, luajit-tested) and the swath grid in
+`scripts/survey.lua`; the contracts and the Reach stage are in
+`scripts/missions.lua`; the station's part is in `docs/tracking-station.md` §6.
+
+### What a player can do
+
+- **Give a base a purpose by building it.** A role is never chosen; a census
+  reads it off every piece within 150 m of a base's tower (and of the
+  spaceport's Tracking Station, base 0):
+
+  | role | glyph | what makes it |
+  |---|---|---|
+  | PORT | ⇆ | a run that starts, stops or ends there (a Build Stand alone is not enough) |
+  | FUEL | ⛁ | an Electrolyser, or a Fuel Hose Stand with 500 kg in its Fuel Tanks (with less: weaker) |
+  | MINE | ⚒ | a Quarry Drive (1.0 while it has dug in the last 24 h, 0.6 idle) |
+  | POWER | ⚡ | the base grid's sources exceed its loads by 10 kW |
+  | REFINERY | ⚙ | a Crusher, Furnace, Kiln, Regocrete Mixer or Fabricator (1.0 while it worked in the last 24 h) |
+  | SCIENCE | ✦ | a telescope or a Survey Station (1.0 with a Scientist there or a sweep running) |
+  | DEPOT | ▤ | hoppers and silos with 4 t of room (0.5), or 2 t held (1.0) |
+  | DEFENCE | ✚ | a part with `defence` (X9's emitters and launch rails; none yet) |
+  | OUTPOST | ⌂ | none of the above |
+
+  A role shows from strength 0.5. It rises at once and fades by a third a
+  game day, so a quarry idle for a day is still a MINE base (§1.1's
+  hysteresis); three days of nothing and it goes.
+- **See it.** The Tracking Station's BASES rows wear the strongest role's
+  glyph and "FUEL · MINE · ground station"; the base card lists every role
+  with its bar and why ("an Electrolyser makes propellant", "a quarry ·
+  300 kg in 24 h"), what the base moved (24 h in and out, mined and worked;
+  in all, and run cycles), its pieces and stores, and what would give it the
+  roles it lacks. The role key (beside the world key) shows one role's bases
+  at a time. The chart's base label reads "Far Side · ⛁ FUEL · ⚒ MINE". The
+  BODY card lists each base on the world with its roles.
+- **Base stats.** Credited by what moves things: a run's load at a base is
+  OUT, its unload IN (an unload at the Intake is the spaceport's IN), each
+  cycle a RUN for every base it touches (`route_ops` → `creditRun`); a
+  quarry's dig is MINED, a machine's input WORKED, a loading chute's flow OUT
+  (`logistics` step → `creditStep`).
+- **Contracts that pay for reach** (the board's new **Reach** tier, standing 3
+  with Made Orbit flown; offered only where they can be done):
+  - **establish**: a base with role R on world W (a world the company has
+    reached and has no base on; the role suits it: ice worlds lean to FUEL,
+    airless ones to SCIENCE and MINE). Once a world.
+  - **layer**: one survey layer of W known (resources to 80 % by the
+    scanner, the field by the gravimeter, or composition). Once a world.
+  - **supply**: 200 kg (a moon) or 400 kg more of an ore the home world has and
+    W lacks in a base's hoppers and silos than when it was signed.
+    Repeatable.
+  - **pipeline**: three run cycles through a base since signing. Repeatable.
+  Pay is the generator's: `base × difficulty` (Δv, distance, gravity) ×
+  standing; establish 9,000, layer 4,000, supply 5,000 (+ twice the ore's
+  depot value), pipeline 6,000 base.
+- **The Reach stage** (PROGRAMME, after the Relay Network): found a base on
+  another world ($3,000), a FUEL base off the home world ($6,000), an
+  automated run's first cycle ($4,000), ore refined off the home world
+  ($5,000), another world SURVEYED ($6,000); $25,000 and +3 reputation for the
+  stage.
+- **Survey II.** The Orbital Scanner maps the ground under its swath: a
+  400-cell grid of each world (the comms coverage grid's layout), a cell
+  marked when the swath (30° either side of nadir, to the horizon) passes
+  over it; RES is the share marked. The worlds do not turn (the engine's
+  rails bodies only translate), so one orbital plane maps one band: a
+  scanner 0.75 R up maps 59 % in one orbit and no more in ten; a second
+  plane maps most of the rest; a higher orbit maps a wider band. The
+  **Gravimeter** (new VAB part, the scanner's housing, $5,200 + 60 RP after
+  the scanner) gives gravity at once and the magnetic field over three
+  orbits in the same band. **The res_map**: each mapped cell's patch is read
+  for its veins from the world's seed (`mineral_field.patchOres`, the same
+  rolls the ground makes), and the station draws a tinted disc on every
+  mapped cell of the selected world, coloured by the ore the patch holds
+  most of, with a key on the BODY card: where to put a MINE base.
+
+### The rules
+
+- `base_roles.targetsOf(census)` → target strengths and reasons;
+  `decay(s, target, dt)` (up at once, down 1/DECAY a second: one long step
+  equals many short); `step(prev, targets, dt)`; `strongest`, `roleLine`,
+  `glyphOf`; `statsAdd(st, field, amount, t)` and `stats24(st, field, t)`
+  (today plus the share of yesterday still inside the 24 h window).
+- The census walks `structures.list()` once: a structure more than 550 m from
+  every base on its world is skipped whole; each part goes to the nearest
+  base within 150 m along the ground. It reads fuel in tanks
+  (`fluid_net.content`), stores (`inventory.mass` of the hoppers and silos),
+  the grid (`base_tower.power`), the runs (`route_ops.list`), sweeps
+  (`survey.jobOf`) and Scientists (the crew roster).
+- `survey.swathTrack(state, mu, dt, R, step, visit)` carries a body-relative
+  state along its ellipse by Kepler's equation and visits points at most
+  `step` radians of true anomaly apart, one revolution at most (the track
+  repeats); `swathMark` marks the cells within the swath of a point
+  (indexed by the grid's latitude bands, so a narrow swath checks few
+  cells). A live craft is re-read from the engine each tick; an unloaded
+  one is carried in closed form until its record is rewritten.
+
+### Save keys and old saves
+
+- `bases.<id>.roles`, `.rt` (when they were read), `.stats` (the base record;
+  bases.lua keeps them); `bases.home` = { roles, rt, stats } for the
+  spaceport. `survey.<body>.sw` (the marked cells, hex, 100 characters) and
+  `.gm` (the gravimeter's field). `opt_trackFilter.role`. A supply or
+  pipeline goal carries its baseline (`b0`, `c0`) in the signed spec.
+- An old save has none of these: its bases are OUTPOSTs until the first
+  census (two seconds after loading); its worlds' RES stays what X1's
+  closed form gave (a layer only rises) and the swath grid starts empty; the
+  Reach stage opens if the Relay Network is done, and ticks what is already
+  true.
+
+### Cost
+
+Measured in `tools/perf/reachprobe.sh` (engine 0.117.1-dev.1466; ms a frame
+unless said; `work/expansion_x7/NOTES.md`):
+
+- **Nothing built:** `base_roles` 0.005 a frame (one compare a frame; the
+  versions are looked at twice a second; the hook floor every script pays).
+  `survey` 0.005–0.010 (its 1 Hz tick 0.09 ms).
+- **A base with five roles:** a census 0.25–0.43 ms (2 places, 9 pieces), run
+  when the structures, the bases or the number of runs change, and once a game
+  hour. `base_roles` 0.005 a frame between censuses.
+- **The station open on the base card:** `tracking_station` 0.07–0.18,
+  `base_roles` 0.0065 (the card reads its tables).
+- **The res_map:** 132 discs drawn (the facing half of 285 mapped cells) in
+  0.24–0.27 ms a frame, only while a world is selected in the station and its
+  disc is 60 px or more across; reading the cells' veins 12 a frame
+  (0.002 ms a call once read). Marking two whole orbits of swath in one call:
+  3 ms (a 1 Hz scanner tick at ×1 marks a few points: ~0.01 ms).
+- **Credits:** a run's advance and logistics' step call one function each;
+  the stats are written at most every 5 s.
+
+### Balance numbers for Ty
+
+- The thresholds: FUEL at 500 kg in a hose stand's tanks, POWER at 10 kW
+  spare, DEPOT at 4 t of room or 2 t held; SHOW 0.5; a role fades over 3
+  game days.
+- The swath: 30° off nadir, 400 cells; the band 0.1–1.5 R up (X1's).
+  Three orbital planes are about what a world takes.
+- The contract pay (establish 9,000, layer 4,000, supply 5,000, pipeline
+  6,000 base) and supply's 200 / 400 kg; the Reach stage's $24,000 in goals
+  and $25,000 for the stage.
+- The Gravimeter: $5,200 + 60 RP, three orbits for the field.
+
+### Left for later
+
+- The base name sign's role glyph (S4 signs); the run planner's "refuel at
+  Far Side saves 1.9 t"; `kwh_exported` (HV export between base grids) and
+  a POWER base's export line; LIMITED BY on the base card.
+- A carried Weather Station deployable (the Survey Station kit piece fills
+  temperature and air in 6 h meanwhile); the 4 m telescope.
+- DEFENCE waits on X9's parts.
+- The res_map draws one disc a cell (one engine call each): a batched
+  immediate-mode shape call would make it nearly free (card draft in the
+  notes).
+
+### Tests and the probe
+
+- `tests/smoke_base_roles.lua` (luajit): each role from a census, decay (one
+  long fade equals 1,440 short), the stats and the 24 h line, the census
+  over stubbed structures with the real bases.lua (an old record loads as an
+  outpost; a part 400 m away is no base's; a fade over days; a reload keeps
+  them), `creditRun` and `creditStep`, the four contract kinds (offered only
+  where possible, baselines, paid when met), the Reach stage, every glyph in
+  both UI fonts.
+- `tests/smoke_survey.lua`: the swath grid (marks, the hex round trip, one
+  long track step equals 700 short to 1e-6, one band an orbit, no more from
+  the same plane, a second plane), the scene's scanner by plane, the
+  res_map read under a budget.
+- `tools/perf/reachprobe.sh <engine>` (PATCHES=funds.patch): `XR PASS|FAIL`
+  lines, pictures in `save/user/reachshots/`.

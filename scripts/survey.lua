@@ -20,9 +20,14 @@
 --   tel100    a 1 m telescope with its spectrograph: temp 0.6, atmo 0.6
 --   scanner   the Orbital Scanner part in orbit 0.1–1.5 R up, powered and
 --             heard by the ground: comp 0.7, atmo 0.9 (a limb sounder), and
---             res by COVERAGE: 1 − e^(−orbits) of the ground under its
---             track, times its REACH (an orbit inclined 40° or more sees all
---             of it; an equatorial one a band): coverageStep
+--             res by SWATH (X7): the share of the world's 400-cell grid its
+--             swath has passed over (swathTrack along the conic, swathMark;
+--             30° either side of nadir, so a higher orbit maps a wider band;
+--             the worlds do not turn, so each orbital plane maps one band).
+--             (X1's closed-form coverageStep is kept for old callers; an old
+--             save's res stays what it was: a layer only rises.)
+--   gravimeter (X7) the Gravimeter part, in the same band: grav 1 at once,
+--             mag over three orbits (GRAV_ORBITS)
 --   station   the Survey Station kit piece standing on the world: comp 1
 --             after 10 min (the seismometer), temp and atmo 1 after 6 h of
 --             weather, mag 1 after a day (the magnetometer)
@@ -45,7 +50,8 @@
 -- SAVE: survey.<body> = { seen, visited, orbited, landed (agency-clock s),
 --   L = { grav, atmo, temp, comp, mag, res }, by = { <layer> = "how" },
 --   rp (RP earned here), rf (its fraction), sta (Survey Station seconds),
---   cov (scanner coverage 0..1) }
+--   cov (X1's scanner coverage 0..1), sw (X7: the swath grid's marked
+--   cells, 4 a hex digit), gm (X7: the gravimeter's field 0..1) }
 -- survey.jobs = { { sid, uid, b (target), t0, ap, by (member id), m (mult) } }
 --
 -- When it runs: a 1 Hz tick on the agency clock; the structures' instruments
@@ -53,7 +59,12 @@
 --
 -- Pure (tests/smoke_survey.lua): LAYERS, SOURCES, RP, newRec, apply,
 -- surveyed, coverageStep, reachOf, inScanBand, telescopeCan, sweepYield,
--- truthOf, layerText, nextTarget.
+-- truthOf, layerText, nextTarget; X7 swathCells, swathHalf, swathMark,
+-- maskCount, maskEncode, maskDecode, swathTrack.
+--
+-- THE RES_MAP (X7): resMap(name, budget) → the mapped cells with the ore
+-- their patch holds most of (mineral_field.patchOres, from the seed), read a
+-- few a call while the station shows the world; swathShare(name).
 
 LAYERS = { "grav", "atmo", "temp", "comp", "mag", "res" }
 LABEL = { grav = "GRAVITY", atmo = "ATMOSPHERE", temp = "TEMPERATURE", comp = "COMPOSITION", mag = "MAGNETOSPHERE",
@@ -70,15 +81,15 @@ SOURCES = {
   home    = { grav = 1, atmo = 1, temp = 1, comp = 1, mag = 1, res = 1 },
 }
 HOW = { soi = "visit", orbit = "orbit", land = "landing", tel30 = "telescope 0.3 m", tel100 = "telescope 1 m",
-        scanner = "orbital scanner", station = "survey station", home = "home" }
+        scanner = "orbital scanner", station = "survey station", home = "home", gravimeter = "gravimeter" }
 -- what fills each layer (the BODY card's "learn:" line)
 LEARN = {
   grav = "enter its sphere of influence",
   atmo = "telescope · orbit · orbital scanner · landing · survey station",
   temp = "telescope · orbit · landing · survey station",
   comp = "orbital scanner · landing · survey station",
-  mag = "survey station",
-  res = "orbital scanner (several orbits, inclined) · orbit",
+  mag = "survey station · gravimeter (3 orbits)",
+  res = "orbital scanner: each orbital plane maps a band, a higher orbit a wider one · orbit",
 }
 SWEEP_S = 600                -- game s a telescope sweep takes
 STATION = { comp = 600, temp = 6 * 3600, atmo = 6 * 3600, mag = 24 * 3600 }
@@ -141,6 +152,154 @@ function coverageStep(cov, dt, period, reach)
   return cap - left * math.exp(-dt / period)
 end
 function inScanBand(alt, R) return alt >= SCAN_BAND[1] * R and alt <= SCAN_BAND[2] * R end
+
+-- ── SURVEY II: THE SWATH GRID (expansion X7, PLAN §7.2) ─────────────────────
+-- The orbital scanner maps the ground UNDER ITS TRACK: SWATH_N cells (a
+-- Fibonacci sphere, the comms coverage grid's layout, body-relative), each
+-- marked once a pass carries the swath's edge over its centre. RES is the
+-- share marked. The worlds do not turn (the engine's rails bodies only
+-- translate), so an orbit's track is one great circle and its swath one band:
+-- more of the world takes another orbital plane (a plane change, or a second
+-- scanner), or a higher orbit, whose swath is wider. A craft's track is
+-- sampled along its conic (closed form: one long step marks what many short
+-- ones do), at most one revolution a step (after that it repeats).
+SWATH_N = 400
+SWATH_ETA = math.rad(30)     -- the instrument's half-angle off nadir, across the track
+SWATH_PAD = 0.5 * math.sqrt(4 * math.pi / 400)   -- half a cell: a band covers whole cells
+GRAV_ORBITS = 3              -- orbits a Gravimeter needs for the field (mag) to be known
+
+local cell_cache = {}
+function swathCells(n)
+  n = n or SWATH_N
+  local g = cell_cache[n]
+  if g then return g end
+  g = {}
+  local ga = math.pi * (3 - math.sqrt(5))
+  for i = 0, n - 1 do
+    local y = 1 - (i + 0.5) * 2 / n
+    local r = math.sqrt(math.max(0, 1 - y * y))
+    local a = ga * i
+    g[i + 1] = { math.cos(a) * r, y, math.sin(a) * r }
+  end
+  cell_cache[n] = g
+  return g
+end
+-- The ground half-width of the swath (central angle, radians) at alt over a
+-- world of radius R: the instrument's edge ray meets the ground, or the
+-- horizon when it would miss.
+function swathHalf(alt, R)
+  if not (R and R > 0) or alt <= 0 then return 0 end
+  local k = (R + alt) / R * math.sin(SWATH_ETA)
+  if k >= 1 then return math.acos(R / (R + alt)) end
+  return math.asin(k) - SWATH_ETA
+end
+-- Mark the cells within `lam` (radians) of the unit direction u. mask[i] =
+-- true; → the number newly marked.
+function swathMark(mask, ux, uy, uz, lam, n)
+  n = n or SWATH_N
+  local cells = swathCells(n)
+  local s = math.min(2, lam)
+  local lo = math.max(0, math.floor((1 - (uy + s)) * n / 2 - 0.5))
+  local hi = math.min(n - 1, math.ceil((1 - (uy - s)) * n / 2 - 0.5))
+  local c = math.cos(lam)
+  local got = 0
+  for i = lo, hi do
+    if not mask[i + 1] then
+      local p = cells[i + 1]
+      if p[1] * ux + p[2] * uy + p[3] * uz >= c then mask[i + 1] = true; got = got + 1 end
+    end
+  end
+  return got
+end
+function maskCount(mask, n)
+  local k = 0
+  for i = 1, n or SWATH_N do if mask[i] then k = k + 1 end end
+  return k
+end
+-- The mask as hex (4 cells a digit) for the save, and back.
+function maskEncode(mask, n)
+  n = n or SWATH_N
+  local out = {}
+  for i = 1, n, 4 do
+    local v = 0
+    for b = 0, 3 do if mask[i + b] then v = v + 2 ^ b end end
+    out[#out + 1] = string.format("%x", v)
+  end
+  return table.concat(out)
+end
+function maskDecode(s, n)
+  n = n or SWATH_N
+  local mask = {}
+  if type(s) ~= "string" then return mask end
+  for k = 1, #s do
+    local v = tonumber(s:sub(k, k), 16) or 0
+    for b = 0, 3 do
+      local i = (k - 1) * 4 + 1 + b
+      if i <= n and math.floor(v / 2 ^ b) % 2 == 1 then mask[i] = true end
+    end
+  end
+  return mask
+end
+
+-- Carry a body-relative state (x..vz) along its conic for dt game s, calling
+-- visit(ux, uy, uz, alt) at points no more than `step` radians of true
+-- anomaly apart (both ends included; at most one revolution: the track
+-- repeats after that, the worlds do not turn). Ellipses only (nil else).
+-- → the state at the end: x, y, z, vx, vy, vz
+function swathTrack(x, y, z, vx, vy, vz, mu, dt, R, step, visit)
+  local r0 = math.sqrt(x * x + y * y + z * z)
+  if not (mu and mu > 0) or r0 < 1e-9 then return nil end
+  local v2 = vx * vx + vy * vy + vz * vz
+  local inv_a = 2 / r0 - v2 / mu
+  if inv_a <= 0 then return nil end
+  local a = 1 / inv_a
+  local hx, hy, hz = y * vz - z * vy, z * vx - x * vz, x * vy - y * vx
+  local h = math.sqrt(hx * hx + hy * hy + hz * hz)
+  if h < 1e-12 then return nil end
+  local rv = x * vx + y * vy + z * vz
+  local ex, ey, ez = ((v2 - mu / r0) * x - rv * vx) / mu, ((v2 - mu / r0) * y - rv * vy) / mu, ((v2 - mu / r0) * z - rv * vz) / mu
+  local e = math.sqrt(ex * ex + ey * ey + ez * ez)
+  local Px, Py, Pz
+  if e > 1e-9 then Px, Py, Pz = ex / e, ey / e, ez / e else Px, Py, Pz = x / r0, y / r0, z / r0; e = 0 end
+  local Qx, Qy, Qz = (hy * Pz - hz * Py) / h, (hz * Px - hx * Pz) / h, (hx * Py - hy * Px) / h
+  local p = h * h / mu
+  local nu0 = math.atan2(x * Qx + y * Qy + z * Qz, x * Px + y * Py + z * Pz)
+  local function E_of(nu) return 2 * math.atan2(math.sqrt(1 - e) * math.sin(nu / 2), math.sqrt(1 + e) * math.cos(nu / 2)) end
+  local nmo = math.sqrt(mu / (a * a * a))
+  local E0 = E_of(nu0)
+  local M0 = E0 - e * math.sin(E0)
+  local M1 = M0 + nmo * math.max(0, dt)
+  local E1 = M1
+  for _ = 1, 30 do
+    local f = E1 - e * math.sin(E1) - M1
+    local d = f / (1 - e * math.cos(E1))
+    E1 = E1 - d
+    if math.abs(d) < 1e-12 then break end
+  end
+  -- the anomaly walked (unwrapped): E1 − E0 revolutions turn into ν the same number of times
+  local revs = math.floor((E1 - E0) / (2 * math.pi))
+  local frac = (E1 - E0) - revs * 2 * math.pi
+  local nu1 = 2 * math.atan2(math.sqrt(1 + e) * math.sin((E0 + frac) / 2), math.sqrt(1 - e) * math.cos((E0 + frac) / 2))
+  local span = nu1 - nu0
+  while span < 0 do span = span + 2 * math.pi end
+  if revs >= 1 then span = 2 * math.pi end
+  local function at(nu)
+    local r = p / (1 + e * math.cos(nu))
+    local c, s = math.cos(nu), math.sin(nu)
+    return r * (c * Px + s * Qx), r * (c * Py + s * Qy), r * (c * Pz + s * Qz), r
+  end
+  if visit then
+    local k = math.max(1, math.ceil(span / math.max(step or 0.05, 1e-3)))
+    for i = 0, k do
+      local px, py, pz, r = at(nu0 + span * i / k)
+      visit(px / r, py / r, pz / r, r - (R or 0))
+    end
+  end
+  local fx, fy, fz = at(nu1)
+  local sv = math.sqrt(mu / p)
+  local c1, s1 = math.cos(nu1), math.sin(nu1)
+  return fx, fy, fz, sv * (-s1 * Px + (e + c1) * Qx), sv * (-s1 * Py + (e + c1) * Qy), sv * (-s1 * Pz + (e + c1) * Qz)
+end
 
 -- What a sweep fills: by aperture.
 function sweepYield(ap)
@@ -367,14 +526,141 @@ local part_cache = {}        -- fid → { t, scanner, telescope }
 local function parts_of(fid, rec)
   local c = part_cache[fid]
   if c and c.t == rec.t and c.n == #(rec.parts or {}) then return c end
-  c = { t = rec.t, n = #(rec.parts or {}), scanner = false, telescope = false }
+  c = { t = rec.t, n = #(rec.parts or {}), scanner = false, telescope = false, gravimeter = false }
   for _, d in ipairs(rec.parts or {}) do
     local id = tostring(d.id or "")
     if id == "scanner" then c.scanner = true end
     if id == "telescopeS" then c.telescope = true end
+    if id == "gravimeter" then c.gravimeter = true end
   end
   part_cache[fid] = c
   return c
+end
+
+-- ── X7: the swath grid of each world, and the scanners' tracks ──
+local SW = {}                -- name → { mask, n (marked) } (the save's r.sw, decoded once)
+local sw_state = {}          -- fid → { body, x, y, z, vx, vy, vz } body-relative (session)
+function swathOf(name)
+  local s = SW[name]
+  if s then return s end
+  local r = record(name)
+  local mask = maskDecode(r and r.sw, SWATH_N)
+  s = { mask = mask, n = maskCount(mask, SWATH_N) }
+  SW[name] = s
+  return s
+end
+-- The share of `name`'s ground the scanners have mapped (0..1).
+function swathShare(name) return swathOf(name).n / SWATH_N end
+stats.swath_ms, stats.swath_pts = 0, 0
+scan_tick = function(fid, body, b, px, py, pz, vx, vy, vz, dt, P, pc, live, recT)
+  local w0 = wall()
+  local R = b.radius
+  local st = sw_state[fid]
+  -- (a new pass, another world, or a live craft: start from where it is now)
+  if not st or st.body ~= body or st.t ~= recT then
+    st = { body = body, x = px, y = py, z = pz, vx = vx, vy = vy, vz = vz, t = recT }
+    sw_state[fid] = st
+  end
+  local r = record(body)
+  local S = swathOf(body)
+  local got, pts = 0, 0
+  local function visit(ux, uy, uz, alt)
+    pts = pts + 1
+    if pc.scanner and inScanBand(alt, R) then got = got + swathMark(S.mask, ux, uy, uz, swathHalf(alt, R) + SWATH_PAD, SWATH_N) end
+  end
+  local lam0 = swathHalf(math.max(len(st.x, st.y, st.z) - R, SCAN_BAND[1] * R), R) + SWATH_PAD
+  local nx, ny, nz, nvx, nvy, nvz = swathTrack(st.x, st.y, st.z, st.vx, st.vy, st.vz, b.mu, dt, R, math.max(0.03, math.min(0.25, lam0 * 0.8)), visit)
+  if live or not nx then
+    -- (a live craft: the engine's pose is the truth for the next tick)
+    st.x, st.y, st.z, st.vx, st.vy, st.vz = px, py, pz, vx, vy, vz
+  else
+    st.x, st.y, st.z, st.vx, st.vy, st.vz = nx, ny, nz, nvx, nvy, nvz
+  end
+  if got > 0 then
+    S.n = S.n + got
+    r.sw = maskEncode(S.mask, SWATH_N)
+    dirty[body] = true
+    credit(body, "scanner", { comp = SOURCES.scanner.comp, atmo = SOURCES.scanner.atmo, res = S.n / SWATH_N })
+    resmap_drop(body)
+  end
+  -- THE GRAVIMETER: gravity at once, the field over GRAV_ORBITS orbits in its band
+  if pc.gravimeter and P and P > 0 and inScanBand(len(px, py, pz) - R, R) then
+    local g0 = r.gm or 0
+    local g1 = math.min(1, g0 + dt / (GRAV_ORBITS * P))
+    if g1 > g0 + 1e-6 then
+      r.gm = g1
+      dirty[body] = true
+      credit(body, "gravimeter", { grav = 1, mag = g1 })
+    end
+  end
+  stats.swath_pts = pts
+  stats.swath_ms = (wall() - w0) * 1000
+end
+
+-- ── X7: THE RES_MAP — what the scanner found in each mapped cell ──
+-- The veins of the patch under each marked cell (mineral_field.patchOres,
+-- from the world's seed: what is really there), worked out a few cells a
+-- call while the station shows the world, and kept for the session.
+local RM = {}                -- name → { cells = { [i] = { ore, n } | false }, todo = { i… }, k, ver }
+resmap_drop = function(name) local m = RM[name]; if m then m.stale = true end end
+RESMAP_PER_CALL = 12
+-- (a categorical palette for the map's discs and the card's key, in the
+-- order of how many cells each ore holds: hues apart on a dark world)
+RESMAP_COLORS = { { 1.00, 0.62, 0.22 }, { 0.30, 0.88, 0.84 }, { 0.78, 0.52, 1.00 }, { 1.00, 0.90, 0.30 },
+                  { 1.00, 0.42, 0.42 }, { 0.52, 0.95, 0.42 }, { 0.46, 0.64, 1.00 }, { 1.00, 0.56, 0.82 } }
+stats.resmap_ms = 0
+-- → { { i, x, y, z (unit), ore, n (veins), c (colour) } … } for the cells
+-- mapped so far, counts = { ore = cells }, done (every marked cell read),
+-- colours = { ore = { r, g, b } }, order = { ore… } (most cells first)
+function resMap(name, budget)
+  local w0 = wall()
+  local S = swathOf(name)
+  local m = RM[name]
+  if not m or m.stale then
+    local old = m and m.cells or {}
+    m = { cells = old, list = {}, counts = {}, todo = {} }
+    for i = 1, SWATH_N do if S.mask[i] and old[i] == nil then m.todo[#m.todo + 1] = i end end
+    m.k = 1
+    m.rebuild = true
+    RM[name] = m
+  end
+  local MF = ref("mineral_field")
+  local cells = swathCells(SWATH_N)
+  local n = budget or RESMAP_PER_CALL
+  while n > 0 and m.k <= #m.todo do
+    local i = m.todo[m.k]
+    m.k = m.k + 1
+    n = n - 1
+    local best, bn = false, 0
+    if MF and MF.patchOres then
+      local ok, ores = pcall(MF.patchOres, name, cells[i][1], cells[i][2], cells[i][3])
+      if ok and type(ores) == "table" then
+        for ore, c in pairs(ores) do if c > bn or (c == bn and best and ore < best) then best, bn = ore, c end end
+      end
+    end
+    m.cells[i] = best and { best, bn } or false
+    m.rebuild = true
+  end
+  if m.rebuild then
+    m.rebuild = false
+    m.list, m.counts = {}, {}
+    for i = 1, SWATH_N do
+      local c = m.cells[i]
+      if c and S.mask[i] then
+        local p = cells[i]
+        m.list[#m.list + 1] = { i = i, x = p[1], y = p[2], z = p[3], ore = c[1], n = c[2] }
+        m.counts[c[1]] = (m.counts[c[1]] or 0) + 1
+      end
+    end
+    m.order = {}
+    for ore in pairs(m.counts) do m.order[#m.order + 1] = ore end
+    table.sort(m.order, function(a, b) if m.counts[a] ~= m.counts[b] then return m.counts[a] > m.counts[b] end return a < b end)
+    m.colours = {}
+    for k, ore in ipairs(m.order) do m.colours[ore] = RESMAP_COLORS[(k - 1) % #RESMAP_COLORS + 1] end
+    for _, e in ipairs(m.list) do e.c = m.colours[e.ore] end
+  end
+  stats.resmap_ms = (wall() - w0) * 1000
+  return m.list, m.counts, m.k > #m.todo, m.colours or {}, m.order or {}
 end
 
 local function visit(name, t)
@@ -477,6 +763,7 @@ local function fleet_tick(t, dt, B)
       if f.landed then
         if land_seen[fid] ~= body then land_seen[fid] = body; landed_on(body, t) end
         orbit_acc[fid] = nil
+        sw_state[fid] = nil
       else
         land_seen[fid] = nil
         -- a full orbit round it, once (a closed conic above the ground)
@@ -492,23 +779,16 @@ local function fleet_tick(t, dt, B)
             if r and not r.orbited then r.orbited = t; dirty[body] = true end
             credit(body, "orbit")
           end
-          -- THE ORBITAL SCANNER (a part; powered, in its band, heard by the ground)
+          -- THE ORBITAL SCANNER and THE GRAVIMETER (parts; powered, in their
+          -- band, heard by the ground). X7: the scanner marks the swath grid
+          -- under its track (swathTrack, carried along the conic from where
+          -- it was a tick ago); the gravimeter learns the field in 3 orbits.
           local pc = parts_of(fid, rec)
-          if pc.scanner and f.link and (f.cap or 0) > 0 and (f.charge or 0) > 0 then
-            local alt = len(px, py, pz) - b.radius
-            if inScanBand(alt, b.radius) then
-              local hx, hy, hz = py * vz - pz * vy, pz * vx - px * vz, px * vy - py * vx
-              local hl = len(hx, hy, hz)
-              -- (the body's spin axis is the frame's +Y: the orbit's tilt from it)
-              local inc = hl > 1e-9 and math.acos(clamp(hy / hl, -1, 1)) or 0
-              local r = record(body)
-              local cov = coverageStep(r.cov or 0, dt, P, reachOf(inc))
-              if cov > (r.cov or 0) + 1e-6 then
-                r.cov = cov
-                dirty[body] = true
-                credit(body, "scanner", { comp = SOURCES.scanner.comp, atmo = SOURCES.scanner.atmo, res = cov })
-              end
-            end
+          local powered = f.link and (f.cap or 0) > 0 and (f.charge or 0) > 0
+          if (pc.scanner or pc.gravimeter) and powered then
+            scan_tick(fid, body, b, px, py, pz, vx, vy, vz, dt, P, pc, v ~= nil, rec.t)
+          else
+            sw_state[fid] = nil
           end
         end
       end
@@ -538,6 +818,7 @@ local function fleet_tick(t, dt, B)
     end
   end
   for fid in pairs(orbit_acc) do if not seen_f[fid] then orbit_acc[fid] = nil end end
+  for fid in pairs(sw_state) do if not seen_f[fid] then sw_state[fid] = nil end end
 end
 
 -- ── the kit's instruments (structures) ──
@@ -735,7 +1016,7 @@ end
 
 -- (probes) credit a source by hand
 function creditNow(name, src, vals) return credit(name, src, vals) end
-function reset() REC = {}; dirty = {}; orbit_acc = {}; land_seen = {}; tel_acc = {}; part_cache = {}; inst = { ver = -1, list = {} } end
+function reset() REC = {}; dirty = {}; orbit_acc = {}; land_seen = {}; tel_acc = {}; part_cache = {}; inst = { ver = -1, list = {} }; SW = {}; sw_state = {}; RM = {} end
 
 local tick_t, tick_c = -10, nil
 local reg_on = false

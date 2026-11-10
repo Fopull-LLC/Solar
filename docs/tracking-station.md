@@ -372,6 +372,36 @@ it, and the world key filters to its own entry with everything on it.
 - What the layers are, how they fill and what they earn: `scripts/survey.lua`
   and `docs/crew-and-items.md` §11.
 
+### 6.1 Base roles and the res_map (expansion X7)
+
+What each base is for and the scanner's map (`scripts/base_roles.lua`,
+`docs/base-building.md` §25):
+
+- **BASES rows** wear the glyph of the base's strongest role (⇆ ⛁ ⚒ ⚡ ⚙ ✦ ▤ ✚,
+  ⌂ for an outpost) and the situation "FUEL · MINE · ground station" (the
+  spaceport "spaceport · PORT"). `fleet_view` copies `roles` and `stats` from
+  `base_tower.bases()` (the records) onto the entry; `base_roles.version` is
+  the snapshot's ninth stamp.
+- **The role key**: a third header row holds the world key and the role key
+  (All roles → Port → Fuel → Mine → Power → Refinery → Science → Depot →
+  Defence, one click a step); Crewed and Alerts moved to a fourth row. With a
+  role set only the bases carrying it pass (`fleet_view.passes`'s `F.role`),
+  on the list and on the map; it is kept in `opt_trackFilter`.
+- **The base card** (and the spaceport's) gains ROLES: each role's glyph,
+  label, strength bar and why; a CRT inset with the last 24 h (IN, OUT, MINED,
+  WORKED) and all-time totals with run cycles; the pieces and stores counted;
+  and the two first roles it lacks with what gives each.
+- **The BODY card** lists each base on the world with its role line, and
+  under the six layers an **ORE MAP** key: the share of the ground the
+  scanners have swept and each ore found in the mapped cells, in its map
+  colour, most cells first.
+- **The res_map on the map**: with a world selected, a disc on every mapped
+  cell of the hemisphere facing the camera, tinted by the ore its patch holds
+  most (`survey.resMap`, 12 cells read a frame until all are; the palette is
+  categorical, in the key's order), placed against this frame's body read.
+  Nothing is drawn while the world's disc is under 60 px across.
+- Probes: `pickEntry(id)`, `setFilter(k, v)`, `resmapStats`.
+
 ## 7. Left for later
 
 - **P5**: the VAB board, EN6/EN14 swaps (cards 0651, 0652), per-craft nodes

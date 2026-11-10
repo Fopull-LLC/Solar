@@ -87,6 +87,66 @@ do
   check("the band: 0.1–1.5 radii up", SV.inScanBand(100, 800) and not SV.inScanBand(50, 800) and not SV.inScanBand(1300, 800))
 end
 
+-- ── X7: the swath grid ──────────────────────────────────────────────────────
+do
+  local N = SV.SWATH_N
+  local cells = SV.swathCells(N)
+  check("the grid: 400 unit cells", #cells == N and near(cells[1][1] ^ 2 + cells[1][2] ^ 2 + cells[1][3] ^ 2, 1, 1e-9))
+  -- the swath widens with height, up to the horizon
+  local R = 200
+  local lo, mid, hi = SV.swathHalf(0.1 * R, R), SV.swathHalf(0.5 * R, R), SV.swathHalf(1.5 * R, R)
+  check(string.format("the swath widens with height: %.1f° at 0.1 R, %.1f° at 0.5 R, %.1f° at 1.5 R", math.deg(lo), math.deg(mid), math.deg(hi)),
+    lo < mid and mid < hi and lo > 0)
+  check("…never past the horizon", hi <= math.acos(R / (R + 1.5 * R)) + 1e-9)
+  -- a mark: every cell within the angle, and only those
+  local mask = {}
+  local lam = math.rad(20)
+  local got = SV.swathMark(mask, 0, 1, 0, lam, N)
+  local want = 0
+  for _, c in ipairs(cells) do if c[2] >= math.cos(lam) then want = want + 1 end end
+  check(string.format("a mark at the pole takes the %d cells within 20°", want), got == want and SV.maskCount(mask, N) == want, got)
+  check("…and again: none new", SV.swathMark(mask, 0, 1, 0, lam, N) == 0)
+  local back = SV.maskDecode(SV.maskEncode(mask, N), N)
+  local same = true
+  for i = 1, N do if (back[i] or false) ~= (mask[i] or false) then same = false end end
+  check("the mask round-trips through the save's hex", same and #SV.maskEncode(mask, N) == N / 4)
+  -- an orbit 0.75 R up inclined 60°: one band
+  local mu = 1.6 * R * R
+  local r0 = R * 1.75
+  local v0 = math.sqrt(mu / r0)
+  local inc = math.rad(60)
+  local P = 2 * math.pi * math.sqrt(r0 ^ 3 / mu)
+  local function fly(chunks, dt_total)
+    local m = {}
+    local x, y, z, vx, vy, vz = r0, 0, 0, 0, v0 * math.sin(inc), v0 * math.cos(inc)
+    for _ = 1, chunks do
+      x, y, z, vx, vy, vz = SV.swathTrack(x, y, z, vx, vy, vz, mu, dt_total / chunks, R, 0.1, function(ux, uy, uz, alt)
+        SV.swathMark(m, ux, uy, uz, SV.swathHalf(alt, R) + SV.SWATH_PAD, N)
+      end)
+    end
+    return m, x, y, z, vx, vy, vz
+  end
+  local m1, x1, y1, z1 = fly(1, 0.7 * P)
+  local m2, x2, y2, z2 = fly(700, 0.7 * P)
+  check("the track: one long step ends where 700 short ones do (1e-6)", near(x1, x2, 1e-6 * r0) and near(y1, y2, 1e-6 * r0) and near(z1, z2, 1e-6 * r0),
+    string.format("%.6f %.6f", x1, x2))
+  local a, b = SV.maskCount(m1, N), SV.maskCount(m2, N)
+  check(string.format("…and marks the same cells (%d against %d)", a, b), math.abs(a - b) <= 4, a - b)
+  local full = fly(1, P)
+  local band = math.sin(SV.swathHalf(0.75 * R, R) + SV.SWATH_PAD)
+  local share = SV.maskCount(full, N) / N
+  check(string.format("one orbit maps one band: %.2f of the ground (the band's %.2f)", share, band), near(share, band, 0.04), share)
+  local three = fly(1, 3 * P)
+  check("three orbits of the same plane map no more (the worlds do not turn)", SV.maskCount(three, N) == SV.maskCount(full, N),
+    SV.maskCount(three, N) - SV.maskCount(full, N))
+  -- a second plane, at right angles: most of the rest
+  local m3 = {}
+  for i, v in pairs(full) do m3[i] = v end
+  SV.swathTrack(r0, 0, 0, 0, 0, v0, mu, P, R, 0.1, function(ux, uy, uz, alt) SV.swathMark(m3, ux, uy, uz, SV.swathHalf(alt, R) + SV.SWATH_PAD, N) end)
+  check(string.format("a second plane maps most of the rest (%.2f)", SV.maskCount(m3, N) / N), SV.maskCount(m3, N) / N > 0.85)
+  check("a hyperbola has no track", SV.swathTrack(r0, 0, 0, 0, 0, v0 * 2, mu, 10, R, 0.1) == nil)
+end
+
 -- ── telescopes ──────────────────────────────────────────────────────────────
 do
   local base = { ap = 0.3, crewed = true, scientist = true, powered = true, night = true, airless = false, above = true }
@@ -199,9 +259,28 @@ local moon = E.record("Moon")
 check("the Moon: visited by the craft (gravity known)", moon.L.grav == 1 and moon.visited ~= nil)
 check("…a full orbit: temp, atmo, orbited", moon.orbited ~= nil and moon.L.temp >= 0.5, moon.L.temp)
 check("…the scanner maps it: comp 0.7, atmo 0.9", near(moon.L.comp, 0.7) and near(moon.L.atmo, 0.9), moon.L.comp)
-check(string.format("…res %.2f after one orbit (1 − e^−1 = 0.63)", moon.L.res), near(moon.L.res, 1 - math.exp(-1), 0.02), moon.L.res)
+-- (X7) its swath: one band of the ground (0.75 R up: ±36° of the track)
+local band = math.sin(E.swathHalf(150, 200) + E.SWATH_PAD)
+check(string.format("…res %.2f after one orbit: one band (%.2f)", moon.L.res, band), near(moon.L.res, band, 0.05), moon.L.res)
+local res1 = moon.L.res
 tick(P / 10, 20)
-check(string.format("…and %.2f after three (0.95)", moon.L.res), near(moon.L.res, 1 - math.exp(-3), 0.02), moon.L.res)
+check(string.format("…and still %.2f after three: the worlds do not turn", moon.L.res), near(moon.L.res, res1, 0.01), moon.L.res)
+check("…the swath is in the save as hex", type(moon.sw) == "string" and #moon.sw == E.SWATH_N / 4)
+-- a plane change (the record rewritten): the new plane maps more
+recs.c1 = { t = 2, parts = { { id = "probe" }, { id = "scanner" } }, x = R, y = 0, z = 0, vx = 0, vy = 0, vz = v }
+tick(P / 10, 10)
+check(string.format("…a new orbital plane maps more: %.2f", moon.L.res), moon.L.res > res1 + 0.15, moon.L.res)
+-- the res_map: the cells mapped, with their ores (mineral_field stubbed)
+SCR.mineral_field = { valid = true, patchOres = function(n, x, y, z) return y > 0 and { ilmenite = 2, he3 = 1 } or { kamacite = 1 } end }
+local list, counts, done = E.resMap("Moon", 1000)
+check(string.format("the res_map: %d cells read, ilmenite where y > 0", #list), done and #list == math.floor(moon.L.res * E.SWATH_N + 0.5)
+  and (counts.ilmenite or 0) > 0 and (counts.kamacite or 0) > 0, #list)
+local by_budget = 0
+E.reset()
+SCR.mineral_field.calls = 0
+local l2, _, d2 = E.resMap("Moon", 5)
+check("…a few cells a call (the budget)", not d2 and #l2 <= 5, #l2)
+SCR.mineral_field = nil
 check("the lab got whole RP for it", points > 50 and points == math.floor(points), points)
 check("…and the fraction is carried", moon.rf >= 0 and moon.rf < 1)
 -- no link: the scanner waits

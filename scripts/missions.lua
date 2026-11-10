@@ -49,6 +49,12 @@
 --                        carries on where it stopped
 --   home                 park the craft you are driving back at the base
 --                        (stopped, within GROUND_PARK of it)
+--   establish body role  (X7) a base on that body carrying that role
+--                        (base_roles: an Electrolyser makes a FUEL base, …)
+--   layer  body layer v  (X7) that survey layer of the body known to v
+--   supply base mat kg   (X7) kg MORE of mat in that base's stores than when
+--                        the contract was signed (b0, stamped by accept)
+--   pipeline base n      (X7) n run cycles through that base since signing (c0)
 --
 --   consume = true       (deliver) the buyer TAKES the goods: on payout they
 --                        leave the warehouse. Ground orders pay well over the
@@ -309,6 +315,24 @@ PROGRAMME = {
       { kind = "linked", class = "planet", pay = 15000, label = "Link another planet to the network" },
     },
   },
+  {
+    -- (expansion X7, PLAN §1.2) REACH: bases with a purpose off the home
+    -- world, the first run that keeps them supplied, refining where the ore
+    -- is, and a world known in every layer. Read from base_roles (what each
+    -- base is for), route_ops (the runs) and survey (the layers).
+    id = "reach", title = "Reach", requires = "relay_net",
+    brief = "Home has the money and the labs. Everything else is somewhere else: ice to make\n" ..
+            "fuel from, ore to refine, ground to watch the sky from. Build bases that DO\n" ..
+            "something out there, and the runs that keep them going.",
+    reward = 25000, rep = 3,
+    goals = {
+      { kind = "basefar", pay = 3000, label = "Found a base on another world (a Base Station Tower)" },
+      { kind = "rolefar", role = "fuel", pay = 6000, label = "A FUEL base off the home world: an Electrolyser, or a Fuel Hose Stand with 500 kg in its tanks" },
+      { kind = "runcycle", n = 1, pay = 4000, label = "An automated run completes a cycle" },
+      { kind = "workedfar", pay = 5000, label = "Refine ore off the home world: a Crusher, Furnace or Kiln at work there" },
+      { kind = "surveyedfar", pay = 6000, label = "Another world SURVEYED: every layer known" },
+    },
+  },
 }
 
 -- Published for the card and the board: the network numbers as last polled.
@@ -541,12 +565,20 @@ local GEN_KINDS = {
   orehaul = { base = 4800 },   -- a world's own ore (materials.bodyOres): "ORE HAULS"
   rescue = { base = 5300 },
   cargo  = { base = 8400 },
+  -- REACH (expansion X7, PLAN §1.2): work that pays for expanding. Offered
+  -- only where it can be done: an establish where the company has been, a
+  -- supply or a pipeline to a base it has, a layer it has not mapped.
+  establish = { base = 9000, once = true, reach = true },   -- found a base with role R on world W
+  layer     = { base = 4000, once = true, reach = true },   -- map a survey layer of W
+  supply    = { base = 5000, reach = true },                -- N kg of X into base B's stores
+  pipeline  = { base = 6000, reach = true },                -- N run cycles through base B
   -- GROUND WORK (home world, repeatable, priced by the job — `ground_spec`)
   order  = { ground = true },
   bulk   = { ground = true },
   trek   = { ground = true },
 }
-local KIND_ORDER = { "survey", "orbit", "land", "flag", "haul", "orehaul", "rescue", "cargo" }
+local KIND_ORDER = { "survey", "orbit", "land", "flag", "haul", "orehaul", "rescue", "cargo",
+                     "establish", "layer", "supply", "pipeline" }
 
 -- Which kinds open where, by standing level (company.standing: 2 Contractor,
 -- 3 Trusted, 4 Prime) and the ladder rung you need to have flown. `moon` is a
@@ -564,6 +596,11 @@ TIERS = {
     what = "beacons, hauls and recoveries across the whole system",
     kinds = { planet = { "flag", "haul", "orehaul", "rescue", "cargo" },
               far = { "survey", "orbit", "land", "flag", "haul", "orehaul", "rescue" } } },
+  -- (X7) bases with a purpose, and the runs and maps that serve them
+  { level = 3, needs = "orbit", name = "Reach",
+    what = "bases with a purpose on other worlds, supply runs and pipelines to them, survey maps",
+    kinds = { moon = { "establish", "layer", "supply", "pipeline" }, planet = { "establish", "layer", "supply", "pipeline" },
+              far = { "establish", "layer", "supply", "pipeline" } } },
 }
 
 -- How many generated contracts the board holds, by standing level.
@@ -767,7 +804,7 @@ end
 -- Δv a kind of job needs, by its legs.
 local function need(p, kind)
   if kind == "survey" then return p.ascent + p.out + p.flyby end
-  if kind == "orbit" or kind == "cargo" then return p.ascent + p.out + p.capture end
+  if kind == "orbit" or kind == "cargo" or kind == "layer" then return p.ascent + p.out + p.capture end
   if kind == "land" or kind == "flag" then return p.ascent + p.out + p.capture + p.down end
   -- a round trip: there, down, up again, and home
   return p.ascent + p.out + p.capture + p.down + p.up + p.back
@@ -931,6 +968,89 @@ function oreHaulFactor(mat)
   return (1 + ORE_HAUL_RARITY * (r - 1)) * (1 + ORE_HAUL_DEPTH * math.min(1, (o.minDepth or 0) / 40)), r, o
 end
 
+-- ── REACH (expansion X7) ────────────────────────────────────────────────────
+-- What an establish contract asks a world for: the role its ground suits.
+-- Ice (cold worlds) makes propellant; airless rock is for the mine and the
+-- telescope; any world takes a refinery. Rolled by seq among those.
+REACH_ROLES = { fuel = 1.0, mine = 1.0, science = 0.7, refinery = 0.6, power = 0.5 }
+function reachRole(b, seq)
+  local w = save.get("world." .. b.name) or {}
+  local kind = (type(w) == "table" and w.kind) or b.kind or "barren"
+  local wt = {}
+  for r, v in pairs(REACH_ROLES) do wt[r] = v end
+  if kind == "frost" or kind == "ice" then wt.fuel = wt.fuel * 2.5 end
+  if (b.atmo or 0) <= 0.15 then wt.science = wt.science * 1.8; wt.mine = wt.mine * 1.4 end
+  local order = { "fuel", "mine", "science", "refinery", "power" }
+  local total = 0
+  for _, r in ipairs(order) do total = total + wt[r] end
+  local h = 11
+  for i = 1, #b.name do h = (h * 31 + b.name:byte(i)) % 1000003 end
+  local pick = mix((seq or 0) * 13 + h) * total
+  for _, r in ipairs(order) do
+    pick = pick - wt[r]
+    if pick <= 0 then return r end
+  end
+  return "fuel"
+end
+-- The layer a survey contract asks for: the least-known of resources (the
+-- scanner's), the magnetic field (the gravimeter's) and composition, and the
+-- share it asks. nil when all three are known.
+REACH_LAYERS = { { "res", 0.8, "orbital scanner" }, { "mag", 1.0, "gravimeter" }, { "comp", 1.0, "survey station, or a landing and a scanner" } }
+function reachLayer(name)
+  local sv = ref("survey")
+  local r = sv and sv.record and sv.record(name)
+  if not r then return nil end
+  local best, bv = nil, math.huge
+  for _, e in ipairs(REACH_LAYERS) do
+    local v = (r.L and r.L[e[1]]) or 0
+    if v < e[2] - 1e-6 and v < bv then best, bv = e, v end
+  end
+  return best
+end
+-- The first base off the home world on `name` (base_roles' places) → place
+local function reach_base(name)
+  local br = ref("base_roles")
+  local list = br and br.basesWith and br.basesWith(nil, name, true) or {}
+  return list[1]
+end
+local function base_name(id)
+  local B = ref("bases")
+  local r = B and B.get and B.get(id)
+  return r and r.n or ("base " .. tostring(id))
+end
+-- What a supply contract brings: an ore the home world has and the base's
+-- world lacks (the run's cargo), else iron ore.
+local function supply_mat(home, b, seq)
+  local mats = ref("materials")
+  if not (mats and mats.bodyOres) then return "iron" end
+  local there = {}
+  for _, e in ipairs((mats.bodyOres(b.name, b.kind)) or {}) do there[e.mat] = true end
+  local list = {}
+  for _, e in ipairs((mats.bodyOres(home.name, home.kind)) or {}) do
+    if not there[e.mat] then list[#list + 1] = e.mat end
+  end
+  if #list == 0 then return "iron" end
+  return list[1 + math.floor(mix((seq or 0) * 17 + #b.name) * #list) % #list]
+end
+-- May a reach kind be offered for body b now? (candidates)
+local function reach_ok_for(kind, R, home, b)
+  local br = ref("base_roles")
+  if not (br and br.basesWith) then return false end
+  if kind == "establish" then
+    return reachOk(b.name) and #br.basesWith(nil, b.name, true) == 0
+  elseif kind == "layer" then
+    return ref("survey") ~= nil and reachLayer(b.name) ~= nil
+  else
+    return reach_base(b.name) ~= nil
+  end
+end
+reachOkFor = function(kind, bname)
+  local R = roster()
+  local home = R and home_entry(R)
+  local b = R and R.by[bname]
+  return (home and b and reach_ok_for(kind, R, home, b)) or false
+end
+
 -- Build one contract spec for (kind, body). Pure data — it goes in the save.
 -- nil when the kind can't be done there (nothing to haul, no plan).
 function genSpec(kind, bname, seq)
@@ -947,7 +1067,8 @@ function genSpec(kind, bname, seq)
   local K = GEN_KINDS[kind]
   local dv = need(p, kind)
   local ratio = dv / math.max(p.ascent, 1e-3)
-  local lands = (kind == "land" or kind == "flag" or kind == "haul" or kind == "orehaul" or kind == "rescue")
+  local lands = (kind == "land" or kind == "flag" or kind == "haul" or kind == "orehaul" or kind == "rescue"
+    or kind == "establish" or kind == "supply" or kind == "pipeline")
   local gfac = 1.0
   if lands then
     gfac = 1.0 + 0.35 * math.min(2.0, grav(b) / math.max(grav(home), 1e-3))
@@ -1029,6 +1150,48 @@ function genSpec(kind, bname, seq)
       "Cargo Bay (load it from your suit pack at the craft) and make orbit with it aboard.", X, kg)
     g = { { kind = "cargo", body = X, kg = kg, frac = 0.10,
             label = string.format("Orbit %s with %d kg in the hold, periapsis above %%s", X, kg) } }
+  elseif kind == "establish" then
+    local role = reachRole(b, seq)
+    local BR = ref("base_roles")
+    local L = (BR and BR.LABEL and BR.LABEL[role]) or string.upper(role)
+    local how = (BR and BR.HOW and BR.HOW[role]) or ""
+    title = string.format("Establish: a %s base on %s", L, X)
+    brief = string.format("The board wants a %s base on %s: a Base Station Tower, and within\n" ..
+      "150 m of it %s. Ship the pieces (or make them there) and build it.", L, X, how)
+    g = { { kind = "establish", body = X, role = role, label = string.format("A %s base on %s", L, X) } }
+  elseif kind == "layer" then
+    local e = reachLayer(X)
+    if not e then return nil end
+    local sv = ref("survey")
+    local lbl = (sv and sv.LABEL and sv.LABEL[e[1]]) or e[1]
+    title = string.format("Survey: %s of %s", string.lower(lbl), X)
+    brief = string.format("The labs want %s's %s mapped%s. The instrument for it: %s.", X, string.lower(lbl),
+      e[2] < 1 and string.format(" to %d %%", math.floor(e[2] * 100 + 0.5)) or "", e[3])
+    g = { { kind = "layer", body = X, layer = e[1], value = e[2],
+            label = string.format("%s of %s known to %d %%", lbl, X, math.floor(e[2] * 100 + 0.5)) } }
+  elseif kind == "supply" then
+    local P = reach_base(X)
+    if not P then return nil end
+    local mat = supply_mat(home, b, seq)
+    local mats = ref("materials")
+    local mname = (mats and mats.label and mats.label(mat)) or mat
+    local kg = (cls == "moon") and 200 or 400
+    extra = (mats and mats.value and mats.value(mat) or 0) / math.max((mats and mats.kg and mats.kg(mat)) or 1, 0.1) * kg * 2
+    local bn = base_name(P.id)
+    title = string.format("Supply: %d kg of %s to %s", kg, mname, bn)
+    brief = string.format("%s on %s needs %s, which %s has none of. Bring %d kg into its\n" ..
+      "hoppers or silos (a run that unloads there does it every cycle).", bn, X, mname, X, kg)
+    g = { { kind = "supply", base = P.id, body = X, mat = mat, kg = kg,
+            label = string.format("%d kg more %s in %s's stores", kg, mname, bn) } }
+  elseif kind == "pipeline" then
+    local P = reach_base(X)
+    if not P then return nil end
+    local bn = base_name(P.id)
+    local n = 3
+    title = string.format("Pipeline: %s", bn)
+    brief = string.format("Prove %s keeps going without you: %d cycles of an automated\n" ..
+      "run that starts, stops or ends there.", bn, n)
+    g = { { kind = "pipeline", base = P.id, body = X, n = n, label = string.format("%d run cycles through %s", n, bn) } }
   end
   if not g then return nil end
   local reward = price((K.base * diff * ofac + extra) * (company() and company().rewardMult
@@ -1144,7 +1307,8 @@ local function candidates()
           -- A beacon is planted once per world, whichever contract planted it;
           -- an ore haul is offered only where the company can get to.
           if not (k == "flag" and (save.get("mission.flags") or {})[b.name])
-             and not (k == "orehaul" and not reach_ok(R, home, b)) then
+             and not (k == "orehaul" and not reach_ok(R, home, b))
+             and not (GEN_KINDS[k].reach and not reach_ok_for(k, R, home, b)) then
             out[#out + 1] = { kind = k, body = b.name, key = key }
           end
         end
@@ -1632,6 +1796,26 @@ local function prog_goal_now(m, i, g, niches)
       if name ~= home and body_class(name) == g.class then return true end
     end
     return false
+  -- (X7) REACH: read from base_roles, route_ops and survey
+  elseif g.kind == "basefar" or g.kind == "rolefar" then
+    local br = ref("base_roles")
+    return br ~= nil and br.basesWith ~= nil and #br.basesWith(g.role, nil, true) > 0
+  elseif g.kind == "runcycle" then
+    local ro = ref("route_ops")
+    local n = 0
+    for _, r in ipairs((ro and ro.list and ro.list()) or {}) do n = n + (r.cycles or 0) end
+    return n >= (g.n or 1)
+  elseif g.kind == "workedfar" then
+    local br = ref("base_roles")
+    return br ~= nil and br.workedOffHome ~= nil and br.workedOffHome() > 0
+  elseif g.kind == "surveyedfar" then
+    local sv = ref("survey")
+    if not (sv and sv.bodies and sv.isSurveyed) then return false end
+    local home = homeName()
+    for _, b in ipairs(sv.bodies()) do
+      if b.name ~= home and sv.isSurveyed(b.name) then return true end
+    end
+    return false
   end
   return false
 end
@@ -1966,6 +2150,12 @@ function accept(id)
     local keep = {}
     for _, s in ipairs(board()) do if s.id ~= id then keep[#keep + 1] = s end end
     save.set("mission.board", keep)
+    -- (X7) a supply or a pipeline counts from the moment it is signed
+    local br = ref("base_roles")
+    for _, g in ipairs(m.goals or {}) do
+      if g.kind == "supply" then g.b0 = (br and br.stockOf and br.stockOf(g.base, g.mat)) or 0 end
+      if g.kind == "pipeline" then g.c0 = (br and br.cyclesOf and br.cyclesOf(g.base)) or 0 end
+    end
     save.set("mission.activeSpec", m)
   else
     save.set("mission.activeSpec", false)
@@ -2321,6 +2511,19 @@ local function goal_now(g, v, info)
     -- delivery, because these goals latch permanently.
     if not ref("inventory") then return false end
     return delivered(g) >= (g.kg or g.value or 1)
+  elseif g.kind == "establish" then
+    local br = ref("base_roles")
+    return br ~= nil and br.basesWith ~= nil and #br.basesWith(g.role, g.body, false) > 0
+  elseif g.kind == "layer" then
+    local sv = ref("survey")
+    local r = sv and sv.record and sv.record(g.body)
+    return r ~= nil and ((r.L and r.L[g.layer]) or 0) >= (g.value or 1) - 1e-6
+  elseif g.kind == "supply" then
+    local br = ref("base_roles")
+    return br ~= nil and br.stockOf ~= nil and br.stockOf(g.base, g.mat) - (g.b0 or 0) >= (g.kg or 0) - 1e-6
+  elseif g.kind == "pipeline" then
+    local br = ref("base_roles")
+    return br ~= nil and br.cyclesOf ~= nil and br.cyclesOf(g.base) - (g.c0 or 0) >= (g.n or 1)
   elseif g.kind == "sample" then
     local inv = ref("inventory")
     if not inv then return false end
@@ -2338,7 +2541,8 @@ end
 
 -- Kinds that are things you DID rather than states of the flight you're on:
 -- they latch for the whole contract and survive stepping out of the pod.
-local PERMANENT = { deliver = true, sample = true, recover = true, flag = true }
+local PERMANENT = { deliver = true, sample = true, recover = true, flag = true,
+                    establish = true, layer = true, supply = true, pipeline = true }
 
 -- How far along an unmet goal is, as a tail for its line. A number you can
 -- watch move is the difference between a contract you are flying and a contract
@@ -2364,6 +2568,30 @@ local function tail(i, g)
   end
   if g.kind == "drive" then
     return string.format("   (%s / %s driven)", fmt_m(odo.d), fmt_m(g.value or 0))
+  end
+  -- (X7) the reach goals' progress
+  if g.kind == "supply" then
+    local br = ref("base_roles")
+    local d = br and br.stockOf and (br.stockOf(g.base, g.mat) - (g.b0 or 0)) or 0
+    return string.format("   (%.0f / %d kg)", math.max(0, d), g.kg or 0)
+  end
+  if g.kind == "pipeline" then
+    local br = ref("base_roles")
+    local d = br and br.cyclesOf and (br.cyclesOf(g.base) - (g.c0 or 0)) or 0
+    return string.format("   (%d / %d cycles)", math.max(0, d), g.n or 1)
+  end
+  if g.kind == "layer" then
+    local sv = ref("survey")
+    local r = sv and sv.record and sv.record(g.body)
+    return string.format("   (now %d %%)", math.floor(((r and r.L and r.L[g.layer]) or 0) * 100 + 0.5))
+  end
+  if g.kind == "establish" then
+    local br = ref("base_roles")
+    local list = br and br.basesWith and br.basesWith(nil, g.body, false) or {}
+    if #list == 0 then return "   (no base there yet)" end
+    local best = 0
+    for _, p in ipairs(list) do best = math.max(best, ((br.rolesOf(p.id) or {})[g.role] or 0)) end
+    return string.format("   (%d base%s there · %s %d %%)", #list, #list == 1 and "" or "s", g.role, math.floor(best * 100 + 0.5))
   end
   if g.kind == "home" then
     local v = piloted()

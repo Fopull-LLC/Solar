@@ -364,7 +364,11 @@ second()
 check("a linked planet completes Beyond", state_of("beyond") == "done")
 check("Beyond's rewards: 2 sky stages + 1 + milestone + 2 links + milestone",
   co.balance() == f3 + 3000 + 3000 + 5000 + 12000 + 8000 + 15000 + 30000, co.balance() - f3)
-check("nothing left in progress", #mi.progActive() == 0)
+-- (X7) only Reach is left: its goals are bases, runs and surveys off the home
+-- world (base_roles, route_ops, survey: none in this harness, so none tick)
+local left = mi.progActive()
+check("nothing left in progress but Reach, which waits on bases off the home world",
+  #left == 1 and left[1].id == "reach" and not ticked("reach", 1), #left)
 
 -- ── 7. a comms script that throws ───────────────────────────────────────────
 comms.coverage = function() error("boom") end

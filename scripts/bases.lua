@@ -16,7 +16,10 @@
 --                  n = name, t = agency clock when founded, d = "Day 41, Y2",
 --                  by = member id, sid, uid (the tower: structure and part),
 --                  down = true while the tower is taken down (a minute's undo
---                  puts it back under the same name) }
+--                  puts it back under the same name),
+--                  roles = { fuel = 0.6, … }, rt = when they were last read,
+--                  stats = { … } (expansion X7, base_roles.lua; an old
+--                  save's bases have none: OUTPOSTs until the first read) }
 --
 -- ── THE API ─────────────────────────────────────────────────────────────────
 --
@@ -28,6 +31,8 @@
 --   spacingWhy(body, x, y, z, R, home, skipId) → nil | why   (towers 300 m apart,
 --                                       the home base's Tracking Station too)
 --   baseAt(body, x, y, z, R) → rec, d   the base a body-relative point belongs to
+--   setRoles(id, roles, t)  setStats(id, stats)   (X7, base_roles.lua; no
+--                                       version bump: base_roles has its own)
 --   version                             bumps on every change
 --
 -- The station's and the map's list is base_tower.bases() (the records plus
@@ -46,7 +51,7 @@ version = 0
 local recs, order = nil, {}
 
 local function S() return save end
-local KEEP = { "id", "b", "x", "y", "z", "n", "t", "d", "by", "sid", "uid", "down" }
+local KEEP = { "id", "b", "x", "y", "z", "n", "t", "d", "by", "sid", "uid", "down", "roles", "rt", "stats" }
 local function plain(r)
   local o = {}
   for _, k in ipairs(KEEP) do o[k] = r[k] end
@@ -147,6 +152,25 @@ function setDown(id, down, x, y, z)
   if x then r.x, r.y, r.z = x, y, z end
   write(r)
   bump()
+  return true
+end
+
+-- (X7) what the base is for, and what it moved (base_roles.lua). No version
+-- bump: the census reads the bases, and base_roles.version tells the station.
+function setRoles(id, roles, t)
+  ensure()
+  local r = recs[id]
+  if not r then return false end
+  r.roles, r.rt = roles, t
+  write(r)
+  return true
+end
+function setStats(id, st)
+  ensure()
+  local r = recs[id]
+  if not r then return false end
+  r.stats = st
+  write(r)
   return true
 end
 

@@ -172,9 +172,18 @@ function kindClass(e)
   return "craft"
 end
 
+-- (X7) THE ROLE KEY: one role at a time (base_roles.ORDER), each click the
+-- next; only the bases carrying it pass (F.role). Kept beside the kind key.
+ROLE_KEYS = { "port", "fuel", "mine", "power", "refinery", "science", "depot", "defence" }
+ROLE_SHOW = 0.5   -- (base_roles.SHOW)
+function hasRole(e, r)
+  return type(e.roles) == "table" and (e.roles[r] or 0) >= ROLE_SHOW
+end
+
 -- Does the entry pass the filters (the search is searchHit)?
 function passes(e, F)
   if not F then return true end
+  if F.role and not hasRole(e, F.role) then return false end
   if F.kind and F.kind ~= "all" and kindClass(e) ~= F.kind then return false end
   if F.body and e.body ~= F.body then return false end
   if F.crewed and not (e.crewed or e.kind == "crew") then return false end
@@ -224,8 +233,8 @@ end
 -- The filters as one string (cache keys).
 function filterSig(F)
   F = F or {}
-  return string.format("%s|%s|%s|%s|%s|%s", tostring(F.kind or "all"), tostring(F.body or ""), F.crewed and 1 or 0,
-    F.attn and 1 or 0, tostring(F.q or ""), tostring(F.sort or "name"))
+  return string.format("%s|%s|%s|%s|%s|%s|%s", tostring(F.kind or "all"), tostring(F.body or ""), F.crewed and 1 or 0,
+    F.attn and 1 or 0, tostring(F.q or ""), tostring(F.sort or "name"), tostring(F.role or ""))
 end
 
 -- The situation line, in words: "orbiting Naolol", "landed · 4.1 km from base".
@@ -241,13 +250,15 @@ function situation(e)
   if e.kind == "flag" then return "flag" .. (e.date and (" · " .. e.date) or "") end
   if e.kind == "remains" then return "remains" end
   if e.kind == "structure" then return "structure" .. (e.date and (" · " .. e.date) or "") end
-  if e.kind == "base" then return "spaceport" end
+  if e.kind == "base" then return "spaceport" .. (e.roleText and (" · " .. e.roleText) or "") end
   if e.kind == "body" then
     local what = e.home and "home world" or (e.parent and ("moon of " .. e.parent) or "planet")
     if e.surveyed then return what .. " · surveyed" end
     return string.format("%s · %d %% known", what, math.floor((e.known or 0) * 100 + 0.5))
   end
-  if e.kind == "outpost" then return "base · " .. (e.tier or "mast") end
+  if e.kind == "outpost" then
+    return (e.roleText and (e.roleText .. " · ") or "base · ") .. (e.tier or "mast")
+  end
   if e.kind == "route" then return e.rsub or "automated run" end
   if e.kind == "debris" then
     if e.dkind == "landed" then return "debris · down on " .. tostring(e.body) end
@@ -406,16 +417,16 @@ decodes = 0            -- (tests: how many records were decoded)
 local function stamp_now()
   local fo, net, stc, dep, dp, cr = ref("flight_ops"), ref("comms"), ref("structures"), ref("deployables"),
     ref("debris_pack"), ref("crew")
-  local sv, ro = ref("survey"), ref("route_ops")
+  local sv, ro, br = ref("survey"), ref("route_ops"), ref("base_roles")
   return { fo and fo.fleetVersion or 0, net and net.networkVersion or 0, stc and stc.version or 0,
            dep and dep.version or 0, dp and dp.packVersion or 0, cr and cr.version or 0, sv and sv.version or 0,
-           ro and ro.version or 0 }
+           ro and ro.version or 0, br and br.version or 0 }
 end
 
 local function changed(a, b)
   if not (a and b) then return true end
   for i = 1, 5 do if a[i] ~= b[i] then return true end end
-  if a[7] ~= b[7] or a[8] ~= b[8] then return true end
+  if a[7] ~= b[7] or a[8] ~= b[8] or a[9] ~= b[9] then return true end
   return false
 end
 
@@ -605,6 +616,21 @@ local function debris_entries(out)
 end
 
 local base_entries
+-- (X7) a base's roles on its entry: the role key's filter, the glyph (its
+-- strongest role's), the situation line ("⛁ FUEL · ⚒ MINE")
+local function role_fields(e, roles, st, id)
+  e.roles, e.bstats, e.baseIdx = roles, st, id
+  local BR = ref("base_roles")
+  if BR and BR.strongest and roles then
+    local s = BR.strongest(roles)
+    if #s > 0 then
+      e.glyph = BR.GLYPH[s[1]]
+      local bits = {}
+      for i = 1, math.min(2, #s) do bits[#bits + 1] = BR.LABEL[s[i]] end
+      e.roleText = table.concat(bits, " · ")
+    end
+  end
+end
 local function infra_entries(out)
   local net = ref("comms")
   if net and net.beaconList then
@@ -641,6 +667,8 @@ local function infra_entries(out)
   local fp = bf and bf.footprint
   if fp and fp.body then
     out[#out + 1] = { id = "base", kind = "base", name = "Spaceport", body = fp.body, rx = fp.x, ry = fp.y, rz = fp.z, st = 0 }
+    local hr = save and save.get and save.get("bases.home")
+    if type(hr) == "table" then role_fields(out[#out], hr.roles, hr.stats, 0) end
   end
   base_entries(out)
 end
@@ -660,6 +688,7 @@ base_entries = function(out)
                         rx = b.gx - gb.x, ry = b.gy - gb.y, rz = b.gz - gb.z, st = 0, outpost = b, baseId = b.id,
                         tier = b.tier, link = b.linked, signal = b.strength, hops = b.hops, path = b.via, date = b.founded }
       out[#out].dist = home_dist(b.body, out[#out].rx, out[#out].ry, out[#out].rz)
+      role_fields(out[#out], b.roles, b.stats, b.id)
     end
   end
 end
@@ -726,7 +755,7 @@ local function build()
   local by = {}
   local counts = { craft = 0, linked = 0, relays = 0, debris = 0, crew = 0, attention = 0 }
   for _, e in ipairs(out) do
-    e.glyph = GLYPHS[e.kind] or "◇"
+    e.glyph = e.glyph or GLYPHS[e.kind] or "◇"
     e.prio = PRIO[e.kind] or 20
     if e.attn then e.prio = e.prio + 15; counts.attention = counts.attention + 1 end
     e.sub = situation(e)

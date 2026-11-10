@@ -80,7 +80,7 @@ stats = { lists = 0, cards = 0, strips = 0, tops = 0, layouts = 0, drawn = 0, ta
 -- THE FILTERS (the FLEET column's header, fleet_view.passes / searchHit /
 -- sortList): kind, world, crewed, alerts and the sort are kept in the save
 -- (opt_trackFilter); the search text is not (it starts empty each opening).
-filter = { kind = "all", body = nil, crewed = false, attn = false, q = "", sort = "name" }
+filter = { kind = "all", body = nil, crewed = false, attn = false, q = "", sort = "name", role = nil }
 -- THE MAP'S OWN OPTIONS (the top bar): orbits "key" (the selected, hovered,
 -- crewed, flown and ATTENTION craft; the rest fade out) or "all" (the rest
 -- faint); debris specks on or off.
@@ -98,7 +98,7 @@ local function now() return time or 0 end
 local function save_filters()
   if not (save and save.set) then return end
   pcall(save.set, SAVE_KEY, { kind = filter.kind, body = filter.body or false, crewed = filter.crewed, attn = filter.attn,
-    sort = filter.sort, orbits = mapopt.orbits, debris = mapopt.debris })
+    sort = filter.sort, orbits = mapopt.orbits, debris = mapopt.debris, role = filter.role or false })
 end
 local function load_filters()
   local ok, f = pcall(function() return save and save.get and save.get(SAVE_KEY) end)
@@ -107,6 +107,7 @@ local function load_filters()
   filter.body = type(f.body) == "string" and f.body or nil
   filter.crewed, filter.attn = f.crewed == true, f.attn == true
   filter.sort = type(f.sort) == "string" and f.sort or "name"
+  filter.role = type(f.role) == "string" and f.role or nil
   mapopt.orbits = f.orbits == "all" and "all" or "key"
   mapopt.debris = f.debris ~= false
 end
@@ -1039,6 +1040,16 @@ local function filter_header(V)
     for j, b in ipairs(list) do if b == filter.body then i = j end end
     set_filter("body", list[i + 1])     -- past the last: every world again
   end
+  -- (X7) the role key: each click the next role (only the bases carrying it), then every base again
+  local function next_role()
+    local RK = fv.ROLE_KEYS or {}
+    local i = 0
+    for j, r in ipairs(RK) do if r == filter.role then i = j end end
+    set_filter("role", RK[i + 1])
+  end
+  local BR = ref("base_roles")
+  local role_text = filter.role and (((BR and BR.GLYPH and BR.GLYPH[filter.role]) or "") .. " " .. ((BR and BR.NAME and BR.NAME[filter.role]) or filter.role))
+    or "All roles"
   local function next_sort()
     local S2 = fv.SORTS or { "name" }
     local i = 1
@@ -1064,9 +1075,13 @@ local function filter_header(V)
       key_btn("wb", "panel/choice", (filter.body or "All worlds") .. "  ▾", "grow", 24, false,
         "One world at a time: each click the next world that has anything of ours", next_world,
         { selected = filter.body ~= nil or nil }),
-      key_btn("cr", "panel/choice", "Crewed", 62, 24, false, "Only the crew, and craft with someone aboard",
+      key_btn("rk", "panel/choice", role_text .. "  ▾", "grow", 24, false,
+        "The role key: one base role at a time (Port, Fuel, Mine, Power, Refinery, Science, Depot, Defence); each click the next",
+        next_role, { selected = filter.role ~= nil or nil }) },
+    { "row", key = "fc", w = "100%", h = 24, gap = 2, pad = 0, align = "center",
+      key_btn("cr", "panel/choice", "Crewed", "grow", 24, false, "Only the crew, and craft with someone aboard",
         function() set_filter("crewed", not filter.crewed) end, { selected = filter.crewed or nil }),
-      key_btn("at", "panel/choice", "Alerts", 58, 24, false, "Only what needs attention",
+      key_btn("at", "panel/choice", "Alerts", "grow", 24, false, "Only what needs attention",
         function() set_filter("attn", not filter.attn) end, { selected = filter.attn or nil }) }
 end
 
@@ -1120,13 +1135,13 @@ local function describe_fleet(S, dh)
   local h = col_h(dh)
   local shown = (V.n < #S.entries) and string.format("%d of %d shown", V.n, #S.entries)
     or string.format("%d craft · %d crew", S.counts.craft or 0, S.counts.crew or 0)
-  local h1, h2, h3 = filter_header(V)
+  local h1, h2, h3, h4 = filter_header(V)
   return { "col", key = "fleet", style = "panel/frame", pin = "topLeft", x = M, y = COL_Y, w = FLEET_W, h = h,
     gap = 6, pad = 12, align = "start",
     { "row", key = "hd", w = "100%", h = "fit", gap = 6, pad = 0, align = "center",
       { "text", key = "t", style = "panel/heading", w = "grow", h = "fit", text = "FLEET" },
       { "text", key = "n", style = "panel/cellMuted", w = "fit", h = "fit", text = shown } },
-    h1, h2, h3,
+    h1, h2, h3, h4,
     rule("ru"),
     { "scroll", key = "listS", w = "100%", h = "grow", gap = 0, pad = 0, scrollFade = 12,
       { "col", key = "list", w = "100%", h = "fit", gap = 3, pad = 0, align = "start",
@@ -1324,12 +1339,76 @@ local function card_crew(e, rows)
     key_btn("foc", "panel/secondary", "Focus", "grow", 30, e.rx == nil and e.node == nil, nil, function() focus_on(e, true) end) }
 end
 
+-- (X7) WHAT THE BASE IS FOR (base_roles.lua): each role it carries with its
+-- strength and why ("an Electrolyser makes propellant"), what it moved in
+-- the last 24 h and in all, the runs through it, and what would give it the
+-- roles it lacks.
+local function kg_text(v)
+  v = v or 0
+  if v >= 10000 then return string.format("%.1f t", v / 1000) end
+  return string.format("%.0f kg", v)
+end
+local function roles_rows(e, rows)
+  local BR = ref("base_roles")
+  if not BR then return end
+  local id = e.baseIdx or (e.kind == "base" and 0) or e.baseId
+  local roles = e.roles or (id and BR.rolesOf and BR.rolesOf(id)) or {}
+  local wy = (id and BR.why and BR.why[id]) or {}
+  local have = BR.strongest(roles)
+  rows[#rows + 1] = txt("rlh", "panel/label", #have > 0 and string.format("ROLES · %d", #have) or "ROLES")
+  for i, r in ipairs(have) do
+    local v = roles[r] or 0
+    rows[#rows + 1] = { "col", key = "rl" .. i, w = "100%", h = "fit", gap = 1, pad = 0, align = "start",
+      { "row", key = "h", w = "100%", h = 16, gap = 6, pad = 0, align = "center",
+        { "text", key = "g", style = "panel/cellStrong", w = 18, h = "fit", text = BR.GLYPH[r] },
+        { "text", key = "l", style = "panel/cell", w = 82, h = "fit", text = BR.LABEL[r] },
+        { "row", key = "m", w = 96, h = 6, radius = 1, pad = 0, gap = 0, fill = { 0.02, 0.03, 0.025 }, border = 1,
+          borderColor = { 0, 0, 0, 0.8 },
+          { "box", key = "f", w = math.max(2, math.floor(96 * math.min(1, v) + 0.5)), h = 6, radius = 1, fill = v >= 0.99 and C.done or C.warn } },
+        { "text", key = "p", style = "panel/cellMuted", w = "grow", h = "fit", textAlign = "end", maxLines = 1,
+          text = string.format("%d %%", math.floor(v * 100 + 0.5)) } },
+      { "text", key = "w", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+        text = wy[r] or "fading: nothing has used it lately" } }
+  end
+  if #have == 0 then
+    rows[#rows + 1] = txt("rl0", "panel/cellMuted", "An outpost: nothing here gives it a purpose yet.")
+  end
+  -- what the census counted, and what it moved
+  local st = e.bstats or (id and BR.statsOf and BR.statsOf(id)) or {}
+  local dp = ref("deployables")
+  local t = dp and dp.agencyClock and dp.agencyClock() or 0
+  local l = { string.format("24 H  IN %s  OUT %s", kg_text(BR.stats24(st, "i", t)), kg_text(BR.stats24(st, "o", t))) }
+  local m24, w24 = BR.stats24(st, "m", t), BR.stats24(st, "w", t)
+  if m24 > 0 or w24 > 0 then l[#l + 1] = string.format("24 H  MINED %s  WORKED %s", kg_text(m24), kg_text(w24)) end
+  l[#l + 1] = string.format("IN ALL  IN %s  OUT %s", kg_text(st.i), kg_text(st.o))
+  l[#l + 1] = string.format("RUN CYCLES %d", st.r or 0)
+  rows[#rows + 1] = crt("bst", l)
+  local cz = id and BR.census and BR.census[id]
+  if cz then
+    local bits = { string.format("%d structure%s · %d piece%s", cz.structures or 0, (cz.structures or 0) == 1 and "" or "s", cz.parts or 0, (cz.parts or 0) == 1 and "" or "s") }
+    if (cz.runs or 0) > 0 then bits[#bits + 1] = string.format("%d run%s through it", cz.runs, cz.runs == 1 and "" or "s") end
+    if (cz.storeCap or 0) > 0 then bits[#bits + 1] = string.format("stores %s / %s", kg_text(cz.storeKg), kg_text(cz.storeCap)) end
+    rows[#rows + 1] = txt("bcz", "panel/cellMuted", table.concat(bits, "  ·  "))
+  end
+  -- the roles it lacks, and what gives each (two at most: a hint, not a list)
+  local n = 0
+  for _, r in ipairs(BR.ORDER) do
+    if not BR.shown(roles, r) and r ~= "defence" and n < 2 then
+      n = n + 1
+      rows[#rows + 1] = txt("bh" .. n, "panel/hint", string.format("%s %s: %s", BR.GLYPH[r], BR.LABEL[r], BR.HOW[r]))
+    end
+  end
+end
+
 -- A base's card (deep-space step 7, M5: base_tower.bases()): its tower's
 -- tier and power, its link, its world's ground coverage, when it was founded.
 base_card = function(e, rows)
   local b = e.outpost or {}
   local bt = ref("base_tower")
   local pw = bt and bt.power and e.baseId and bt.power(e.baseId) or b
+  -- (X7) what the base is for comes first: its roles and what it moved
+  roles_rows(e, rows)
+  rows[#rows + 1] = rule("rr")
   rows[#rows + 1] = txt("tw", pw.powered and "panel/keys" or "panel/cell", string.format("Tower: %s  ·  draws %.1f EC/s",
     pw.powered and "a ground station" or "a mast", pw.draw or pw.need or 2))
   -- (step 8, M6) the base grid: in, out, the battery, what is on it
@@ -1394,6 +1473,8 @@ local function card_other(e, rows, co)
     rows[#rows + 1] = txt("ab", "panel/cellMuted", string.format("%d part%s%s", e.parts or 0, (e.parts or 0) == 1 and "" or "s", e.date and (" · founded " .. e.date) or ""))
   elseif e.kind == "base" then
     rows[#rows + 1] = txt("ab", "panel/cellMuted", "The agency's spaceport: the pad, the runway, the buildings and the ground station.")
+    rows[#rows + 1] = rule("rr")
+    roles_rows(e, rows)
   end
   rows[#rows + 1] = rule("r2")
   local acts = { "row", key = "a1", w = "100%", h = 30, gap = 6, pad = 0,
@@ -1441,8 +1522,21 @@ local function card_body(e, rows, S)
   if #lines > 0 then rows[#rows + 1] = crt("crt", lines) end
   -- our bases there
   local nb = 0
-  for _, x in ipairs(S.entries) do if (x.kind == "outpost" or x.kind == "base") and x.body == e.name then nb = nb + 1 end end
+  local here = {}
+  for _, x in ipairs(S.entries) do
+    if (x.kind == "outpost" or x.kind == "base") and x.body == e.name then
+      nb = nb + 1
+      here[#here + 1] = x
+    end
+  end
   if nb > 0 then rows[#rows + 1] = txt("bases", "panel/cell", string.format("⌂ %d base%s here", nb, nb == 1 and "" or "s")) end
+  -- (X7) each base there with what it is for
+  local BR = ref("base_roles")
+  for i, x in ipairs(here) do
+    if i > 4 then break end
+    rows[#rows + 1] = txt("bh" .. i, "panel/cellMuted", string.format("%s %s · %s", x.glyph or "⌂", x.name or "base",
+      (BR and BR.roleLine and BR.roleLine(x.roles, 3)) or "outpost"))
+  end
   local sv = ref("survey")
   local list, rec = {}, nil
   if sv and sv.rows then
@@ -1456,6 +1550,29 @@ local function card_body(e, rows, S)
     { "text", key = "b", style = done and "panel/keys" or "panel/cellMuted", w = "fit", h = "fit",
       text = done and "◆ SURVEYED" or string.format("%d %% known", math.floor((e.known or 0) * 100 + 0.5)) } }
   for i, r in ipairs(list) do rows[#rows + 1] = layer_row(i, r) end
+  -- (X7) the orbital scanner's map: the share of the ground its swaths
+  -- covered, and the ores in the mapped cells (the map's tinted discs)
+  if sv and sv.swathShare then
+    local share = sv.swathShare(e.name)
+    if share > 0 then
+      local okr, _, counts, done, cols, order = pcall(sv.resMap, e.name, 0)
+      rows[#rows + 1] = txt("swh", "panel/label", string.format("ORE MAP · %d %% OF THE GROUND SWEPT", math.floor(share * 100 + 0.5)))
+      local M = ref("materials")
+      local n = 0
+      for i, ore in ipairs((okr and order) or {}) do
+        if i > 6 then break end
+        n = n + 1
+        local c = cols[ore] or { 1, 1, 1 }
+        rows[#rows + 1] = { "row", key = "swk" .. i, w = "100%", h = 16, gap = 6, pad = 0, align = "center",
+          { "text", key = "d", style = "panel/cellStrong", w = 14, h = "fit", text = "●", textColor = { c[1], c[2], c[3], 1 } },
+          { "text", key = "o", style = "panel/cell", w = "grow", h = "fit", maxLines = 1,
+            text = (M and M.label and M.label(ore)) or ore },
+          { "text", key = "n", style = "panel/cellMuted", w = "fit", h = "fit", text = string.format("%d cells", counts[ore] or 0) } }
+      end
+      if n == 0 or (okr and not done) then rows[#rows + 1] = txt("swo", "panel/cellMuted", "reading the swaths…") end
+      rows[#rows + 1] = txt("swn", "panel/hint", "Each orbital plane maps one band (the worlds do not turn): change the plane or fly a second scanner to fill the gaps. A MINE base goes where the discs are.")
+    end
+  end
   if rec and (rec.rp or 0) >= 1 then
     rows[#rows + 1] = txt("rp", "panel/cellMuted", string.format("%d RP earned here", math.floor(rec.rp + 0.5)))
   end
@@ -1741,6 +1858,10 @@ local function show(on)
 end
 
 function node_of_fleet() return node_of("Station Fleet") end
+
+-- (probes, X7) pick an entry as a click would (framing it), set a filter key
+function pickEntry(id) pick(id, true) end
+function setFilter(k, v) set_filter(k, v) end
 
 function start(node)
   local el = node.getcomponent and node:getcomponent("UiElement")
@@ -2205,6 +2326,43 @@ end
 --   FOV), lk, sw, sh, placed (the worlds' names already drawn), blocked (the
 --   HUD's), yaw, pitch, show, drawTrack, TRAJ, label, cine, busy
 local PF, PO, PE, POOL, APOOL = {}, {}, {}, {}, {}
+-- (X7) THE RES_MAP: on the selected world, a faint disc on every cell the
+-- orbital scanner has mapped, tinted by the ore its patch holds most of
+-- (survey.resMap: a few cells read a frame until all are). Only the
+-- hemisphere facing the camera; placed against this frame's body read.
+local RESMAP_ALPHA = 0.6
+local RESMAP_MIN_PX = 60      -- the world's disc on screen, px: smaller and the discs are specks (not drawn)
+resmapStats = { cells = 0, drawn = 0, ms = 0 }
+local function draw_resmap(S, B, cam, ppu)
+  local e = selected and S.byId[selected]
+  if not (e and e.kind == "body") then resmapStats.drawn = 0 return end
+  local sv = ref("survey")
+  local b = B[e.name]
+  if not (sv and sv.resMap and b and draw and draw.disc) then return end
+  local w0 = wall()
+  local ok, list = pcall(sv.resMap, e.name)
+  if not ok or type(list) ~= "table" then return end
+  local R = b.radius or 1
+  local cx, cy, cz = cam.x - b.x, cam.y - b.y, cam.z - b.z
+  local cl = math.sqrt(cx * cx + cy * cy + cz * cz)
+  if cl < 1e-6 then return end
+  if ppu and ppu(cl) * R < RESMAP_MIN_PX then resmapStats.drawn = 0 return end
+  cx, cy, cz = cx / cl, cy / cl, cz / cl
+  local rr = R * 0.055
+  local drawn = 0
+  local disc = draw.disc
+  for _, c in ipairs(list) do
+    if c.x * cx + c.y * cy + c.z * cz > 0.08 then
+      local col = c.c or { 1, 1, 1 }
+      disc(b.x + c.x * R * 1.004, b.y + c.y * R * 1.004, b.z + c.z * R * 1.004, c.x, c.y, c.z, 0, rr,
+        col[1], col[2], col[3], RESMAP_ALPHA)
+      drawn = drawn + 1
+    end
+  end
+  resmapStats.cells, resmapStats.drawn = #list, drawn
+  resmapStats.ms = (wall() - w0) * 1000
+end
+
 function drawMap(ctx)
   local t0 = wall()
   if not isOpen() then return end
@@ -2219,6 +2377,7 @@ function drawMap(ctx)
   end
   local B = {}
   for _, b in ipairs(ctx.bodies) do B[b.name] = b end
+  draw_resmap(S, B, ctx.cam, ctx.ppu)
   local tnow = space.time()
   local sw, sh, k = ctx.sw, ctx.sh, ctx.lk or 1
   local rt = now()
@@ -2256,7 +2415,7 @@ function drawMap(ctx)
   -- engine, so its functions are taken once a frame, not once an entry)
   local passes, shit = fv and fv.passes, fv and fv.searchHit
   -- (no filter set: everything passes, no call an entry)
-  local all_pass = filter.kind == "all" and not filter.body and not filter.crewed and not filter.attn
+  local all_pass = filter.kind == "all" and not filter.body and not filter.crewed and not filter.attn and not filter.role
   -- (what is not under a plate: the map area between the four plates, less
   -- the few other rects that reach into it — one box test a point, not ten)
   local fx0, fy0, fx1, fy1 = -1e9, -1e9, 1e9, 1e9
