@@ -450,8 +450,9 @@ local function resolve_target(rec, p, d, P)
       if f then T.pipe = f.uid end
     end
   elseif sense == "level" then
-    local f = nearest(rec, fx, fy, fz, 4, function(dd) return (dd.fl and (dd.fl.kind == "tank" or dd.fl.kind == "bottle")) or (dd.life and dd.life.store) end)
-    if f then T.tank = f.uid; T.air = defs(f.id).life ~= nil end
+    local f = nearest(rec, fx, fy, fz, 4, function(dd) return (dd.fl and (dd.fl.kind == "tank" or dd.fl.kind == "bottle")) or (dd.life and dd.life.store)
+      or (dd.it and (dd.it.kind == "hopper" or dd.it.kind == "silo" or dd.it.kind == "drive")) end)
+    if f then T.tank = f.uid; T.air = defs(f.id).life ~= nil; T.store = defs(f.id).it ~= nil end
   elseif sense == "door" then
     local f = nearest(rec, fx, fy - 0.8, fz, 2.5, function(dd) return dd.door ~= nil end)
     if f then T.door = f.uid end
@@ -577,6 +578,10 @@ local function apply(c)
   elseif dev == "pump" or dev == "valve" then
     local FN = ref("fluid_net")
     if FN and FN.setOn then FN.setOn(sid, uid, on) end
+  elseif dev == "belt" then
+    -- (X5) a conveyor's or a tube blower's RUN: off stops its whole line
+    local LX = ref("logistics")
+    if LX and LX.setRun then LX.setRun(sid, uid, on) end
   elseif dev == "breaker" then
     local BP = ref("base_power")
     if BP and BP.setBreaker then
@@ -695,6 +700,11 @@ function reading(key)
     return nil
   elseif s == "level" then
     if not T.tank then return nil end
+    if T.store then
+      -- (X5) a hopper's, a silo's or a quarry drive's bin: % of its kg
+      local LX = ref("logistics")
+      return LX and LX.levelOf and LX.levelOf(m.sid, T.tank) or nil
+    end
     if T.air then
       local RA = ref("room_air")
       local st = RA and RA.state and RA.state(m.sid)

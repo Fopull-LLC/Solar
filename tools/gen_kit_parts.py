@@ -1276,6 +1276,10 @@ PIECES.update(gen_kit_logic.pieces(sys.modules[__name__]))
 import gen_kit_survey  # noqa: E402
 MATS.update(gen_kit_survey.MATERIALS)
 PIECES.update(gen_kit_survey.pieces(sys.modules[__name__]))
+# ── X5: the quarry, conveyors, tubes, hoppers, silos, the loading chute (tools/gen_kit_quarry.py) ──
+import gen_kit_quarry  # noqa: E402
+MATS.update(gen_kit_quarry.MATERIALS)
+PIECES.update(gen_kit_quarry.pieces(sys.modules[__name__]))
 
 # ── S4: PAINT SURFACES. node:setTint tints everything a node draws, so what
 # paint must not touch, and a wall's second face, are split into children of

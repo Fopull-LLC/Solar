@@ -3553,6 +3553,10 @@
                 // signals: the rulebook and the scene (logic, logic_net; S8)
                 ( kind: "logic", enabled: true, params: [] ),
                 ( kind: "logic_net", enabled: true, params: [] ),
+                // quarries, conveyors, tubes, silos, chutes: the rulebooks and the scene (quarry, item_net, logistics; X5)
+                ( kind: "quarry", enabled: true, params: [] ),
+                ( kind: "item_net", enabled: true, params: [] ),
+                ( kind: "logistics", enabled: true, params: [] ),
                 ( kind: "base_shield", enabled: true, params: [] ),
                 ( kind: "craft_orient", enabled: true, params: [] ),
                 ( kind: "ghost", enabled: true, params: [] ),

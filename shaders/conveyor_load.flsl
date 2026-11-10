@@ -1,0 +1,30 @@
+// CONVEYOR LOAD — what a kit conveyor carries, drawn without a single body
+// (expansion X5; tools/gen_kit_quarry.py, scripts/logistics.lua).
+//
+// A thin strip lies on the belt, subdivided along it (uv.x across 0..1, uv.y
+// metres from the tail). The vertex stage lifts it into a ridge of broken
+// material, its lumps travelling with the belt at `speed` (the same phase as
+// conveyor_run.flsl: uv.y − (time·speed + off)); `fill` (0..1, the line's
+// load against its capacity) sets how high and how full the ridge is, and at
+// 0 the strip sinks out of sight into the belt's carcass. The colour is the
+// material's (`col`), broken up by noise that rides with it. The script sets
+// the uniforms only when a line's flow or material changes.
+shader conveyor_load {
+  stage fragment
+  uniform speed: float = 0.0
+  uniform off: float = 0.0
+  uniform fill: float = 0.0
+  uniform col: vec3 = vec3(0.45, 0.40, 0.34)
+
+  let v = uv.y - (time * speed + off)
+  let across = abs(uv.x - 0.5) * 2.0
+  let lump = fbm(vec3(uv.x * 6.0, v * 3.1, 2.3), octaves: 3.0)
+  let gap = smoothstep(0.25, 0.55, fbm(vec3(0.5, v * 0.7, 7.1), octaves: 2.0) + fill * 0.6)
+  let ridge = (1.0 - across * across) * (0.45 + 0.9 * lump) * gap
+  let h = fill * 0.10 * ridge - (1.0 - min(fill * 4.0, 1.0)) * 0.09 - 0.004
+  let fine = fbm(vec3(uv.x * 37.0, v * 29.0, 4.1), octaves: 2.0)
+  let tone = 0.55 + 0.7 * lump + 0.25 * (fine - 0.5)
+  let c = col * tone * vertexColor.rgb
+  output color = vec4(litPbr(c, normal), 1.0)
+  output offset = vec3(0.0, h, 0.0)
+}

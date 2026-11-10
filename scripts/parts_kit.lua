@@ -166,7 +166,7 @@ PIPE_Y = 0.6
 --             { kind = "station" } (the Survey Station: weather, seismometer,
 --             magnetometer; fills its body's layers while it stands there)
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGIC", "NUCLEAR", "SCIENCE", "FITTINGS", "PROPS", "DECALS" }
+SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGISTICS", "LOGIC", "NUCLEAR", "SCIENCE", "FITTINGS", "PROPS", "DECALS" }
 EXTERIOR = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
 FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true,
            porthole = true, airlockWall = true, openFrame = true, ventWall = true, leadWall = true, gable = true,
@@ -894,6 +894,100 @@ devpins("reactorConsole", "rxconsole", { { "scram", "in", -0.2, 0.5, -0.43 }, { 
 devpins("o2gen", "machine", { { "run", "in", 0.35, 1.0, -0.3 } })
 devpins("scrubber", "machine", { { "run", "in", 0.3, 1.0, -0.25 } })
 
+-- ── LOGISTICS (expansion X5: the quarry, conveyors, tubes, hoppers, silos and
+-- the loading chute; scripts/quarry.lua, item_net.lua, logistics.lua;
+-- tools/gen_kit_quarry.py; docs/base-building.md §23) ─────────────────────────
+-- Every belt and tube port is at BELT_Y (0.8 m) over its piece's ground point,
+-- on the 0.5 m grid; a belt's ports are bore "BELT", a tube's "DN150", so a
+-- belt never meets a tube. A conveyor's port "a" is where it takes load and
+-- "b" where it gives it (R picks which end goes on; its menu reverses it).
+--   it = { kind = "post" | "drive" | "belt" | "tube" | "blower" | "hopper" |
+--          "silo" | "chute", cap (kg/s a conveyor), len (m), kw (a grid load
+--          while it runs), buf / kg (a store's kg), mouth (a chute's spout,
+--          piece frame), reach (m to a craft) }
+BELT_Y = 0.8
+do
+  local function bp(name, x, z, nx, nz, role, y) return { name = name, x = x, y = y or BELT_Y, z = z, nx = nx, nz = nz, bore = "BELT", role = role } end
+  local function tp(name, x, z, nx, nz, role) return { name = name, x = x, y = BELT_Y, z = z, nx = nx, nz = nz, bore = "DN150", role = role } end
+  local function L(t)
+    t.section = "LOGISTICS"
+    t.mats = { "steel" }
+    t.fill = "solid"
+    t.vol = t.vol or 0.1
+    t.mass = t.mass or { steel = 0.1 }
+    if t.it and t.it.kw then t.power = { kind = "aux", use = t.it.kw } end
+    return t
+  end
+  for k, t in pairs({
+    qPost   = { label = "Quarry Post", order = 1, snap = "post", box = B(-0.25, 0.25, 0, 3.0, -0.25, 0.25),
+                mass = { steel = 0.4 }, cost = 1800, vol = 0.06, it = { kind = "post" },
+                desc = "a 300 mm H-column 3 m tall · four on the corners of a rectangle (4 to 32 m a side) and a Quarry Drive beside them make a quarry: the gantry spans them and digs everything inside, 1 m in from the posts, down to 30 m" },
+    qDrive  = { label = "Quarry Drive", order = 2, snap = "block", box = B(-1, 1, 0, 2.5, -1, 1),
+                mass = { steel = 1.6 }, cost = 14000, vol = 1.2, it = { kind = "drive", buf = 500, kw = 6 },
+                ports = { bp("out", 0, 1.0, 0, 1, "any"), tp("tout", 1.0, 0.4, 1, 0, "any") },
+                desc = "the quarry's winch, its bucket-wheel head on 30 m of cable, and a 500 kg discharge bin · set within 14 m of four Quarry Posts · its discharge (+Z) meets a belt, its tube port (+X) a tube · 6 kW from the grid while it digs: soil 0.5 m³/s, rock 0.25, the hard ores 0.12" },
+    cvBelt2 = { label = "Conveyor 2 m", order = 10, snap = "pipe", box = B(-0.4, 0.4, 0, 0.8, -1, 1),
+                mass = { steel = 0.14 }, cost = 900, it = { kind = "belt", cap = 8, len = 2, kw = 0.06 },
+                ports = { bp("a", 0, -1, 0, -1, "in"), bp("b", 0, 1, 0, 1, "out") },
+                desc = "a 600 mm troughed belt on its stringers and idlers: 8 kg/s, tail (a) to head (b) · conveyors that meet are one line, driven from the grid (0.3 kW per 10 m) · a Signal Cable on its RUN terminal starts and stops the line" },
+    cvBelt1 = { label = "Conveyor 1 m", order = 11, snap = "pipe", box = B(-0.4, 0.4, 0, 0.8, -0.5, 0.5),
+                mass = { steel = 0.08 }, cost = 520, it = { kind = "belt", cap = 8, len = 1, kw = 0.03 },
+                ports = { bp("a", 0, -0.5, 0, -1, "in"), bp("b", 0, 0.5, 0, 1, "out") },
+                desc = "a 1 m length of conveyor: 8 kg/s" },
+    cvCorner = { label = "Conveyor Corner", order = 12, snap = "pipe", box = B(-0.3, 0.5, 0, 0.8, -0.5, 0.3),
+                mass = { steel = 0.09 }, cost = 780, it = { kind = "belt", cap = 8, len = 0.8, kw = 0.03 },
+                ports = { bp("a", 0, -0.5, 0, -1, "in"), bp("b", 0.5, 0, 1, 0, "out") },
+                desc = "a curved belt through 90° · R picks which way it turns" },
+    cvMerge = { label = "Conveyor Merge (T)", order = 13, snap = "pipe", box = B(-0.4, 0.5, 0, 1.1, -0.5, 0.5),
+                mass = { steel = 0.1 }, cost = 950, it = { kind = "belt", cap = 8, len = 1, kw = 0.03 },
+                ports = { bp("a", 0, -0.5, 0, -1, "in"), bp("c", 0.5, 0, 1, 0, "in"), bp("b", 0, 0.5, 0, 1, "out") },
+                desc = "a side feed onto a belt: two lines into one, together never more than the one belt's 8 kg/s" },
+    cvRamp  = { label = "Conveyor Ramp 15°", order = 14, snap = "pipe", box = B(-0.4, 0.4, 0, 1.3, -1, 1),
+                mass = { steel = 0.16 }, cost = 1100, it = { kind = "belt", cap = 5, len = 2.06, kw = 0.08 },
+                ports = { bp("a", 0, -1, 0, -1, "in"), bp("b", 0, 1, 0, 1, "out", BELT_Y + 0.5) },
+                desc = "an inclined belt rising 0.5 m in 2 m: 5 kg/s up the slope (a line is as fast as its slowest piece)" },
+    tbTube2 = { label = "Transfer Tube 2 m", order = 20, snap = "pipe", box = B(-0.15, 0.15, 0, 0.94, -1, 1),
+                mass = { steel = 0.036 }, cost = 300, it = { kind = "tube", cap = 2, len = 2 },
+                ports = { tp("a", 0, -1, 0, -1, "in"), tp("b", 0, 1, 0, 1, "out") },
+                desc = "a DN150 pneumatic tube on its stands · sealed, so it works in vacuum, in zero-g, any way up · 20 kg capsules every 10 s: 2 kg/s · a line needs a Tube Blower" },
+    tbTube1 = { label = "Transfer Tube 1 m", order = 21, snap = "pipe", box = B(-0.15, 0.15, 0, 0.94, -0.5, 0.5),
+                mass = { steel = 0.018 }, cost = 180, it = { kind = "tube", cap = 2, len = 1 },
+                ports = { tp("a", 0, -0.5, 0, -1, "in"), tp("b", 0, 0.5, 0, 1, "out") },
+                desc = "a 1 m length of transfer tube" },
+    tbElbow = { label = "Transfer Tube Elbow", order = 22, snap = "pipe", box = B(-0.15, 0.5, 0, 0.94, -0.5, 0.15),
+                mass = { steel = 0.02 }, cost = 220, it = { kind = "tube", cap = 2, len = 0.8 },
+                ports = { tp("a", 0, -0.5, 0, -1, "in"), tp("b", 0.5, 0, 1, 0, "out") },
+                desc = "a 0.5 m radius bend · R picks which way" },
+    tbBlower = { label = "Tube Blower", order = 23, snap = "pipe", box = B(-0.45, 0.45, 0, 1.1, -0.5, 0.5),
+                mass = { steel = 0.09 }, cost = 2600, it = { kind = "blower", cap = 2, len = 1, kw = 2.2 },
+                ports = { tp("a", 0, -0.5, 0, -1, "in"), tp("b", 0, 0.5, 0, 1, "out") },
+                desc = "a side-channel blower in the line: it pushes the capsules at 6 m/s round a sealed loop with its own air · 2.2 kW · one a tube line" },
+    lgHopper = { label = "Hopper", order = 30, snap = "block", box = B(-1, 1, 0, 2.6, -1, 1),
+                mass = { steel = 1.6 }, cost = 5200, vol = 1.0, it = { kind = "hopper", kg = 4000 },
+                ports = { bp("in", 0, -1, 0, -1, "any"), bp("out", 0, 1, 0, 1, "any"), tp("tl", -1, 0, -1, 0, "any"), tp("tr", 1, 0, 1, 0, "any") },
+                desc = "a 2 × 2 m bin on four legs: 4,000 kg of anything · belts and tubes in and out at its ports; hands take from it too (right-click)" },
+    lgSilo  = { label = "Silo", order = 31, snap = "block", box = B(-1.1, 1.1, 0, 6.6, -1.1, 1.1),
+                mass = { steel = 1.4 }, cost = 9500, vol = 1.0, it = { kind = "silo", kg = 8000 },
+                ports = { bp("in", 0, -1.1, 0, -1, "any"), bp("out", 0, 1.1, 0, 1, "any"), tp("tl", -1.1, 0, -1, 0, "any"), tp("tr", 1.1, 0, 1, 0, "any") },
+                desc = "a 2 m steel silo, 8,000 kg of ONE material (the first in, or the one set in its menu) · a bucket elevator fills it from its inlet (−Z) · a run can load from it" },
+    lgChute = { label = "Loading Chute", order = 32, snap = "block", box = B(-0.5, 0.4, 0, 3.3, -0.6, 2.4),
+                mass = { steel = 0.45 }, cost = 4200, vol = 0.3, it = { kind = "chute", mouth = { 0, 1.85, 2.2 }, reach = 6 },
+                ports = { bp("in", 0, -0.6, 0, -1, "any"), tp("tin", -0.5, 0, -1, 0, "any") },
+                desc = "a mast and boom with a telescoping spout · what its line brings goes into the hold of the craft under the spout: one held on a stand, or parked within 6 m · a run loads from what feeds it" },
+    -- (the gantry's moving parts: logistics.lua draws them; never in the catalogue)
+    qBridge = { label = "Quarry Bridge", order = 90, snap = "block", box = B(-0.5, 0.5, 0, 0.58, -0.25, 0.25), hidden = true, clutter = true,
+                mass = { steel = 0.06 }, cost = 10, it = { kind = "visual" } },
+    qCable  = { label = "Quarry Hoist Cable", order = 91, snap = "block", box = B(-0.05, 0.05, -1, 0, -0.12, 0.12), hidden = true, clutter = true,
+                mass = { steel = 0.003 }, cost = 10, it = { kind = "visual" } },
+    qHead   = { label = "Quarry Cutter Head", order = 92, snap = "block", box = B(-0.5, 0.62, -0.1, 1.6, -0.7, 0.7), hidden = true, clutter = true,
+                mass = { steel = 1.1 }, cost = 10, it = { kind = "visual" } },
+  }) do PIECES[k] = L(t) end
+  -- a belt's RUN terminal on its stringer (S8): off stops its whole line
+  for _, k in ipairs({ "cvBelt2", "cvBelt1", "cvCorner", "cvMerge", "cvRamp", "tbBlower" }) do
+    devpins(k, "belt", { { "run", "in", 0.36, 0.7, 0 } })
+  end
+end
+
 -- ── FITTINGS: VAB parts placed live (S2) ─────────────────────────────────────
 -- The registry figures they carry are parts_registry's (and parts_aero's,
 -- parts_nuclear's), copied here because the world scene carries no registry;
@@ -1016,6 +1110,8 @@ local function resolve(piece, mat)
     lg = P.lg, wire = P.wire,
     -- (X1) a survey instrument
     survey = P.survey,
+    -- (X5) a logistics piece: the quarry, conveyors, tubes, stores, the chute
+    it = P.it,
     script = P.script or ((P.door or P.light or P.screen or P.switch or P.sign or P.emblem) and "kit_live" or nil),
     seals = (P.seals == "door" or P.seals == "ring" or P.seals == "y" or P.seals == "z") and P.seals or nil,
     u = M.u, matk = M.k, strength = M.strength,

@@ -2823,3 +2823,179 @@ Measured in `tools/perf/matprobe.sh` (numbers in the X4 notes).
   wall placed out of its crate, undone back into it, placed and taken down;
   pictures from two angles; `MX PASS|FAIL` lines, pictures in
   `save/user/matshots/`.
+
+## 23. Expansion X5: quarries, conveyors, tubes, silos and loading chutes
+
+Built 2026-11-09 (`work/expansion/PLAN.md` §3.1–3.3 and §3.5; Ty, 11-09:
+"quarries that hollow out the ground inside bounds, with conveyors, or tubes in
+zero-g, loading a vessel"). The rules are `scripts/quarry.lua` and
+`scripts/item_net.lua` (pure, luajit-tested); the scene half is
+`scripts/logistics.lua`. The pieces are the kit's LOGISTICS section
+(`tools/gen_kit_quarry.py`).
+
+### What a player can do
+
+- **Frame a quarry.** Four **Quarry Posts** on the corners of a rectangle
+  (each side 4 to 32 m, square to within 0.9 m) and a **Quarry Drive** within
+  14 m of it make a quarry. The posts size it. The gantry spans them: a bridge
+  across the rectangle, the hoist cable and a bucket-wheel head that travels
+  and lowers as it digs.
+- **It digs inside its bounds.** The head cuts a serpentine of 1.2 m cells,
+  one 0.6 m layer at a time, walls 1 m inside the posts, from the top of the
+  ground down to 30 m (its cable), or to the floor set in the drive's menu
+  (0.5 m steps). Soil goes at 0.5 m³/s, rock 0.25, the hard ores 0.12, and on a
+  small body 1 m³/s. It needs the grid: a 6 kW load while it digs ("no power:
+  the grid is short" stops it); with no grid at all it runs, as a pump does.
+- **Near it, the hole is real.** With the crew on its world within 1.2 km, each
+  cell is a real `terrain.dig` (a sharp 0.9 m ball that covers the cell), and
+  the mineral field pays what the cut removed into the drive's 500 kg bin, by
+  the material it was (a vein's ore where the cut crosses one): the same
+  ground, the same save as the Terrain Laser's hole.
+- **Away, it keeps going.** It runs in closed form on the agency clock on the
+  survey's estimate (below). When the crew comes back the cells it claimed are
+  dug, 30 a second, without paying twice; the hole catches up while you watch.
+- **Carry it.** Conveyors (2 m, 1 m, a curved corner, a T merge, a 15° ramp)
+  and Transfer Tubes (2 m, 1 m, an elbow, and a Tube Blower each line) snap
+  port to port (a belt never meets a tube). Conveyors that meet are one line:
+  8 kg/s, a ramp 5, a tube line 2 (any orientation, vacuum, zero-g). A line
+  runs from where its tail meets a store to where its head meets one; the
+  belt's direction is the way it was laid (R picks the end, the menu reverses
+  it). A line draws 0.3 kW per 10 m from the grid while it joins two stores.
+- **Store it.** A **Hopper** (4,000 kg of anything) and a **Silo** (8,000 kg,
+  ONE material: the first in, or the one set in its menu; a line offering
+  another passes it by and it waits upstream). Hands take from either
+  ("Take what fits into your pack").
+- **Load a craft.** A **Loading Chute**'s spout fills the hold of the craft
+  under it: one held on a Build Stand, or parked within 6 m. Its line stops
+  when the hold is full ("the craft's hold is full").
+- **Automate it.** Every unit a line moves is an `inventory.transfer` between
+  real containers, so a flight log sees a hold filled by the chute as loaded
+  from the silo (or hopper) behind it. A run made from that flight loads from
+  the silo each cycle (routes' load action, `W.move(silo, hold)`), waits when
+  it is short, and the stand says why ("waiting for Silo 1: 10 of 25 Soil").
+  A silo or hopper stands as long as its piece does (route_ops `W.exists`).
+- **Wire it.** Every conveyor and the Tube Blower have a RUN terminal (S8): a
+  Signal Cable off stops the line. The Level Switch reads the nearest hopper,
+  silo or drive bin (% full), so a full silo can stop the belt that feeds it.
+- **See it.** **F8** with the kit open: the LOGISTICS overlay.
+
+### The quarry (`quarry.lua`)
+
+- `fromPosts` turns the posts' ground points (body-relative) into the frame:
+  centre, radial up, the rectangle's axes, half sizes, or the reason it isn't
+  one (three posts, not a rectangle, not square, too small, too big).
+- The cut: `cells` (nx × nz per layer, layers to the depth), `cellAt(i)` (the
+  serpentine: odd rows run back, odd layers run the rows back, so a layer
+  starts under where the last one ended).
+- **The survey**, once, when the frame completes and the crew is near (a
+  layer of 16 columns a frame): each column's ground height by a ray, then
+  `mineral_field.materialAt` layer by layer: `mix[k] = { air, hard, comp }`.
+  The cut starts at the highest ground over the rectangle; ground lower than a
+  layer is air, swept at 4 m³/s.
+- **The yield.** The hand laser's volume pays a trickle (its income is its
+  bite), so the head has a bulk factor: `YIELD_K` (200) units for the laser's
+  one per m³ (soil 10 kg a m³, iron ore 70, by `dig_unit` and the unit
+  masses). A live dig passes the same factor to `mineral_field.trackDig` (its
+  new `k`; a quarry's cut makes no caption, no loose chunk and keeps its own
+  part units). The engine's yield volume measured about a real m³ a cell.
+- `profile(prog)`: cells a second and kg a second by the layer's mix, and the
+  cells to the next layer (an event for the closed form).
+- At most four quarries a world (`MAX_QUARRIES`): a fifth stands but says
+  "terrain budget: 4 quarries a world until the engine evicts edited ground
+  (card 0658)". A quarry within the base's foundation guard
+  (`base_facilities.digRefused`) won't dig and says so.
+
+### The network (`item_net.lua`)
+
+- `build` joins the pieces' ports (0.12 m, same bore) into lines (union-find
+  over the conveyors) and finds each line's upstream and downstream stores; a
+  head-on pair jams ("two belts run into each other head on"), a tube line
+  without a blower stalls, a line back into its own store or round a loop
+  stalls ("it loops back on itself"). The stores are ordered by the lines.
+- `rates`: a store with stock offers what its lines carry, an empty one
+  passes on what comes in (and what its quarry makes); materials drain in a
+  fixed order (by name), so every flow is constant between events; a full
+  store takes only what it passes on (a backward pass) and its quarry slows
+  to what it can discharge; a T merge shares one belt's capacity; a silo takes
+  one material; a chute takes anything while its craft has room.
+- `advance` steps event to event exactly (a material running out, a store
+  filling, a quarry's next layer, a hold full): a day in one call equals
+  86,400 one-second calls to 1e-6 (`smoke_item_net`). `limitedBy` names the
+  first thing holding a store or a line back.
+
+### The scene (`logistics.lua`)
+
+- One network a world, from every structure's `it` pieces (across
+  structures: ports are matched body-relative), rebuilt when the records
+  change (debounced 0.5 s, never in a frame).
+- Stepped at 5 Hz on the agency clock while anything can move, 1 Hz when
+  nothing can, caught up in one call on load (to 30 days). The stores are read
+  from their containers each step (a hand or a run may have moved some);
+  what moves goes as whole units, the fraction waiting on its edge.
+- **No body rides a belt.** The belt's surface is `shaders/conveyor_run.flsl`
+  and its load `shaders/conveyor_load.flsl` (a subdivided strip lifted into a
+  lumpy ridge in the vertex stage, sunk out of sight when empty), both phased
+  on the GPU's clock: their uniforms (speed, fill, the material's colour) are
+  set only when a line's flow or material changes. A running line costs no
+  Lua a frame. Dropping a loose rock on a belt doesn't carry it (EN11 below).
+- The gantry: three static nodes on the planet per quarry within 450 m (the
+  bridge scaled to the span, the cable to the depth, the head), moved in
+  lateUpdate from the progress, smoothed in the quarry's frame.
+- **The LOGISTICS overlay** (F8, `drawOverlay` in lateUpdate from this frame's
+  body read): each line green while it carries (blue for a tube), grey idle,
+  amber stopped, red jammed, with chevrons the way it runs and its kg/s and
+  material; each hopper's and silo's fill as a bar with what it holds; each
+  quarry's rectangle on the ground with its layer, depth and m³/h ("estimated"
+  while away) and LIMITED BY; posts that aren't a frame yet say why; each
+  chute's craft, with a line from the spout to it.
+- **Menus** (right-click): a line's flow, Running, Reverse it; a store's
+  contents, Take what fits, a silo's Material; the drive's quarry (layer,
+  depth, rate, live or estimated), Digging, the floor; the chute's craft and
+  its room; a post's frame; LIMITED BY on every piece.
+
+### Save keys and old saves
+
+- `lgx.<body>` = { a } (the world's clock); `qry.<sid>.<uid>` = JSON { sig
+  (the posts), prog, dug, paid, q (the frame and its survey) }. Moving a post
+  forgets the survey and starts again.
+- Part states: a conveyor's `rev` and `off`, a silo's `mat`, a drive's `off`
+  (paused) and `floor`.
+- The stores are ordinary containers (`hopper:<sid>.<uid>`,
+  `silo:<sid>.<uid>`; a drive's bin is a hopper of 500 kg). Nothing old
+  changes.
+
+### Cost
+
+Measured in `tools/perf/quarryprobe.sh` (a 12 × 12 m quarry, four belts, a
+hopper, a silo, a chute over a stand craft; `logistics` ms a frame):
+nothing built 0.012; the quarry digging live and three lines carrying
+0.06–0.11 (a 5 Hz step 0.25–0.55 ms, of which the closed form 0.04–0.11);
+away 0.04–0.07; the overlay on 0.37–0.45 (kit open only). No body rides a
+belt; a running belt costs no Lua a frame. In luajit a 30-belt network
+builds in 0.13–0.22 ms and steps in 0.006–0.013 ms. The numbers and pictures
+are in `work/expansion_x5/NOTES.md` and `shots/`.
+
+### Left for later
+
+- The laser cutter head, the Unloading Chute and the Intake as a node; the
+  tower's THROUGHPUT card; the refineries (X6).
+- Quarries on small bodies: the 1 m³/s zero-g rate is in `quarry.lua`, but the
+  scene doesn't mark a small body's quarry yet.
+- The fifth quarry is refused when it would run, not when its post is placed;
+  the kit's ghost doesn't preview the rectangle.
+- Dust, the bucket wheel's sound, the tube's capsule glints; the head on the
+  S2 anchored vessel (it is a static node moved in lateUpdate).
+- Loose bodies on belts (EN11, a card draft in the X5 notes).
+
+### Tests and the probe
+
+- `tests/smoke_quarry.lua` (luajit): the frame from posts and its refusals,
+  the cells and the serpentine, the survey (air over low ground, a vein's
+  layer), the rates, the profile, the catch-up list, pack and unpack.
+- `tests/smoke_item_net.lua` (luajit): lines, bores, jams, the blower, loops;
+  quarry → bin → hopper → silo; the one-material silo and the idle line's
+  reason; the drain order; a T merge; an unpowered line stopping the quarry
+  with LIMITED BY; a chute filling a hold; a day in one call = 86,400 calls;
+  the cost; a run loading from a silo through the chute.
+- `tools/perf/quarryprobe.sh <engine>` (PATCHES=funds.patch): the whole slice
+  in the engine; `QX PASS|FAIL` lines, pictures in `save/user/quarryshots/`.

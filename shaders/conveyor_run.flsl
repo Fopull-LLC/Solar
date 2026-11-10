@@ -1,0 +1,39 @@
+// CONVEYOR RUN — the running surface of the kit's conveyors (expansion X5;
+// tools/gen_kit_quarry.py, scripts/logistics.lua). The Intake's belt
+// (conveyor_belt.flsl) with its phase on the GPU's clock: the script sets
+// `speed` (m/s) and `off` only when the line starts or stops, never a frame,
+// so thirty belts cost no Lua at all while they run.
+//
+// uv.x runs across the belt (0 one edge, 1 the other), uv.y is METRES along
+// it from its tail toward its head; a feature at belt coordinate v sits at
+// uv.y = v + time * speed + off.
+shader conveyor_run {
+  stage fragment
+  uniform speed: float = 0.0
+  uniform off: float = 0.0
+  uniform pitch: float = 0.55 range(0.2, 2)
+
+  let v = uv.y - (time * speed + off)
+  let across = abs(uv.x - 0.5) * 2.0
+  let edge = smoothstep(0.80, 0.86, across)
+  let c = fract((v + across * 0.32) / pitch)
+  let rise = smoothstep(0.0, 0.05, c)
+  let fall = 1.0 - smoothstep(0.09, 0.22, c)
+  let cleat = rise * fall * (1.0 - edge)
+  let slope = ((1.0 - smoothstep(0.0, 0.05, abs(c - 0.025) * 2.0)) - (1.0 - smoothstep(0.0, 0.13, abs(c - 0.155) * 2.0)) * 0.4) * (1.0 - edge)
+  let grit = fbm(vec3(uv.x * 7.0, v * 2.3, 1.7), octaves: 4.0)
+  let fleck = fbm(vec3(uv.x * 41.0, v * 13.0, 5.3), octaves: 2.0)
+  let rubber = vec3(0.045, 0.043, 0.041) * (0.75 + 0.5 * grit)
+  let dust = vec3(0.30, 0.25, 0.19) * smoothstep(0.58, 0.92, grit) * (0.45 + 0.4 * edge)
+  let worn = vec3(0.075, 0.071, 0.066) * cleat * (0.8 + 0.4 * fleck)
+  let col = rubber + dust * (1.0 - cleat * 0.6) + worn + vec3(0.02, 0.018, 0.015) * smoothstep(0.7, 0.95, fleck)
+  let dpx = dpdx(worldPos)
+  let dpy = dpdy(worldPos)
+  let dux = dpdx(uv)
+  let duy = dpdy(uv)
+  let det = duy.y * dux.x - dux.y * duy.x
+  let along = (dpy * dux.x - dpx * duy.x) / (det + sign(det) * 0.000001 + 0.0000001)
+  let fwd = normalize(along - normal * dot(along, normal) + vec3(0.00001, 0.0, 0.0))
+  let n = normalize(normal - fwd * slope * 0.55)
+  output color = vec4(litPbr(col * vertexColor.rgb, n), 1.0)
+}

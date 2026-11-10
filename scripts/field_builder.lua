@@ -2366,7 +2366,7 @@ end
 local MODE_TXT = { edge = "EDGE TO EDGE", deck = "ON THE DECK", grid = "GRID 0.5 m", free = "FREE" }
 function hintLine()
   if not open_ then return "Build Kit  ·  B opens it" end
-  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms  ·  F2 power  ·  F3 nuclear  ·  F5 logic  ·  F7 fluids"
+  local keys = (collapsed and "B unfolds the parts" or "B folds the parts") .. "  ·  Esc " .. (heldPart and "drops the part" or "closes the kit") .. "  ·  Ctrl+Z undo  ·  F1 rooms  ·  F2 power  ·  F3 nuclear  ·  F5 logic  ·  F7 fluids  ·  F8 logistics"
   if not heldPart then return "Build Kit  ·  pick a part  ·  RMB tap a placed part to take it down  ·  " .. keys end
   local hdef = partInfo(heldPart)
   -- (S4) paint and the eyedropper
@@ -2616,6 +2616,11 @@ function update(node, dt)
     if input.pressed("f7") then
       local FN = ref("fluid_net")
       if FN then FN.overlay = not FN.overlay; say(FN.overlay and "FLUIDS: each line by what it carries, chevrons the way it flows · tank levels, gauges, pumps · each network's LIMITED BY · a reactor's coolant and any break" or "FLUIDS overlay off") end
+    end
+    -- X5: F8 shows the LOGISTICS overlay (each belt and tube line's flow, the stores' fill, the quarries, the chutes)
+    if input.pressed("f8") then
+      local LX = ref("logistics")
+      if LX then LX.overlay = not LX.overlay; say(LX.overlay and "LOGISTICS: each belt and tube line with its kg/s, chevrons the way it runs · each hopper and silo's fill · each quarry's frame, layer and rate · each chute's craft · LIMITED BY" or "LOGISTICS overlay off") end
     end
     if input.key("ctrl") then
       if input.pressed("c") then copy_now() end

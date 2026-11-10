@@ -742,9 +742,11 @@ topology = function(a, clk)
                  plantKW = RP and RP.gridGen or nil,
                  -- (S7) a plant's pumps, the fluid network's pumps and the airlocks' pumps
                  auxKW = function(sid, uid)
-                   local FN, RA = ref("fluid_net"), ref("room_air")
+                   local FN, RA, LX = ref("fluid_net"), ref("room_air"), ref("logistics")
                    return (RP and RP.gridAux and RP.gridAux(sid, uid) or 0) + (FN and FN.gridAux and FN.gridAux(sid, uid) or 0)
                           + (RA and RA.gridAux and RA.gridAux(sid, uid) or 0)
+                          -- (X5) a quarry drive while it digs, a conveyor line while it runs, a tube blower
+                          + (LX and LX.gridAux and LX.gridAux(sid, uid) or 0)
                  end }
   local BP = ref("base_power")
   local t = read_e()

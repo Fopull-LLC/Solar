@@ -1773,12 +1773,15 @@ lastYield = nil
 -- material, and how many reports
 yieldStats = { vol = {}, units = {}, reports = 0, removed = 0 }
 
-function trackDig(id, x, y, z, cid)
+-- (X5) `k` scales what the cut pays: a quarry's head (logistics.lua) moves
+-- the ground in bulk, quarry.YIELD_K units for the laser's one.
+qacc = {}
+function trackDig(id, x, y, z, cid, k)
   if not id or id == 0 or not terrain.yields then return false end
   local name = space.dominant(x, y, z)
   local b = name and space.body(name)
   if not b then return false end
-  digs[id] = { cid = cid or "astro", body = name, x = x - b.x, y = y - b.y, z = z - b.z, t = time }
+  digs[id] = { cid = cid or "astro", body = name, x = x - b.x, y = y - b.y, z = z - b.z, t = time, k = k }
   return true
 end
 
@@ -1882,6 +1885,7 @@ local function pay(d, y)
       got[m] = (got[m] or 0) + vol
     end
     if (y.untextured or 0) > 0 then got.regolith = (got.regolith or 0) + y.untextured end
+    if d.k and d.k ~= 1 then for m, vol in pairs(got) do got[m] = vol * d.k end end
     -- A cut into a vein's rock: the plain rock it took out there was the
     -- vein's ore (a buried vein is not painted before the cut opens it), all
     -- of it inside the core, half of it at the edge. What was already
@@ -1909,6 +1913,9 @@ local function pay(d, y)
     end
   end
   local depth = nil
+  -- (X5: a quarry's head keeps its own part units, apart from the laser's readout)
+  local acc = acc
+  if d.k then qacc[d.cid] = qacc[d.cid] or {}; acc = qacc[d.cid] end
   yieldStats.reports = yieldStats.reports + 1
   yieldStats.removed = yieldStats.removed + (y.removed or 0)
   for m, vol in pairs(got) do
@@ -1941,7 +1948,7 @@ local function pay(d, y)
       end
       yieldStats.units[m] = (yieldStats.units[m] or 0) + took
       local e = { mat = m, n = n, took = took, full = took < n, x = d.x, y = d.y, z = d.z, body = d.body, depth = depth }
-      events[#events + 1] = e
+      if not d.k then events[#events + 1] = e end   -- (a quarry's cut is not the laser's: no caption, no chunk)
       lastYield = e
       if took < n then acc[m] = math.min(acc[m], u * 0.99) end
     end
@@ -1959,10 +1966,10 @@ local function pay(d, y)
       vein_save(p.key)
       outcrop_gone(rec)
       local e = { mat = v.ore, n = 2, took = took, full = took < 2, outcrop = true, x = rec.x, y = rec.y, z = rec.z, body = d.body }
-      events[#events + 1] = e
+      if not d.k then events[#events + 1] = e end
       lastYield = e
     else
-      events[#events + 1] = { mat = v.ore, n = 2, took = 0, full = true, outcrop = true, x = rec.x, y = rec.y, z = rec.z, body = d.body }
+      if not d.k then events[#events + 1] = { mat = v.ore, n = 2, took = 0, full = true, outcrop = true, x = rec.x, y = rec.y, z = rec.z, body = d.body } end
     end
   end
 end

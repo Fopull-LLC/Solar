@@ -67,6 +67,9 @@ local function store_name(cid)
     if ok and l then return l end
   end
   if type(cid) == "string" and cid:sub(1, 7) == "locker:" then return "locker " .. cid:sub(8) end
+  -- (X5) a hopper, a silo, a quarry drive's bin: its label on the map
+  local lx = ref("logistics")
+  if lx and lx.storeLabel and type(cid) == "string" then local l = lx.storeLabel(cid); if l then return l end end
   return tostring(cid)
 end
 storeName = store_name
@@ -145,6 +148,11 @@ W.exists = function(cid)
   if cid:sub(1, 6) == "crate:" then
     local sc = ref("supply_crates")
     return not (sc and sc.layoutOf) or sc.layoutOf(tonumber(cid:sub(7))) ~= nil
+  end
+  -- (X5) a silo or a hopper (a quarry drive's bin too) stands while its piece does
+  if cid:sub(1, 5) == "silo:" or cid:sub(1, 7) == "hopper:" then
+    local lx = ref("logistics")
+    return lx ~= nil and lx.storeExists ~= nil and lx.storeExists(cid)
   end
   local inv = ref("inventory")
   return inv ~= nil and (inv.cap(cid) or 0) > 0
