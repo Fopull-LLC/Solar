@@ -2,7 +2,8 @@
 
 The plan behind this is `work/worlds/PLAN.md` (the worlds planner, 2026-11-10). This doc holds
 what has shipped. Section 1 is the geology provinces (slice W2), section 2 the ores and crystals
-(slice W3), section 3 the cave kinds and their dressing (slice W4).
+(slice W3), section 3 the cave kinds and their dressing (slice W4), section 4 the cave hazards
+and rewards (slice W5).
 
 ## 1. Geology provinces (material generation 3)
 
@@ -383,3 +384,193 @@ chamber's shape, never its detail.
   a fresh save's home world, stands in it, logs `CV STATE` (kind, air, hazards, nodes, marks),
   `CV COST` (cave_field, underground, rays, field edits), and shoots the lamps, the torch, flares
   and the HUD; `sweep=1` dresses the same cave as each kind, `tintlab=1` the tint A/B.
+
+## 4. Cave hazards and rewards (slice W5)
+
+Ty's rule for every one of them: a hazard is **telegraphed, never prevented**. Each is said before
+it bites (a reading that climbs, a recorded sound, dust, a caption carrying its codex line), and
+none is a wall: you may take the helmet off in a CO2 sump, fire the laser in a methane pocket, dig
+under a ticking roof or stand at a pitchblende face. It hurts; that is all. The rules are pure in
+`scripts/cave_hazards.lua` (on the Weather node, after `cave_field`); the scene half runs once per
+`cave_field` probe (2 Hz), with no rays of its own but one per rockfall.
+
+### 4.1 Cave air (`AIR`, `airAtLocal`; atmo, suit)
+
+- **Cells.** The body is cut into 36 m air cells. Each kind has a background (a lava tube 4 mbar
+  CO2, karst 6 mbar, a vent 8 mbar CO2 with a few ppm of SO2 and H2S) and pockets, at most one a
+  cell by chance: a CO2 sump (karst 32 %, lava tube 30 %, geode 30 %, chasm 12 %, collapse 10 %),
+  firedamp in karst (12 %), methane from clathrate in ice caves (18 %), fumarole gas in vents (50 %:
+  140 ppm SO2, 160 ppm H2S, 60 mbar CO2). Salt caverns have none. A pocket is a ball of radius
+  4–12 m whose gas falls off smoothly from its heart, so the reading climbs over several metres
+  before it is over the limit. Heavy gas (CO2, SO2, H2S) is thin above the heart and deep below it:
+  it pools in sumps. Methane is the other way round and gathers at the roof.
+- **The world's air holds it.** The figures are for a 1 bar world, scaled by the air's pressure
+  (0.3–1.5 ×). A vacuum holds no cave gas.
+- **atmo.** `atmo.airHere` asks `cave_field.airAt`, which asks `cave_hazards.airAtWorld`. That
+  answers only near the crew while they are in a cave, and is cached for the probe. The cave's
+  partial pressures are mixed into the world's air (`atmo.mergeCave`). `atmo.caveVerdict(x, y, z)`
+  judges the merged air. `breathable` now also refuses H2S over 10 µbar (`H2S_MAX`).
+- **The suit.** `suit.breathableAt` asks `atmo.caveVerdict` after the world's own rules, and
+  answers `false, why, "cave"` in bad cave air. The helmet then **closes itself**, with a caption
+  (the existing rule), and the suit breathes from its tank. If the crew takes it off again in that
+  air, `setHelmet` allows it: a warning caption is shown and `suit.caveDare` is set, and the suit
+  does not close it again until the air clears. `helmetRefusal` never refuses for cave air. A
+  world's own refusals (vacuum, cold, no oxygen) still refuse.
+- **Harm.** Bare-headed in it, the worst gas hurts by how far over its limit it is: per minute,
+  CO2 2 %, SO2 2.5 %, H2S 4 %, CH4 1 %, each times the excess (capped at 12 times). In a fumarole's
+  heart that is about half your health a minute. The cause is "gas".
+- **The chip.** status_hud shows an **Air** chip (`chips()`) once a cave gas reaches 20 % of its
+  limit, for example `CO₂ 6 mbar` or `SO₂ 4 ppm`. It turns caution at half the limit and warning
+  over it. Over the limit, a **BAD AIR** caption shows once per pocket.
+
+### 4.2 Firedamp (`flammable`, `ignite`)
+
+Methane is flammable between 5 and 15 % by volume, and only with at least 12 % oxygen in the air
+to carry a flame. On a world without oxygen it never burns. From 3 % the chip warns, and inside
+the range it reads **Flammable · CH₄ 8 % · FLAMMABLE**, with a caption.
+
+Firing the Terrain Laser in such air (`tool_belt`: the laser in hand, the trigger held, charged)
+lights the pocket:
+- a flash (`vfx.flash`), a small explosion and smoke;
+- the gas whump (pitched down) under `explosion_far`;
+- burns of 25–70 % of a body by concentration, times 0.6 with the helmet on (cause "explosion");
+- a rockfall too, when the kind has unstable roofs.
+
+The pocket is then **burnt out** for good (saved in `cave.burnt.<body>`).
+
+### 4.3 Rockfall (`unstableAt`, `rockfallPlan`, `slabHurt`)
+
+- **Unstable cells.** A cell (12 m) is unstable with chance `UNSTABLE_K` (0.6) times the kind's
+  `hazards.unstable`: about 30 % of cells in a collapse sink, 21 % in a lava tube and 6 % in karst.
+  While you are in one, the roof **ticks** every 3–8 s (a recorded crack, at the roof point the
+  probe's up ray found).
+- **What sets it off.** Walking through it (a 4 % chance a probe while moving), or digging with
+  the laser where the aim lands in one (15 % a probe). Each cell falls once (saved in
+  `cave.fell.<body>`), and there are 30 s at least between falls.
+- **The fall.**
+  1. One ray up finds the roof over the point. A crack sounds there (`cave_crack`, at 0.8 ×) with
+     grit pattering (`cave_trickle`), and the caption **THE ROOF CRACKS** says to get clear.
+  2. 1.5 s of dust follows (three puffs of `LaunchDust` and `DigClods`, fired downward).
+  3. Then 1–3 slabs fall from within 1.2 m of the roof point, as recorded rock comes down
+     (`cave_rockfall_*`).
+- **The slabs.** Each slab is a `LooseBoulder` at scale 0.7–1.4, adopted by mineral_field as loose
+  rock of the roof's material (`materialAt`), so it stays and can be hauled off. A slab that comes
+  within reach of the crew's chest while moving over 2.5 m/s hurts by `0.10 · s³ · v / 5` (6–75 %;
+  cause "crushed", "a rockfall"). A big slab falling 4 m costs about half your health. Each slab
+  hits once.
+- **Time to react.** 1.5 s of warning plus the fall's own second: room to step aside.
+
+### 4.4 Cold and heat (`caveTempK`; `thermal.suitThermal`)
+
+- **The cave's air temperature.** A cave keeps its world's mean. An ice cave is its kind's cold
+  (248 K) or colder. A vent or a lava tube runs hot: the kind's heat over the world's, more so the
+  deeper (a deep vent on a 290 K world reaches 325 K).
+- **The suit.** `thermal.suitThermal(tK, helmet)` has a comfort band of 263–313 K. Outside it the
+  suit's heater or cooling draws 4 % of the lamp cell an hour per 10 K. That cell is the lamps'
+  own (`flashlight.cellAdd`), so **a cold cave eats your light**: an ice cave at −25 °C takes 6 %
+  an hour.
+- **Bare-headed.** You keep 0.7 of the draw and lose 0.6 % of your health a minute per 10 K
+  (frostbite, or heat stroke).
+- **The chip.** A **Cold** or **Heat** chip shows the temperature and the draw.
+
+### 4.5 Radon at a pitchblende seam (`seamShare`, `doseRate`)
+
+Within 6 m of a pitchblende seam, the crew takes a dose through **crew.addDose**: the reactor's
+dose step, healed at the base. The W3 dosimeter's Dose chip shows the reading, and crew_alerts'
+DOSE chip shows the crew's dose. "Within 6 m" means mineral_field's ore share is at least what a
+2 m seam gives at 6 m (about 7.4 µSv/h).
+
+**The scale.** The rate is the reading times `GAME_K` (0.02 / 28 of a lethal dose an hour per
+µSv/h) in a **sealed** cave, where radon builds up, and a tenth of that in the open. So an hour at
+a rich face in a closed cave costs 2 % of a lethal dose. This is game scale: real gamma from a seam
+is about ten thousand times milder, and it is the radon in dead air that makes a uranium mine
+dangerous (the codex says so).
+
+The caption **RADON** shows once in 90 s.
+
+### 4.6 Drops and floods
+
+- **Drops** (`dropHint`). `cave_field` casts its drop ray 2.5 m ahead of the aim. A drop of 6 m
+  or more seen on two probes in a row brings the caption **DROP** with its depth. It tells you to
+  plant the Rope Kit at the edge, or says you have no rope and what a fall like that does.
+- **Floods.** The floor ahead under the sea (`climate.seaDepth`, its `cave_wet` fill) brings
+  **FLOODED: the passage ahead is under water**, once in 30 s. The walker's breath rules do the
+  rest.
+
+### 4.7 Cave ruins (`ruins.lua`, its own CAVE RUINS section)
+
+- **Mine shaft.** A mine head with a cave under it gets a shaft. The cave is a chamber within
+  60 m down, under a column 14–36 m from the head, on rings clear of its slabs, shack and tower.
+  The shaft is:
+  - dug once from the surface to the chamber's floor (balls of 3.4 m every 1.6 m, then a room at
+    the foot), with the floor levelled;
+  - fitted with a ship's-ladder switchback with a landing at each turn. An old site has lost
+    10–35 % of its flights, never the first or the last, so bring a rope;
+  - stocked at the foot with the last shift's cache: a bench, a crate, a small crate, a store
+    cabinet, drums and a cable reel.
+
+  The site's Data Core log names the ore they sank it for: "We sank the shaft 26 metres into the
+  cave under the head, after the galena."
+- **Sink camp.** Half the survey camps on a world with caves are camped in a sink. This is
+  decided by the seed, and a camp already stamped as a camp stays one. The sink has:
+  - on the floor: the hut with its terminal (the core), bunk, shelf, locker and crates;
+  - on the rim: the tower (claimable), a winch drum, a cable reel and a crate;
+  - flights down the side.
+
+  The sink is dug down into a chamber found under the site (a collapse sink), or is a 12 m doline
+  where there is none. Until the floor is known, only the rim stands.
+- **When.** Once the crew is within 220 m and the ground is made, the cave is looked for once per
+  site: field reads every 1.5 m down each column, and three rays. The result is saved in
+  `ruins.s[id].sh = { x, z, d, roof, s0, nat, dug }`, or false when there is none. An untouched
+  ruin is then stamped again with its cave pieces, and the ground is dug.
+- **Loot.** The cave pieces are ordinary ruin containers. `loot.fillSite` rolls them with the
+  rest of the site by kind and age, keyed by their piece index (`ri` past 1000).
+- **Labels.** Labels and RP: "sinkhole camp", 90 RP, and its core gives `comp` 0.8. The probe
+  hooks are `forceCaveKind(id, kind)` and `caveNow(id)`.
+
+### 4.8 Rewards and the codex
+
+- **First entry.** The first time you enter a kind on a world, the survey's composition rises by
+  0.15 (`survey.credit(name, "cave", { comp })`, capped at 1, so with the survey's own RP for the
+  rise), and the kind's RP is credited (`rewards.rp`: 15–45). The caption gives the kind's first
+  real fact. The kinds seen are saved in `cave.seen.<body>`.
+- **The codex.** Each hazard has an entry, `codex.CODEX["hazard_<id>"]`: co2, so2, h2s, ch4,
+  rockfall, cold, heat, dose, drop and flood, each with a summary and two or three real facts
+  (Joachimsthal's radon, Naica's heat, firedamp). The first time a hazard is met, its caption
+  carries the codex line (saved in `cave.codex`).
+
+### 4.9 Sounds
+
+All the sounds are real CC0 recordings from freesound.org, cut by `tools/build_hazard_audio.py`
+and logged in `audio/SOURCES.md`:
+- `cave_crack`: a stone breaking;
+- `cave_tick_1..3`: cracks appearing in a rock;
+- `cave_trickle`: a small slide in Denali;
+- `cave_rockfall_1..2` and `cave_slab_hit_1..2`: rocks falling down a cliff, and boulders
+  crashing;
+- `cave_gas_whump`: a gas stove's accumulated gas going off.
+
+Each plays as a 3D source at a body-local point, placed again every frame while it rings, because
+the planet moves.
+
+### 4.10 Cost, tests, probes
+
+- **Cost.** cave_hazards does nothing between probes: one compare a frame, plus a short follow
+  while a rockfall or a sound is under way. A probe's step is the air cell (a hash and a ball), a
+  few reads of other scripts, and at most one ray for a rockfall.
+- **`tests/smoke_cave_hazards.lua`** tests:
+  - the rules;
+  - atmo's mixing and H2S;
+  - the suit closing itself and never locking;
+  - thermal's draw;
+  - the scene half over stubs: first entry credits once, bad air shows and hurts bare-headed, the
+    laser lights firedamp and burns it out, a rockfall cracks, dusts and drops adopted slabs that
+    hurt, the ice cave's heater, the seam's dose, the rope hint;
+  - the recordings on disk and in SOURCES.md.
+- **`tests/smoke_ruins.lua`** gains the cave ruins: the sink share, flights and landings, the
+  shaft's cache and its indices, the core's line, the sink camp's floor, and the scene over a
+  world with a cave shell (found, dug once, stamped again, a cache crate looted, a reload).
+- **`tools/perf/hazardprobe.sh <engine> <seed…>`** (`hazardprobe_modes.lua`, spliced after
+  caveprobe's) does each part in a real cave in turn: walking into a CO2 sump (the readings, the
+  helmet, the dare), the laser in firedamp, a rockfall photographed and one over the crew, the
+  dose at a seam, a vent, and the mine shaft and sink camp looted. It logs `HZ CHECK` lines.

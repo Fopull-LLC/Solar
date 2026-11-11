@@ -1068,6 +1068,15 @@ W.breaker = function(t)
   if not (BP and BP.breakerState and sid) then return nil end
   return BP.breakerState(sid, uid)
 end
+-- (scn_dust) is a Power Cable made off at structure sid burnt through?
+W.cableBurnt = function(sid)
+  local CB = ref("base_cable")
+  if not (CB and CB.list) then return false end
+  for _, c in ipairs(CB.list()) do
+    if (c.a.sid == sid or c.z.sid == sid) and c.burnt then return true end
+  end
+  return false
+end
 -- a craft's part: { craft, part (id prefix) | uid } → the controller, uid
 local function craft_part(t, mem)
   local name = tostring(t.craft or ""):gsub("^craft:", "")
@@ -1129,6 +1138,20 @@ local function piece_read(struct, part, uid)
       setmetatable(c, { __index = function(t, k) if k == "items" then local cc = S6.contents(sid, uid_); return cc and cc.total or 0 end end })
     end
   end
+  -- (scn_dust) is it fed: `served` (a load the grid serves now; a tower its
+  -- base's power), and `running` (switched on and served)
+  local BG = ref("base_grid")
+  if p.id == "tower" and p.base then
+    local BT = ref("base_tower")
+    local pw = BT and BT.power and BT.power(p.base)
+    if pw then c.served = pw.powered == true end
+  elseif BG and BG.partServed then
+    local s = BG.partServed(sid, uid_)
+    if s ~= nil then c.served = s end
+  end
+  c.running = (not c.off) and c.served ~= false
+  -- (G4) a solar piece: the dust on its cells (0..1)
+  if BG and BG.soilInfo and tostring(p.id):match("^solar") then c.dust = BG.soilInfo(sid, uid_).dust end
   return c
 end
 W.piece = function(g) return piece_read(g.struct, g.part, g.uid) end
@@ -1583,6 +1606,11 @@ local function run_beat(b, e)
       local cur = ST.partState(sid, uid) or {}
       for n, x in pairs(v.st or {}) do cur[n] = x end
       ST.setPartState(sid, uid, cur)
+      -- (scn_dust) a door's seal or state changed: room_air's networks again
+      -- now (its valves were cached: a blown seal vented only when something
+      -- else next moved a door, up to a minute later)
+      local RA = ref("room_air")
+      if RA and RA.doorMoved then pcall(RA.doorMoved, sid, uid) end
     end
   elseif k == "power" then local sid, uid = piece_of(v); if sid then machine_power(sid, uid, v.on ~= false) end
   elseif k == "spawn" then
@@ -2070,7 +2098,9 @@ local function stage_lived_in(out)
         if n then aired = true; out[#out + 1] = string.format("%s: %d room(s) at 1 atm", tostring(e.name), n) end
       end
       if not powered and BG and BG.chargeFull then
-        if BG.chargeFull(e.sid) then powered = true; out[#out + 1] = string.format("%s: batteries full", tostring(e.name)) end
+        -- (scn_dust) `powered = 0.71`: the banks at that share, not full
+        local frac = type(e.powered) == "number" and e.powered or nil
+        if BG.chargeFull(e.sid, frac) then powered = true; out[#out + 1] = string.format("%s: batteries %s", tostring(e.name), frac and string.format("at %d %%", math.floor(frac * 100 + 0.5)) or "full") end
       end
       coroutine.yield()
     end
@@ -2390,6 +2420,43 @@ function stage_wires(list, out)
   end
 end
 
+-- (scn_dust) STATES: { struct, uid | part, st = { … } }: a piece's state as
+-- the `state` beat writes it (a switch off, a breaker's dial), set as soon as
+-- the structure stands, before any cable joins it to a grid
+function stage_states(list, out)
+  local ST = ref("structures")
+  for _, e in ipairs(list or {}) do
+    local sid, uid = piece_of({ struct = e.struct, part = e.part, uid = e.uid })
+    if sid and ST and ST.setPartState then
+      local cur = ST.partState(sid, uid) or {}
+      local t = {}
+      for k, v in pairs(cur) do t[k] = v end
+      for k, v in pairs(e.st or {}) do t[k] = v end
+      ST.setPartState(sid, uid, t)
+      out[#out + 1] = string.format("state %s:%s", tostring(sid), tostring(uid))
+    end
+  end
+end
+-- (scn_dust) CABLES: { from = { struct, uid | part }, to = { … }, ty }: a
+-- Power Cable already laid between two staged structures (base_cable.layFree)
+function stage_cables(list, out)
+  local CB = ref("base_cable")
+  if not (CB and CB.layFree) then return end
+  for _, c in ipairs(list or {}) do
+    local sa, ua = piece_of({ struct = c.from.struct, part = c.from.part, uid = c.from.uid })
+    local sb, ub = piece_of({ struct = c.to.struct, part = c.to.part, uid = c.to.uid })
+    local id, why = nil, "no such piece"
+    if sa and sb then
+      -- (a run already there from a checkpoint's restage is kept)
+      for _, r in ipairs(CB.list and CB.list() or {}) do
+        if (r.a.sid == sa and r.a.uid == ua and r.z.sid == sb and r.z.uid == ub) then id, why = r.id, "kept" end
+      end
+      if not id then id, why = CB.layFree({ sid = sa, uid = ua }, { sid = sb, uid = ub }, { ty = c.ty or "lv16" }) end
+    end
+    out[#out + 1] = string.format("cable %s:%s → %s:%s %s: %s", tostring(sa), tostring(ua), tostring(sb), tostring(ub), tostring(c.ty or "lv16"), tostring(id or why))
+  end
+end
+
 local function stage_table(st, out)
   local co, rs = ref("company"), ref("research")
   if st.funds then set_funds(st.funds) end
@@ -2407,6 +2474,8 @@ local function stage_table(st, out)
   stage_plants(st.plants, out)
   stage_wires(st.wires, out)
   S6.stage(st, out)
+  stage_states(st.states, out)     -- (scn_dust: before the cables, so a breaker's dial and a load's switch hold from the first solve)
+  stage_cables(st.cables, out)     -- (scn_dust)
   stage_crates(st.crates, out)
   stage_flags(st.flags, out)
   stage_survey(st.survey, out)
@@ -2424,7 +2493,7 @@ stage_one = function(kind, e, out)
     elseif kind == "crate" then stage_crates({ e }, o)
     elseif kind == "flag" then stage_flags({ e }, o)
     elseif kind == "craft" then stage_craft({ e }, o)
-    elseif kind == "crew" then stage_crew({ e }, o); stage_posts({ e }, o)
+    elseif kind == "crew" then stage_crew({ e }, o); stage_posts({ e }, o); if portraitFor and e.name then portraitFor(e.name) end
     else o[1] = "spawn: unknown kind " .. tostring(kind) end
     for _, l in ipairs(o) do say_log("spawned " .. l) end
   end)
@@ -2772,7 +2841,9 @@ local function meter_read(m, i)
 end
 local mm_last = nil
 local function meters_models(t, ctx)
-  local dt = mm_last and math.max(0, math.min(5, t - mm_last)) or 0
+  -- (scn_dust: the agency clock can step in tens of seconds under warp; a
+  -- 5 s cap lost most of a warped drive. A reload starts from nil anyway)
+  local dt = mm_last and math.max(0, math.min(600, t - mm_last)) or 0
   mm_last = t
   if not (sc.meters or sc.models) then return end
   local R_ = rulebook()
@@ -3337,10 +3408,10 @@ function capturePortrait(id, opts, cb)
   return true
 end
 -- the job: every auto cast member with a body, one after another
-local function portrait_job()
+local function portrait_job(only)
   for _ = 1, 30 do coroutine.yield() end          -- (the bodies set down and posed first)
   local keys = {}
-  for k, c in pairs(sc.cast or {}) do if c.portrait == "auto" and c.crew then keys[#keys + 1] = k end end
+  for k, c in pairs(sc.cast or {}) do if c.portrait == "auto" and c.crew and (only == nil or c.crew == only) then keys[#keys + 1] = k end end
   table.sort(keys)
   for _, k in ipairs(keys) do
     local c = sc.cast[k]
@@ -3370,6 +3441,11 @@ local function portrait_job()
     coroutine.yield()
   end
   say_log(string.format("portraits: %d captured (%.1f ms of capture waits)", PROF.portraits, PROF.portrait_ms))
+end
+-- (scn_dust) a cast member who joins later (a `spawn` crew beat): their own
+-- face, photographed once they have arrived
+function portraitFor(name)
+  jobs[#jobs + 1] = coroutine.create(function() portrait_job(name) end)
 end
 local portraits_started = false
 function start_portraits()

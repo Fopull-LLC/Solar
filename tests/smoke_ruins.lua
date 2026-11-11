@@ -24,6 +24,10 @@
 --     claim, restore (every missing piece back), repair (the lean undone);
 --     a crate searched once into the pack; the core pulled and read (RP, the
 --     log, the blueprint); an old save without ruins.s loads unchanged;
+--   * (worlds W5) cave ruins: half the camps on a world with caves camp in a
+--     sink; a mine head with a cave under it gets a shaft (flights, landings,
+--     a cache at the foot), dug once and stamped again; the sink camp's hut on
+--     the chamber's floor; a shaft's crate looted; the core names the ore;
 --   * fleet_view: a found ruin is an entry (STRUCTURES, ▣, "abandoned · …"),
 --     an unclaimed ruin's records are not a second "structure" entry.
 --
@@ -413,6 +417,206 @@ do
   store["ruins.s"] = nil
   local S3 = loadlib("ruins.lua", env)
   check("an old save without ruins.s: nothing found, nothing claimed", not S3.discovered(s.id) and not S3.claimed(s.id))
+end
+
+-- ── CAVE RUINS (worlds W5): the mine shaft and the sinkhole camp ───────────
+do
+  -- pure: which camps camp in a sink
+  local sinks, n = 0, 600
+  for i = 1, n do
+    local s = { kind = "camp", seed = i * 7717 + 3, id = "S#" .. i }
+    if RU.caveKindOf(s, { caves = true }) == "sinkcamp" then sinks = sinks + 1 end
+  end
+  check("about half the survey camps on a world with caves camp in a sink", sinks > n * 0.4 and sinks < n * 0.6, sinks)
+  local s0 = { kind = "camp", seed = 5, id = "S#0" }
+  local a1, a2 = RU.caveKindOf(s0, { caves = true }), RU.caveKindOf(s0, { caves = true })
+  check("…the same every time (the seed)", a1 == a2)
+  check("…never a camp already stamped as a camp, nor one on a world without caves, nor a mine",
+    RU.caveKindOf(s0, { caves = true, keep = true }) == nil and RU.caveKindOf(s0, { caves = false }) == nil
+    and RU.caveKindOf({ kind = "mine", seed = 5 }, { caves = true }) == nil)
+  -- flights: from the floor to the collar, a landing at each turn
+  local P, lost = RU.flightPieces(0, 0, -20, 0, nil, 0)
+  local flights, landings, good = 0, 0, true
+  for _, p in ipairs(P) do
+    if p.id == "ladder.steel" then flights = flights + 1 end
+    if p.id == "floor.steel" then landings = landings + 1 end
+    if not def(p.id) then good = false end
+  end
+  check("a 20 m shaft: 9 flights of a ship's ladder, 8 landings", flights == 9 and landings == 8 and lost == 0, flights .. "/" .. landings)
+  check("…every piece real", good)
+  local top = -1e9
+  for _, p in ipairs(P) do if p.id == "ladder.steel" then top = math.max(top, p.y + RU.FLIGHT_H) end end
+  check("…the last flight tops out at the collar or over it", top >= 0 and top < RU.FLIGHT_H)
+  local same_end = true
+  for k = 1, #P do
+    local p = P[k]
+    if p.id == "ladder.steel" and P[k + 2] and P[k + 2].id == "ladder.steel" then
+      -- (this flight tops out where the next one starts: the same z end, one tread up)
+      local tz = p.z + ((p.yaw == 0) and -1.1 or 1.1)
+      local q = P[k + 2]
+      local bz = q.z + ((q.yaw == 0) and 1.1 or -1.1)
+      if math.abs(tz - bz) > 1e-9 or math.abs(q.y - (p.y + RU.FLIGHT_H)) > 1e-9 then same_end = false end
+    end
+  end
+  check("…each flight starts where the last tops out (a switchback)", same_end)
+  local r = RU.rng(9)
+  local P2, lost2 = RU.flightPieces(0, 0, -40, 0, r, 0.9)
+  local first, last_ = false, false
+  for _, p in ipairs(P2) do
+    if p.id == "ladder.steel" and p.y == -40 then first = true end
+    if p.id == "ladder.steel" and p.y + RU.FLIGHT_H >= 0 then last_ = true end
+  end
+  check("an old shaft has lost flights, never its first or its last", lost2 > 0 and first and last_, lost2)
+  -- the shaft's cache
+  local site = { kind = "mine", seed = 31, age = 3000, co = 2, id = "M#1", body = "X", name = "Varro Mine Head 3" }
+  local sh = { x = 20, z = -4, d = 34, s0 = -0.6 }
+  local SP = RU.shaftPieces(site, sh)
+  local loot_, store_, real, deep = 0, 0, true, true
+  for _, p in ipairs(SP) do
+    if p.rl == "loot" then loot_ = loot_ + 1 end
+    if p.rl == "store" then store_ = store_ + 1 end
+    if not def(p.id) then real = false end
+    if p.y > 0.01 then deep = false end
+  end
+  check("a mine shaft: crates and a store cabinet at its foot, every piece real", loot_ >= 2 and store_ >= 1 and real)
+  check("…nothing above the collar", deep)
+  local kept = RU.caveKept(site, { sh = sh }, RU.decay(RU.blueprintOf(site), site))
+  local cave_ri, min_ri = 0, 1e9
+  for _, p in ipairs(kept) do if (p.ri or 0) > RU.CAVE_RI then cave_ri = cave_ri + 1; min_ri = math.min(min_ri, p.ri) end end
+  check("the stamp carries the shaft's pieces, indexed past " .. RU.CAVE_RI .. " (the loot's keys)", cave_ri == #SP and min_ri == RU.CAVE_RI + 1)
+  local kept0 = RU.caveKept(site, {}, RU.decay(RU.blueprintOf(site), site))
+  check("…and none before the cave is found", #kept0 == #RU.decay(RU.blueprintOf(site), site))
+  local line = RU.shaftLine(site, sh, "galena")
+  check("a shaft's core names the ore they sank it for", line:find("galena", 1, true) and line:find("34", 1, true))
+  site.caveLine = line
+  check("…the log carries that line", RU.lore(site)[2] == line)
+  site.caveLine = nil
+  -- the sink camp
+  local sc = { kind = "sinkcamp", seed = 44, age = 1500, co = 1, id = "C#1", body = "X", name = "Pell Sink Camp 2" }
+  local BP = RU.blueprintOf(sc)
+  local held = RU.caveKept(sc, {}, RU.decay(BP, sc))
+  local core_held = false
+  for _, p in ipairs(held) do if p.rl == "core" then core_held = true end end
+  check("a sink camp before its floor is known: only the rim stands (no core yet)", not core_held)
+  local k2 = RU.caveKept(sc, { sh = { x = 0, z = 0, d = 22, s0 = 0, nat = true } }, RU.decay(BP, sc))
+  local core_y, tower_y, fl = nil, nil, 0
+  for _, p in ipairs(k2) do
+    if p.rl == "core" then core_y = p.y end
+    if p.rl == "tower" then tower_y = p.y end
+    if p.id == "ladder.steel" then fl = fl + 1 end
+  end
+  check("…on a 22 m floor: the terminal down there, the tower on the rim, flights down the side",
+    core_y and math.abs(core_y - (-22 + 0.2 + 0.74)) < 1e-9 and tower_y == 0 and fl >= 7, string.format("%s %s %d", tostring(core_y), tostring(tower_y), fl))
+
+  -- the scene: a world with a cave 20–26 m under all its ground
+  store = {}
+  local R = 900
+  local function V(x, y, z) return { x = x, y = y, z = z } end
+  local body = { name = "Draethos", x = 1000, y = -500, z = 300, radius = R }
+  local space = { body = function(nm) return nm == "Draethos" and body or nil end, dominant = function() return "Draethos" end }
+  local function sdf(x, y, z)
+    local r = math.sqrt((x - body.x) ^ 2 + (y - body.y) ^ 2 + (z - body.z) ^ 2)
+    local v
+    if r >= R then v = r - R
+    elseif r <= R - 20 and r >= R - 26 then v = math.min(r - (R - 26), (R - 20) - r)
+    else v = -math.min(math.abs(r - R), math.abs(r - (R - 20)), math.abs(r - (R - 26))) end
+    return math.max(-6, math.min(6, v))
+  end
+  local digs, flats = 0, 0
+  local terrain = {
+    query = sdf,
+    ready = function() return true end,
+    raycast = function(o, d, max)
+      local t, prev = 0, sdf(o.x, o.y, o.z)
+      while t < (max or 100) do
+        t = t + 0.05
+        local v = sdf(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t)
+        if prev > 0 and v <= 0 then return { pos = V(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t), distance = t, exact = true } end
+        prev = v
+      end
+      return nil, "air"
+    end,
+    dig = function() digs = digs + 1; return digs end,
+    sculpt = function() flats = flats + 1; return flats end,
+  }
+  local astro = V(0, 0, 0)
+  local SCRIPTS = {}
+  local env = { save = SAVE, space = space, terrain = terrain, vec3 = V, time = 0,
+                find = function(nm) return nm == "Astronaut" and astro or nil end,
+                findScript = function(k) return SCRIPTS[k] end, log = function() end }
+  local ST = loadlib("structures.lua", { save = SAVE })
+  local inv_store = {}
+  local INV = {
+    addItem = function(c, id, k) inv_store[c] = inv_store[c] or { items = {}, mats = {} }; inv_store[c].items[id] = (inv_store[c].items[id] or 0) + k; return k end,
+    itemCount = function(c, id) local b = inv_store[c]; return b and b.items[id] or 0 end,
+    add = function(c, m, k) inv_store[c] = inv_store[c] or { items = {}, mats = {} }; inv_store[c].mats[m] = (inv_store[c].mats[m] or 0) + k; return k end,
+    itemList = function() return {} end, isEmpty = function() return true end,
+  }
+  INV.moveAllItems = function(f, t) local b = inv_store[f]; local k = 0; if b then for id, v in pairs(b.items) do if v > 0 then k = k + v; INV.addItem(t, id, v); b.items[id] = 0 end end end return k end
+  INV.transferAll = function(f, t) local b = inv_store[f]; local k = 0; if b then for m, v in pairs(b.mats) do if v > 0 then k = k + v; INV.add(t, m, v); b.mats[m] = 0 end end end return k end
+  SCRIPTS = { structures = ST, bases = loadlib("bases.lua", { save = SAVE }), inventory = INV, parts_base = PB,
+              deployables = { agencyClock = function() return 5e6 end },
+              survey = { SWATH_N = 400, swathOf = function() return { mask = {}, n = 0 } end, creditNow = function() end },
+              climate = { worldOf = function() return { atmo = 0.6, seed = 4242, radius = R, relief = 40, sea = 0 } end },
+              materials = { bodyOres = function() return { { mat = "galena", w = 3 }, { mat = "iron", w = 1 } } end } }
+  store["system.home"] = { bodies = { { name = "Draethos", radius = R } } }
+  store["base.body"] = "Draethos"
+  local S4 = loadlib("ruins.lua", env)
+  local list = S4.sites("Draethos")
+  local sm, ss = nil, nil
+  for _, x in ipairs(list) do if not x.pending then if not sm then sm = x elseif not ss then ss = x end end end
+  check("the scene world has two sites for the cave ruins", sm ~= nil and ss ~= nil)
+  S4.forceCaveKind(sm.id, "mine")
+  S4.forceCaveKind(ss.id, "sinkcamp")
+  check("a probe can make a site a mine head or a sink camp", S4.site(sm.id).kind == "mine" and S4.site(ss.id).kind == "sinkcamp"
+    and S4.site(ss.id).name:find("Sink Camp", 1, true))
+  local function put_crew(s, dist)
+    local e1x, e1y, e1z = S4.tangent(s.ux, s.uy, s.uz)
+    local a = dist / R
+    local ux, uy, uz = s.ux * math.cos(a) + e1x * math.sin(a), s.uy * math.cos(a) + e1y * math.sin(a), s.uz * math.cos(a) + e1z * math.sin(a)
+    astro.x, astro.y, astro.z = body.x + ux * (R + 1.8), body.y + uy * (R + 1.8), body.z + uz * (R + 1.8)
+  end
+  local function tick() env.time = env.time + 1.1; S4.update(nil, 1.1) end
+  -- the mine: stamped at 500 m without a shaft; at 150 m the cave is found and dug
+  put_crew(sm, 500)
+  tick()
+  local e = S4.state(sm.id)
+  local n_before = e.n
+  check("the mine stamped far off, no shaft yet", e.sid ~= nil and e.sh == nil)
+  put_crew(sm, 150)
+  tick()
+  e = S4.state(sm.id)
+  check("near: the cave under the head is found (a chamber 20–26 m down)", type(e.sh) == "table" and e.sh.nat and math.abs(e.sh.d - 26) < 0.3,
+    e.sh and e.sh.d)
+  check("…the shaft is dug, once", digs >= 10 and flats >= 2 and e.sh.dug ~= nil, digs .. " digs, " .. flats .. " flattens")
+  local r = ST.get(e.sid)
+  local cave_loot, foot = nil, nil
+  for _, p in ipairs(r.bp) do
+    if (p.ri or 0) > S4.CAVE_RI and p.rl == "loot" then cave_loot = p end
+    if p.id == "ladder.steel" and p.y < -20 then foot = p end
+  end
+  check("…stamped again with its flights and its cache", e.n > n_before and cave_loot ~= nil and foot ~= nil, e.n .. " vs " .. tostring(n_before))
+  local dg = digs
+  put_crew(sm, 120)
+  tick()
+  check("…and never dug twice", digs == dg)
+  local got = S4.searchCrate(sm.id, cave_loot.ri, "astro")
+  check("a crate at the shaft's foot is looted", got > 0, got)
+  check("the shaft's core names the world's ore", S4.site(sm.id).caveLine and S4.site(sm.id).caveLine:find("galena", 1, true))
+  -- the sink camp: no chamber here at its middle? (there is: the shell) — the camp on its floor
+  put_crew(ss, 150)
+  tick()
+  tick()
+  local es = S4.state(ss.id)
+  check("the sink camp: its chamber found, the sink dug into it", type(es.sh) == "table" and es.sh.nat and es.sh.dug ~= nil)
+  local rs = ST.get(es.sid)
+  local core = nil
+  for _, p in ipairs(rs and rs.bp or {}) do if p.rl == "core" then core = p end end
+  check("…its terminal on the chamber's floor", core ~= nil and math.abs(core.y - (-es.sh.d + 0.2 + 0.74)) < 1e-6, core and core.y)
+  -- a reload: the kinds and the shaft's line come back from the save
+  local S5 = loadlib("ruins.lua", env)
+  check("a reload keeps the cave ruins' kinds and the shaft's line", S5.site(sm.id).kind == "mine" and S5.site(ss.id).kind == "sinkcamp"
+    and S5.site(sm.id).caveLine ~= nil)
 end
 
 if failed == 0 then

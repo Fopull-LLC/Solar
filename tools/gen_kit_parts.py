@@ -1404,6 +1404,43 @@ def p_o2gen(mat):
     return m, sh, []
 
 
+def p_heater(mat):
+    """(scn_dust) A three-phase fan heater on a floor stand: a grey steel
+    housing on two skid feet, the element bank glowing dull orange behind a
+    louvred front grille, the fan's round guard on the back, the thermostat
+    dial and a status lamp on the top, the armoured supply lead to the floor."""
+    m, sh = CModel(seed=93), Shell()
+    # the skid feet
+    for x in (-0.24, 0.24):
+        bx(m, "Steel", DARK, x - 0.03, x + 0.03, 0.0, 0.05, -0.16, 0.16)
+    # the housing
+    bx(m, "Steel", (0.52, 0.54, 0.53), -0.28, 0.28, 0.05, 0.58, -0.13, 0.13, sh=sh)
+    bx(m, "Steel", DARK, -0.29, 0.29, 0.58, 0.61, -0.14, 0.14)
+    # the element bank behind the grille (front, +Z), then the louvres over it
+    bx(m, "Steel", (0.20, 0.18, 0.16), -0.23, 0.23, 0.12, 0.50, 0.128, 0.132)
+    for k in range(4):
+        y = 0.16 + k * 0.095
+        tb(m, "Lamp", (1.0, 0.42, 0.12), (-0.21, y, 0.136), (0.21, y, 0.136), 0.008, segs=6)
+    for k in range(10):
+        y = 0.13 + k * 0.038
+        bx(m, "Steel", GREY, -0.24, 0.24, y, y + 0.012, 0.132, 0.148)
+    for x in (-0.25, 0.25):
+        bx(m, "Steel", DARK, x - 0.012, x + 0.012, 0.11, 0.52, 0.13, 0.15)
+    # the fan guard on the back
+    tb(m, "Steel", DARK, (0, 0.33, -0.13), (0, 0.33, -0.145), 0.17, segs=18)
+    for k in range(6):
+        a = k * TAU / 6
+        tb(m, "Steel", GREY, (0, 0.33, -0.147), (0.16 * math.cos(a), 0.33 + 0.16 * math.sin(a), -0.147), 0.006, segs=5)
+    # the thermostat dial, the lamp and a safety band on the top
+    tb(m, "Steel", LIGHT, (0.16, 0.61, 0.02), (0.16, 0.635, 0.02), 0.03, segs=12)
+    bx(m, "Lamp", (1.0, 0.55, 0.15), 0.05, 0.09, 0.61, 0.625, 0.02, 0.05)
+    bx(m, "Steel", SAFETY, -0.27, -0.05, 0.605, 0.612, 0.08, 0.13)
+    # the supply lead out of its back, low, to the floor
+    tb(m, "Steel", (0.12, 0.12, 0.12), (-0.22, 0.12, -0.13), (-0.22, 0.12, -0.155), 0.012, segs=6)
+    tb(m, "Steel", (0.12, 0.12, 0.12), (-0.22, 0.12, -0.155), (-0.22, 0.012, -0.155), 0.012, segs=6)
+    return m, sh, []
+
+
 def p_airTank(mat):
     """Three 200 bar air cylinders strapped in a rack, a manifold, a regulator
     with its gauge. (Ty 11-10: the manifold floated on the necks and stopped
@@ -1649,6 +1686,7 @@ PIECES = {
     "floorDuct": (p_floorDuct, ["steel"]),
     "scrubber": (p_scrubber, ["steel"]),
     "o2gen": (p_o2gen, ["steel"]),
+    "heater": (p_heater, ["steel"]),
     "airTank": (p_airTank, ["steel"]),
     "breaker63": (breaker_panel(0.40, 0.50, 0.14, 63, 121), ["steel"]),
     "breaker160": (breaker_panel(0.56, 0.72, 0.20, 160, 123), ["steel"]),

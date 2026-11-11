@@ -1159,8 +1159,10 @@ end
 -- metres a second on their rails, and a panel set against where its planet
 -- was half a second ago sits tens of metres off its own ground (a shadow at
 -- noon, sunshine after dark — see powerTick's notes).
+--   soil      (G4, optional) 0..1, what reaches the cells through the dust on
+--             them and the sky over them: soilFactor(dust, sky) below
 -- Returns output, exposure, flux, blocker.
-function solarOutput(gen, x, y, z, ax, ay, az, bodies, ref, deployed)
+function solarOutput(gen, x, y, z, ax, ay, az, bodies, ref, deployed, soil)
   local sun, flux = sunOf(x, y, z, bodies, ref)
   if not sun then return 0, 0, 0, nil end
   local sx, sy, sz = sun.x - x, sun.y - y, sun.z - z
@@ -1171,7 +1173,64 @@ function solarOutput(gen, x, y, z, ax, ay, az, bodies, ref, deployed)
   local blocker = segmentBlocked(x, y, z, sun.x, sun.y, sun.z, bodies, 1.0, sun.name)
   flux = math.min(4.0, flux)
   local out = blocker and 0 or (gen or 0) * exposure * flux
+  if soil then out = out * math.max(0, math.min(1, soil)) end
   return out, exposure, flux, blocker
+end
+
+-- ── G4: dust on the cells, cloud and dust over them ─────────────────────────
+-- (PLAN scenarios2 §2 G4.) A ground array delivers its clean output times
+--   (1 − DUST_LOSS · dust) · sky
+--   dust  0..1, how much of the cells is under settled dust. A dust storm
+--         lays it down (DUST_DEP a second at full strength, slowing as the
+--         cells fill), rain washes it off (RAIN_WASH a second, by how hard it
+--         rains; snow does not), wind scours a little (WIND_SCOUR a second for
+--         each m/s over WIND_MIN). A fixed exponential pair for a fixed
+--         weather, so one long step under warp lands where many short ones do.
+--   sky   what the air lets through: cloud cover takes up to SKY_CLOUD of it;
+--         a dust storm's dust aloft takes SKY_DUST more (Opportunity's 2018
+--         storm, optical depth ~11, took it to almost nothing; a game storm
+--         leaves a trickle, SKY_MIN).
+-- An Engineer wipes a panel by hand (base_grid's menu row, 10 s).
+DUST_LOSS = 0.92
+DUST_DEP = 0.0025
+RAIN_WASH = 0.02
+WIND_SCOUR = 0.00002
+WIND_MIN = 6.0
+SKY_CLOUD = 0.55
+SKY_DUST = 0.35
+SKY_MIN = 0.06
+AGE_DUST = 0.3          -- the share of kit_paint's age dust (dry world cap 0.55) that sits on the cells
+local function c01(v) return v < 0 and 0 or (v > 1 and 1 or v) end
+function soilFactor(dust, sky)
+  return c01(1 - DUST_LOSS * c01(dust or 0)) * c01(sky == nil and 1 or sky)
+end
+-- The sky's share for a weather reading `o` (weather.current(): kind, cover,
+-- precip, storm); nil or airless → 1.
+function skyFactor(o)
+  if not o or o.kind == "none" or o.airless then return 1 end
+  local cover = o.cover or o.coverage or 0
+  local s = 1 - SKY_CLOUD * cover
+  if o.kind == "dust" or o.kind == "ash" then s = s - SKY_DUST * (o.storm or 0) - 0.1 * (o.precip or 0) end
+  return math.max(SKY_MIN, math.min(1, s))
+end
+-- The dust's laying and clearing rates for a weather `o`: → dep, clear (/s)
+function dustRates(o)
+  if not o or o.kind == "none" or o.airless then return 0, 0 end
+  local dep, clr = 0, 0
+  if o.kind == "dust" or o.kind == "ash" then dep = DUST_DEP * (o.precip or 0) * (0.5 + 0.5 * (o.storm or 0))
+  elseif o.kind == "wet" then clr = clr + RAIN_WASH * (o.precip or 0) * (1 - (o.snow or 0)) end
+  local w = o.wind or 0
+  if w > WIND_MIN and dep == 0 then clr = clr + WIND_SCOUR * (w - WIND_MIN) end
+  return dep, clr
+end
+-- dust after `dt` seconds of weather `o`: dd/dt = dep·(1 − d) − clear·d, exact
+function dustStep(d, o, dt)
+  d = c01(d or 0)
+  local a, b = dustRates(o)
+  local k = a + b
+  if k <= 0 or not dt or dt <= 0 then return d end
+  local inf = a / k
+  return c01(inf + (d - inf) * math.exp(-k * dt))
 end
 
 -- ── sunlight over a time step (warp) ────────────────────────────────────────

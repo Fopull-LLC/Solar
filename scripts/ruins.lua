@@ -431,7 +431,7 @@ function blueprintOf(site)
   local g = GRAMMAR[site and site.kind] or GRAMMAR.camp
   return g(site)
 end
-function kinds() return { "camp", "mine", "hab", "reactor", "relay" } end
+function kinds() return { "camp", "mine", "hab", "reactor", "relay", "sinkcamp" } end
 
 -- ── pure: decay ─────────────────────────────────────────────────────────────
 local GLASS = { ["windowWall.steel"] = true, ["porthole.steel"] = true }
@@ -618,6 +618,7 @@ function lore(site)
   local b = LORE_B[1 + math.floor(r() * #LORE_B)]
   local c = LORE_C[1 + math.floor(r() * #LORE_C)]
   local d = math.floor((site and site.age or 400) + r() * 40)
+  if site and site.caveLine then b = site.caveLine end   -- (worlds W5: a shaft's log names its ore)
   return { string.format(a, d, COMPANIES[site and site.co or 1] or "Pell Groundworks"), b, c }
 end
 -- What reading the core gives: RP by kind × the reader's study multiplier,
@@ -860,6 +861,7 @@ local function build_sites()
     if type(b.name) == "string" then
       local w = world(b.name)
       local list = sitesFor(b.name, w, b.name == home, b.radius or w.radius)
+      if cave_sites then cave_sites(b.name, w, list) end   -- (worlds W5: CAVE RUINS below)
       SITES[b.name] = list
       for _, s in ipairs(list) do BYID[s.id] = s end
     end
@@ -1108,6 +1110,7 @@ function stampNow(id, force)
   end
   local w0 = wall()
   local kept, ds = decay(blueprintOf(s), s)
+  if caveKept then kept = caveKept(s, e, kept) end   -- (worlds W5: CAVE RUINS below)
   local rec = recordOf(s, e.g, kept, agency_now())
   local sid = ST.add(rec)
   e.sid, e.n = sid, #rec.bp
@@ -1228,6 +1231,7 @@ local function tick()
       end
     end
   end
+  if cave_tick then cave_tick(name, b, px, py, pz, list) end   -- (worlds W5: CAVE RUINS below)
   -- (an untouched ruin on another world: out of the records)
   for _, s in ipairs(sites()) do
     local e = peek(s.id)
@@ -1662,4 +1666,365 @@ function update(node, dt)
     if L and L.crewInLab then pcall(readCores, "astro") end
   end
   stats.ms = (wall() - w0) * 1000
+end
+
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- CAVE RUINS (worlds W5, work/worlds/PLAN.md §4.5; docs/worlds-and-caves.md
+-- §4.7). Kept apart from the rest of the file: it hooks in at five marked
+-- lines (build_sites, stampNow, tick, lore, kinds).
+--
+--   MINE SHAFT     a mine head with a cave under it (a column 14-36 m from
+--                  the head, a chamber within SHAFT_R m down): a shaft dug
+--                  from the surface to the chamber's floor, ONCE (terrain.dig
+--                  and flatten, paced by the engine's edit budget), a ship's
+--                  ladder switchback down it with a landing at each turn (an
+--                  old site has lost some flights: bring a rope), and the
+--                  last shift's cache at the bottom, in the cave: a bench,
+--                  crates, a store cabinet, drums. Its Data Core's log names
+--                  the ore they sank it for.
+--   SINKHOLE CAMP  SINK_SHARE of the survey camps on a world with caves
+--                  (decided by the seed; a camp already stamped as a camp
+--                  stays one) are camped IN a sink: the hut, its terminal (the
+--                  core), bunk and crates on the floor; the tower and a winch
+--                  drum on the rim; flights down its side. The sink opens into
+--                  a chamber found under the site, or is a SINK_D m doline dug
+--                  where there is none.
+--   LOOT           the cave pieces are a ruin's containers like any other:
+--                  scripts/loot.lua rolls them with the site (planSite, by
+--                  kind and age), keyed by their piece index (ri > CAVE_RI).
+--   WHEN           the cave is looked for once the crew is within CAVE_NEAR
+--                  m and the ground there is made (a few dozen field reads a
+--                  column, once a site: ruins.s[id].sh = { x, z, d, roof, nat,
+--                  s0, dug } or false); found, an untouched ruin is stamped
+--                  again with its cave pieces and the ground is dug.
+--
+-- Pure: SINK_SHARE, caveKindOf, flightPieces, shaftPieces, caveKept,
+-- shaftLine. Probes: caveNow(id), forceCaveKind(id, kind).
+SINK_SHARE = 0.5
+SINK_D = 12.0          -- m: the doline's depth where no chamber lies under a sink camp
+SINK_R = 7.0           -- m: its radius
+SHAFT_R = 60.0         -- m: the deepest a shaft is sunk
+SHAFT_REACH = 36.0     -- m: how far from the head a shaft may be sunk
+CAVE_NEAR = 220.0      -- m: the crew this near, the cave is looked for
+CAVE_RI = 1000         -- the cave pieces' indices (ri) start past this
+FLIGHT_H = 2.4         -- a ship's ladder's rise (parts_kit ladder)
+LABEL.sinkcamp = "sinkhole camp"
+NOUN.sinkcamp = "Sink Camp"
+RP.sinkcamp = 90
+CORE_LAYER.sinkcamp = { comp = 0.8 }
+LOCK_DOOR.sinkcamp = 0.3
+
+-- Is this camp camped in a sink? info = { caves (the world has rock to hold
+-- caves), keep (a camp already stamped as a camp) } → "sinkcamp" | nil
+function caveKindOf(site, info)
+  info = info or {}
+  if not site or site.kind ~= "camp" or site.pending or not info.caves or info.keep then return nil end
+  local r = rng(hash(tostring(site.seed) .. ":sink"))
+  if r() < SINK_SHARE then return "sinkcamp" end
+  return nil
+end
+
+-- A ship's-ladder switchback from y0 (its foot) up to at least y1, at x0 in
+-- the site's frame (z0 its middle): flights side by side, turning at a
+-- landing at each end; `drop` the chance an old flight is gone (rng `r`;
+-- never the first or the last). → pieces (cv = true), flights lost
+function flightPieces(x0, z0, y0, y1, r, drop)
+  local P, lost = {}, 0
+  local n = math.max(1, math.ceil((y1 - y0) / FLIGHT_H - 1e-6))
+  for k = 0, n - 1 do
+    local y = y0 + k * FLIGHT_H
+    local odd = k % 2 == 1
+    -- (a flight rises toward its local −Z: yaw 0 tops out at z0 − 1.1, yaw π at z0 + 1.1)
+    local gone = k > 0 and k < n - 1 and r ~= nil and r() < (drop or 0)
+    if gone then lost = lost + 1
+    else P[#P + 1] = { id = "ladder.steel", x = x0 + (odd and 1.0 or 0), y = y, z = z0, yaw = odd and math.pi or 0, pitch = 0, roll = 0,
+                       rl = "fix", cv = true } end
+    if k < n - 1 then
+      -- the landing where this flight tops out and the next starts (its top at the tread's)
+      P[#P + 1] = { id = "floor.steel", x = x0 + 0.5, y = y + FLIGHT_H - 0.2, z = z0 + (odd and 2.1 or -2.1), yaw = 0, pitch = 0, roll = 0,
+                    rl = "floor", cv = true }
+    end
+  end
+  return P, lost
+end
+
+-- A mine shaft's pieces in the site's frame: sh = { x, z (the shaft's
+-- column), d (its floor's depth under the site's ground), s0 (the ground at
+-- the column, + up) }. The flights from the floor to the collar, and the
+-- cache beside their foot.
+function shaftPieces(site, sh)
+  local r = rng(hash(tostring(site and site.seed or 1) .. ":shaft"))
+  local ageK = clamp(((site and site.age or 400) - 400) / 5600, 0, 1)
+  local P = flightPieces(sh.x - 0.5, sh.z, -sh.d, (sh.s0 or 0), r, 0.10 + 0.25 * ageK)
+  local cx, y = sh.x + 3.6, -sh.d
+  local T2 = y + T
+  for _, q in ipairs({
+    { "slab2.concrete", cx, y, sh.z - 1, 0, "slab" }, { "slab2.concrete", cx, y, sh.z + 1, 0, "slab" },
+    { "workbench.steel", cx + 0.45, T2, sh.z - 1.2, -Q, "fix" },
+    { "crate.steel", cx - 0.1, T2, sh.z + 1.2, 0.3, "loot" },
+    { "crateS.steel", cx + 0.6, T2, sh.z + 1.6, 0, "loot" },
+    { "cabinet.steel", cx + 0.64, T2, sh.z + 0.2, -Q, "store" },
+    { "drum.steel", cx - 1.4, y, sh.z + 2.6, 0, "prop" },
+    { "drum.steel", cx + 2.2, y, sh.z - 1.8, 0, "prop" },
+    { "cableReel.steel", cx + 2.0, y, sh.z + 2.4, 0.8, "prop" },
+  }) do
+    P[#P + 1] = { id = q[1], x = q[2], y = q[3], z = q[4], yaw = q[5], pitch = 0, roll = 0, rl = q[6], cv = true,
+                  paint = (q[1]:match("^crate") or q[1]:match("^cabinet")) and "olive" or (q[1]:match("^drum") and "oxide" or nil) }
+  end
+  return P
+end
+
+-- THE SINK CAMP's blueprint (pure; through blueprintOf): the rim (y ≥ 0)
+-- and the camp on the floor at the nominal depth SINK_D (cv: moved to the
+-- real floor, or held back until it is known, by caveKept). The hut is the
+-- survey camp's, its middle on the sink's.
+GRAMMAR.sinkcamp = function(site)
+  local P, add = builder()
+  local D = -SINK_D
+  local function cv(i) P[i].cv = true; return i end
+  local ox, oz = -1, -1
+  for _, sl in ipairs({ { 0, 0 }, { 2, 0 }, { 0, 2 }, { 2, 2 } }) do cv(add("slab2.concrete", sl[1] + ox, D, sl[2] + oz, 0, 0, 0, nil, "slab")) end
+  cv(add("doorWall.steel", 0 + ox, D + T, 3 + oz, 0, 0, 0, "hull", "door"))
+  cv(add("windowWall.steel", 2 + ox, D + T, 3 + oz, 0, 0, 0, "hull", "wall"))
+  local wb = cv(add("wall.steel", 0 + ox, D + T, -1 + oz, math.pi, 0, 0, "hull", "wall"))
+  cv(add("wall.steel", 2 + ox, D + T, -1 + oz, math.pi, 0, 0, "hull", "wall"))
+  cv(add("windowWall.steel", -1 + ox, D + T, 0 + oz, -Q, 0, 0, "hull", "wall"))
+  cv(add("wall.steel", -1 + ox, D + T, 2 + oz, -Q, 0, 0, "hull", "wall"))
+  local ws = cv(add("wall.steel", 3 + ox, D + T, 0 + oz, Q, 0, 0, "hull", "wall"))
+  cv(add("wall.steel", 3 + ox, D + T, 2 + oz, Q, 0, 0, "hull", "wall"))
+  local roof = {}
+  for _, sl in ipairs({ { 0, 0 }, { 2, 0 }, { 0, 2 }, { 2, 2 } }) do roof[#roof + 1] = cv(add("floor.steel", sl[1] + ox, D + T + 2.2, sl[2] + oz, 0, 0, 0, "gunmetal", "roof")) end
+  cv(add("lightFitting.steel", 1 + ox, D + T + 2.2, 1 + oz, 0, math.pi, 0, nil, "light", roof[4]))
+  cv(add("bunk.steel", 0.1 + ox, D + T, -0.4 + oz, 0, 0, 0, "olive", "fix"))
+  local tb = cv(add("table.steel", 1.75 + ox, D + T, 1.5 + oz, Q, 0, 0, nil, "fix"))
+  cv(add("monitor.steel", 1.75 + ox, D + T + 0.74, 1.5 + oz, Q, 0, 0, nil, "core", tb))
+  cv(add("chair.steel", 0.95 + ox, D + T, 1.5 + oz, Q, 0, 0, nil, "prop"))
+  cv(add("chair.steel", 2.55 + ox, D + T, 1.5 + oz, -Q, 0, 0, nil, "prop"))
+  cv(add("shelf.steel", 2.6 + ox, D + T, 0.0 + oz, -Q, 0, 0, nil, "fix"))
+  cv(add("crateS.steel", 2.6 + ox, D + T, 2.55 + oz, 0, 0, 0, "orange", "loot"))
+  cv(add(mark(site.co), 3.1 + ox, D + T + 1.3, 0 + oz, Q, Q, 0, nil, "decal", ws))
+  cv(add("grimeStreaks.film", 0.0 + ox, D + T + 1.1, -1.1 + oz, math.pi, Q, 0, nil, "decal", wb))
+  cv(add("locker.steel", -0.64 + ox, D + T, 1.2 + oz, Q, 0, 0, "olive", "store"))
+  cv(add("crate.steel", -3.6, D, 2.4, 0.3, 0, 0, "olive", "loot"))
+  cv(add("drum.steel", -3.4, D, -2.6, 0, 0, 0, "orange", "prop"))
+  cv(add("drum.steel", -4.0, D, -1.9, 0, 0, 0, "oxide", "prop"))
+  -- the rim: the tower, the winch's drum and its cable, a crate left up top
+  add("tower", -SINK_R - 4, 0, 0, 0, 0, 0, nil, "tower")
+  add("drum.steel", SINK_R + 1.5, 0, -3, 0, 0, 0, "oxide", "prop")
+  add("cableReel.steel", SINK_R + 1.5, 0, 2, 0.6, 0, 0, nil, "prop")
+  add("crateS.steel", -SINK_R - 2, 0, 3, 0.2, 0, 0, "orange", "loot")
+  return P
+end
+
+-- The kept pieces with the cave's: a sink camp's floor pieces moved to the
+-- real floor (or held back while the floor is not known), the flights; a
+-- mine's shaft. `e` the site's state (e.sh). Cave pieces get ri past CAVE_RI.
+function caveKept(site, e, kept)
+  local sh = e and e.sh or nil
+  if e then e.kk = site.kind end
+  local out = {}
+  if site.kind == "sinkcamp" then
+    local dy = sh and (SINK_D - sh.d) or nil
+    for _, p in ipairs(kept) do
+      if p.cv then
+        if dy then
+          local q = {}
+          for k2, v in pairs(p) do q[k2] = v end
+          q.y = p.y + dy
+          out[#out + 1] = q
+        end
+      else out[#out + 1] = p end
+    end
+    if sh then
+      local r = rng(hash(tostring(site.seed) .. ":flights"))
+      local ageK = clamp(((site.age or 400) - 400) / 5600, 0, 1)
+      local fl = flightPieces(SINK_R - 2.6, 0, -sh.d, 0, r, 0.08 + 0.2 * ageK)
+      for i, p in ipairs(fl) do p.ri = CAVE_RI + i; out[#out + 1] = p end
+    end
+    return out
+  end
+  for _, p in ipairs(kept) do out[#out + 1] = p end
+  if site.kind == "mine" and sh then
+    for i, p in ipairs(shaftPieces(site, sh)) do p.ri = CAVE_RI + i; out[#out + 1] = p end
+  end
+  return out
+end
+
+-- The line a mine's core gives when it had a shaft (pure).
+function shaftLine(site, sh, ore)
+  if not sh then return nil end
+  return string.format("We sank the shaft %d metres into the cave under the head, after the %s. The cache is at the bottom.",
+    math.floor(sh.d + 0.5), tostring(ore or "ore"))
+end
+
+-- ── the scene ───────────────────────────────────────────────────────────────
+local function world_caves(w)
+  if type(w) == "table" and w.kind == "gas" then return false end
+  return true
+end
+function cave_sites(name, w, list)
+  local caves = world_caves(w)
+  for _, s in ipairs(list) do
+    local e = peek(s.id)
+    local keep = e ~= nil and e.kk == "camp" and (e.sid ~= nil or e.tc ~= nil or e.lp ~= nil)
+    local k = caveKindOf(s, { caves = caves, keep = keep })
+    if k then
+      s.kind = k
+      s.name = siteName(s.co, k, s.num)
+    end
+    if e and e.fk then s.kind = e.fk; s.name = siteName(s.co, e.fk, s.num) end
+    if s.kind == "mine" and e and e.sh then s.caveLine = shaftLine(s, e.sh, ores_of(s.body)[1]) end
+  end
+end
+
+-- The point of the site's frame (x, y, z) on its body (body-relative).
+local function frame_pt(g, x, y, z)
+  local ST = ref("structures")
+  if ST and ST.partPose then
+    local px, py, pz = ST.partPose(g, { x = x, y = y, z = z })
+    return px, py, pz
+  end
+  local rx, ry, rz = g.uy * g.fz - g.uz * g.fy, g.uz * g.fx - g.ux * g.fz, g.ux * g.fy - g.uy * g.fx
+  return g.x + rx * x + g.ux * y + g.fx * z, g.y + ry * x + g.uy * y + g.fy * z, g.z + rz * x + g.uz * y + g.fz * z
+end
+
+-- A chamber under column (cx, cz) of the site's frame, within `deep` m:
+-- → { x, z, d (floor depth), roof (roof depth), s0 (the ground there, + up),
+-- nat } or nil. Field reads every 1.5 m down the column and three rays.
+local function chamber_under(b, g, cx, cz, deep)
+  local tx, ty, tz = frame_pt(g, cx, 0, cz)
+  local ux, uy, uz = g.ux, g.uy, g.uz
+  local ok, h = pcall(terrain.raycast, vec3(b.x + tx + ux * 30, b.y + ty + uy * 30, b.z + tz + uz * 30), vec3(-ux, -uy, -uz), 80)
+  if not (ok and h and h.distance) then return nil end
+  local s0 = 30 - h.distance
+  local y = s0 - 2.5
+  while y > -deep do
+    local q = terrain.query(b.x + tx + ux * y, b.y + ty + uy * y, b.z + tz + uz * y)
+    if q and q > 1.0 then
+      local px, py, pz = b.x + tx + ux * y, b.y + ty + uy * y, b.z + tz + uz * y
+      local okd, hd = pcall(terrain.raycast, vec3(px, py, pz), vec3(-ux, -uy, -uz), 40)
+      local oku, hu = pcall(terrain.raycast, vec3(px, py, pz), vec3(ux, uy, uz), 40)
+      if okd and hd and hd.distance and oku and hu and hu.distance and hd.distance + hu.distance >= 3.0 then
+        local d = -(y - hd.distance)
+        if d <= deep then return { x = cx, z = cz, d = d, roof = -(y + hu.distance), s0 = s0, nat = true } end
+      end
+      return nil
+    end
+    y = y - 1.5
+  end
+  return nil
+end
+
+-- Look for the site's cave (see WHEN). → sh | false
+function findCave(s, e, b)
+  local g = e.g
+  if s.kind == "mine" then
+    -- (rings round the head, clear of its slabs, gantry, shack and tower)
+    local cols = {}
+    for _, rr in ipairs({ 14, 24, SHAFT_REACH }) do
+      for k = 0, 7 do local a = k * math.pi / 4; cols[#cols + 1] = { 2 + math.cos(a) * rr, -2 + math.sin(a) * rr } end
+    end
+    for _, c in ipairs(cols) do
+      local sh = chamber_under(b, g, c[1], c[2], SHAFT_R)
+      if sh then return sh end
+    end
+    return false
+  end
+  if s.kind == "sinkcamp" then
+    local sh = chamber_under(b, g, 0, 0, 45)
+    if sh and sh.d >= 6 then return sh end
+    return { x = 0, z = 0, d = SINK_D, s0 = 0, nat = false }
+  end
+  return false
+end
+
+-- Dig it, once: balls down the column, a room at the foot, the floor levelled.
+local function dig_cave(s, e, b)
+  local sh = e.sh
+  if not (sh and terrain and terrain.dig) or sh.dug then return 0 end
+  local g = e.g
+  local n = 0
+  local function dig(x, y, z, r)
+    local px, py, pz = frame_pt(g, x, y, z)
+    if pcall(terrain.dig, b.x + px, b.y + py, b.z + pz, r, 1.0, { hardness = 1.0, falloff = "sharp" }) then n = n + 1 end
+  end
+  local function flat(x, y, z, r)
+    if not terrain.sculpt then return end
+    local px, py, pz = frame_pt(g, x, y, z)
+    if pcall(terrain.sculpt, b.x + px, b.y + py, b.z + pz, r, 1.0, "flatten", { hardness = 0.8, falloff = "smooth" }) then n = n + 1 end
+  end
+  if s.kind == "mine" then
+    local x0 = sh.x
+    local y = (sh.s0 or 0) + 2.5
+    while y > -sh.d + 2.2 do dig(x0, y, sh.z, 3.4); y = y - 1.6 end
+    dig(x0, -sh.d + 2.2, sh.z, 3.4)
+    dig(x0 + 3.6, -sh.d + 2.0, sh.z, 3.2)
+    flat(x0, -sh.d, sh.z, 3.0)
+    flat(x0 + 3.6, -sh.d, sh.z, 3.0)
+  elseif s.kind == "sinkcamp" then
+    local bottom = sh.nat and ((sh.roof or sh.d) + 1.0) or sh.d
+    local y = 2.0
+    while y > -bottom + SINK_R * 0.6 do dig(0, y, 0, SINK_R); y = y - 3.0 end
+    dig(0, -bottom + SINK_R * 0.6, 0, SINK_R)
+    -- (in a chamber: room round the camp, so its door does not open on rock)
+    if sh.nat then dig(0, -sh.d + 2.8, 0, 5.5); dig(-3.5, -sh.d + 2.4, 1.0, 3.5) end
+    flat(0, -sh.d, 0, sh.nat and 5.0 or (SINK_R - 1))
+  end
+  sh.dug = n
+  write()
+  if log then log(string.format("ruins: %s: %s dug (%d edits, floor %.1f m down, %s)", s.name, s.kind == "mine" and "shaft" or "sink",
+    n, sh.d, sh.nat and "into a chamber" or "a doline")) end
+  return n
+end
+
+local function cave_found(s, e, b)
+  if not e.sh then return end
+  if e.sid and not touched(s.id) then unstampNow(s.id) end
+  dig_cave(s, e, b)
+  if not e.sid then stampNow(s.id, true) end
+  if s.kind == "mine" then s.caveLine = shaftLine(s, e.sh, ores_of(s.body)[1]) end
+  bump()
+end
+
+-- Probes: look for the site's cave and dig it now (the crew anywhere).
+function caveNow(id)
+  local s, e = site(id), peek(id)
+  local b = s and space.body(s.body)
+  if not (s and e and e.g and b and terrain and terrain.query) then return nil, "not sited" end
+  e.sh = findCave(s, e, b)
+  write()
+  cave_found(s, e, b)
+  return e.sh
+end
+-- Probes: make a site this kind ("mine" | "sinkcamp"), saved (e.fk).
+function forceCaveKind(id, kind)
+  local s = site(id)
+  if not s then return false end
+  local e = state(id)
+  if e.sid and not touched(id) then unstampNow(id) end
+  e.fk, e.sh = kind, nil
+  s.kind = kind
+  s.name = siteName(s.co, kind, s.num)
+  write()
+  bump()
+  return true
+end
+
+function cave_tick(name, b, px, py, pz, list)
+  if not (terrain and terrain.query and terrain.raycast) then return end
+  local R = b.radius or 800
+  for _, s in ipairs(list) do
+    if not s.pending and (s.kind == "mine" or s.kind == "sinkcamp") then
+      local e = peek(s.id)
+      if e and e.sid and e.g and e.sh == nil and not e.drop then
+        local d = groundDist(R, px, py, pz, e.g.x, e.g.y, e.g.z)
+        if d < CAVE_NEAR and (not terrain.ready or terrain.ready(b.x + e.g.x, b.y + e.g.y, b.z + e.g.z, 12)) then
+          e.sh = findCave(s, e, b)
+          write()
+          cave_found(s, e, b)
+        end
+      end
+    end
+  end
 end

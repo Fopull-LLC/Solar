@@ -688,7 +688,8 @@ kind("room_air", { req = { "struct" }, eval = function(g, W)
   if g.p then ok = ok and a.p >= g.p; parts[#parts + 1] = string.format("p %.2f of %.2f", a.p, g.p) end
   if g.o2 then ok = ok and a.o2 >= g.o2; parts[#parts + 1] = string.format("O2 %.2f of %.2f", a.o2, g.o2) end
   if g.co2 then ok = ok and a.co2 <= g.co2; parts[#parts + 1] = string.format("CO2 %.3f (max %.3f)", a.co2, g.co2) end
-  if g.breathable then ok = ok and a.breathable == true; parts[#parts + 1] = a.breathable and "breathable" or tostring(a.why or "not breathable") end
+  -- (scn_dust: `breathable = false` was read as no test at all, so it was always met)
+  if g.breathable ~= nil then ok = ok and ((a.breathable == true) == (g.breathable == true)); parts[#parts + 1] = a.breathable and "breathable" or tostring(a.why or "not breathable") end
   return ok, table.concat(parts, " · ")
 end })
 kind("grid", { req = { "struct" }, eval = function(g, W)
@@ -889,6 +890,12 @@ kind("power_read", { req = { "struct" }, eval = function(g, W)
     if not st then return false, "no breaker " .. tostring(g.breaker) end
     ok = ok and (g.state == nil or st == g.state)
     parts[#parts + 1] = "breaker " .. st
+  end
+  -- (scn_dust) burnt = bool: a Power Cable made off at the structure burnt through
+  if g.burnt ~= nil then
+    local b = W.cableBurnt and W.cableBurnt(sid) or false
+    ok = ok and (b == (g.burnt == true))
+    parts[#parts + 1] = b and "a cable burnt through" or "cables whole"
   end
   return ok, table.concat(parts, " · ")
 end })
@@ -1730,6 +1737,44 @@ function validate(sc, ctx)
   for i, c in ipairs(type(st.cores) == "table" and st.cores or {}) do
     if type(c) ~= "table" then E(string.format("start.cores[%d]", i), "a table") else core_def(string.format("start.cores[%d]", i), c) end
   end
+  -- (scn_dust) start.states = { { struct, part | uid, st = { … } } }: a piece's
+  -- state set as soon as its structure stands (before start.cables)
+  if st.states ~= nil and type(st.states) ~= "table" then E("start.states", "a list of { struct, part | uid, st }") end
+  for i, e in ipairs(type(st.states) == "table" and st.states or {}) do
+    local p = string.format("start.states[%d]", i)
+    if type(e) ~= "table" then E(p, "a table { struct, part | uid, st }")
+    else
+      local sn = type(e.struct) == "string" and e.struct:gsub("^struct:", "") or nil
+      if not sn then E(p .. ".struct", "a structure's name")
+      elseif next(structs) and not structs[sn] then E(p .. ".struct", "no start.structures entry named " .. sn) end
+      if e.part == nil and e.uid == nil then E(p, "part or uid") end
+      if type(e.st) ~= "table" then E(p .. ".st", "a table of the piece's state ({ off = true }, { ir = 0.4 })") end
+    end
+  end
+  -- (scn_dust) start.cables = { { from = { struct, part | uid }, to = { struct,
+  -- part | uid }, ty = "lv16" | "lv35" | "lv95" | "lv2" } }: Power Cables already
+  -- laid between two staged structures (base_cable.layFree)
+  if st.cables ~= nil and type(st.cables) ~= "table" then E("start.cables", "a list of { from, to, ty }") end
+  for i, c in ipairs(type(st.cables) == "table" and st.cables or {}) do
+    local p = string.format("start.cables[%d]", i)
+    if type(c) ~= "table" then E(p, "a table { from, to, ty }")
+    else
+      for _, k in ipairs({ "from", "to" }) do
+        local e = c[k]
+        if type(e) ~= "table" then E(p .. "." .. k, "{ struct, part | uid }")
+        else
+          local sn = type(e.struct) == "string" and e.struct:gsub("^struct:", "") or nil
+          if not sn then E(p .. "." .. k .. ".struct", "a structure's name")
+          elseif next(structs) and not structs[sn] then E(p .. "." .. k .. ".struct", "no start.structures entry named " .. sn) end
+          if e.part == nil and e.uid == nil then E(p .. "." .. k, "part or uid") end
+          if e.uid ~= nil and (type(e.uid) ~= "number" or e.uid < 1 or e.uid % 1 ~= 0) then E(p .. "." .. k .. ".uid", "a piece's uid (a whole number)") end
+        end
+      end
+      if c.ty ~= nil and not ({ lv2 = true, lv16 = true, lv35 = true, lv95 = true, hv35 = true })[c.ty] then
+        E(p .. ".ty", "lv2, lv16, lv35, lv95 or hv35")
+      end
+    end
+  end
   for i, c in ipairs(st.craft or {}) do
     local p = string.format("start.craft[%d]", i)
     if type(c.file) ~= "string" then E(p .. ".file", "a craft JSON under scenarios/")
@@ -1748,6 +1793,8 @@ function validate(sc, ctx)
       if type(b) == "table" then
         if type(b.mark) == "table" and type(b.mark.name) == "string" then marks[b.mark.name] = true end
         if type(b.core) == "table" and type(b.core.id) == "string" and b.core.pages then core_ids[b.core.id] = true end
+        -- (scn_dust) a member who joins later (a `spawn` crew beat) is named too
+        if type(b.spawn) == "table" and type(b.spawn.crew) == "table" and type(b.spawn.crew.name) == "string" then names[b.spawn.crew.name] = true end
         if type(b.choice) == "table" then for _, o in ipairs(b.choice.options or {}) do pre(o.beats) end end
         if type(b.branch) == "table" then pre(b.branch.beats); pre(b.branch.elseBeats) end
       end

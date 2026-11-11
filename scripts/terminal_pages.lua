@@ -97,6 +97,7 @@ PRED = {
   logic = function(d) return d.lg ~= nil and d.lg.kind ~= "device" end,
   device = function(d) return d.lg ~= nil and d.lg.kind == "device" end,
   switch = function(d) return d.fl and (d.fl.kind == "pump" or d.fl.kind == "valve") end,
+  heater = function(d) return d.heat ~= nil end,     -- (scn_dust)
 }
 -- every piece of the console's reach of kind `name` (PRED): → { { sid, uid, p, d, rec, idx } }
 local PC = { ver = nil, lists = {} }
@@ -209,6 +210,21 @@ local function page_power(scope)
       local s = BG.status(gid); return (s and (s.short or 0) > 0) and string.format("%s: loads shed", kw(s.short)) or "none" end,
       warn = function() local s = BG.status(gid); return s and (s.short or 0) > 0 end }
     rows[#rows + 1] = { type = "info", col = 1, label = "Limited by", value = function() local s = BG.status(gid); return (s and s.limited) or "nothing" end }
+    -- (G4) what reaches the panels' cells: the dust on them and the sky
+    if BG.soilInfo then
+      rows[#rows + 1] = { type = "info", col = 1, label = "Panels", value = function()
+        local M = BG.model(gid)
+        local n, k, d, sk = 0, 0, 0, 0
+        for _, a in ipairs(M and M.arrays or {}) do
+          local i = BG.soilInfo(a.sid, a.uid); n = n + 1; k = k + i.k; d = d + i.dust; sk = sk + i.sky
+        end
+        if n == 0 then return "no solar" end
+        return string.format("%s · dust %s · sky %s", pct(k / n), pct(d / n), pct(sk / n)) end,
+        warn = function()
+          local M = BG.model(gid)
+          for _, a in ipairs(M and M.arrays or {}) do if BG.soilInfo(a.sid, a.uid).k < 0.5 then return true end end
+          return false end }
+    end
   end
   -- the breakers
   local brs = pieces(scope, "breaker", 24)
@@ -263,6 +279,32 @@ local function page_power(scope)
             local m = KL.setLights(sid, want)
             blog(sid, "power", string.format("%d lights switched %s", m, want and "on" or "off (load shed)"))
             return true
+          end, enabled = en, why = why }
+      end
+    end
+  end
+  -- (scn_dust) load shedding: the heaters, each on its own switch
+  if KL and KL.setLight then
+    local hs = pieces(scope, "heater", 12)
+    if #hs > 0 then
+      rows[#rows + 1] = { type = "header", label = "HEATERS", col = 1 }
+      local ST = ref("structures")
+      for _, h in ipairs(hs) do
+        local sid, uid = h.sid, h.uid
+        local function on() local st = ST and ST.partState(sid, uid); return not (st and st.off) end
+        local en, why = gate(scope, function() return KL.lightWhyNot and KL.lightWhyNot(sid, uid, not on()) end)
+        rows[#rows + 1] = { id = "ht_" .. sid .. "_" .. uid, type = "toggle", col = 1, keep = true, label = title_of(sid, uid, h.d),
+          on = on,
+          hint = function()
+            if not on() then return "off" end
+            local BG2 = ref("base_grid")
+            if BG2 and BG2.partServed and BG2.partServed(sid, uid) == false then return "NO POWER" end
+            return kw(h.d.heat and h.d.heat.kw or 0)
+          end,
+          act = function(want)
+            local ok, w = KL.setLight(sid, uid, want, "hand")
+            if ok then blog(sid, "power", string.format("%s switched %s", name_of(sid, uid), want and "on" or "off (load shed)")) end
+            return ok, w
           end, enabled = en, why = why }
       end
     end

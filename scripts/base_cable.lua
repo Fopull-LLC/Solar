@@ -88,6 +88,12 @@ local function defs(id) local pb = ref("parts_base"); return pb and pb.partInfo(
 -- the drum's own card (max, kgm, perm, lift, r). `ty` nil = the 16 mm² drum.
 local DRUM = { lv16 = "powerCable", lv35 = "powerCable35", lv95 = "powerCable95", hv35 = "hvCable" }
 local function cdef(ty)
+  -- (scn_dust) a type no drum lays (a 2.5 mm² flex run): base_power's own card
+  if ty and not DRUM[ty] then
+    local BP = ref("base_power")
+    local c = BP and BP.CABLES and BP.CABLES[ty]
+    if c then return { max = c.max or 200, kgm = c.kgm or 0.35, perm = c.perm or 1, lift = 0.4, r = c.r or 0.009, label = c.label, type = ty } end
+  end
   local d = defs(DRUM[ty or "lv16"] or "powerCable")
   local C = d and d.cable or { max = 1500, kgm = 1.4, perm = 3.0, lift = 0.6, r = 0.018 }
   return C
@@ -617,7 +623,9 @@ end
 -- J6: a cable run is an Engineer's job (the kit is theirs already; this is
 -- the rule itself, for any other way in). → why | nil
 ENGINEERS_ONLY = "Engineers only: laying a Power Cable is an Engineer's job"
+local FREE = false       -- (scn_dust) layFree: a scenario's staged run, no hand and no bill
 function layerWhyNot(id)
+  if FREE then return nil end
   local c = ref("crew")
   if not (c and c.hasRole) then return nil end
   id = id or (c.activeId and c.activeId())
@@ -719,7 +727,7 @@ function validity(e1, hit, body, ty)
     return r
   end
   local co = ref("company")
-  if co and co.afford and not co.afford(r.quote.total) then r.bad = "can't afford it: " .. money(r.quote.total) return r end
+  if not FREE and co and co.afford and not co.afford(r.quote.total) then r.bad = "can't afford it: " .. money(r.quote.total) return r end
   return r
 end
 
@@ -745,7 +753,7 @@ function lay(a, z, opts)
   local rec0 = { b = ra.b, a = a, z = z, ty = ty }
   local pts, L = polyline(v.E, h, b.radius, { boxes = obstaclesFor(rec0, v.E), rocks = rk, a = tensionA(b, cdef(ty), v.E), ty = ty })
   local q = quote(L, c0 and c0.activeId and c0.activeId() or nil, ty)
-  if not co.spend(q.total, EC.ledgerWhy("Power Cable", q) .. string.format(" · %.0f m", L)) then return nil, "can't afford it: " .. money(q.total) end
+  if not FREE and not co.spend(q.total, EC.ledgerWhy("Power Cable", q) .. string.format(" · %.0f m", L)) then return nil, "can't afford it: " .. money(q.total) end
   local t = agency_now()
   local c = ref("crew")
   local by = c and c.activeId and c.activeId() or nil
@@ -779,6 +787,18 @@ function lay(a, z, opts)
     fb.pushHistory(e)
   end
   return id, nil, q, L
+end
+
+-- (scn_dust) A scenario's start: a run already laid, by nobody, paid for
+-- long ago (no Engineer's hand, no bill, no undo step). → id | nil, why
+function layFree(a, z, opts)
+  opts = opts or {}
+  opts.noHistory = true
+  FREE = true
+  local ok, id, why, q, L = pcall(lay, a, z, opts)
+  FREE = false
+  if not ok then return nil, tostring(id) end
+  return id, why, q, L
 end
 
 -- Take a cable up: the deconstruct rule (within its minute all of it, later

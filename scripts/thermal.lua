@@ -596,3 +596,29 @@ function linkExchange(UA, mdot, cp, Thot, Tcold)
 end
 function linkRadiate(eps, A, T, Tsky) return eps * HEATNET.sigma * A * (T ^ 4 - Tsky ^ 4) end
 function carnot(Th, Tc) if Th <= 0 then return 0 end return math.max(0, 1 - Tc / Th) end
+
+-- ── the crew in the cold and the heat (worlds W5: ice caves, vents) ─────────
+-- The EVA suit holds the body's heat balance with its heater (and its
+-- sublimator in the heat), powered from the suit's lamp cell
+-- (flashlight.cellLevel: the same cell the lamps draw on, so a cold cave eats
+-- your light). Bare-headed, the face and the lungs take the air as it is.
+-- Comfort band SUIT.lo..SUIT.hi K: no draw, no harm. Outside it:
+--   draw  % of the lamp cell an hour, helmet on: SUIT.draw per 10 K out of
+--         the band (an ice cave at −25 °C: about 10 % an hour, a third of
+--         the torch's 25)
+--   harm  share of a healthy body a minute, bare-headed: SUIT.harm per 10 K
+--         out of the band (frostbite of the face and the airway; heat
+--         stroke); the body, still suited, keeps 0.7 of the draw
+SUIT = { lo = 263, hi = 313, draw = 4.0, harm = 0.006 }
+-- → draw (%/h of the lamp cell), harm (a minute), "cold" | "hot" | nil
+function suitThermal(tK, helmet)
+  if not tK then return 0, 0, nil end
+  local out, kind = 0, nil
+  if tK < SUIT.lo then out, kind = SUIT.lo - tK, "cold"
+  elseif tK > SUIT.hi then out, kind = tK - SUIT.hi, "hot" end
+  if out <= 0 then return 0, 0, nil end
+  local draw = SUIT.draw * out / 10
+  if helmet then return draw, 0, kind end
+  -- (bare-headed the body is still in the suit: most of the draw stays)
+  return draw * 0.7, SUIT.harm * out / 10, kind
+end

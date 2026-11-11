@@ -44,8 +44,12 @@
 --   air         { CO2=, SO2=, H2S=, … } bar the cave adds (nil: the world's)
 --   hazard      { unstable, cold, heat, dose, drop, gas, flood, … }
 --   cells()     the region cells visited on this body (the map's trail, W6)
---   airAt(x, y, z), kindAt(x, y, z)   at a world point (W5's atmo hook)
+--   airAt(x, y, z), kindAt(x, y, z)   at a world point (W5's atmo hook:
+--               cave_hazards' air cells where it runs)
 --   stats       { nodes, records, decals, rays, ms } (probes)
+--   (W5, for cave_hazards on the same probe, no rays of its own) probeN
+--   (counts probes), eyeLocal, roofLocal (the up ray's hit), aheadLocal (the
+--   drop ray's hit), all BODY-LOCAL {x, y, z} on probeBody
 
 defaults = {
   on = true,
@@ -74,6 +78,7 @@ defaults = {
 
 caveKind, label, enclosure, height, depth, air, hazard = nil, nil, 0, nil, nil, nil, nil
 roofDepth = nil   -- depth while a roof is within 30 m (underground.lua)
+probeN, probeBody, eyeLocal, roofLocal, aheadLocal = 0, nil, nil, nil, nil
 stats = { nodes = 0, records = 0, decals = 0, rays = 0, ms = 0, cells = 0, gen = 0 }
 
 local sqrt, max, min, floor = math.sqrt, math.max, math.min, math.floor
@@ -610,11 +615,18 @@ local function probe(a, name, b, wi)
   fx, fy, fz = fx - ux * fd, fy - uy * fd, fz - uz * fd
   local fl = len(fx, fy, fz)
   local drop = 0
+  aheadLocal = nil
   if fl > 0.1 then
     fx, fy, fz = fx / fl, fy / fl, fz / fl
     local hf = cast(vec3(we.x + fx * 2.5, we.y + fy * 2.5, we.z + fz * 2.5), vec3(-ux, -uy, -uz), 40)
     drop = hf and max(0, (hf.distance or 0) - 1.6) or 40
+    if hf and hf.pos then aheadLocal = { hf.pos.x - b.x, hf.pos.y - b.y, hf.pos.z - b.z } end
   end
+  -- (W5) the probe's points for cave_hazards, body-local (rule 1)
+  roofLocal = (hu and hu.pos) and { hu.pos.x - b.x, hu.pos.y - b.y, hu.pos.z - b.z } or nil
+  eyeLocal = { ex, ey, ez }
+  probeBody = name
+  probeN = probeN + 1
   -- in a cave: enclosed and under real rock (hysteresis, as underground's flag)
   local deep = (roofDepth or 0) > (in_cave and 5 or 7)
   if in_cave then in_cave = deep or (enclosure > 0.35 and (depth or 0) > 2)
@@ -653,6 +665,8 @@ end
 -- atmo.airHere to it); nil: the world's.
 function airAt(x, y, z)
   if not caveKind then return nil end
+  local ch = ref("cave_hazards")
+  if ch and ch.airAtWorld then return ch.airAtWorld(x, y, z) end
   return air
 end
 

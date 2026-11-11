@@ -16,6 +16,7 @@
 | `ambience/` | `cave_tone` (seamless loop), `cave_drip_1..6`: underground.lua | real recordings in caves, cut and levelled by `tools/build_cave_audio.py` (table below) | CC0 (freesound.org) |
 | `ambience/` | `cave_creak_1..3`, `cave_groan_1..2` (mono: 3D sources on the rock): underground.lua | real recordings, `tools/build_grit_audio.py` (table below) | CC0 (freesound.org) |
 | `ambience/` | `cave_vent`, `cave_rumble`, `cave_water_far` (seamless loops), `cave_ice_crack_1..3` (mono): the cave kinds, underground.lua | real recordings, `tools/build_cave_audio.py` (the kinds' table below) | CC0 (freesound.org) |
+| `ambience/` | `cave_crack`, `cave_tick_1..3`, `cave_trickle`, `cave_rockfall_1..2`, `cave_slab_hit_1..2`, `cave_gas_whump` (mono one-shots: 3D sources on the rock): the cave hazards, cave_hazards.lua | real recordings, `tools/build_hazard_audio.py` (the hazards' table below) | CC0 (freesound.org) |
 | `sfx/` | `breath_calm`, `breath_heavy`, `suit_hum` (seamless loops): the suit, soundscape.lua | real recordings, `tools/build_grit_audio.py` (table below) | CC0 (freesound.org) |
 | `foley/` | `leak_hiss` (a seamless mono loop: a 3D source on a craft part with a hole, cabin_air.lua, G1) | a real recording, cut by hand with ffmpeg (section below) | CC0 (freesound.org) |
 
@@ -110,6 +111,26 @@ The collapse sink's wind is `wind_low` (above). Seen and not used: "Hot Bubbling
 but 4 minutes for a 13 s bed), "Small cave river flow" (Duasun #462661, CC0: too near and bright
 for "far below"); the lava-tube recordings found (Thurston, Ape Cave, Golden Dome) are CC BY or
 BY-NC, and the ice-cave walk (#530747) is CC BY with tourists in it.
+
+### The cave hazards (worlds W5, 2026-11-10)
+
+A rockfall is telegraphed by a crack at the roof, grit pattering down through 1.5 s of dust, then
+the slabs; an unstable roof ticks before it goes; a methane pocket lit by the laser goes off with a
+whump (scripts/cave_hazards.lua). All real recordings, CC0 1.0 (the licence read on each sound's
+page, 2026-11-10), cut by `tools/build_hazard_audio.py` from the HQ previews (curl lines in its
+docstring). Mono 44.1 kHz, peaks set per cut; checked by numbers (`--stats`), never played aloud.
+
+| file(s) | source | licence | processing | used by |
+|---|---|---|---|---|
+| `cave_crack` (2.2 s) | "stone falls and breaks low pitch.aiff" by SoundCollectah, https://freesound.org/people/SoundCollectah/sounds/109360/ — a stone landing and breaking into pieces, 0–2.2 s | CC0 1.0 | above 60 Hz, peak −2.9 dBFS; played at 0.78–0.88× (a bigger slab letting go) | the rockfall's warning, at the roof |
+| `cave_tick_1..3` | "RockCrack03" by falcospizaetus, https://freesound.org/people/falcospizaetus/sounds/489905/ — cracks appearing in a rock, at 0.84, 1.72 and 2.02 s | CC0 1.0 | above 600 Hz (the room's hum off), peak −7 dBFS | an unstable roof, every 3–8 s |
+| `cave_trickle` (3 s) | "20120808_064004 Cathedral Mountain rock slide, slow blocky chunks.wav" by betchkal, https://freesound.org/people/betchkal/sounds/500638/ — a small slide in Denali, separate pops, 7.5–10.5 s | CC0 1.0 | above 150 Hz, peak −4.9 dBFS | grit sifting down with the dust |
+| `cave_rockfall_1..2` | "rockfall2a.wav" by AlanCat, https://freesound.org/people/AlanCat/sounds/389303/ — rocks falling down a cliff and a cascade after (Olympus LS-14), 0.5–4.5 and 6.9–10.5 s | CC0 1.0 | above 40 Hz, peak −2.4 dBFS | the slabs coming down |
+| `cave_slab_hit_1..2` | "RockFall1b.wav" by AlanCat, https://freesound.org/people/AlanCat/sounds/381645/ — small boulders crashing and rolling down a short slope, 0.25–2.25 and 20.0–21.8 s | CC0 1.0 | above 40 Hz, peak −2.4 dBFS | a slab landing, or hitting the crew |
+| `cave_gas_whump` (0.7 s) | "gasExplosion.wav" by Zabuhailo, https://freesound.org/people/Zabuhailo/sounds/145400/ — an old gas stove's accumulated gas going off | CC0 1.0 | above 30 Hz, peak −2.5 dBFS; played at 0.62× under `foley/explosion_far` | firedamp lit by the laser |
+
+Seen and not used: "Cracking Earthquake" (uagadugu #222521, CC0: a processed mix), "breaking_concrete"
+(zatar #755522, CC0: itself a mix of other sounds), "Rock destroy" (Bertsz #524312: a game effect).
 
 ## The laser, the cave's creaks and groans, the suit, the weather and the sea, from real recordings
 

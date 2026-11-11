@@ -203,7 +203,12 @@ function gridModel(g, pose, towerNeed, opts)
       local key = tostring(e.rec.id) .. ":" .. tostring(e.p.uid)
       local main = not (opts.cablesAt and (opts.cablesAt[key] or 0) > 0)
       local st = opts.state and opts.state(e.rec.id, e.p.uid) or "closed"
-      M.breakers[#M.breakers + 1] = { key = key, sid = e.rec.id, uid = e.p.uid, pw = pw, main = main, state = st, kW = breakerKW_(pw) }
+      -- (scn_dust) its trip setting: the long-time pickup dial, Ir = 0.3..1 of
+      -- the frame's amps (`st.ir`, set by a hand or a scenario; 1 by default)
+      local stt = e.rec.st and e.rec.st[tostring(e.p.uid)]
+      local ir = type(stt) == "table" and tonumber(stt.ir) or nil
+      ir = ir and math.max(IR_MIN, math.min(1, ir)) or 1
+      M.breakers[#M.breakers + 1] = { key = key, sid = e.rec.id, uid = e.p.uid, pw = pw, main = main, state = st, kW = breakerKW_(pw) * ir, ir = ir }
       if main and st ~= "closed" then M.mainsOff[e.rec.id] = true end
     elseif pw and pw.kind == "xfmr" then
       M.xfmrs[#M.xfmrs + 1] = { key = tostring(e.rec.id) .. ":" .. tostring(e.p.uid), sid = e.rec.id, uid = e.p.uid, pw = pw }
@@ -230,7 +235,8 @@ function gridModel(g, pose, towerNeed, opts)
       -- the cells track about the part's +X (= up × front)
       local ax, ay, az = U.y * F.z - U.z * F.y, U.z * F.x - U.x * F.z, U.x * F.y - U.y * F.x
       M.arrays[#M.arrays + 1] = { key = string.format("%s|%.2f|%.2f|%.2f|%.3f|%.3f|%.3f", key, gx, gy, gz, ax, ay, az),
-                                  gen = pw.gen or 0, x = gx, y = gy, z = gz, ax = ax, ay = ay, az = az, b = r.b, sid = r.id }
+                                  gen = pw.gen or 0, x = gx, y = gy, z = gz, ax = ax, ay = ay, az = az, b = r.b, sid = r.id,
+                                  pk = key, uid = p.uid }   -- (G4: pk = "sid:uid", its dust and sky)
       M.sources = M.sources + 1
     elseif pw and pw.kind == "store" then
       -- (J6: `effk` on the part = the installing Engineer's bonus, fixed at placement)
@@ -274,6 +280,7 @@ function gridModel(g, pose, towerNeed, opts)
 end
 -- (a breaker's rating in kW at 400 V: base_power.breakerKW's figure)
 function breakerKW_(pw) return (pw and pw.amps or 63) * 400 / 1000 end
+IR_MIN = 0.3            -- (scn_dust) the lowest a breaker's trip dial goes
 
 -- (S5) THE NETWORK SPEC of a grid for base_power.network: its buses, where
 -- each source, load and store sits, its live cables (`cables` = the grid's,
@@ -517,6 +524,184 @@ local caught = nil        -- the last catch-up: { dt, years, short }
 
 local function defs(id) local pb = ref("parts_base"); return pb and pb.partInfo(id) or nil end
 
+-- ── G4: dust on the panels, cloud and dust over them ────────────────────────
+-- (PLAN scenarios2 §2 G4; electronics.lua soilFactor/skyFactor/dustStep.)
+-- Every solar piece of a grid carries the dust a storm laid on it (saved:
+-- grid.dust = { ["sid:uid"] = 0..1 }) and the age dust kit_paint gives every
+-- exterior piece (since it was placed or last wiped: grid.wipe = { key =
+-- agency time }). The weather is read where it is simulated: the structure
+-- within SOIL_R of the camera on the camera's world (weather.current());
+-- farther off, the dust stays as it was and the sky is clear. Each panel's
+-- factor is quantised to SOIL_Q, and the grids are rebuilt only when one
+-- steps (the profile and the network's flows are the light times it).
+SOIL_R = 3000.0
+SOIL_Q = 0.02
+SOIL = { k = {}, sky = {}, t = nil, n_steps = 0 }
+local soil_d, soil_w = nil, nil
+local function soil_tables()
+  if not soil_d then
+    soil_d = (save and save.get and save.get("grid.dust")) or {}
+    soil_w = (save and save.get and save.get("grid.wipe")) or {}
+    if type(soil_d) ~= "table" then soil_d = {} end
+    if type(soil_w) ~= "table" then soil_w = {} end
+  end
+  return soil_d, soil_w
+end
+-- the factor in use for panel pk (1 before the first tick)
+function soil_k(pk) local f = SOIL.k[pk]; if f == nil then return 1 end return f end
+local soiled_cache = {}
+-- an array's year of slots, times its factor (cached per factor step)
+function soiled(arr)
+  local p = light_cache[arr.key]
+  if not p then return nil end
+  local f = soil_k(arr.pk)
+  if f >= 1 then return p end
+  local c = soiled_cache[arr.key]
+  if c and c.f == f and c.src == p then return c.p end
+  local q = {}
+  for j = 1, #p do q[j] = p[j] * f end
+  soiled_cache[arr.key] = { f = f, src = p, p = q }
+  return q
+end
+-- (pure) a panel's factor: storm dust d, age dust a (kit_paint level), sky s
+function soilOf3(E, d, a, s)
+  local eff = 1 - (1 - (d or 0)) * (1 - E.AGE_DUST * (a or 0))
+  return E.soilFactor(eff, s), eff
+end
+local function soil_eye()
+  local pc = ref("planet_camera")
+  if pc and pc.cam_x then return pc.cam_x, pc.cam_y, pc.cam_z end
+  return nil
+end
+local function soil_tick(force_dt)
+  local E, ST = ref("electronics"), ref("structures")
+  if not (E and E.dustStep and ST and ST.get) then return false end
+  local D, Wp = soil_tables()
+  local an = agency_now()
+  local dt = force_dt or (SOIL.t and math.max(0, math.min(an - SOIL.t, CATCH_MAX)) or 0)
+  SOIL.t = an
+  local wx = ref("weather")
+  local o = wx and wx.current and wx.current() or nil
+  local ex, ey, ez = soil_eye()
+  local ob = o and o.body and space and space.body and space.body(o.body)
+  local KP = ref("kit_paint")
+  local changed = false
+  for _, g in ipairs(G.list) do
+    local M = G.models[g.id]
+    for _, arr in ipairs(M and M.arrays or {}) do
+      local pk = arr.pk
+      local rec = ST.get(arr.sid)
+      local near = false
+      if o and ob and ex and rec and rec.b == o.body then
+        local rx, ry, rz = ex - ob.x, ey - ob.y, ez - ob.z
+        near = (rx - (rec.x or 0)) ^ 2 + (ry - (rec.y or 0)) ^ 2 + (rz - (rec.z or 0)) ^ 2 < SOIL_R * SOIL_R
+      end
+      local d = tonumber(D[pk]) or 0
+      if near and dt > 0 then d = E.dustStep(d, o, dt) end
+      D[pk] = math.floor(d * 1e4 + 0.5) / 1e4
+      local s = near and E.skyFactor(o) or 1
+      SOIL.sky[pk] = s
+      local age = 0
+      if KP and KP.dustOf and rec then
+        local part = ST.getPart and ST.getPart(arr.sid, arr.uid)
+        if part then
+          local t0 = part.pt or (type(part.paid) == "table" and part.paid.t) or rec.t or 0
+          local w = tonumber(Wp[pk])
+          if w and w > t0 then t0 = w end
+          local ok, lv = pcall(KP.dustOf, rec, { pt = t0 }, an)
+          if ok and type(lv) == "number" then age = lv end
+        end
+      end
+      local f = soilOf3(E, D[pk], age, s)
+      local q = math.floor(f / SOIL_Q + 0.5) * SOIL_Q
+      if q > 1 then q = 1 end
+      if SOIL.k[pk] ~= q then SOIL.k[pk] = q; changed = true end
+    end
+  end
+  if save and save.set then save.set("grid.dust", D) end
+  if changed then SOIL.n_steps = SOIL.n_steps + 1; dirty = true end
+  return changed
+end
+-- (probes, the menu, the terminal) a panel's dust, age dust, sky and factor
+function soilInfo(sid, uid)
+  local D = soil_tables()
+  local pk = tostring(sid) .. ":" .. tostring(uid)
+  return { dust = tonumber(D[pk]) or 0, sky = SOIL.sky[pk] or 1, k = soil_k(pk) }
+end
+-- the mean factor of a structure's panels (1 with none)
+function soilOfStruct(sid)
+  local n, s = 0, 0
+  local pre = tostring(sid) .. ":"
+  for pk, f in pairs(SOIL.k) do if pk:sub(1, #pre) == pre then n, s = n + 1, s + f end end
+  return n > 0 and s / n or 1
+end
+-- (scenarios, probes) lay dust on every panel of a structure (0..1)
+function setDust(sid, d)
+  local D = soil_tables()
+  local pre = tostring(sid) .. ":"
+  local ST = ref("structures")
+  local rec = ST and ST.get and ST.get(sid)
+  local pb = ref("parts_base")
+  for _, p in ipairs(rec and rec.bp or {}) do
+    local def = pb and pb.partInfo(p.id)
+    if def and def.power and def.power.kind == "solar" then D[pre .. tostring(p.uid)] = math.max(0, math.min(1, d or 0)) end
+  end
+  soil_tick(0)
+  return true
+end
+-- An Engineer's cloth: the panel's dust off, its age dust too.
+function wipe(sid, uid)
+  local D, Wp = soil_tables()
+  local pk = tostring(sid) .. ":" .. tostring(uid)
+  D[pk] = 0
+  Wp[pk] = agency_now()
+  if save and save.set then save.set("grid.wipe", Wp) end
+  soil_tick(0)
+  return true
+end
+local function engineer_why()
+  local c = ref("crew")
+  if not (c and c.hasRole) then return nil end
+  local id = c.activeId and c.activeId()
+  if id == nil then return "Engineers only" end
+  local ok, yes = pcall(c.hasRole, id, "engineer")
+  if ok and yes == true then return nil end
+  return "Engineers only"
+end
+WIPE_S = 10.0
+-- the menu on a solar piece: what reaches its cells, and the wipe
+local function soil_provider(t, ctx)
+  if not (t and t.node) then return {} end
+  local ST = ref("structures")
+  if not (ST and ST.partOfNode) then return {} end
+  local rec, part = ST.partOfNode(t.node)
+  if not part then return {} end
+  local def = defs(part.id)
+  if not (def and def.power and def.power.kind == "solar") then return {} end
+  local sid, uid = rec.id, part.uid
+  return {
+    { id = "sg_cells", type = "info", label = "Cells", group = "Solar", value = function()
+        local s = soilInfo(sid, uid)
+        local txt = string.format("%d %% of their output · dust %d %% · sky %d %%", math.floor(s.k * 100 + 0.5),
+          math.floor(s.dust * 100 + 0.5), math.floor(s.sky * 100 + 0.5))
+        return txt
+      end },
+    { id = "sg_wipe", type = "action", label = "Wipe the panel", group = "Solar", hint = string.format("%.0f s", WIPE_S),
+      enabled = function() return engineer_why() == nil end,
+      why = function() return engineer_why() end,
+      job = { secs = WIPE_S, label = "Wiping the panel",
+        check = function() if not (ST.getPart and ST.getPart(sid, uid)) then return false, "it's gone" end return true end,
+        tick = function() end,
+        done = function()
+          wipe(sid, uid)
+          if ctx and ctx.toast then ctx.toast("panel wiped") end
+          return true
+        end } },
+  }, def.label
+end
+soilProviderFn = soil_provider
+local soil_reg = false
+
 -- The slots of the year: anchored once on the agency clock (grid.a0, saved).
 local function slots_for(bodies, bname)
   local E = ref("electronics")
@@ -555,7 +740,10 @@ local function profile_of(M, bodies)
       local ok, res = pcall(slotLight, arr, sl)
       if ok then p = res; light_cache[arr.key] = p end
     end
-    if p then for j = 1, sl.N do prof[j] = prof[j] + p[j] end end
+    if p then
+      local f = soil_k(arr.pk)
+      for j = 1, sl.N do prof[j] = prof[j] + p[j] * f end
+    end
   end
   return prof
 end
@@ -770,7 +958,7 @@ topology = function(a, clk)
     end
     -- (S5) the network: losses by slot, the slots that trip something
     if BP and BP.network then
-      local spec = netSpec(g, M, function(arr) return light_cache[arr.key] end)
+      local spec = netSpec(g, M, function(arr) return soiled(arr) end)
       local ok, net = pcall(BP.network, spec)
       if ok and net then
         M.net = net
@@ -866,7 +1054,7 @@ function partFlow(sid, uid)
   if not (M and M.net) then return out end
   for _, b in ipairs(M.breakers or {}) do
     if b.key == key then
-      out.rating, out.main = b.kW, b.main
+      out.rating, out.main, out.ir = b.kW, b.main, b.ir
       local kw = 0
       if b.main then
         for _, m in ipairs(M.net.mains or {}) do if m.key == key then kw = m.load end end
@@ -892,12 +1080,13 @@ end
 function gridOfStruct(sid) fresh() return G.bySid[sid] end
 -- (scenarios) a start state already lived in: sid's grid with its stores full.
 -- → true | nil (no grid with a store)
-function chargeFull(sid)
+-- (scn_dust) `frac`: charged to that share of the store instead (0..1)
+function chargeFull(sid, frac)
   fresh()
   local g = G.bySid[sid]
   local M, st = g and G.models[g.id], g and G.st[g.id]
   if not (M and st and (M.C or 0) > 0) then return nil end
-  st.e = M.C
+  st.e = M.C * (frac and math.max(0, math.min(1, frac)) or 1)
   spread(g, M, st.e)
   return true
 end
@@ -1017,6 +1206,7 @@ function start(node)
   vers = { st = nil, bs = nil, cb = nil }
   trips = 0
   dirty, last_rebuild, last_adv, slot, light_cache, e_saved, caught = true, -10, -10, nil, {}, nil, nil
+  SOIL, soil_d, soil_w, soiled_cache, soil_reg = { k = {}, sky = {}, t = nil, n_steps = 0 }, nil, nil, {}, false
 end
 
 function update(node, dt)
@@ -1030,7 +1220,20 @@ function update(node, dt)
   local t = now()
   -- (on change: at once the first time, then at most twice a second while a
   -- stand or a placement churns the records)
-  if dirty and t - last_rebuild > 0.5 then rebuild() return end
+  if dirty and t - last_rebuild > 0.5 then
+    if #G.list > 0 then soil_tick() end   -- (G4: the sky and dust as they are now)
+    rebuild()
+    return
+  end
   local every = (params and params.every) or 2.0
-  if #G.list > 0 and t - last_adv >= every then advance_all(agency_now()) end
+  if #G.list > 0 and t - last_adv >= every then
+    -- (G4) the panels' dust and sky first: a factor that steps rebuilds the
+    -- grids (advanced to now with the old one), so the step lands from here
+    if soil_tick() then rebuild() return end
+    advance_all(agency_now())
+  end
+  if not soil_reg then
+    local reg = ref("context_registry")
+    if reg and reg.register then reg.register("prop", soil_provider, { id = "base_grid_soil", order = 6 }); soil_reg = true end
+  end
 end

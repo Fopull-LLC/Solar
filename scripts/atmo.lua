@@ -30,7 +30,7 @@
 -- BREATHE_T, BREATHE_TYPES), or the helmet could never come off.
 --
 -- BREATHABLE (breathable(air, share, tK)) → ok, why, info:
---   no air under 0.05 bar · SO2 over 10 µbar, CO2 over CO2_MAX (0.02 bar,
+--   no air under 0.05 bar · SO2 over 10 µbar, H2S over 10 µbar, CO2 over CO2_MAX (0.02 bar,
 --   room_air's line), CH4 over 0.05 bar or NH3 over 50 µbar: TOXIC, the gas
 --   named (the helmet is forced on) · ppO2 over 0.5 bar: oxygen poisoning ·
 --   ppO2 under HYPOX (0.10): too thin, the helmet stays on · ppO2 between
@@ -64,6 +64,7 @@ CO2_MAX = 0.02               -- bar (room_air.CO2_MAX)
 SO2_MAX = 1e-5               -- bar
 CH4_MAX = 0.03               -- bar (60 % of its lower flammable limit at 1 bar)
 NH3_MAX = 5e-5               -- bar
+H2S_MAX = 1e-5               -- bar (10 ppm at 1 bar: the workplace limit; 100 ppm kills; worlds W5's vents)
 P_MIN = 0.05                 -- bar: less than this is no air
 RANDOM_BREATHE = 0.60        -- Ty 2026-11-09: alien homes are random, 60 % breathable
 CHOICES = { "earth", "rich", "thin", "alien", "random" }
@@ -99,9 +100,9 @@ TEMPLATES = {
 -- the inert mix an "alien" AIR choice gives a world whose own air would breathe
 ALIEN_MIX = { N2 = 0.955, Ar = 0.04, CO2 = 0.005 }
 -- the order gases are listed in
-GAS_ORDER = { "N2", "O2", "CO2", "Ar", "CH4", "SO2", "H2O", "NH3", "CO", "H2", "He" }
+GAS_ORDER = { "N2", "O2", "CO2", "Ar", "CH4", "SO2", "H2S", "H2O", "NH3", "CO", "H2", "He" }
 GAS_LABEL = { N2 = "N₂", O2 = "O₂", CO2 = "CO₂", Ar = "Ar", CH4 = "CH₄", SO2 = "SO₂", H2O = "H₂O", NH3 = "NH₃",
-              CO = "CO", H2 = "H₂", He = "He" }
+              CO = "CO", H2 = "H₂", He = "He", H2S = "H₂S" }
 -- aero.OXY, kept here for the readers of an old save (aero.lua holds the same)
 OXY_LEGACY = { archipelago = 1, verdant = 1, alpine = 1, steppe = 1, tundra = 1, dune = 0.8, greenhouse = 0, titan = 0 }
 
@@ -195,6 +196,7 @@ function breathable(air, share, tK)
   if p < P_MIN then return false, "There is no air here to speak of. The helmet stays on.", info end
   local tox = nil
   if p * (g.SO2 or 0) > SO2_MAX then tox = "SO2"
+  elseif p * (g.H2S or 0) > H2S_MAX then tox = "H2S"
   elseif p * (g.NH3 or 0) > NH3_MAX then tox = "NH3"
   elseif p * (g.CO2 or 0) > CO2_MAX then tox = "CO2"
   elseif p * (g.CH4 or 0) > CH4_MAX then tox = "CH4" end
@@ -288,8 +290,33 @@ local function ref(kind)
 end
 local tick_t, said = -10, {}
 
+-- A CAVE'S OWN AIR (worlds W5, scripts/cave_hazards.lua): a CO2 sump, a
+-- vent's SO2 and H2S, a methane pocket. `cave` is the partial pressures (bar)
+-- the cave adds where you stand; the world's air at `share` takes them in,
+-- and the record comes back as one air: p0 such that p0 · share is the new
+-- total, the fractions of the mix. Gas does not pool in a vacuum: an airless
+-- world (air nil) keeps none. (pure) → the merged air record
+function mergeCave(air, share, cave)
+  if type(air) ~= "table" or type(cave) ~= "table" then return air end
+  share = math.max(1e-6, share or 1)
+  local p = (air.p0 or 0) * share
+  if p < P_MIN then return air end
+  local g = air.gases or {}
+  local pp, tot = {}, p
+  for k, v in pairs(g) do pp[k] = p * v end
+  for k, v in pairs(cave) do if type(v) == "number" and v > 0 then pp[k] = (pp[k] or 0) + v; tot = tot + v end end
+  local out = {}
+  for k, v in pairs(air) do out[k] = v end
+  local gases = {}
+  for k, v in pairs(pp) do gases[k] = v / tot end
+  out.gases, out.p0, out.o2, out.cave = gases, tot / share, gases.O2 or 0, true
+  return out
+end
+
 -- The air at world point (x, y, z) on its dominant body: the air record (nil
--- airless), the share of the datum's density there, the world record.
+-- airless), the share of the datum's density there, the world record, and
+-- (worlds W5) the cave's own gases where a cave adds any (cave_field.airAt):
+-- the air record then has them mixed in (mergeCave).
 function airHere(x, y, z)
   local dom = space and space.dominant and space.dominant(x, y, z)
   local cl = ref("climate")
@@ -304,7 +331,26 @@ function airHere(x, y, z)
     if ae and ae.airShare then share = ae.airShare(math.max(alt, -0.25 * H), H, w.atmoScaleH)
     else local f = math.max(0, 1 - math.max(alt, 0) / H); share = f * f end
   end
+  local cf = ref("cave_field")
+  local cave = cf and cf.airAt and cf.airAt(x, y, z) or nil
+  if cave and type(w.air) == "table" then return mergeCave(w.air, share, cave), share, w, cave end
   return w.air, share, w
+end
+
+-- (worlds W5) The verdict on a cave's own air where the world's alone would
+-- be breathed: nil where the cave adds nothing (or the world has no air to
+-- hold it), else ok, why, info (breathable's) over the merged air. An old
+-- save's world (legacy air) is judged the same way: a CO2 sump is a sump.
+function caveVerdict(x, y, z)
+  local air, share, w, cave = airHere(x, y, z)
+  if not cave or type(air) ~= "table" then return nil end
+  local p = (air.p0 or 0) * (share or 1)
+  if p < P_MIN then return nil end
+  local ok, why, info = breathable(air, share, nil)
+  if ok then return true, nil, info end
+  -- only a gas refuses here: thin or oxygen-poor air is the world's own rule
+  if not info.toxic then return true, nil, info end
+  return false, why, info
 end
 
 -- Inside the spaceport's Command building, or within REFILL_R of its walls

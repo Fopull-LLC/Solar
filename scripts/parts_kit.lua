@@ -434,6 +434,13 @@ PIECES = {
                 mats = { "steel" }, vol = 0.72, fill = "solid", mass = { steel = 0.11 }, cost = 4800,
                 life = { o2c = 2.8e-5 }, use = 2.0,
                 desc = "a pressure-swing O2 concentrator for four crew: makes oxygen from any outside air with 5 % of it, no water · 2 EC/s" },
+  -- (scn_dust: a room's heat on a cold world; a load on the base grid, its
+  -- switch the room's thermostat or a hand. Scenarios model what it holds a
+  -- room at; base_grid counts its 3 kW)
+  heater    = { label = "Fan Heater 3 kW", section = "LIFE", snap = "block", box = B(-0.3, 0.3, 0, 0.62, -0.17, 0.17),
+                mats = { "steel" }, vol = 0.12, fill = "solid", mass = { steel = 0.022 }, cost = 380,
+                use = 3.0, heat = { kw = 3.0 },
+                desc = "a three-phase fan heater on a floor stand: 3 kW into a room · on its thermostat or by hand · 3 EC/s from the base grid" },
   -- (S7: pressure mechanics, scripts/room_air.lua)
   airReceiver = { label = "Airlock Receiver", section = "LIFE", snap = "block", box = B(-0.45, 0.45, 0, 2.0, -0.45, 0.45),
                 mats = { "steel" }, vol = 1.6, fill = "solid", mass = { steel = 0.32 }, cost = 3400,
@@ -1290,7 +1297,7 @@ local function resolve(piece, mat)
     half = { x = hx, y = hy, z = hz }, base0 = b[3],
     slope = 0.6, onDeck = P.snap ~= "slab", grade = P.grade or 1.2, footPad = P.footPad or 0.15, skirt = P.skirt,
     tile = P.tile, deck = P.deck, deckTop = P.deckTop, slopeZ = P.slopeZ, triangle = P.triangle,
-    door = P.door, light = P.light, screen = P.screen, switch = P.switch, life = P.life,
+    door = P.door, light = P.light, screen = P.screen, switch = P.switch, life = P.life, heat = P.heat,
     -- (the interaction plan S5) a piece that holds things: { kg, L, what } (scripts/loot.lua)
     container = P.container,
     sym = P.sym or "x", mirror = P.mirror, hidden = P.hidden,

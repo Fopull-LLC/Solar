@@ -103,6 +103,9 @@ EQ_DOOR = 0.1                -- a door's own equalising valve, m³/s per atm (a 
 SEAL_C = 0.03                -- a fully failed seal's leak, m³/s per atm
 PUMP_S = 0.5                 -- an airlock pump's speed, m³/s at the chamber's pressure (a 9 m³ chamber: ~41 s to 0.1 atm)
 P_RESID = 0.1                -- it pumps down to this; the rest is vented
+P_PURGE = 0.01               -- (scn_dust) coming in, foreign gas is pumped overboard to this first
+PURGE_S = 1.0                -- …at this many m³/s at the chamber's pressure (a 9 m³ chamber, 0.8 → 0.01 atm in ~40 s)
+PURGE_CO2, PURGE_O2 = 0.01, 0.15   -- foreign: CO2 over this share of the gas, or O2 under this one
 REC_C = 0.5                  -- the receiver's return valve, m³/s per atm
 CYC_C = 1.0                  -- the chamber's equalising valve to the hab (or the room ahead), m³/s per atm
 VENT_C = 0.6                 -- the chamber's vent valve, m³/s per atm (no pump: the air is lost)
@@ -1301,6 +1304,26 @@ function cycleStep(sid, s, C, target, pT, dt)
       cyc_say(C, why)
     end
   else
+    -- (scn_dust) THE PURGE: coming in, the chamber is full of the outside's
+    -- gas. Pressurised as it is, it would be pumped into the hab with the
+    -- door (on a CO2 world one entry poisons a room no scrubber can save).
+    -- A real lock pumps it overboard first: while the chamber's gas is
+    -- foreign (CO2 over PURGE_CO2 of it, or O2 under PURGE_O2) and the far
+    -- side is a sealed room, the pump draws it down to P_PURGE and dumps it
+    -- outside (powered; without power it pressurises as it is, and says so)
+    local tot = A.N + A.x + A.c
+    local foreign = tot > EPS and ((A.c / tot) > PURGE_CO2 or (A.x / tot) < PURGE_O2)
+    if foreign and tr and tr.sealed and pc > P_PURGE + 1e-6 and s.pow then
+      C.dir = "down"
+      C.pumping = true
+      local n1 = math.max(P_PURGE * Vc, tot * math.exp(-PURGE_S * dt / Vc))
+      local f = (tot > EPS) and (n1 / tot) or 0
+      C.vented = (C.vented or 0) + (tot - n1)
+      A.N, A.x, A.c = A.N * f, A.x * f, A.c * f
+      cyc_say(C, "airlock: purging the outside's gas overboard")
+      return
+    end
+    if foreign and tr and tr.sealed and not s.pow then cyc_say(C, "airlock: NO POWER to purge: pressurising with the outside's gas in it") end
     C.dir = "up"
     C.pumping = false
     -- the receivers first (their valve), then the room ahead or the hab

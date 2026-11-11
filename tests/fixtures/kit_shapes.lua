@@ -96,6 +96,7 @@ return {
   KitFloorDuct_steel = { lo = { -1.000, 0.000, -0.200 }, hi = { 1.000, 0.123, 0.200 }, colliders = 1, tris = 48, children = {  } },
   KitScrubber_steel = { lo = { -0.350, 0.000, -0.340 }, hi = { 0.350, 1.393, 0.268 }, colliders = 2, tris = 660, children = { "Glass" } },
   KitO2gen_steel = { lo = { -0.450, 0.000, -0.300 }, hi = { 0.445, 1.640, 0.326 }, colliders = 2, tris = 780, children = { "Glass" } },
+  KitHeater_steel = { lo = { -0.290, 0.000, -0.165 }, hi = { 0.290, 0.635, 0.160 }, colliders = 1, tris = 804, children = { "Glass" } },
   KitAirTank_steel = { lo = { -0.603, 0.000, -0.250 }, hi = { 0.603, 1.804, 0.250 }, colliders = 4, tris = 2628, children = {  } },
   KitBreaker63_steel = { lo = { -0.200, 0.000, -0.300 }, hi = { 0.200, 0.134, 0.250 }, colliders = 0, tris = 216, children = { "Lens" } },
   KitBreaker160_steel = { lo = { -0.280, 0.000, -0.410 }, hi = { 0.280, 0.186, 0.360 }, colliders = 0, tris = 228, children = { "Lens" } },

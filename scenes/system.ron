@@ -3138,6 +3138,14 @@
                     enabled: true,
                     params: [],
                 ),
+                // what in a cave can hurt you (bad air, firedamp, rockfall,
+                // cold, radon, drops, flooding) and what entering it pays, on
+                // cave_field's probe (scripts/cave_hazards.lua, worlds W5)
+                (
+                    kind: "cave_hazards",
+                    enabled: true,
+                    params: [],
+                ),
                 // G throws a red road flare (scripts/cave_flares.lua, items.lua `flare`)
                 (
                     kind: "cave_flares",

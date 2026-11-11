@@ -961,6 +961,31 @@ grid automatically; a Power Cable joins grids beyond that.**
   - a long step skips whole years: a year that comes back to where it began
     repeats, and one that never touches full or empty adds the same every year
     until it would.
+- **Dust and sky on the panels (G4, scenarios2 PLAN §2).** Every solar
+  piece delivers its clean light times `electronics.soilFactor(dust, sky)` =
+  (1 − 0.92 · dust) · sky.
+  - **sky** (`skyFactor`): cloud cover takes up to 55 % of the light, a dust
+    or ash storm's dust aloft 35 % more and its haze 10 %; never under 6 %
+    (a storm leaves a trickle).
+  - **dust** (`dustStep`, exact for a fixed weather: dd/dt = dep·(1 − d) −
+    clear·d): a dust storm lays it (0.25 % of the cells a second at full
+    strength), rain washes it (2 % a second), a dry wind over 6 m/s scours a
+    little; snow does neither. On top, the age dust kit_paint gives every
+    exterior piece (since it was placed or last wiped): 30 % of it sits on
+    the cells (a dry world's 0.55 cap costs 15 %).
+  - **Where the weather is read:** a structure within 3 km of the camera on
+    the camera's world reads `weather.current()`; farther off, its dust
+    stays as it was and its sky reads clear.
+  - Each panel's factor is quantised to 0.02 and the grids are rebuilt only
+    when one steps (the profile and the network's flows are the light times
+    it). Saved: `grid.dust` (each panel's storm dust) and `grid.wipe` (when
+    it was last wiped).
+  - **An Engineer wipes a panel:** its menu reads **Cells** (its share of
+    output, the dust, the sky) and **Wipe the panel** (10 s, Engineers only),
+    which clears both kinds of dust. The terminal's POWER page has a
+    **Panels** row (the grid's mean share, dust and sky).
+  - Probes: `soilInfo(sid, uid)`, `soilOfStruct(sid)`, `setDust(sid, d)`,
+    `wipe(sid, uid)`, `SOIL.n_steps`. Test: `tests/smoke_panel_dust.lua`.
 - **When it is solved.** On change (structures, bases or cables) and every
   2 s, never in a frame. A question asked right after a change
   (`towerPower`, `gridOfStruct`) rebuilds on the spot.
@@ -1731,8 +1756,9 @@ screen's LOSSES line, the station card's LOSS line) are in kW.
   span (`tensionA`, a sag of 2.5 %), never less than the hand's lay. The
   settle (§12) is otherwise the same: where even the tight line would dip
   into the ground it lies on it.
-- **Burnt through:** a cable with no breaker at either end driven past 125 %
-  of its rating burns through at the start of that slot. It carries nothing
+- **Burnt through:** a cable driven past 125 % of its rating burns through at
+  the start of that slot unless a breaker on it trips first (scn_dust: a
+  breaker rated, or dialled, over what its cable carries guards nothing). It carries nothing
   until it is spliced: right-click its end → **Splice the burnt cable** (4 s,
   a quarter of its price). Between 100 and 125 % it only runs hot (the
   overlay is red and the limit line names it).
@@ -1764,6 +1790,18 @@ screen's LOSSES line, the station card's LOSS line) are in kW.
   with `by` = "hand" | "logic" | "trip"; hooks in `base_power.onBreaker`
   hear every change (fn(sid, uid, state, by)). S8's actuators call the one
   and sensors read `breakerState` / `base_grid.partFlow`.
+- **The trip dial (scn_dust).** A breaker's long-time pickup, **Ir**, is a
+  share of its frame's amps (0.3 to 1; 1 when never set), kept in the part's
+  state (`st.ir`): a 63 A panel at Ir 0.4 trips over 10.1 kW. The menu shows
+  it (**Trip setting**) with **Turn the trip setting up** and **down** (10 %
+  a turn). Turning it up is never refused: the warning names what the
+  guarded cable burns at (`base_power.irWarn`), because a dial over a light
+  cable moves the fire from the breaker into the cable. `breakerIr`,
+  `setBreakerIr(sid, uid, ir, by)` (its hooks hear `"ir"`).
+- **The 2.5 mm² flex (scn_dust).** `base_power.CABLES.lv2`: 24 A, 9.6 kW,
+  burns through over 12 kW, 200 m at most. No drum lays it (a scenario's
+  start does: `start.cables`); `base_cable.layFree` lays a staged run with no
+  hand and no bill.
 - **Trips in time.** `base_grid.advance` stops a grid at the start of a slot
   that trips (or at once when it is already in one: a load added, a reset
   under load); `advance_all` opens what tripped, rebuilds the grids (keeping

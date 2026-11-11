@@ -751,6 +751,20 @@ local function provider(t, ctx)
       why = function() local e = E[key(sid, uid)]; return lightWhyNot(sid, uid, not (e and light_on(e))) end,
       hint = browned(sid) and "grid short" or nil }
   end
+  -- (scn_dust) a heater's switch: `st.off`, the switch every load has
+  if def.heat then
+    local function heat_on() local st = ST.partState(sid, uid); return not (st and st.off) end
+    out[#out + 1] = { id = "kl_heat", type = "toggle", label = "Heater", group = "Fitting", keep = true,
+      on = heat_on,
+      act = function(want)
+        local ok, why = setLight(sid, uid, want, "hand")
+        if ok and audio and audio.play then pcall(audio.play, "audio/foley/switch_2.ogg", { track = "UI", volume = 0.4 }) end
+        return ok, why
+      end,
+      enabled = function() return lightWhyNot(sid, uid, not heat_on()) == nil end,
+      why = function() return lightWhyNot(sid, uid, not heat_on()) end,
+      hint = (def.heat.kw and string.format("%.0f kW", def.heat.kw)) or nil }
+  end
   if def.switch or def.light then
     local n, on = lightsOf(sid)
     if n > 0 then

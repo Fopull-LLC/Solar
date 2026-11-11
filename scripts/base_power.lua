@@ -43,8 +43,8 @@
 --             structure's MAIN: open, the structure's own loads are off; it
 --             trips when they draw more than its rating. Open or tripped, a
 --             guarded cable carries nothing and the grid may split in two.
---   burn      a cable with no breaker at either end that is driven past 125 %
---             of its rating burns through (the copper melts its insulation):
+--   burn      a cable driven past 125 % of its rating, with no breaker on it
+--             tripping first (none, or one rated over it: scn_dust), burns (the copper melts its insulation):
 --             it carries nothing until it is spliced (right-click its end).
 --   Both happen at the START of the first slot whose flow passes the limit,
 --   so a long step and a series of short ones trip at the same moment.
@@ -65,12 +65,14 @@ LOSS_ITERS = 16         -- the slack covers the losses: re-solved until they set
 -- conductor; amps = the rating buried / on the ground (IEC 60364 ballpark
 -- for 4-core SWA at 400 V, 3-core XLPE at 11 kV); kgm and perm real-ish.
 CABLES = {
+  -- (scn_dust) a light 2.5 mm² flex: an extension run, not a drum the kit sells
+  lv2 = { label = "Power Cable 2.5 mm²", short = "2.5 mm²", mm2 = 2.5, v = "lv", amps = 24, kgm = 0.35, perm = 0.8, r = 0.009, max = 200, flex = true },
   lv16 = { label = "Power Cable 16 mm²", short = "16 mm²", mm2 = 16, v = "lv", amps = 80, kgm = 1.4, perm = 3.0, r = 0.016, max = 1500 },
   lv35 = { label = "Power Cable 35 mm²", short = "35 mm²", mm2 = 35, v = "lv", amps = 125, kgm = 2.6, perm = 6.0, r = 0.020, max = 1500 },
   lv95 = { label = "Power Cable 95 mm²", short = "95 mm²", mm2 = 95, v = "lv", amps = 230, kgm = 5.8, perm = 14.0, r = 0.027, max = 1500 },
   hv35 = { label = "HV Cable 11 kV", short = "11 kV", mm2 = 35, v = "hv", amps = 140, kgm = 2.3, perm = 9.0, r = 0.022, max = 6000 },
 }
-CABLE_ORDER = { "lv16", "lv35", "lv95", "hv35" }
+CABLE_ORDER = { "lv2", "lv16", "lv35", "lv95", "hv35" }
 
 function cableType(key) return CABLES[key or "lv16"] or CABLES.lv16 end
 function volts(key) return VOLTS[cableType(key).v] end
@@ -290,14 +292,22 @@ function eventsIn(net, F)
   local seen = {}
   for i, e in ipairs(net.edges) do
     local P = math.abs(F.P[i])
+    local tripped = false
     if #(e.guard or {}) > 0 then
       for _, gd in ipairs(e.guard) do
-        if P > gd.kW * (1 + 1e-9) and not seen[gd.key] then
-          seen[gd.key] = true
-          add({ kind = "trip", key = gd.key, kW = P, rating = gd.kW, edge = e.id })
+        if P > gd.kW * (1 + 1e-9) then
+          tripped = true
+          if not seen[gd.key] then
+            seen[gd.key] = true
+            add({ kind = "trip", key = gd.key, kW = P, rating = gd.kW, edge = e.id })
+          end
         end
       end
-    elseif P > net.cap[i] * BURN * (1 + 1e-9) then
+    end
+    -- (scn_dust) a cable burns past 125 % of its rating unless a breaker on it
+    -- trips first: a breaker rated (or dialled) over what its cable carries
+    -- guards nothing, and the copper cooks under it
+    if not tripped and P > net.cap[i] * BURN * (1 + 1e-9) then
       add({ kind = "burn", id = e.id, kW = P, rating = net.cap[i] })
     end
   end
@@ -442,6 +452,43 @@ function setBreaker(sid, uid, closed, by)
   return true
 end
 lastTrips = {}         -- probes: { { kind, key|id, kW, rating, t } … } (newest last)
+-- (scn_dust) A breaker's trip dial, Ir (0.3..1 of its frame's amps; 1 when
+-- never set): the part's state `ir`, so it saves with the structure.
+function breakerIr(sid, uid)
+  local ST = ref("structures")
+  local st = ST and ST.partState(sid, uid)
+  local ir = st and tonumber(st.ir)
+  if not ir then return 1 end
+  return math.max(0.3, math.min(1, ir))
+end
+function setBreakerIr(sid, uid, ir, by)
+  local ST = ref("structures")
+  if not ST then return false end
+  local st = ST.partState(sid, uid) or {}
+  local t = {}
+  for k, v in pairs(st) do t[k] = v end
+  ir = math.max(0.3, math.min(1, tonumber(ir) or 1))
+  t.ir = math.floor(ir * 100 + 0.5) / 100     -- (kept even at 1: a dial turned up reads as turned up)
+  ST.setPartState(sid, uid, next(t) and t or nil)
+  local BG = ref("base_grid")
+  if BG and BG.markDirty then BG.markDirty() end
+  for _, fn in ipairs(onBreaker) do pcall(fn, sid, uid, "ir", by or "hand") end
+  return true
+end
+-- the warning for a dial turned up: what its cables can carry
+function irWarn(sid, uid, ir)
+  local ST, CB = ref("structures"), ref("base_cable")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  local d = p and partsDef(p.id)
+  local at = (CB and CB.at) and CB.at(sid, uid) or {}
+  local trip = breakerKW(d and d.power) * ir
+  local least = nil
+  for _, c in ipairs(at) do local cap = capacityKW(c.ty); if not least or cap < least then least = cap end end
+  if least and trip > least * BURN then
+    return string.format("it now trips over %s; its cable burns over %s", kw(trip), kw(least * BURN))
+  end
+  return string.format("it now trips over %s", kw(trip))
+end
 
 -- ── the POWER overlay (lateUpdate: drawn poses, this frame's body read) ─────
 overlay = false        -- F2 with the kit open
@@ -634,10 +681,31 @@ local function provider(t, ctx)
         local st = breakerState(sid, uid)
         local f = BG and BG.partFlow and BG.partFlow(sid, uid) or {}
         local what = f.main and "its structure's main" or string.format("guards %d cable%s", f.cables or 0, (f.cables or 0) == 1 and "" or "s")
-        if st == "tripped" then return string.format("TRIPPED · %s · rated %s", what, kw(breakerKW(pw))) end
+        local rated = f.rating or breakerKW(pw)
+        if st == "tripped" then return string.format("TRIPPED · %s · rated %s", what, kw(rated)) end
         if st == "open" then return string.format("open · %s", what) end
-        return string.format("%s of %s · %s", kw(f.kW), kw(breakerKW(pw)), what)
+        return string.format("%s of %s · %s", kw(f.kW), kw(rated), what)
       end }
+    -- (scn_dust) the trip dial: Ir, the share of the frame's amps it trips at.
+    -- Never refused: turned up past what its cable carries, it is a cable
+    -- that burns instead of a breaker that trips, and the warning says so
+    out[#out + 1] = { id = "bp_ir", type = "info", label = "Trip setting", group = "Power",
+      value = function()
+        local ir = breakerIr(sid, uid)
+        return string.format("Ir %d %% of %d A · trips over %s", math.floor(ir * 100 + 0.5), pw.amps or 63, kw(breakerKW(pw) * ir))
+      end }
+    if breakerIr(sid, uid) < 0.999 then
+      out[#out + 1] = { id = "bp_irup", type = "action", label = "Turn the trip setting up", group = "Power", hint = "+10 %", danger = true,
+        act = function()
+          local ir = math.min(1, breakerIr(sid, uid) + 0.1)
+          setBreakerIr(sid, uid, ir)
+          return true, irWarn(sid, uid, ir)
+        end }
+    end
+    if breakerIr(sid, uid) > 0.401 then
+      out[#out + 1] = { id = "bp_irdn", type = "action", label = "Turn the trip setting down", group = "Power", hint = "−10 %",
+        act = function() setBreakerIr(sid, uid, math.max(0.4, breakerIr(sid, uid) - 0.1)); return true end }
+    end
     out[#out + 1] = { id = "bp_on", type = "toggle", label = "Breaker closed", group = "Power", keep = true,
       on = function() return breakerState(sid, uid) == "closed" end,
       act = function(want)

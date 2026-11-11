@@ -123,6 +123,14 @@ local function readouts()
                         warn = false, heavy = mins < 30, gauge = "air" }
     end
   end
+  -- CAVE AIR AND COLD (worlds W5, scripts/cave_hazards.lua): the suit's gas
+  -- reading once a cave's own air shows (a CO2 sump, a vent's SO2, methane:
+  -- "Flammable"), caution as it nears the limit, warning over it; and the
+  -- cold or heat with what the suit draws on the lamp cell for it.
+  local chz = ref("cave_hazards")
+  if chz and chz.chips and crew_afoot() then
+    for _, c in ipairs(chz.chips()) do out[#out + 1] = c end
+  end
   if co and co.money then
     out[#out + 1] = { key = "funds", label = "Funds", value = co.money(co.balance()) }
     out[#out + 1] = { key = "rep", label = "Rep", value = (co.isSandbox and co.isSandbox()) and "MAX" or string.format("%+d", co.rep()) }
@@ -165,6 +173,7 @@ local function text_of(rs)
     if r.key == "o2" then parts[#parts + 1] = "air " .. r.value
     elseif r.key == "dose" then parts[#parts + 1] = "dose " .. r.value
     elseif r.key == "lamp" then parts[#parts + 1] = "lamp " .. r.value
+    elseif r.key == "gas" or r.key == "therm" then parts[#parts + 1] = string.lower(r.label) .. " " .. r.value
     elseif r.key == "rep" then parts[#parts + 1] = "rep " .. r.value
     elseif r.key == "rp" then parts[#parts + 1] = "research " .. r.value
     elseif r.warn then parts[#parts + 1] = "PACK FULL  " .. r.value

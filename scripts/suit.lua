@@ -250,6 +250,14 @@ function breathableAt(x, y, z)
       return false, "The air is too thin to breathe up here. The helmet stays on."
     end
   end
+  -- (worlds W5) a cave's own air where the world's would do: a CO2 sump, a
+  -- vent's SO2 and H2S (atmo.caveVerdict over cave_hazards' air cells). The
+  -- third answer, "cave", lets setHelmet take it off all the same (caveDare)
+  local AC = ref("atmo")
+  if AC and AC.caveVerdict then
+    local okc, whyc = AC.caveVerdict(x, y, z)
+    if okc == false then return false, whyc, "cave" end
+  end
   local tk = type(w.bio) == "table" and w.bio.tempK or nil
   if tk and tk < P.cold_k then
     return false, string.format("It is %d °C out there. Too cold to take the helmet off.", math.floor(tk - 273.15))
@@ -315,8 +323,8 @@ end
 function helmetRefusal(want)
   if busy then return "Hands full: the neck ring is still turning." end
   if want or not helmet then return nil end
-  local ok, why = canRemoveHelmet()
-  if ok then return nil end
+  local ok, why, tag = canRemoveHelmet()
+  if ok or tag == "cave" then return nil end
   return why
 end
 
@@ -326,14 +334,26 @@ local function opt(opts, key)
   return rawget(opts, key)
 end
 
+-- (worlds W5) THE CAVE'S AIR IS NEVER A LOCK. Bad air in a cave closes the
+-- helmet by itself (update), but a crew who takes it off again in that air
+-- may: the reason is said (caveWarn) and cave_hazards hurts them while they
+-- breathe it. caveDare holds until the helmet goes back on or the air clears.
+caveDare = false
+caveWarn = nil
+
 -- Helmet on or off. ok, reason.
 function setHelmet(on, opts)
   on = on and true or false
   if busy then return false, "Hands full: the neck ring is still turning." end
   if on == helmet then return true, nil end
+  caveWarn = nil
   if not on then
-    local ok, why = canRemoveHelmet()
-    if not ok then lastReason = why return false, why end
+    local ok, why, tag = canRemoveHelmet()
+    if not ok and tag == "cave" then
+      caveDare, caveWarn = true, why
+      local bc = ref("big_caption")
+      if bc and bc.show then bc.show("HELMET OFF IN BAD AIR", why or "", 3.5) end
+    elseif not ok then lastReason = why return false, why end
   end
   lastReason = nil
   if opt(opts, "instant") or not (model and model.valid) then
@@ -440,9 +460,11 @@ function update(node, dt)
   resolve(node)
   local wk = ref("planet_walker")
   -- Bare-headed where the air has stopped being breathable: back on at once.
+  if helmet then caveDare = false end
   if not helmet and not busy and wk and wk.onFoot and not wk.downed then
-    local ok, why = breathableAt(node.x, node.y, node.z)
-    if not ok then
+    local ok, why, tag = breathableAt(node.x, node.y, node.z)
+    if ok then caveDare = false end
+    if not ok and not (tag == "cave" and caveDare) then
       apply(true, not checked_load)
       if checked_load then
         local bc = ref("big_caption")
