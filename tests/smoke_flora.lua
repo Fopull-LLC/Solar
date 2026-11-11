@@ -931,6 +931,87 @@ do
   API.mesh = nil
 end
 
+-- ── nothing grows through a kit floor, and a big base costs no burst ──────────
+-- (builderperf, 11-10: 2,000-6,000 pieces made 40-48 ms frames in this clear.)
+-- A structure under the crew: a 12 x 12 grid of 2 m floors with 2,000 walls
+-- among them. Every prop rooted under a floor goes, the ones beside it stay; a
+-- part kind's partInfo is read once, not once per part per pass.
+do
+  ff.clearAll()
+  tick(40)
+  local U, Fw = { 1, 0, 0 }, { 0, 0, 1 }
+  -- where a prop stands once dropped (as the stub's near does: along its patch's up)
+  local function frame_uv(src, i)
+    local node = by_name[src.parent]
+    local ex, ey, ez = axes_of(node)
+    local wx = BODY.x + node.x + ex[1] * i.lx + ez[1] * i.lz
+    local wy = BODY.y + node.y + ex[2] * i.lx + ez[2] * i.lz
+    local wz = BODY.z + node.z + ex[3] * i.lx + ez[3] * i.lz
+    local hit = API.raycast(wx + ey[1] * 60, wy + ey[2] * 60, wz + ey[3] * 60, -ey[1], -ey[2], -ey[3], 150)
+    ray_count = ray_count - 1
+    if hit then wx, wy, wz = hit.x, hit.y, hit.z end
+    return -(wy - BODY.y), wz - BODY.z, wx - BODY.x - SURFACE   -- the record's frame: R = U x F = (0, -1, 0)
+  end
+  local function count(inside)
+    local n = 0
+    for _, src in pairs(SRC) do
+      if src.parent and by_name[src.parent] and not (src.lod and #src.lod == 1 and src.lod[1].asset == "mesh:empty") then
+        for _, i in ipairs(live(src)) do
+          local u, v, h = frame_uv(src, i)
+          local inn = math.abs(h) < 2 and math.abs(u) < 11.9 and math.abs(v) < 11.9
+          local near_ = math.abs(h) < 2 and math.abs(u) < 22 and math.abs(v) < 22 and (math.abs(u) > 12.2 or math.abs(v) > 12.2)
+          if (inside and inn) or (not inside and near_) then n = n + 1 end
+        end
+      end
+    end
+    return n
+  end
+  local in0, out0 = count(true), count(false)
+  local bp = {}
+  for i = 0, 11 do
+    for j = 0, 11 do bp[#bp + 1] = { id = "floor.steel", x = -11 + 2 * i, y = 0, z = -11 + 2 * j, yaw = 0 } end
+  end
+  for k = 1, 2000 do bp[#bp + 1] = { id = "wall.steel", x = (k % 40) - 20, y = 0.2, z = math.floor(k / 40) - 25, yaw = (k % 2) * math.pi / 2 } end
+  local rec = { b = BODY.name, x = SURFACE, y = 0, z = 0, ux = U[1], uy = U[2], uz = U[3], fx = Fw[1], fy = Fw[2], fz = Fw[3], bp = bp }
+  local info_calls = 0
+  local defs = { ["floor.steel"] = { kit = true, snap = "floor", half = { x = 1, y = 0.1, z = 1 } },
+                 ["wall.steel"] = { kit = true, snap = "wall", half = { x = 1, y = 1.1, z = 0.1 } } }
+  envs.structures = { version = 1, list = function() return { rec } end }
+  envs.parts_base = { partInfo = function(id) info_calls = info_calls + 1; return defs[id] end }
+  local removed0 = ff.structClearRemoved
+  -- (this 400 m world curves away 20-30 m under a patch's plane within 150 m, so
+  -- the stub's chunk band refuses a 17 m query at the ground there; on a real
+  -- world the plane is within centimetres. Ask wider and keep the radius's.)
+  local near0 = API.scatter.near
+  API.scatter.near = function(id, p, r, o)
+    local out = {}
+    for _, h in ipairs(near0(id, p, r + 40, o)) do if h.distance <= r then out[#out + 1] = h end end
+    return out
+  end
+  tick(40)
+  local in1, out1 = count(true), count(false)
+  check("plants rooted under a kit floor are taken off", in0 > 0 and in1 == 0, in0 .. " -> " .. in1)
+  check("…the ones beside the structure stay", out0 > 0 and out1 == out0, out0 .. " -> " .. out1)
+  check("…counted", ff.structClearRemoved - removed0 >= in0, (ff.structClearRemoved - removed0) .. " removed")
+  check("a part kind's partInfo is read once, not per part per pass (2,144 parts, 2 kinds)", info_calls == 2, info_calls)
+  -- a records change rebuilds the boxes: a floor moved out to (15, 0) clears there too
+  bp[#bp + 1] = { id = "floor.steel", x = 15, y = 0, z = 0, yaw = 0 }
+  envs.structures.version = 2
+  tick(40)
+  local left = 0
+  for _, src in pairs(SRC) do
+    if src.parent and by_name[src.parent] and not (src.lod and #src.lod == 1 and src.lod[1].asset == "mesh:empty") then
+      for _, i in ipairs(live(src)) do
+        local u, v = frame_uv(src, i)
+        if math.abs(u - 15) < 0.9 and math.abs(v) < 0.9 then left = left + 1 end
+      end
+    end
+  end
+  check("…a records change clears under the new floor", left == 0, left)
+  envs.structures, envs.parts_base = nil, nil
+  API.scatter.near = near0
+end
+
 -- Per-source sun-map casting (engine card 0661): this stub, like engines
 -- before it, refuses castShadow/shadowDistance, so the field asked once and
 -- stopped sending them (every stand above was still made).

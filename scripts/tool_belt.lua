@@ -330,6 +330,27 @@ local impact_n
 local units_mined = 0
 local fill_credit = 0
 
+-- (builderperf, 11-10: tool_belt read 2-4.5 ms a frame idle in a big base. The
+-- engine's `find` answers a name it holds from an index, but a name that is
+-- NOT in the scene walks every node, twice (and the kit adds thousands):
+-- "FacRepair" every frame, "Laser Muzzle" and "Laser Impact" every frame while
+-- the laser is away. A miss is remembered for half a second.)
+FIND_MISS = {}
+do
+  local raw = find
+  if raw then
+    find = function(name, opts)
+      if opts == nil then
+        local m = FIND_MISS[name]
+        if m and (time or 0) - m < 0.5 and (time or 0) >= m then return nil end
+      end
+      local n = raw(name, opts)
+      if n == nil and opts == nil then FIND_MISS[name] = time or 0 end
+      return n
+    end
+  end
+end
+
 -- Cross-script singletons, resolved once and kept (findScript walks the scene).
 local refs = {}
 local function ref(kind)
@@ -2449,8 +2470,16 @@ local function e_taken()
   if fm and fm.prompting and fm.prompting() then return "E is the building's door" end
   local sv = ref("salvage")
   if sv and sv.prompting and sv.prompting() then return "E recovers the crate" end
-  local rb = find("FacRepair")
-  local rbs = rb and rb.getScript and rb:getScript("repair_bay")
+  -- (builderperf, 11-10: `find` walks the scene by name, every frame: its cost
+  -- grew with every node a base added (2-4 ms a frame idle in a big base). The
+  -- bay's script is held, and asked for again only every 2 s while missing.)
+  local rbs = refs.repair_bay
+  if not (rbs and rbs.valid) and (time or 0) - (refs.repair_miss_t or -10) > 2.0 then
+    local rb = find("FacRepair")
+    rbs = rb and rb.getScript and rb:getScript("repair_bay") or nil
+    refs.repair_bay = rbs
+    if not rbs then refs.repair_miss_t = time or 0 end
+  end
   -- the bay draws its own prompt (service, pump), so the reticle stays quiet
   if rbs and rbs.prompting and rbs.prompting() then return "E is the repair bay's console", true end
   -- a Rope Kit's line or davit within reach (rope_climb draws its own prompt;

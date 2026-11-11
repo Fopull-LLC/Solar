@@ -101,7 +101,7 @@ function HJ.run()
   -- an Air Tank Rack in the first segment, on its deck (fb.place: the kit
   -- refuses fittings inside a can, so the probe puts it there itself)
   do
-    local q = L(0, 0.8, -0.35)
+    local q = L(0, 0.65, -0.35)   -- (builderperf: the deck is at 0.65 m)
     local s2, w2, _, uid = fb.place(sid, "airTank.steel", { body = rec.b, mode = "face", sid = sid, lx = q[1], ly = q[2], lz = q[3],
       yaw = (p1.yaw or 0) + math.pi / 2, pitch = 0, roll = 0 }, "money")
     P("HJ air tank: %s", tostring(uid or w2))

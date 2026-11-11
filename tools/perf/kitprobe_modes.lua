@@ -636,6 +636,132 @@ function KIT.run_perf()
   BK.result()
 end
 
+-- kitview (builderperf): one block (params.kk, default 26 = 2,028 pieces) in
+-- kitperf's view, held until the run ends: for `floptle shot --after N --timing`
+-- (the GPU per-pass split at two render sizes) and for still pictures.
+function KIT.run_view()
+  BK.tag = "kitview"
+  wait_ready(120)
+  wait(2)
+  local ST = findScript("structures")
+  local spot = BK.flat_spot()
+  if not BK.check("spot", spot ~= nil, "flat ground") then BK.result() return end
+  stand_at(spot)
+  wait(3)
+  local k = math.floor(params.kk or 26)
+  local rec = KIT.block(ST, spot, k, 0)
+  local id = ST.add(rec)
+  ST.spawnNow(id)
+  wait_for(function() return spawnPending() == 0 and #(ST.nodesOf(id) or {}) >= #rec.bp - 2 end, 240, "the block's pieces")
+  local U = spot.dir
+  VP.cam_fixed({ x = U.x * (spot.r + 14) - spot.t.x * 8, y = U.y * (spot.r + 14) - spot.t.y * 8, z = U.z * (spot.r + 14) - spot.t.z * 8 },
+               { x = U.x * spot.r + spot.t.x * (25 + k), y = U.y * spot.r + spot.t.y * (25 + k), z = U.z * spot.r + spot.t.z * (25 + k) })
+  wait(2)
+  local c = perf.counts()
+  P("KIT VIEW %d pieces · nodes %d instances %d draws %d sunMapDraws %d triangles %d lights %d", #rec.bp, c.nodes or -1, c.instances or -1,
+    c.draws or -1, c.sunMapDraws or -1, c.triangles or -1, c.lights or -1)
+  if (params.kshot or 0) > 0 then BK.shot("kitview_" .. k, false) end
+  -- the GPU's own per-pass time (perf.gpu), mean of 90 frames, at the render
+  -- scale the project has and at half of it: what scales with pixels
+  local function gpu_mean(nm)
+    local acc, n = {}, 0
+    for _ = 1, 90 do
+      yield()
+      local g = perf.gpu and perf.gpu()
+      if g and g.total then
+        n = n + 1
+        acc.total = (acc.total or 0) + g.total
+        for _, p in ipairs(g.passes or {}) do acc[p.name] = (acc[p.name] or 0) + p.ms end
+      end
+    end
+    local parts = {}
+    for key, v in pairs(acc) do if key ~= "total" and v / math.max(n, 1) >= 0.15 then parts[#parts + 1] = string.format("%s %.2f", key, v / n) end end
+    table.sort(parts)
+    local c2 = perf.counts()
+    P("KIT GPU %s (scale %.2f, %d frames): total %.2f ms · %s · sunMapDraws %d instances %d", nm, app.renderScale and app.renderScale() or -1, n,
+      (acc.total or 0) / math.max(n, 1), table.concat(parts, ", "), c2.sunMapDraws or -1, c2.instances or -1)
+  end
+  if perf.gpu and app.setRenderScale then
+    local s0 = app.renderScale()
+    app.setRenderScale(1.0); wait(1.0); gpu_mean("full")
+    app.setRenderScale(0.5); wait(1.0); gpu_mean("half")
+    app.setRenderScale(s0)
+    local KL = findScript("kit_live")
+    if KL and KL.setWallCull then
+      local n, hid = KL.wallStats()
+      P("KIT GPU walls %d, inside hidden %d", n, hid)
+      KL.setWallCull(false); app.setRenderScale(1.0); wait(1.0); gpu_mean("full_nocull")
+      KL.setWallCull(true); app.setRenderScale(s0)
+    end
+  end
+  BK.result()
+  while true do wait(1) end
+end
+
+-- tbprof (builderperf): what tool_belt, fp_body, item_hand and planet_walker cost
+-- standing idle, by the script sampler's lines: third person empty-handed, first
+-- person empty-handed, first person with the Terrain Laser held (gritdig's idle).
+function KIT.prof_phase(nm, secs)
+  perf.samples()
+  sc_begin(nm); wait(secs); sc_end(nm)
+  local per = {}
+  for _, s in ipairs(perf.samples() or {}) do
+    local k = s.script
+    if k == "tool_belt" or k == "fp_body" or k == "item_hand" or k == "planet_walker" or k == "planet_camera" then
+      per[k] = per[k] or { sum = 0 }
+      per[k].sum = per[k].sum + (s.ms or 0)
+      if #per[k] < (k == "tool_belt" and 24 or 8) then per[k][#per[k] + 1] = string.format("%s:%d %.1f", tostring(s.fn), s.line or -1, s.ms or 0) end
+    end
+  end
+  P("TBPROF %s: tool_belt %.3f fp_body %.3f item_hand %.3f planet_walker %.3f planet_camera %.3f ms/frame", nm,
+    perf.scriptMs("tool_belt") or -1, perf.scriptMs("fp_body") or -1, perf.scriptMs("item_hand") or -1,
+    perf.scriptMs("planet_walker") or -1, perf.scriptMs("planet_camera") or -1)
+  for k, l in pairs(per) do P("TBPROF %s %s lines (sampled %.1f ms in all): %s", nm, k, l.sum, table.concat(l, " | ")) end
+  -- the engine calls each script made (perf.frames' calls), summed over the last 120 frames
+  local calls = {}
+  for _, f in ipairs(perf.frames(120) or {}) do
+    for _, c in ipairs(f.calls or {}) do
+      if c.script == "tool_belt" or c.script == "item_hand" then
+        local key = c.script .. "." .. tostring(c.call)
+        calls[key] = (calls[key] or 0) + (c.ms or 0) / 120
+      end
+    end
+  end
+  local cl = {}
+  for key, v in pairs(calls) do cl[#cl + 1] = { key, v } end
+  table.sort(cl, function(a, b) return a[2] > b[2] end)
+  local out = {}
+  for i = 1, math.min(12, #cl) do out[#out + 1] = string.format("%s %.3f", cl[i][1], cl[i][2]) end
+  P("TBPROF %s engine calls ms/frame: %s", nm, table.concat(out, " | "))
+end
+function KIT.run_tbprof()
+  BK.tag = "tbprof"
+  wait_ready(120)
+  wait(2)
+  local spot = BK.flat_spot()
+  if not BK.check("spot", spot ~= nil, "flat ground") then BK.result() return end
+  stand_at(spot)
+  wait(5)
+  if perf.sampleScripts then perf.sampleScripts(true) end
+  local pc = findScript("planet_camera")
+  KIT.prof_phase("tp_empty", 6)
+  pc.firstPerson = true
+  wait(1)
+  KIT.prof_phase("fp_empty", 6)
+  local inv, tb = findScript("inventory"), findScript("tool_belt")
+  if inv and inv.gearCount and inv.gearCount("astro", "laser") < 1 then inv.addGear("astro", "laser", 1) end
+  pcall(tb.hold, "laser")
+  wait(1.5)
+  P("TBPROF tool %s", tostring(tb.toolId and tb.toolId()))
+  KIT.prof_phase("fp_laser", 6)
+  pc.firstPerson = false
+  wait(1)
+  KIT.prof_phase("tp_laser", 6)
+  if perf.sampleScripts then perf.sampleScripts(false) end
+  KIT.prof_phase("tp_laser_nosample", 6)
+  BK.result()
+end
+
 -- ── rooms (sandbox S3): a sealed hab with an airlock, its air, a leak ────────
 -- On flat ground 150+ m out: three slabs edge to edge, an airlock chamber
 -- (an Airlock Wall out, a Door Wall in) and a 4 x 2 m hab beyond it (a

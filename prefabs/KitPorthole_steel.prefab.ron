@@ -16,7 +16,7 @@
     (
         name: "Mesh",
         transform: (
-            translation: (0.0000, 1.1000, 0.0280),
+            translation: (0.0000, 1.1000, 0.0000),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -199,7 +199,7 @@
     (
         name: "MeshIn",
         transform: (
-            translation: (0.0000, 1.1000, -0.0280),
+            translation: (0.0000, 1.1000, -0.1250),
             rotation: (0.0, 0.0, 0.0, 1.0),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -236,5 +236,6 @@
         },
         scripts: [],
         parent: Some(0),
+        cast_shadow: false,
     ),
 ]

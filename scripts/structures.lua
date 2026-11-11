@@ -473,11 +473,21 @@ local function hook_of(p)
   local s = def and def.script and findScript and findScript(def.script) or nil
   return s
 end
+-- (builderperf) a plain two-faced wall has no script, but kit_live hides its
+-- inside face from outside it: it hears the wall come and go
+local function is_cull_wall(def) return def and def.kit and def.faces2 and def.snap == "wall" and def.script ~= "kit_live" end
 local function hook_gone(id, uid)
   local r = recs and recs[id]
   local p = r and part_in(r, uid)
   local h = p and hook_of(p)
   if h and h.gone then pcall(h.gone, id, uid) end
+  if p and not h then
+    local pb = parts_lib()
+    if is_cull_wall(pb and pb.partInfo(p.id)) then
+      local KL = findScript and findScript("kit_live")
+      if KL and KL.wallGone then pcall(KL.wallGone, id, uid) end
+    end
+  end
 end
 
 despawn = function(id)
@@ -668,6 +678,9 @@ spawn_part = function(r, L, p, noFoot)
         local okh, err = pcall(h.spawned, r, p, inst)
         if not okh and log then log("structures: " .. tostring(def.script) .. ".spawned: " .. tostring(err)) end
       end
+    elseif is_cull_wall(def) then
+      local KL = findScript and findScript("kit_live")
+      if KL and KL.wallSpawned then pcall(KL.wallSpawned, r, p, inst) end
     end
   end, planet)
   if not ok then L.spawning = L.spawning - 1 end

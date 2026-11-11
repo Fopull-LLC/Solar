@@ -45,10 +45,18 @@ local function sample(tag)
     end
   end
   local mh = m and ((m.worldPos.x - b.x) * u.x + (m.worldPos.y - b.y) * u.y + (m.worldPos.z - b.z) * u.z) or 0
+  -- (builderperf) the skeleton under the model node, in the model's own frame:
+  -- the Back bone (the hips' carrier) and the Head, across (x), up (y), along (z)
+  local bx_, by_, bz_, hx_, hy_ = 0, 0, 0, 0, 0
+  local Bk = an and an.boneWorld and an:boneWorld("Back")
+  if m and Bk then local l = m:toLocal(Bk); bx_, by_, bz_ = l.x, l.y, l.z end
+  if m and H then local l = m:toLocal(H); hx_, hy_ = l.x, l.y end
   local pw = findScript("planet_walker")
   local vs = pw and pw.vertState or {}
   local vu = (A.vx or 0) * u.x + (A.vy or 0) * u.y + (A.vz or 0) * u.z
   return { t = time, dt = DT or 0, hA = hA, hT = hT, cam = cam, head = head, sy = sy, rel = cam - head, mh = mh, tag = tag,
+           bkx = bx_, bky = by_, bkz = bz_, hdx = hx_, hdy = hy_,
+           drop = (pw and pw.feet and pw.feet.drop) or 0, gph = (pw and pw.gaitPhase) or 0,
            c = vs.contact and 1 or 0, ray = vs.ray and 1 or 0, slope = vs.slope or 0, pop = vs.pop or 0, snap = vs.snap or 0, vu = vu }
 end
 function lateUpdate(node, dt)
@@ -88,13 +96,13 @@ local function record(phase, secs)
     local t1 = upd[1] and upd[1].t or 0
     for i, s in ipairs(upd) do
       if s.t - t1 > 1.0 then break end
-      J("F %s %3d t %.4f hA %.4f hT %.4f cam %.4f head %.4f sy %.1f | contact %d ray %d slope %.3f pop %.3f snap %.3f vu %.3f",
+      J("F %s %3d t %.4f hA %.4f hT %.4f cam %.4f head %.4f sy %.1f | contact %d ray %d slope %.3f pop %.3f snap %.3f vu %.3f | bky %.4f drop %.4f ph %.3f",
         phase, i, s.t - t1, s.hA - upd[1].hA, s.hT - upd[1].hA, s.cam - upd[1].cam, s.head - upd[1].head, s.sy,
-        s.c, s.ray, s.slope, s.pop, s.snap, s.vu)
+        s.c, s.ray, s.slope, s.pop, s.snap, s.vu, s.bky, s.drop, s.gph)
     end
   end
   for _, set in ipairs({ { "late", late }, { "update", upd } }) do
-    for _, key in ipairs({ "hA", "hT", "mh", "cam", "head", "rel", "sy" }) do
+    for _, key in ipairs({ "hA", "hT", "mh", "cam", "head", "rel", "sy", "bkx", "bky", "bkz", "hdx", "hdy", "drop" }) do
       local k = key == "sy" and 1 or 1000
       local rms, p95, mx = d2stats(set[2], key, k)
       J("RESULT %s %s %-4s d2 rms %.3f p95 %.3f max %.3f %s", phase, set[1], key, rms, p95, mx, key == "sy" and "px" or "mm")
@@ -144,6 +152,38 @@ local function run_jitter()
   pw.steer(nil)
   wait(1.5)
   record("stop", 2.0)
+  -- (builderperf) LANDINGS: a standing jump, then a running one. Every frame
+  -- in lateUpdate: the head's height over the crew's drawn centre (the
+  -- skeleton and the model's dip together); the steepest fall of it over any
+  -- 3 frames and over 0.1 s, and its range.
+  for _, run in ipairs({ { "land_stand", nil }, { "land_run", 1 } }) do
+    local list = {}
+    LATE = function(node, dt)
+      local s2 = sample("L")
+      if s2 then s2.hd = s2.head - s2.hA; list[#list + 1] = s2 end
+    end
+    if run[2] then pw.steer(1, 0, false); wait(1.2) end
+    pw.steer(run[2] or 0, 0, false, true)
+    wait(2.2)
+    pw.steer(nil)
+    LATE = nil
+    local worst3, worst01, low, top = 0, 0, 1e9, -1e9
+    for i = 1, #list do
+      local h = list[i].hd
+      if h < low then low = h end
+      if h > top then top = h end
+      if i > 3 then worst3 = math.max(worst3, list[i - 3].hd - h) end
+      local j = i
+      while j > 1 and list[i].t - list[j - 1].t <= 0.1 do j = j - 1 end
+      worst01 = math.max(worst01, list[j].hd - h)
+    end
+    J("RESULT %s head over centre: range %.3f m, steepest drop %.3f m in 3 frames, %.3f m in 0.1 s (%d frames)",
+      run[1], top - low, worst3, worst01, #list)
+    if (params.jit_frames or 0) > 0 then
+      for i, s2 in ipairs(list) do J("L %s %3d t %.3f hd %.4f mh %.4f", run[1], i, s2.t - list[1].t, s2.hd, s2.mh - s2.hA) end
+    end
+    wait(1.0)
+  end
 end
 
 -- ── medself: the Medkit used on yourself, from the front and the side ──────

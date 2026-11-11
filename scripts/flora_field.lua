@@ -1373,15 +1373,106 @@ end
 -- structure's frame, from its records) is taken off as the audit takes one.
 -- It comes back on a redeclaration and is taken again here. The near
 -- queries are a job worked off under STRUCT_CLEAR.ms a frame, never a burst.
-STRUCT_CLEAR = { every = 3.0, radius = 60.0, low = 0.35, raised = 2.6, ms = 0.25 }
+STRUCT_CLEAR = { every = 3.0, radius = 60.0, low = 0.35, raised = 2.6, ms = 0.25, cell = 4.0 }
 structClearRemoved = 0
 local sc_t = -1e9
 local sc_first = nil     -- (11-09) when this scene's first pass ran: the first 30 s go every second
-local sc_job = nil       -- { items = { { sid, cx, cy, cz (body-relative), R, U, F, boxes, reach } … }, i }
+local sc_job = nil       -- { items = { { sid, rec } … }, i, pg, F, k }
+-- (builderperf, 11-10: at 2,000-6,000 pieces this clear made 40-48 ms frames.
+-- A pass read every part's partInfo through another script (thousands of
+-- cross-script calls in one frame), and each prop a near query answered was
+-- tested against every floor box of the structure. Now a structure's boxes are
+-- built once per records change, a slice a frame, kept in a grid of
+-- STRUCT_CLEAR.cell m cells in the structure's frame (a prop tests only the
+-- boxes of its cell); a part kind's class is looked up once; and the near
+-- queries are paged under the same budget.)
+local sc_kind = {}       -- part id → false | { half x, z, class }
+local sc_cache = setmetatable({}, { __mode = "k" })   -- record → { ver, i, boxes, grid, reach, F, done }
+local function sc_kind_of(PB, id)
+  local k = sc_kind[id]
+  if k == nil then
+    local d = PB.partInfo(id)
+    k = false
+    if d and d.half then
+      local cls = nil
+      if d.kit and (d.snap == "slab" or d.snap == "floor") then cls = "floor"
+      elseif d.kit and (d.snap == "hab" or d.deckTop ~= nil) then cls = "hab"
+      elseif d.kit and d.snap == "block" then cls = "block"
+      elseif d.hull ~= nil or d.deck ~= nil then cls = "any" end
+      if cls then k = { hx = d.half.x + 0.05, hz = d.half.z + 0.05, r = math.sqrt(d.half.x ^ 2 + d.half.z ^ 2), cls = cls } end
+    end
+    sc_kind[id] = k
+  end
+  return k
+end
+-- the record's frame (structures.frame), nil if degenerate
+local function sc_frame(rec)
+  local ux, uy, uz = rec.ux or 0, rec.uy or 1, rec.uz or 0
+  local ul = math.sqrt(ux * ux + uy * uy + uz * uz); ux, uy, uz = ux / ul, uy / ul, uz / ul
+  local fx, fy, fz = rec.fx or 0, rec.fy or 0, rec.fz or 1
+  local fd = fx * ux + fy * uy + fz * uz
+  fx, fy, fz = fx - ux * fd, fy - uy * fd, fz - uz * fd
+  local fl = math.sqrt(fx * fx + fy * fy + fz * fz)
+  if fl <= 1e-6 then return nil end
+  fx, fy, fz = fx / fl, fy / fl, fz / fl
+  return { ux = ux, uy = uy, uz = uz, fx = fx, fy = fy, fz = fz,
+           rx = uy * fz - uz * fy, ry = uz * fx - ux * fz, rz = ux * fy - uy * fx }
+end
+-- build (or go on building) a record's boxes; true when they are ready.
+local function sc_build(rec, ver, PB, t0)
+  local c = sc_cache[rec]
+  if not c or c.ver ~= ver or c.bp ~= rec.bp then
+    c = { ver = ver, bp = rec.bp, i = 1, boxes = {}, grid = {}, reach = 0, F = sc_frame(rec), done = false }
+    sc_cache[rec] = c
+  end
+  if c.done then return true end
+  if not c.F then c.done = true return true end
+  local bp, G = rec.bp or {}, STRUCT_CLEAR.cell
+  local n = 0
+  while c.i <= #bp do
+    local p = bp[c.i]
+    c.i = c.i + 1
+    local k = sc_kind_of(PB, p.id)
+    -- (11-09: a slab or floor set on the terrain — `gnd`, joined to a
+    -- structure at the ground's own height — is at the ground wherever
+    -- its height in the frame)
+    -- (Ty 11-10, habjoin shots hj4c/hj5: plants grew up through hab decks, which are 0.8 m
+    -- over the ground, and through raised kit floors: a hab piece (`deckTop`, snap "hab"), a
+    -- floor or slab up to a storey over the ground, and a block standing on the ground clear
+    -- what is rooted under them, up to their own height plus a metre)
+    local py = p.y or 0
+    if k and ((k.cls == "floor" and (py <= STRUCT_CLEAR.raised or p.gnd)) or (k.cls == "hab" and py <= STRUCT_CLEAR.raised)
+              or (k.cls == "block" and py <= STRUCT_CLEAR.low) or k.cls == "any") then
+      local cs, sn = math.cos(p.yaw or 0), math.sin(p.yaw or 0)
+      local b = { x = p.x or 0, y = py, z = p.z or 0, c = cs, s = sn, hx = k.hx, hz = k.hz,
+                  lo = (py > STRUCT_CLEAR.low) and -1.5 - py or -1.0 }
+      c.boxes[#c.boxes + 1] = b
+      local r = math.sqrt(b.x * b.x + b.z * b.z) + k.r
+      if r > c.reach then c.reach = r end
+      -- the cells its turned footprint covers
+      local ex = math.abs(cs) * k.hx + math.abs(sn) * k.hz
+      local ez = math.abs(sn) * k.hx + math.abs(cs) * k.hz
+      for gi = math.floor((b.x - ex) / G), math.floor((b.x + ex) / G) do
+        for gj = math.floor((b.z - ez) / G), math.floor((b.z + ez) / G) do
+          local key = gi * 65536 + gj
+          local cell = c.grid[key]
+          if not cell then cell = {}; c.grid[key] = cell end
+          cell[#cell + 1] = b
+        end
+      end
+    end
+    n = n + 1
+    if n % 64 == 0 and (clear_wall() - t0) * 1000 >= STRUCT_CLEAR.ms then return false end
+  end
+  c.done = true
+  return true
+end
 local function struct_clear(obs)
   if not (obs and cur_body and scatter and scatter.near) then return end
   local body = space.body(cur_body)
   if not body then return end
+  local ST, PB = ref("structures"), ref("parts_base")
+  if not (ST and PB and ST.list) then return end
   if not sc_job then
     -- (S8 probe, 11-09: "grass pokes through kit slabs again after a reload".
     -- After a load the plants are declared and dropped over the first seconds;
@@ -1392,86 +1483,65 @@ local function struct_clear(obs)
     local every = (time - sc_first < 30) and 1.0 or STRUCT_CLEAR.every
     if time < sc_t + every then return end
     sc_t = time
-    local ST, PB = ref("structures"), ref("parts_base")
-    if not (ST and PB and ST.list) then return end
     local items = {}
     for _, rec in ipairs(ST.list()) do
-      if rec.b == cur_body then
+      if rec.b == cur_body and rec.bp and #rec.bp > 0 then
         local dx, dy, dz = body.x + rec.x - obs.x, body.y + rec.y - obs.y, body.z + rec.z - obs.z
         if dx * dx + dy * dy + dz * dz < STRUCT_CLEAR.radius * STRUCT_CLEAR.radius then
-          -- the structure's frame (structures.frame), and its ground-level footprint
-          local ux, uy, uz = rec.ux or 0, rec.uy or 1, rec.uz or 0
-          local ul = math.sqrt(ux * ux + uy * uy + uz * uz); ux, uy, uz = ux / ul, uy / ul, uz / ul
-          local fx, fy, fz = rec.fx or 0, rec.fy or 0, rec.fz or 1
-          local fd = fx * ux + fy * uy + fz * uz
-          fx, fy, fz = fx - ux * fd, fy - uy * fd, fz - uz * fd
-          local fl = math.sqrt(fx * fx + fy * fy + fz * fz)
-          if fl > 1e-6 then
-            fx, fy, fz = fx / fl, fy / fl, fz / fl
-            local boxes, reach = {}, 0
-            for _, p in ipairs(rec.bp or {}) do
-              local d = PB.partInfo(p.id)
-              -- (11-09: a slab or floor set on the terrain — `gnd`, joined to a
-              -- structure at the ground's own height — is at the ground wherever
-              -- its height in the frame)
-              -- (Ty 11-10, habjoin shots hj4c/hj5: plants grew up through hab decks, which are 0.8 m
-              -- over the ground, and through raised kit floors: a hab piece (`deckTop`, snap "hab"), a
-              -- floor or slab up to a storey over the ground, and a block standing on the ground clear
-              -- what is rooted under them, up to their own height plus a metre)
-              local py = p.y or 0
-              local floorish = d and d.half and ((d.kit and (d.snap == "slab" or d.snap == "floor") and (py <= STRUCT_CLEAR.raised or p.gnd))
-                                                 or (d.kit and (d.snap == "hab" or d.deckTop ~= nil) and py <= STRUCT_CLEAR.raised)
-                                                 or (d.kit and d.snap == "block" and py <= STRUCT_CLEAR.low)
-                                                 or d.hull ~= nil or d.deck ~= nil)
-              if floorish then
-                boxes[#boxes + 1] = { x = p.x or 0, y = py, z = p.z or 0, c = math.cos(p.yaw or 0), s = math.sin(p.yaw or 0),
-                                      hx = d.half.x + 0.05, hz = d.half.z + 0.05, lo = (py > STRUCT_CLEAR.low) and -1.5 - py or -1.0 }
-                local r = math.sqrt((p.x or 0) ^ 2 + (p.z or 0) ^ 2) + math.sqrt(d.half.x ^ 2 + d.half.z ^ 2)
-                if r > reach then reach = r end
-              end
-            end
-            if #boxes > 0 then
-              local F = { ux = ux, uy = uy, uz = uz, fx = fx, fy = fy, fz = fz,
-                          rx = uy * fz - uz * fy, ry = uz * fx - ux * fz, rz = ux * fy - uy * fx }
-              for sid, sr in pairs(srcs) do
-                if sr.part ~= "bark" then
-                  items[#items + 1] = { sid = sid, x = rec.x, y = rec.y, z = rec.z, F = F, boxes = boxes, reach = reach }
-                end
-              end
-            end
+          for sid, sr in pairs(srcs) do
+            if sr.part ~= "bark" then items[#items + 1] = { sid = sid, rec = rec } end
           end
         end
       end
     end
     if #items == 0 then return end
-    sc_job = { items = items, i = 1 }
+    sc_job = { items = items, i = 1, ver = ST.version }
   end
-  -- a few near queries a frame, never a burst (the walk's stutter)
+  -- a slice a frame, never a burst (the walk's stutter)
   local t0 = clear_wall()
+  local G = STRUCT_CLEAR.cell
   while sc_job and sc_job.i <= #sc_job.items do
     local it = sc_job.items[sc_job.i]
-    sc_job.i = sc_job.i + 1
-    if srcs[it.sid] then
-      local F = it.F
-      local cx, cy, cz = body.x + it.x, body.y + it.y, body.z + it.z
-      for _, h in ipairs(scatter.near(it.sid, vec3(cx, cy, cz), it.reach + 0.5) or {}) do
-        if h.pos then
-          local qx, qy, qz = h.pos.x - cx, h.pos.y - cy, h.pos.z - cz
-          local lx, ly, lz = qx * F.rx + qy * F.ry + qz * F.rz, qx * F.ux + qy * F.uy + qz * F.uz, qx * F.fx + qy * F.fy + qz * F.fz
-          do
-            for _, b in ipairs(it.boxes) do
+    local rec = it.rec
+    if not srcs[it.sid] then
+      sc_job.i, sc_job.pg, sc_job.F = sc_job.i + 1, nil, nil
+    else
+      if not sc_build(rec, ST.version, PB, t0) then return end
+      local c = sc_cache[rec]
+      if not c.F or #c.boxes == 0 then
+        sc_job.i, sc_job.pg, sc_job.F = sc_job.i + 1, nil, nil
+      else
+        local F = c.F
+        -- round the structure's origin, kept body-relative (the job runs over frames)
+        if not sc_job.pg then sc_job.pg, sc_job.F = pager(it.sid, rec.x, rec.y, rec.z, c.reach + 0.5), nil end
+        if not sc_job.F or sc_job.k > sc_job.F.count then sc_job.F, sc_job.k = pager_next(sc_job.pg, body), 1 end
+        local P = sc_job.F
+        local n = 0
+        while P and sc_job.k <= P.count do
+          local k = sc_job.k
+          sc_job.k = k + 1
+          local qx, qy, qz = P.rx[k] - rec.x, P.ry[k] - rec.y, P.rz[k] - rec.z
+          local lx, lz = qx * F.rx + qy * F.ry + qz * F.rz, qx * F.fx + qy * F.fy + qz * F.fz
+          local cell = c.grid[math.floor(lx / G) * 65536 + math.floor(lz / G)]
+          if cell then
+            local ly = qx * F.ux + qy * F.uy + qz * F.uz
+            local unsettled = P.settled and P.settled[k] == false
+            for _, b in ipairs(cell) do
               local ox, oz = lx - b.x, lz - b.z
               local px, pz = ox * b.c - oz * b.s, ox * b.s + oz * b.c
               -- (rooted within a metre under or over that floor; still dropping: up to 3 m over it)
-              local dy = ly - (b.y or 0)
-              if math.abs(px) <= b.hx and math.abs(pz) <= b.hz and dy > (b.lo or -1.0) and dy < ((h.settled == false) and 3.0 or 1.0) then
-                audit_take(it.sid, { id = h.id })
+              local dy = ly - b.y
+              if math.abs(px) <= b.hx and math.abs(pz) <= b.hz and dy > b.lo and dy < (unsettled and 3.0 or 1.0) then
+                audit_take(it.sid, { id = P.ids[k] })
                 structClearRemoved = structClearRemoved + 1
                 break
               end
             end
           end
+          n = n + 1
+          if n % 64 == 0 and (clear_wall() - t0) * 1000 >= STRUCT_CLEAR.ms then return end
         end
+        if not P or (sc_job.pg.done and sc_job.k > P.count) then sc_job.i, sc_job.pg, sc_job.F = sc_job.i + 1, nil, nil end
       end
     end
     if (clear_wall() - t0) * 1000 >= STRUCT_CLEAR.ms then return end

@@ -151,7 +151,7 @@
     (
         name: "Wall 5",
         transform: (
-            translation: (0.0000, 0.7400, 0.0000),
+            translation: (0.0000, 0.5900, 0.0000),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -164,7 +164,7 @@
             mode: Static,
             radius: 0.5,
             height: 1.0,
-            half_extents: (0.8340, 0.0600, 1.0000),
+            half_extents: (0.6374, 0.0600, 1.0000),
             restitution: 0.0,
             friction: 0.9,
             gravity: false,

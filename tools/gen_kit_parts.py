@@ -214,8 +214,10 @@ def wall_body(m, sh, mat, x0, x1, y0, y1, holes=(), t=WT, trims=True):
                 bx(m, "Steel", GREY, p0, p1, q0, q1, -hz - 0.012, hz + 0.012)
 
 
-def door_leaf(w, h, heavy=False, window=True, t=0.05):
-    """A sliding leaf about its own bottom centre: (model, its colliders)."""
+def door_leaf(w, h, heavy=False, window=True, t=0.05, ww=None, wx=0.0):
+    """A sliding leaf about its own bottom centre: (model, its colliders).
+    ww, wx: the vision panel's width and its centre across the leaf (a narrow leaf
+    of a pair keeps it clear of the dogs and the chevrons on its leading edge)."""
     m = CModel(seed=301)
     m.ground = False
     sh = Shell()
@@ -228,9 +230,10 @@ def door_leaf(w, h, heavy=False, window=True, t=0.05):
         bx(m, "Steel", LIGHT, -w / 2 + 0.06, -w / 2 + 0.09, 0.85, 1.25, s * (t / 2 + 0.02) - 0.012, s * (t / 2 + 0.02) + 0.012)
     if window:
         wy0, wy1 = (1.25, 1.75) if not heavy else (1.35, 1.65)
-        ww = 0.22 if not heavy else 0.30
-        bx(m, "Steel", DARK, -ww / 2 - 0.03, ww / 2 + 0.03, wy0 - 0.03, wy1 + 0.03, -t / 2 - 0.006, t / 2 + 0.006)
-        bx(m, "Pane", (1, 1, 1), -ww / 2, ww / 2, wy0, wy1, -t / 2 - 0.008, t / 2 + 0.008)
+        if ww is None:
+            ww = 0.22 if not heavy else 0.30
+        bx(m, "Steel", DARK, wx - ww / 2 - 0.03, wx + ww / 2 + 0.03, wy0 - 0.03, wy1 + 0.03, -t / 2 - 0.006, t / 2 + 0.006)
+        bx(m, "Pane", (1, 1, 1), wx - ww / 2, wx + ww / 2, wy0, wy1, -t / 2 - 0.008, t / 2 + 0.008)
     if heavy:
         # dogs round the edge and hazard chevrons along the leading edge
         for y in (0.4, 1.0, 1.6):
@@ -362,6 +365,11 @@ def kit_stair(m, sh, rise, run, width):
 
 def p_steps(mat):
     return p_stairs(mat, rise=0.8, run=1.0, width=1.2)
+
+
+def p_habSteps(mat):
+    # (builderperf: the ground to a hab's lowered deck, at its Door Bulkhead)
+    return p_stairs(mat, rise=HDECK, run=0.8, width=1.2)
 
 
 def p_ladder(mat):
@@ -756,7 +764,11 @@ def p_rail(mat):
 
 # ── the hab can (2.5 m, along Z, on saddles) ─────────────────────────────────
 HR, HT, HAX = 1.25, 0.08, 1.65    # outer radius, hull, the axis's height (saddles 0.4 m)
-HDECK = 0.80                      # the deck's top
+# (builderperf, Ty 11-10 decision: the walker's capsule is 1.9 m and the hab door and
+# the junction's passage were 1.8 m. The deck is 15 cm lower, so both openings are
+# 2.0 m clear; the can, its flanges, saddles and snap points are as they were. The
+# deck is narrower for it: 1.14 m between the kick strips, was 1.57.)
+HDECK = 0.65                      # the deck's top
 KICKZ = 0.996                     # the deck's kick strips stop short of the flanges' faces
 
 
@@ -890,7 +902,7 @@ def p_habWindow(mat):
 JOIN_CODES = ("L", "R", "LR", "Lb", "Lf", "Lbf", "Rb", "Rf", "Rbf", "LRb", "LRf", "LRbf")
 PZ, PWT = 0.62, 0.10                 # the passage's half-width, the trunk's walls
 PHZ = 0.67                           # the hull's hole half-width (inside the walls)
-PY1 = HDECK + 1.8                    # the passage's ceiling (the deck is its floor): the bulkhead door's height
+PY1 = HDECK + 2.0                    # the passage's ceiling (the deck is its floor): the bulkhead door's height
 PFB, PCT = HAX - 1.05, HAX + 1.05    # the trunk's underside and top (they bury the hole's edges)
 PX0 = 0.62                           # where the trunk starts, inside the hull
 PLX0, PLX1 = 1.31, 1.35              # the berthing plate; the branch's ring butts on PLX1 (the box's side)
@@ -1208,7 +1220,11 @@ def p_habBulkhead(mat):
     m, sh = CModel(seed=66), Shell()
     m.ground = False
     R = HR - 0.02
-    dx0, dx1, dy0, dy1 = -0.84, 0.0, HDECK, HDECK + 1.8
+    # (builderperf: 2.0 m clear from the lowered deck. A 2 m leaf parked beside the
+    # opening must stay inside the flanges' 1.28 m, which leaves 0.8 m of width for
+    # opening AND parked leaf: so a centred 0.76 m opening closed by a PAIR of leaves
+    # sliding apart, each parked inside the flange ring; centred on the narrower deck.)
+    dx0, dx1, dy0, dy1 = -0.38, 0.38, HDECK, HDECK + 2.0
     # the plate in 0.05 m strips (its stepped edge under the flange rings)
     t = 0.05
     ny = int(2 * R / 0.05)
@@ -1243,8 +1259,13 @@ def p_habBulkhead(mat):
     sh.add(((dx0 + dx1) / 2, (dy1 + HAX + R) / 2, 0), (dx1 - dx0, HAX + R - dy1, 0.08))
     sh.add(((dx0 + dx1) / 2, (HAX - R + dy0) / 2, 0), (dx1 - dx0, dy0 - (HAX - R), 0.08))
     hab_saddles(m, sh, (0.0,))
-    lm, lsh = door_leaf(0.88, 1.8, heavy=True, t=0.05)
-    return m, sh, [("Door", "door", (lm, lsh, (-0.42, HDECK, -0.065)))]
+    # the right leaf slides +X (its leading edge, chevrons and dogs, on its -X side);
+    # the left one is the same leaf turned about Y (kit_live slides Door2 the other way)
+    # (0.39 m each, meeting at the middle in one plane; 1 cm behind each jamb)
+    lm, lsh = door_leaf(0.39, 2.0, heavy=True, t=0.05, ww=0.16, wx=0.05)
+    l2 = CModel(seed=302); l2.ground = False
+    l2.merge(lm, M=rot_y(math.pi))
+    return m, sh, [("Door", "door", (lm, lsh, (0.195, HDECK, -0.065))), ("Door2", "door", (l2, lsh, (-0.195, HDECK, -0.065)))]
 
 
 def p_shieldBlock(mat):
@@ -1583,6 +1604,7 @@ PIECES = {
     "ramp": (p_ramp, ["concrete", "steel"]),
     "stairs": (p_stairs, ["steel", "concrete"]),
     "steps": (p_steps, ["steel", "concrete"]),
+    "habSteps": (p_habSteps, ["steel", "concrete"]),
     "ladder": (p_ladder, ["steel"]),
     "grating": (p_grating, ["steel"]),
     "floor": (p_floor, ["steel", "concrete", "regocrete", "glass"]),
@@ -1714,7 +1736,13 @@ def split_model(m, take):
         P = np.vstack(Ps); N = np.vstack(Ns); UV = np.vstack(UVs); I = np.vstack(Is)
         C = np.vstack(m.cols[mat])
         cen = (P[I[:, 0]] + P[I[:, 1]] + P[I[:, 2]]) / 3
-        sel = np.array([bool(take(mat, c)) for c in cen], bool)
+        if take.__code__.co_argcount >= 3:
+            # (builderperf) the triangle's facing too: its vertices' normals averaged
+            nrm = N[I[:, 0]] + N[I[:, 1]] + N[I[:, 2]]
+            nrm = nrm / np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-9)
+            sel = np.array([bool(take(mat, c, n)) for c, n in zip(cen, nrm)], bool)
+        else:
+            sel = np.array([bool(take(mat, c)) for c in cen], bool)
         for model, mask in ((got, sel), (keep, ~sel)):
             if not mask.any():
                 continue
@@ -1740,7 +1768,14 @@ def paint_split(piece, m, children):
     f2 = faces2_of(piece)
     inn = None
     if f2 == "z":
-        m, inn = split_model(m, lambda mat, c: c[2] < -1e-4)
+        # (builderperf, 11-10) the inside is the faces that LOOK into the room: facing -Z, on or
+        # beyond the panel's inner face. Split by centroid before, every face across the wall's
+        # thickness (its top, its ends, a doorway's reveals, a sill) was cut along its diagonal,
+        # half painted and lit as the inside and half as the outside. Now those are all the
+        # Mesh's, so the Mesh alone is the wall's whole silhouette and MeshIn need not cast
+        # (one sun-map draw less a wall), and a concrete panel's lifting inserts (on its top,
+        # inside the thickness) leave MeshIn with the concrete alone (one instance less).
+        m, inn = split_model(m, lambda mat, c, n: n[2] < -0.5 and c[2] < -(WT / 2) + 1e-3)
     elif f2 == "ring" and "J" in piece:
         m, inn = split_model(m, lambda mat, c: join_inside(c))
     elif f2 == "ring":
@@ -1856,7 +1891,10 @@ def write_piece(piece, mat, fn, dry, fixture):
             cm, at = data
             cc, clo, chi = centre(cm)
             # (S4: a wall's inside and a piece's glass are as much of it as its Mesh: they cast)
-            cast = cname in ("MeshIn", "Glass") and not small
+            # (builderperf: a two-faced WALL's MeshIn is only its room-facing faces, behind the
+            # Mesh's own: the Mesh casts the whole shadow. A hab can's lining and deck still cast,
+            # for the sun through its windows and open ends.)
+            cast = cname in ("MeshIn", "Glass") and not small and not (cname == "MeshIn" and faces2_of(piece) == "z")
             nodes.append(node_mesh(cname, f"{FOLDER}/{piece}_{mat}_{cname.lower()}.glb", cm, np.asarray(at) + cc, 0, cast=cast,
                                    refl=INSIDE_REFL if cname == "MeshIn" else None))
             extra.append((f"{piece}_{mat}_{cname.lower()}.glb", cm))

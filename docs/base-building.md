@@ -4183,3 +4183,85 @@ world (`scripts/terminal.lua`, on the ContextLib prefab).
   (Graveyard Shift staged: the prompt, E, every page pictured, a breaker
   trip-tested and reset, MU-1, SCRAM, the airlock, a door, the log, Esc, the
   desk monitor, the cost).
+
+## 32. Builder performance, and a hab you walk into standing (11-10)
+
+### Where a big base's frame went
+
+`tools/perf/kitprobe.sh <engine> kitperf` (500 / 2,000 / 6,000 pieces in
+view). Numbers in `work/builderperf/NOTES.md`.
+
+- **Instances.** A wall-class piece is 4 instances (its Mesh and its MeshIn,
+  each in two materials) since S4 gave a wall's inside face a node of its own
+  (paint) and S5 a 12 % sky reflection; a floor is 1. That is the 50 % more
+  instances per piece than the S1 measurement. Two material states a side
+  cannot share a primitive (an engine card asks for per-primitive material
+  numbers in one instance). What changed here:
+  - **The inside is the faces that look into the room** (`paint_split`):
+    facing −Z on or past the panel's inner face. A wall's top, ends, a
+    doorway's reveals and a sill are the Mesh's. Split by centroid before,
+    each of those faces was cut along its diagonal, half painted and lit as
+    the inside, half as the outside: now they are the outside's.
+  - **A wall's MeshIn casts no shadow** (the Mesh is its whole silhouette): one
+    sun-map draw less a wall. A hab can's lining still casts.
+  - **A concrete or regocrete panel's inside is the concrete alone** (its
+    lifting inserts are on its top): 3 instances, was 4.
+  - **A wall's inside is not drawn from outside it** (`kit_live`, "a wall's
+    inside, seen from outside it"): from the wall's outer side every MeshIn
+    face looks away and lies behind the wall's outer face and reveals. The
+    camera is tested against each wall's plane in the camera pass,
+    body-relative: walls within 10 m every frame, the rest a slice a frame
+    (all in ~8 frames) with a margin for the camera's motion; a cut hides
+    nothing that frame. `kit_live.setWallCull(false)` turns it off,
+    `wallStats()` counts. Test: `tests/smoke_wall_cull.lua`.
+  - Plain walls have no script, so structures tells kit_live as one lands
+    and goes (`wallSpawned`, `wallGone`); kit_live's scans and its light pool
+    walk only the pieces with a door, a light, a screen or a sign.
+  - The base census (`base_roles`) keeps each part kind's def: it read every
+    part's through two scripts, a 60 ms frame after a 2,000-piece structure
+    landed.
+- **flora_field's structure clear** made the 40-48 ms frames: each pass read
+  every part's `partInfo` through two scripts, and tested every prop a near
+  query answered against every floor box. A part kind is looked up once; a
+  structure's boxes are built once per records change, a slice a frame, into
+  a 4 m grid in the structure's frame; the near queries are paged under the
+  same budget (smoke_flora).
+- **tool_belt** polled for nodes that are not in the scene ("FacRepair", the
+  laser's muzzle and impact while it is away); the engine's `find` walks every
+  node for a name it does not hold, so its cost grew with the base. A miss is
+  remembered for half a second (engine card: a missing name from the index).
+
+### The walker (measured, partly fixed)
+
+`tools/perf/jitterprobe.sh <engine> jitter` now records the Back bone and the
+head in the model's own frame, the hips' drop, and two landings. Walking, the
+Back's height jerks 4-6 cm between two frames at each heel strike (d2 rms
+18-22 mm): the gait clips' own hips (24 keys a cycle), not the walker's drop
+(0.2-0.7 mm). A landing folds 16-19 cm in 3 frames: the land clip's absorb at
+0.09 s. Changed: the lean's acceleration is taken from an eased speed (the
+tick-stepped speed spiked it), the land clip fades in over 0.14 s, the
+landing dip eases down. Easing the hips in the walker (a MaleArm offset)
+measured no change and was taken out; the fix is in the clips
+(`tools/gen_astronaut_anims.py`: more keys or a smoothed pelvis in the gaits,
+a later absorb in `land`).
+
+### The hab's deck, 15 cm lower (Ty's decision)
+
+The walker's capsule is 1.9 m; the hab door and a junction's passage were
+1.8 m. The deck is at 0.65 m (was 0.8) in every segment, window segment and
+junction, so both are 2.0 m clear. The can, its flanges, saddles, colliders
+round the hull and its snap points are as they were; the deck is 1.14 m
+between the kick strips (was 1.57). `deckTop` is 0.65, so what stands on the
+deck stands on it.
+
+- **The Door Bulkhead** has a centred 0.76 × 2.0 m opening closed by a pair of
+  heavy leaves that slide apart (`door.pair`, 0.38 m each way, 0.9 s). One
+  2 m leaf parked beside the opening would have to reach past the flanges'
+  1.28 m: the pair parks inside them.
+- **Hab Steps 0.65 m** (FOUNDATION, new): three risers from the ground to the
+  deck at a Door Bulkhead. Steps 0.8 m are for a 0.8 m deck or door and stay
+  as they were (ruins and scenarios use them at slab sills).
+- `tools/perf/kitprobe.sh <engine> zfight` walks a capped run with a Door
+  Bulkhead and Hab Steps at its end and a branch off its middle: up the steps,
+  through the door, along the run and through the port into the branch,
+  never crouching (`hab_door`, `hab_port`, `hab_stand`).

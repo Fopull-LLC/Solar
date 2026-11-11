@@ -882,6 +882,7 @@ gaitPhase, gaitAmount = 0.0, 0.0   -- published copies of the two above (tool_be
 local gait_sent = nil      -- the last `gait` written, so an unchanged one isn't re-sent
 local layer_w = {}         -- last weights written, so unchanged ones aren't re-sent
 local land_dip = 0.0
+local land_dip_t = 0.0   -- (builderperf) what the dip is easing toward: set on touchdown, springing back
 -- What `update` measured for `lateUpdate`'s pose this frame (one table, kept;
 -- `on` says whether this frame filled it).
 local pose_req = { on = false, spd = 0.0, ground = false, stand = 0.0, stride = 0.0 }
@@ -921,6 +922,7 @@ local function footstep(node, from, to)
       minDistance = 3.0, maxDistance = 60.0 * q })
 end
 
+LAND_FADE = 0.14
 -- Drive the layers from what the body is actually doing.
 local function animate(node, dt, spd, on_ground, jumped, swimming, landed_at)
   if anim then
@@ -937,7 +939,11 @@ local function animate(node, dt, spd, on_ground, jumped, swimming, landed_at)
         anim:crossfade("fall", 0.2, "Base")
       end
     elseif landed_at then
-      if st == "fall" or st == "jump" then anim:restart("land", 0.05, "Base") end
+      -- (builderperf, 11-10: "the landing crouch is very abrupt". The clip folds
+      -- 16-19 cm in its first 0.09 s; a 0.05 s fade from the fall's tuck added
+      -- the tuck's own swing to it. The real fix is the clip's timing:
+      -- tools/gen_astronaut_anims.py "land", absorb at 0.09 s.)
+      if st == "fall" or st == "jump" then anim:restart("land", LAND_FADE, "Base") end
     elseif st == "fall" or st == "jump" then
       anim:crossfade("idle", 0.2, "Base")
     end
@@ -1052,6 +1058,7 @@ local REACH_UP, REACH_DOWN = 0.5, 0.6    -- how far above / below the soles a fo
 
 local bank_s, pitch_s, twist_s = 0.0, 0.0, 0.0
 local accel_s, last_spd = 0.0, 0.0
+local spd_s = nil   -- (builderperf) the ground speed eased, what the lean's acceleration is taken from
 local look_w, look_dir = 0.0, nil
 local plant_w, plant_drop = 0.0, 0.0
 local ma_dy = 0.0   -- how far this frame's writes have moved MaleArm up so far
@@ -1109,15 +1116,21 @@ end
 -- it is the clip's.
 local function lean(dt, spd, on_ground)
   local bank, pitch = 0.0, 0.0
+  -- (builderperf, 11-10: "the skeleton zigzags 1-2 cm every frame while walking".
+  -- The speed is the body's tick velocity, which steps on the ticks (a frame with
+  -- no tick reads the same, the next a whole tick's change), and its difference
+  -- over one frame was a spike every tick: the chest pitched back and forth with
+  -- it. The speed is eased first, then differenced.)
+  spd_s = spd_s and (spd_s + (spd - spd_s) * (1 - math.exp(-12 * dt))) or spd
   if on_ground then
-    local a = (spd - last_spd) / math.max(dt, 1e-4)
+    local a = (spd_s - last_spd) / math.max(dt, 1e-4)
     accel_s = accel_s + (math.clamp(a, -30, 30) - accel_s) * (1 - math.exp(-6 * dt))
     bank = -math.atan(spd * yaw_rate / 9.8) * 0.5     -- + yaw is a LEFT turn; + roll tips right
     pitch = math.atan(accel_s / 9.8) * 0.8
   else
     accel_s = 0.0
   end
-  last_spd = spd
+  last_spd = spd_s
   -- Crouched, the chest leans over the knees; sliding, it sits back.
   local lean_k = sliding and -0.32 or 0.34
   local k = 1 - math.exp(-8 * dt)
@@ -2672,12 +2685,15 @@ function update(node, dt)
     -- The knees take the landing: a dip of the whole model, deeper for a
     -- harder landing, springing back. The land clip does the same while you
     -- stand; this is what shows it while a gait owns the legs.
-    land_dip = math.min(0.12, math.max(0.0, impact) * 0.012 + 0.03)
+    land_dip_t = math.min(0.12, math.max(0.0, impact) * 0.012 + 0.03)
     -- (Not on the jump's own frame, which also reads as `landed` here.)
     local fx = not jumped and ref("sfx")
     if fx and fx.playAt then fx.playAt("land", node, math.min(1.0, 0.3 + math.max(0.0, impact) * 0.07)) end
   end
-  land_dip = land_dip * math.exp(-9 * dt)
+  -- (builderperf: the dip eases DOWN to its depth over a few frames, then springs
+  -- back; it was the whole depth on the landing's frame)
+  land_dip_t = land_dip_t * math.exp(-9 * dt)
+  land_dip = land_dip + (land_dip_t - land_dip) * (1 - math.exp(-30 * dt))
   local feet_down = contact or (ground_hit ~= nil and ground_hit.distance < 1.15)
   local climb = 0
   if input.key("space") or (steer_f and steer_climb > 0) then climb = 1 end

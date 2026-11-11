@@ -212,7 +212,19 @@ local function agency_now()
   return tonumber(save and save.get and save.get("agency.clock")) or 0
 end
 local function radius_of(b) local w = space and space.body and space.body(b); return w and w.radius or nil end
-local function defs(id) local pb = ref("parts_base"); return pb and pb.partInfo and pb.partInfo(id) or nil end
+-- (builderperf, 11-10: the census read every part's def through parts_base and
+-- parts_kit, two cross-script calls a part: a 60 ms frame after a 2,000-piece
+-- structure landed. A part kind's def never changes in a session: kept.)
+local def_cache = {}
+local function defs(id)
+  local d = def_cache[id]
+  if d == nil then
+    local pb = ref("parts_base")
+    d = pb and pb.partInfo and pb.partInfo(id) or nil
+    if d ~= nil then def_cache[id] = d else return nil end
+  end
+  return d
+end
 local function kg_of(m) local M = ref("materials"); return (M and M.kg and M.kg(m)) or 1 end
 
 -- The places: { id, b, x, y, z (body-relative), rec (bases record or nil) },

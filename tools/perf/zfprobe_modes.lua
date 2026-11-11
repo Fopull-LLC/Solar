@@ -175,6 +175,41 @@ function ZF.run()
   local _, uy = KIT.at(recR)
   BK.check("ru_walk", r1 and r2, "the ruin's steps and both airlock doors walked standing")
   BK.check("ru_ladder", r3 and (uy or 0) > 2.4, "up the ladder to the upper floor (feet at %.2f)", uy or -1)
+  -- (builderperf, Ty 11-10 decision: the hab's door and a junction's passage are 2.0 m clear for
+  -- the 1.9 m capsule) a run of three cans with a Door Bulkhead and Hab Steps at its -Z end, a
+  -- branch off the middle one's +X side (the T) capped; walked in from the ground, up the steps,
+  -- through the door, along the run and through the port into the branch, never crouching
+  local hp = { { id = "habSteps.steel", x = 0, y = 0, z = -1.8, yaw = math.pi },
+               { id = "habBulkhead.steel", x = 0, y = 0, z = -1.2, yaw = 0 } }
+  for k = 0, 2 do hp[#hp + 1] = { id = "habSeg.steel", x = 0, y = 0, z = 2 * k, yaw = 0 } end
+  hp[#hp + 1] = { id = "habCap.steel", x = 0, y = 0, z = 5.35, yaw = 0 }
+  hp[#hp + 1] = { id = "habSeg.steel", x = 2.35, y = 0, z = 2, yaw = math.pi / 2 }
+  hp[#hp + 1] = { id = "habCap.steel", x = 3.7, y = 0, z = 2, yaw = math.pi / 2 }
+  local sidH = ZF.stamp(ST, hp, zf_g(spot, 80), "Probe Hab")
+  wait(6)
+  local recH = ST.get(sidH)
+  local hj = nil
+  for _, p in ipairs(recH and recH.bp or {}) do if p.hj then hj = p.hj end end
+  P("ZF hab: %d pieces, the junction %s", recH and #recH.bp or -1, tostring(hj))
+  KIT.view("zf_hab_door_out", recH, { 1.2, 1.7, -4.2 }, { 0, 1.4, -1.2 })
+  KIT.view("zf_hab_inside_run", recH, { 0, 1.75, -0.6 }, { 0, 1.2, 4.5 })
+  KIT.view("zf_hab_port", recH, { -0.4, 1.7, 1.0 }, { 2.4, 1.4, 2.0 })
+  KIT.view("zf_hab_door_in", recH, { 0, 1.7, 3.5 }, { 0, 1.4, -1.2 })
+  local pw = findScript("planet_walker")
+  local crouched = false
+  local function watch_crouch() if pw and (pw.crouching or (pw.crouchAmount or 0) > 0.05) then crouched = true end end
+  KIT.tp(recH, 0, -4.2)
+  wait(1.5)
+  local h1 = KIT.walk(recH, 0, -0.4, 14, 0.45, watch_crouch)
+  local _, hy1 = KIT.at(recH)
+  local h2 = KIT.walk(recH, 0, 2.0, 8, 0.4, watch_crouch)
+  local h3 = KIT.walk(recH, 2.3, 2.0, 10, 0.4, watch_crouch)
+  local hx3, hy3 = KIT.at(recH)
+  P("ZF hab walk: steps+door %s (feet at %.2f), run %s, port %s (at x %.2f, feet %.2f), crouched %s",
+    tostring(h1), hy1 or -1, tostring(h2), tostring(h3), hx3 or -1, hy3 or -1, tostring(crouched))
+  BK.check("hab_door", h1 and h2 and (hy1 or 0) > 0.5, "up the Hab Steps and through the Door Bulkhead onto the deck, standing")
+  BK.check("hab_port", h3 and (hx3 or 0) > 1.5, "through the junction's passage into the branch, standing")
+  BK.check("hab_stand", not crouched, "never crouched (a 2.0 m opening for the 1.9 m capsule)")
   KL.forceDoors = false
   if save.flush then save.flush() end
   BK.result()

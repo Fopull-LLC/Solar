@@ -78,7 +78,7 @@ s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
-              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "kit" then KIT.run()\n    elseif MODE == "kitperf" then KIT.run_perf()\n    elseif MODE == "rooms" then KIT.run_rooms()\n    elseif MODE == "character" then CH.run()\n    elseif MODE == "tint" then CH.run_tint()\n    elseif MODE == "interior" then PW.run_interior()\n    elseif MODE == "power" then PW.run()\n    elseif MODE == "reactor" then RXP.run()\n    elseif MODE == "fluids" then FLP.run()\n    elseif MODE == "logic" then LGP.run()\n    elseif MODE == "habjoin" then HJ.run()\n    elseif MODE == "zfight" then ZF.run()')
+              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "kit" then KIT.run()\n    elseif MODE == "kitperf" then KIT.run_perf()\n    elseif MODE == "kitview" then KIT.run_view()\n    elseif MODE == "tbprof" then KIT.run_tbprof()\n    elseif MODE == "rooms" then KIT.run_rooms()\n    elseif MODE == "character" then CH.run()\n    elseif MODE == "tint" then CH.run_tint()\n    elseif MODE == "interior" then PW.run_interior()\n    elseif MODE == "power" then PW.run()\n    elseif MODE == "reactor" then RXP.run()\n    elseif MODE == "fluids" then FLP.run()\n    elseif MODE == "logic" then LGP.run()\n    elseif MODE == "habjoin" then HJ.run()\n    elseif MODE == "zfight" then ZF.run()')
 open(p, 'w').write(s)
 PY
 rm -rf $S/proj/save/user/buildshots
