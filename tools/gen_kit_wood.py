@@ -46,8 +46,8 @@ WT, WH = 0.2, 2.2
 REFL = 0.3      # (wood reflects little sky: at 1.0 a rough dark board read as blue-grey concrete outdoors)
 
 
-def _set(name, normal=1.0, albedo=None):
-    t = TEX + name + "/"
+def _set(name, normal=1.0, albedo=None, prefix=None):
+    t = prefix or (TEX + name + "/")
     return ('(\n                color: (1.0, 1.0, 1.0),\n'
             f'                texture: Some("{albedo or (t + "albedo.png")}"),\n'
             f'                normal_map: Some("{t}normal.png"),\n'
@@ -63,7 +63,8 @@ def _set(name, normal=1.0, albedo=None):
 # (the boards' colour: Wood062's albedo warmed and lifted toward sawn, weathered softwood —
 # textures/kit/timber_albedo.png, made by timber_albedo() from the CC0 set, so CC0 too)
 TIMBER_ALBEDO = "textures/kit/timber_albedo.png"
-MATERIALS = {"Timber": lambda: _set("Wood062", 1.1, TIMBER_ALBEDO), "LogBark": lambda: _set("Bark016", 1.2)}
+# (W2: the boards wear the strip atlas below, timber_board(); W1's TIMBER_ALBEDO is kept for its maker)
+MATERIALS = {"Timber": lambda: _set("Wood062", 0.9, prefix="textures/kit/timber_board_"), "LogBark": lambda: _set("Bark016", 1.2)}
 
 
 def timber_albedo():
@@ -80,6 +81,90 @@ def timber_albedo():
     Image.fromarray((np.clip(s, 0, 1) * 255 + 0.5).astype(np.uint8)).save(out)
     return out
 
+# (W2, Ty 11-11: "the hut reads as grey stone at a distance") THE BOARD SET: a strip atlas, four
+# boards of Wood062 one above the other, each 128 px across its width (a board's width maps to its
+# strip whatever it is: 0.1-0.3 m), the grain along U at Wood062's own scale. Each strip is the set
+# weathered toward a grey-brown softwood (pores softened along the grain and the figure's contrast
+# taken to 0.6, the colour warm and a little silvered, one strip greyer, one warmer) with its EDGES dark in albedo and AO (the gap, the
+# lap's shadow, the dirt in the joint) and a rounded arris in the normal map: the board lines then
+# read at 20-60 m, where Wood062's fine grain has long since gone to its mean. Rougher than the set
+# (0.84 mean, 0.95 at the edges): weathered wood never shines. Made by timber_board() from the CC0
+# set, so CC0 too. _shift_uv() puts every Timber block's faces into one strip each.
+BOARD = "textures/kit/timber_board_"
+STRIPS = 4
+# linear albedo each strip is moved to (weathered pine: grey-brown, one greyer, one warmer; warm enough
+# that a wall in the shade, lit by a blue sky alone, still reads as wood and not slate)
+STRIP_MEAN = [(0.310, 0.228, 0.140), (0.280, 0.218, 0.150), (0.330, 0.235, 0.128), (0.262, 0.196, 0.124)]
+
+
+def timber_board():
+    """textures/kit/timber_board_{albedo,normal,orm}.png from textures/env/sets/Wood062 (CC0)."""
+    from PIL import Image
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = os.path.join(root, TEX, "Wood062")
+    alb = np.asarray(Image.open(os.path.join(src, "albedo.png")).convert("RGB"), np.float64) / 255.0
+    nrm = np.asarray(Image.open(os.path.join(src, "normal.png")).convert("RGB"), np.float64) / 255.0
+    orm = np.asarray(Image.open(os.path.join(src, "orm.png")).convert("RGB"), np.float64) / 255.0
+    lin = np.where(alb <= 0.04045, alb / 12.92, ((alb + 0.055) / 1.055) ** 2.4)
+    W = alb.shape[1]
+    H = 128                                   # px per strip
+    rows = int(round(0.2 * UVW * alb.shape[0]))   # a 0.2 m board's worth of the set's rows (~92)
+    rng = np.random.default_rng(6206)
+    out_a = np.zeros((H * STRIPS, W, 3))
+    out_n = np.zeros((H * STRIPS, W, 3))
+    out_o = np.zeros((H * STRIPS, W, 3))
+    v = (np.arange(H) + 0.5) / H              # across the board, 0..1
+    e = np.minimum(v, 1 - v) * H              # px from the nearer edge
+    # (v 0 is a board's top on a wall — box() runs v down the face — and the lap above shades a
+    # broad band there; its foot is a thin dark line under a lit arris. A deck plank or a stud
+    # shows the same: a shadowed side and a crisp one, which reads as a gap either way.)
+    top, foot = v * H, (1 - v) * H
+    edge_dark = (1.0 - 0.62 * np.exp(-top / 18.0) - 0.22 * np.exp(-top / 3.0)) * (1.0 - 0.70 * np.exp(-foot / 4.0))
+    edge_dark = edge_dark * (1.0 + 0.10 * np.exp(-((foot - 9.0) / 4.0) ** 2))
+    edge_ao = (1.0 - 0.55 * np.exp(-top / 12.0)) * (1.0 - 0.65 * np.exp(-foot / 3.0))
+    bevel = np.exp(-e / 3.0) * np.where(v < 0.5, 1.0, -1.0)    # the arris: the normal leans out over each edge
+
+    def along_blur(img, r):
+        k = np.ones(2 * r + 1) / (2 * r + 1)
+        pad = np.concatenate([img[:, -r:], img, img[:, :r]], axis=1)
+        o = np.zeros_like(img)
+        for c in range(img.shape[2]):
+            for i in range(img.shape[0]):
+                o[i, :, c] = np.convolve(pad[i, :, c], k, mode="valid")
+        return o
+    for k in range(STRIPS):
+        y0 = int(rng.integers(0, alb.shape[0] - rows))
+        idx = np.clip(y0 + (np.arange(H) + 0.5) * rows / H, 0, alb.shape[0] - 1).astype(int)
+        shift = int(rng.integers(0, W))
+        L = np.roll(lin[idx], shift, axis=1)
+        N = np.roll(nrm[idx], shift, axis=1)
+        O = np.roll(orm[idx], shift, axis=1)
+        # (the pores softened along the grain: weathered wood's raised grain, not walnut's speckle)
+        L = 0.45 * L + 0.55 * along_blur(L, 8)
+        # (the grain's contrast taken down to 0.6: at 5-20 m the board lines, not the figure, should read)
+        mu = L.reshape(-1, 3).mean(0)
+        L = mu + (L - mu) * 0.6
+        lum = L.mean(axis=2, keepdims=True)
+        L = 0.78 * L + 0.22 * lum                # a little silvered
+        L = L * (np.array(STRIP_MEAN[k]) / L.reshape(-1, 3).mean(0))
+        L = L * edge_dark[:, None, None]
+        out_a[k * H:(k + 1) * H] = np.clip(L, 0, 1)
+        # normal: the set's, a little softer, and the arris
+        t = (N * 2 - 1)
+        t[..., 0:2] *= 0.45      # (the grain's bumps soft: at 5-20 m they only sparkle)
+        t[..., 1] += 0.7 * bevel[:, None]
+        t /= np.linalg.norm(t, axis=2, keepdims=True)
+        out_n[k * H:(k + 1) * H] = t * 0.5 + 0.5
+        ao = np.clip(O[..., 0] * edge_ao[:, None], 0, 1)
+        rough = np.clip(0.30 + 0.80 * O[..., 1], 0, 1)
+        rough = rough + (0.95 - rough) * np.exp(-e / 6.0)[:, None]
+        out_o[k * H:(k + 1) * H] = np.stack([ao, rough, np.zeros_like(ao)], axis=2)
+    srgb = np.where(out_a <= 0.0031308, out_a * 12.92, 1.055 * out_a ** (1 / 2.4) - 0.055)
+    for name, img in (("albedo", srgb), ("normal", out_n), ("orm", out_o)):
+        Image.fromarray((np.clip(img, 0, 1) * 255 + 0.5).astype(np.uint8)).save(os.path.join(root, BOARD + name + ".png"))
+    return BOARD
+
+
 K = None    # gen_kit_parts, set by install()
 
 
@@ -87,13 +172,46 @@ K = None    # gen_kit_parts, set by install()
 
 def tint(m, k=1.0):
     """A board's own colour: sawn softwood varies board to board (and a little in hue)."""
-    v = m.rng.uniform(0.80, 1.0) * k
-    return (min(1.0, v * 1.0), min(1.0, v * m.rng.uniform(0.94, 1.0)), min(1.0, v * m.rng.uniform(0.86, 0.98)))
+    # (W2: a wider spread than W1's 0.80-1.0, so a wall's courses and a deck's planks still
+    # read as boards at 20-60 m once the grain has gone to its mean; one in five greyer, weathered)
+    v = m.rng.uniform(0.70, 1.0) * k
+    g, b = m.rng.uniform(0.93, 1.0), m.rng.uniform(0.84, 0.98)
+    if m.rng.uniform() < 0.2:
+        g, b = 0.98, 1.0
+    return (min(1.0, v * 1.0), min(1.0, v * g), min(1.0, v * b))
 
 
-def _shift_uv(m, mat, uo):
+def _shift_uv(m, mat, uo, whole=False):
+    """Offset the last block's UVs into the set; a Timber block's faces each go into one board strip
+    of the atlas (v across the face's width 0..1 inside strip k, picked per block): its edges then
+    darken where a board's do. Faces are runs of vertices sharing a normal (a box's six, a prism's
+    caps and sides); a smooth surface (a peeled log) goes in whole."""
     uv = m.parts[mat][2]
     uv[-1] = uv[-1] + np.asarray(uo, float)
+    if mat != "Timber":
+        return
+    U = uv[-1].copy()
+    N = np.asarray(m.parts[mat][1][-1], float)
+    k = int(m.rng.integers(0, STRIPS))
+    groups = []
+    if not whole:
+        i = 0
+        while i < len(U):
+            j = i + 1
+            while j < len(U) and np.allclose(N[j], N[i], atol=1e-4):
+                j += 1
+            groups.append((i, j))
+            i = j
+        if max(j - i for i, j in groups) < 3:
+            groups = []
+    if not groups:
+        groups = [(0, len(U))]
+    for i, j in groups:
+        v = U[i:j, 1]
+        lo, hi = v.min(), v.max()
+        t = (v - lo) / (hi - lo) if hi - lo > 1e-6 else np.full_like(v, 0.5)
+        U[i:j, 1] = (k + 0.02 + 0.96 * t) / STRIPS
+    uv[-1] = U
 
 
 def wb(m, c, s, M=None, col=None, mat="Timber", sh=None):
@@ -176,14 +294,16 @@ def log(m, y0, y1, r0, r1, segs=12, wobble=0.006, peeled=False, cap_top=True, ca
         # (the lathe's u runs round the log: swap so the grain runs along it)
         uv = sub.parts[mat][2]
         uv[-1] = uv[-1][:, ::-1] * np.array([UVW, 0.25 * UVW])
-    _shift_uv(sub, mat, (m.rng.uniform(0, 1), m.rng.uniform(0, 1)))
+    _shift_uv(sub, mat, (m.rng.uniform(0, 1), m.rng.uniform(0, 1)), whole=True)
     end = (0.86, 0.80, 0.70)     # sawn end grain, lighter than the weathered side
     if cap_top:
         sub.color = end
         disk(sub, "Timber", r1, y1, segs=segs, up=True, uv_m=UVW)
+        _shift_uv(sub, "Timber", (m.rng.uniform(0, 1), 0.0), whole=True)
     if cap_bot:
         sub.color = end
         disk(sub, "Timber", r0, y0, segs=segs, up=False, uv_m=UVW)
+        _shift_uv(sub, "Timber", (m.rng.uniform(0, 1), 0.0), whole=True)
     m.merge(sub, t=(cx, 0, cz))
 
 

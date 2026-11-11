@@ -553,6 +553,8 @@ local function throw_chunks(x, y, z, nx, ny, nz, n, col)
     end)
   end
 end
+-- (W2) kit_load throws them off a piece that breaks under its load
+throwChunks = throw_chunks
 -- the chunks still flying (a beam passes through them: they are only the look)
 function chunkNodes(extra)
   local out = {}

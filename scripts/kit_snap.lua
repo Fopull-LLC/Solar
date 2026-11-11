@@ -593,6 +593,13 @@ local function hang_map(list, gone)
   for n, h in pairs(hang) do map[n.p.uid] = h end
   return map
 end
+-- (W2, kit_load.lua) the cached graph read as it is — g = { list = { { p, d,
+-- a, r, adj } … }, cells } (kit_load keeps its own model on it, `g.kl`, so a
+-- change of parts drops both) — the cell walk round a structure-frame (x, z),
+-- and the ground rule
+function graphOf(rec, defs) return graph_of(rec, defs) end
+function nodesNear(g, x, z, r, f) near_nodes(g.cells, { x = x, z = z }, r, f) end
+function isGrounded(p, a) return grounded(p, a) end
 -- uid → hang for every piece of `rec` that is held from the ground somehow
 -- (absent: nothing reaches it). `gone` = uids taken away (not cached).
 function supportMap(rec, defs, gone)

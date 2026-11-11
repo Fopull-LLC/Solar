@@ -315,7 +315,7 @@ return {
   KitPost5_wood = { lo = { -0.153, 0.000, -0.149 }, hi = { 0.153, 4.996, 0.149 }, colliders = 1, tris = 308, children = {  } },
   KitBeam6w_wood = { lo = { -3.000, 0.000, -0.113 }, hi = { 3.000, 0.300, 0.113 }, colliders = 1, tris = 412, children = {  } },
   KitTrussW4_wood = { lo = { -2.000, 0.000, -0.063 }, hi = { 2.000, 0.890, 0.063 }, colliders = 4, tris = 744, children = {  } },
-  KitDeck24_wood = { lo = { -0.998, 0.000, -2.000 }, hi = { 0.999, 0.103, 2.000 }, colliders = 1, tris = 1716, children = {  } },
+  KitDeck24_wood = { lo = { -1.000, 0.000, -2.000 }, hi = { 0.999, 0.103, 2.000 }, colliders = 1, tris = 1716, children = {  } },
   KitPlankFloor_wood = { lo = { -1.000, 0.000, -1.000 }, hi = { 1.000, 0.083, 1.000 }, colliders = 1, tris = 708, children = {  } },
   KitShingleRoof_wood = { lo = { -1.000, -0.102, -1.060 }, hi = { 1.000, 1.149, 0.997 }, colliders = 1, tris = 1680, children = {  } },
   KitFence_wood = { lo = { -1.000, 0.000, -0.050 }, hi = { 1.000, 1.100, 0.030 }, colliders = 1, tris = 648, children = {  } },

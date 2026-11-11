@@ -4401,13 +4401,15 @@ Ty 2026-11-11: "we should also have cheaper building options like things made of
 
 Every board is its own box, its grain along its length, at a random place in the CC0 Wood062 set with its own tint; gaps of 4–8 mm show the dark behind. A wall is a real stud frame (plates, studs at 600, framed openings) with lapped weatherboards outside (each tilted so its foot stands proud), vertical boards inside, linings and casings round its holes. Logs are Bark016 browned, with sawn end grain; iron is black, post bases galvanised. Rough (the set's roughness, metallic 0): wood never shines. The generator is imported by `gen_kit_parts.py` (`install`): wood is added to the existing pieces without touching their steel builders, and their colliders are the existing piece's, so a timber floor walks and snaps exactly like a steel one. A timber wall is folded like every wall (§34: its inside is its own model's `TimberIn`/`SteelIn` slots, painted apart, `kit_paint.FOLD_GUESS.wood`) but keeps its own two texture sets (the atlas has no timber column): two instances, not one. Wood reflects 0.3 of the sky (at 1.0 a rough dark board read as blue-grey concrete outdoors), and its albedo is `textures/kit/timber_albedo.png`, Wood062 warmed and lifted toward a weathered pine (made by `timber_albedo()` from the CC0 set). Z-fighting: every member of a frame stands at its own depth, alternate courses of laps and shingles stop short at their ends, shingle joints keep 2 cm from those below, nails stand 2.5 mm proud; `zall` over every timber prefab is 0 (`work/prog_w1/zall_w.py`, ZW=1).
 
+**W2: the board set** (Ty 11-11: the W1 hut read as grey stone or concrete from 20 m: Wood062's fine grain had gone to a uniform noisy grey-brown and nothing showed a board). `textures/kit/timber_board_{albedo,normal,orm}.png` is a strip atlas made by `timber_board()` from the CC0 Wood062 set (so CC0 too): four boards one above the other, each 128 px across its width, the grain along U at the set's own scale (`UVW` 0.9 tiles a metre, unchanged: the scale was right). Each strip is weathered toward a grey-brown softwood (the pores softened along the grain, 22 % silvered, linear means 0.26-0.33 / 0.20-0.24 / 0.12-0.15: warm enough that a wall in shade, lit by the blue sky alone, reads as wood and not slate, one strip greyer, one warmer), its TOP a broad lap shadow and its FOOT a thin dark line under a lit arris, in albedo and AO, and an arris in the normal map; rougher than the set (0.84, 0.95 at the edges). `_shift_uv` puts every Timber face (a box's six, a prism's caps and sides; a peeled log and an end cap whole) into one strip of its own (v across the face 0..1), so every board, stud, shingle and plank has dark edges where a real one does, and the courses and planks read at 20-60 m. The boards' own tints spread 0.70-1.0 (W1: 0.80-1.0), one in five greyer. Normal strength 0.9. `kit_paint.BASE.wood` follows the new mean (0.252, 0.186, 0.115). The grain's normal detail is held to 0.45 of the set's (it only sparkled at 5-20 m).
+
 ### Save keys and old saves
 
 New: `timber.saw` (the saw jobs), a part's `paid.planks`. Nothing old changes meaning: every existing piece keeps its materials, ids and prices, and a save without timber loads as it did.
 
 ### Left for later
 
-- W2: the load model (capacity from `strength` and span; sag, creak, break; the inspector's LOAD line). A wood bridge carries anything in W1.
+- W2: the load model: done, §37 (the inspector's LOAD line is still to do).
 - W3: weathering off-world (`rot`), fire where there is oxygen; the shoring's hold on a cave's roof.
 - Sounds: plank footsteps, the saw running; a codex entry for planks.
 - Depot "sell all" sells planks with the rest of the warehouse.
@@ -4440,3 +4442,48 @@ The 0.01 atm left is ≤ 0.012 atm of CO₂ in the refilled room (under `CO2_MAX
 **Save**: `air.<sid>.purge` = the keys of the rooms being purged (a new session carries on). The arc probe's Shelter step now builds the hut with a rack and purges it (no direct fill).
 
 Tests: `tests/smoke_room_purge.lua` (45: the pure pump-down and plan, a CO₂ world and an N₂ world to breathable in minutes, the crew warned, the grid draw, one step = many, no power, the refusals, stop, save, the rack's menu and the AIR page).
+
+## 37. What a piece carries: the load model (progression W2)
+
+Ty 2026-11-11 on wood: "obviously it shouldn't sustain crazy damage ... on the home planet they'll last forever essentially, just not handle crazy heavy weights." `scripts/kit_load.lua` (pure records half, tested in luajit; a 2 Hz driver on the Build Kit node). Placement is never refused: the load model only ever creaks, sags and breaks.
+
+### Capacity
+
+By how a piece carries (`kindOf`):
+
+| kind | pieces | capacity |
+|---|---|---|
+| bend | snap `floor` (floors, beams, trusses, decks, roofs); a post or a wall laid flat | a point load at the middle of a clear span L: `cap = S × sec × (2/L)²` kN (L at least 1 m) |
+| post | upright posts and pillars | `S × 0.2 × min(1, 3/L)` (a slender post less) |
+| wall | upright walls | `S × 1.0` per metre of wall |
+| solid | everything else | `S × 4` per m² of footprint |
+
+- `S` is the material's carrying strength, `kit_load.STRENGTH` (not `MATS.strength`, which is a laser's and a joint's): timber 40, steel 600, concrete 1,500, regocrete 1,200, glass 150. `sec` is the piece's section (`kit_load.SEC`): beam2/beam4 0.6, beam6w 1.0, trussW4 2.0, deck24 0.6, floors and roofs 0.3.
+- **Worked as moments.** A bending piece's bearings are what it rests on and, when the kit counts it as on the ground (`kit_snap.grounded`: its base within 6 cm of the structure's ground plane), the terrain under it, sampled every 0.5 m along its underside (`terrain.query`, kept 2 s): a beam laid across a dug gap spans the gap. Each span between two bearings (bearing centre to bearing centre) and each overhang past the last one (an overhang `a` counts as a span of `2a`) is asked `M × L / (S × sec × hp)`, with `M` the point loads' moments (`F (s − g0)(g1 − s) / L` in a span, `F × reach` on an overhang) plus its own weight's (`w L²/8`, `w a²/2`); the worst is the piece's `r`. A load right over a bearing bends nothing. A plate (sides within 1.5 of each other) spans whichever way does better. A beam's end against a post or a wall bears on it.
+- **Founded pieces carry anything** (r 0, nothing handed on): a pile (`gnd`), a piece on a cast footing (`ft`), and a post, wall or block standing on the ground.
+- **cap × hp**: a piece's capacity falls with its hp (the part state `hp`, the field lasers, damage and the Repair Kit use), so a cracked beam carries less.
+- Worked numbers (`smoke_kit_load`): a 4 m timber beam on two log posts (3.7 m bearing to bearing) carries 6 kN at its middle: 150 kg r 0.32, 500 kg 0.81, 600 kg 0.95, 1.5 t 2.21, 1.5 t right over a post 0.11. A 4 m steel beam holds 6 t (r 0.57). The smoke's bridge (two 6 m beams across a gap sampled every 0.5 m, three decks, fences; 4.8 m bearing to bearing): a walker 0.48-0.54, the motorcycle (0.3 t with its rider) 0.65, a 450 kg quad 0.76 (creaks), an 850 kg rover over 1, a fuelled hopper (1.5 t) 1.50. In the probe the dug gap is wider (5.28 m bearing to bearing) and the motorcycle reads 0.74: it creaks and holds.
+
+### Loads
+
+- **Dead**: each piece's own weight (9.81 × mass), handed down to its bearings by the lever rule along its span (a post or a wall: by nearness), as one point per piece below at the loads' centroid where they enter it.
+- **Live**: 1 kN for a walker on foot standing on a piece (its drawn place against this pass's body: docs/positions-and-frames.md rule 2), and each craft's true mass (`vessel_controller.trueMass`: dry, propellant, hold, crew) shared over its tyres that are down, or (legs, skids, tyres stowed on a parked craft) over its lowest parts within 1.2 m of a piece's top, each share given to the piece under it.
+- **When**: at 2 Hz, and only for a load on a piece that is not founded. Only the pieces under the live loads and what rests on them are worked out. Nothing at all runs a frame while nobody is on such a piece; the 2 Hz tick itself is a sphere test per structure and a cell lookup under each walker and craft. kit_snap's graph is kept per `structures.version` (`graphOf` signs every part each call) and the load model (`g.kl`) on it.
+
+### What happens
+
+- **r > 0.7**: it creaks (the Big Wood Creaks recordings, spatial at the piece, every 3.2 s at 0.7 down to 0.8 s at 1.1, louder as r rises; steel groans) and it **sags**: its drawn mesh (the `Mesh` child, and a door's leaves) is lowered along the piece's up by up to min(12 cm, 2 % of its span) at r 1.3 (6 cm at r 1.0 on 6 m), eased in at 6/s, and what rests on it rides down with it by the same lever shares. Its colliders stay put: moving a static body every frame under a rolling tyre threw the probe's motorcycle off the end of the bridge. The engine has no per-instance bend (card draft below), so a sagging piece drops whole.
+- **r > 1.0 for 2 s**: its hp falls 0.15 a second (written to the part state in 2 % steps), and splinters tick with each creak. Under 1.0 the 2 s starts again (a tick with no load at all — a parked craft's tyres stowing — runs it down instead); a piece that held keeps the hp it lost.
+- **hp 0**: it breaks: a wood crack, chunks (`lasers.throwChunks`), and `kit_snap.fallsWith` takes down what it held (with `base_snap.dependents`); crew on it fall and a craft on it drops (their colliders are gone). Pieces the kit counts as on the ground that have nothing under them any more (`unheld`: no bearing and no terrain within 0.5 m under any of its footprint, `UNHELD_DROP`; a floor standing 0.3 m over a slope is not falling) break at once; what was round a broken piece is looked at for the next 3 s with no load of its own, so a deck left floating over the gap comes down.
+- No popup and no caption: the creak and the sag are the warning.
+
+### Tests and probes
+
+- `tests/smoke_kit_load.lua` (53): the formula, the 4 m beam, steel's 6 t, cap × hp, load sums (four posts carry exactly the load, the deck, the beams and themselves), the bridge across a sampled gap (walker quiet, bike holds, a quad creaks, rover and hopper over, the bank takes a load, unbroken ground bends nothing, the decks unheld once the beams are gone), sag/creak/break thresholds and timing, a steel base under crew, a rover and a tonne (worst r 0.10, no sag), a hut's floors and walls, pieceUnder.
+- `tools/perf/woodprobe.sh <engine> wood` (29/30 then 30/30 on 0.118.3-dev.1496; its bridge's beams are now sunk 0.35 so the deck stands 5 cm over the banks: the 10 cm lip flipped or stalled the bike in half the runs): the W1 run plus the load checks (the beams' r while the bike is on the bridge, the walker's), a steel floor on four steel pillars walked on, and the bike re-boarded, put back on the run-up, stopped at mid-span and weighed heavier (`kit_load.addMass`, a probe hook: 1.3 t, then 0.7 t more every 6 s until the beams are over 1, since the dug gap's width, 4.3-5.3 m bearing to bearing, differs run to run): over, sag (9.6 cm), creaks, hp falling, a beam breaks about 9 s after going over 1.0, the deck it held goes, the bike drops into the gap. Nothing breaks under the bike, the walker or the hut before that, and a walker on a steel floor on steel pillars reads r 0.006. `kitprobe.sh kitperf`: kit_load 0.005-0.014 ms a frame idle, 500 to 6,000 pieces. `woodlook`: the board look at 1.5, 5, 20 and 60 m, lit and shaded.
+
+### Left for later
+
+- The inspector's LOAD line and the ghost's amber hint (plan §3.4): `kit_load.lastResult(sid)[uid]` has `load` and `cap` for a piece under a live load.
+- W3 reads `cap × hp` already: weathering only has to lower hp.
+- Engine card draft: per-instance bend of a static instanced mesh (so a beam curves under load instead of dropping whole).

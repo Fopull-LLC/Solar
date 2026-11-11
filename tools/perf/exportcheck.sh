@@ -74,7 +74,7 @@ sys.exit(1 if miss else 0)
 PY
 arc=$?
 ALSA=${ALSA:-$(dirname "$LOCK")/silent-alsa.conf}
-flock "$LOCK" timeout 300 env ALSA_CONFIG_PATH="$ALSA" "$ENG" export "$S" "$O" linux-x86_64 --title Solar > "$WORK/xc-export.log" 2>&1
+flock "$LOCK" timeout ${XTMO:-900} env ALSA_CONFIG_PATH="$ALSA" "$ENG" export "$S" "$O" linux-x86_64 --title Solar > "$WORK/xc-export.log" 2>&1
 ex=$?
 tail -c 1500 "$WORK/xc-export.log" | sed 's/^/EXPORTCHECK export: /'
 if [ $ex -ne 0 ] || [ ! -d "$O/assets" ]; then echo "EXPORTCHECK RESULT FAIL: the export itself failed (exit $ex)"; exit 2; fi

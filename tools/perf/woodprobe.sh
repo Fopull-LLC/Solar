@@ -4,7 +4,7 @@
 # 6 m timber bridge built over it, ridden across, walked back across; a timber
 # hut with a hinged plank door walked into; planks ordered, paid with, sawn.
 #
-#   woodprobe.sh <engine> [wood]
+#   woodprobe.sh <engine> [wood|woodlook]
 #   env: WORK LOCK SOLAR TAG PATCHES BENCH_PARAMS as bench.sh
 #
 # Splices vfxprobe_modes.lua (its freecam), buildkitprobe_modes.lua (BK),
@@ -25,7 +25,7 @@ s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
-              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "wood" then WD.run()')
+              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "wood" then WD.run()\n    elseif MODE == "woodlook" then WD.run_look()')
 open(p, 'w').write(s)
 PY
 rm -rf $S/proj/save/user/buildshots

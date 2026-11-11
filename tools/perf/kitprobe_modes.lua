@@ -600,7 +600,8 @@ function KIT.run_perf()
     local nm = "kit_none_" .. k
     sc_begin(nm); wait(5); sc_end(nm)
     local c = perf.counts()
-    P("KIT PERF %s: no block · nodes %d instances %d draws %d unbatched %d", nm, c.nodes or -1, c.instances or -1, c.draws or -1, c.unbatched or -1)
+    P("KIT PERF %s: no block · nodes %d instances %d draws %d unbatched %d · kit_load %.4f ms/frame", nm, c.nodes or -1, c.instances or -1, c.draws or -1, c.unbatched or -1,
+      perf.scriptMs("kit_load") or -1)
     VP.cam_off()
   end
   for _, case in ipairs({ { 13, 0, "kit_500" }, { 13, 30, "kit_500_live30" }, { 26, 0, "kit_2000" }, { 45, 0, "kit_6000" } }) do
@@ -629,9 +630,10 @@ function KIT.run_perf()
     local c = perf.counts()
     local ub = {}
     for k2, v in pairs(c.unbatchedBy or {}) do ub[#ub + 1] = k2 .. "=" .. tostring(v) end
-    P("KIT PERF %s: %d pieces (+%d live), spawned in %.1f s · nodes %d instances %d draws %d unbatched %d (%s) · structures %.4f, kit_live %.4f, struct_live %.4f, vessel_controller %.4f ms/frame",
+    P("KIT PERF %s: %d pieces (+%d live), spawned in %.1f s · nodes %d instances %d draws %d unbatched %d (%s) · structures %.4f, kit_live %.4f, struct_live %.4f, vessel_controller %.4f, kit_load %.4f ms/frame",
       case[3], #rec.bp - case[2], case[2], tsp, c.nodes or -1, c.instances or -1, c.draws or -1, c.unbatched or -1, table.concat(ub, " "),
-      perf.scriptMs("structures") or -1, perf.scriptMs("kit_live") or -1, perf.scriptMs("struct_live") or -1, perf.scriptMs("vessel_controller") or -1)
+      perf.scriptMs("structures") or -1, perf.scriptMs("kit_live") or -1, perf.scriptMs("struct_live") or -1, perf.scriptMs("vessel_controller") or -1,
+      perf.scriptMs("kit_load") or -1)
     BK.shot(case[3], false)
     VP.cam_off()
     ST.remove(id)

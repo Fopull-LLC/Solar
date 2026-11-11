@@ -3704,6 +3704,8 @@
                 ( kind: "base_snap", enabled: true, params: [] ),
                 ( kind: "parts_kit", enabled: true, params: [] ),
                 ( kind: "kit_snap", enabled: true, params: [] ),
+                // what a piece carries: creak, sag, break under a load (kit_load; progression W2)
+                ( kind: "kit_load", enabled: true, params: [] ),
                 ( kind: "kit_live", enabled: true, params: [] ),
                 ( kind: "struct_live", enabled: true, params: [] ),
                 ( kind: "rooms", enabled: true, params: [] ),

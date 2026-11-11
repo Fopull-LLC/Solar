@@ -84,8 +84,9 @@ BASE = {
   concrete  = { 0.285, 0.273, 0.247 },
   regocrete = { 0.198, 0.154, 0.114 },
   glass     = { 0.257, 0.261, 0.260 },
-  -- (W1) sawn softwood: textures/kit/timber_albedo.png (Wood062 warmed) × the boards' tints; paint on it is a stain
-  wood      = { 0.243, 0.158, 0.094 },
+  -- (W1, W2) weathered softwood: textures/kit/timber_board_albedo.png (Wood062's boards, weathered:
+  -- tools/gen_kit_wood.py STRIP_MEAN) × the boards' tints (0.85 on average); paint on it is a stain
+  wood      = { 0.252, 0.186, 0.115 },
   film      = { 0.70, 0.70, 0.70 },
   prop      = { 0.42, 0.42, 0.41 },
 }
