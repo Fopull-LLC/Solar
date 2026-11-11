@@ -491,10 +491,29 @@ local function page_air(scope)
             local s = string.format("%.2f atm · O2 %.0f %% · CO2 %.1f %%", q.p or 0, 100 * (q.o2 or 0) / math.max(q.p or 0, 1e-6), 100 * (q.co2 or 0) / math.max(q.p or 0, 1e-6))
             if not r.sealed then s = s .. " · NOT SEALED" end
             if q.venting then s = s .. " · VENTING" end
+            if q.purging then s = s .. " · PURGING" elseif q.foul and r.sealed and not r.airlock then s = s .. " · OUTSIDE GAS" end
             if (q.crew or 0) > 0 then s = s .. string.format(" · %d crew", q.crew) end
             return s
           end,
           warn = function() local q = RA.airOf(sid, rid); return q ~= nil and (not q.breathable or q.venting) and r.sealed end }
+        -- (roompurge) a sealed room with an Air Tank Rack: its purge (the plan
+        -- worked out as the page opens)
+        local pi = (r.sealed and not r.airlock and RA.purgeInfo) and RA.purgeInfo(sid, rid) or nil
+        if pi and pi.racks > 0 then
+          local why0 = RA.purgeWhy(sid, rid)
+          local en, why = gate(scope, function() return (not RA.purging(sid, rid)) and why0 or nil end)
+          rows[#rows + 1] = { id = "pg_" .. sid .. "_" .. rid, type = "toggle", col = 1, keep = true, label = string.format("  Purge Room %s", tostring(rid)),
+            on = function() return RA.purging(sid, rid) end, onText = "[PURGING]", offText = "[ PURGE ]",
+            hint = (pi.plan.pump and pi.plan.fill) and RA.fmtSecs(pi.plan.pump + pi.plan.fill) or nil,
+            tip = function() return RA.purging(sid, rid) and "pumping the room's gas overboard; the racks refill it after" or RA.purgeLine(pi) end,
+            warn = function() return RA.purging(sid, rid) end,
+            act = function(want)
+              local ok, w
+              if want then ok, w = RA.startPurge(sid, rid, "terminal") else ok, w = RA.stopPurge(sid, rid) end
+              if ok then blog(sid, w and "warn" or "air", string.format("Room %s purge %s%s", tostring(rid), want and "started" or "stopped", w and (": " .. w) or "")) end
+              return ok, w
+            end, enabled = en, why = why }
+        end
       end
     end
   end

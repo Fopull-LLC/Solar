@@ -440,8 +440,10 @@ PIECES = {
                 desc = "an electrolyser: O2 for four crew from water (2 H2O → 2 H2 + O2) · pipe water to its back · 1.5 EC/s from the base grid" },
   airTank   = { label = "Air Tank Rack", section = "LIFE", snap = "block", box = B(-0.6, 0.6, 0, 1.8, -0.25, 0.25),
                 mats = { "steel" }, vol = 1.08, fill = "solid", cost = 1800, fillk = { steel = 0.04 },
-                life = { store = 60, flow = 0.25, price = 4 },
-                desc = "three 200 bar cylinders of air on a regulator · fills a room to 1 atm · 60 m³" },
+                -- (roompurge) its purge pump: m³/s at the room's pressure, kW while it pumps
+                life = { store = 60, flow = 0.25, price = 4, purge = 0.3, purgeKW = 2.0 },
+                power = { kind = "aux", use = 2.0 },
+                desc = "three 200 bar cylinders of air on a regulator · fills a room to 1 atm · 60 m³ · its purge pump (2 kW from the base grid while it runs) empties a room of the outside's gas so the air can fill it" },
   -- (X2: the outside's air as the room's, scripts/room_air.lua)
   n2comp    = { label = "N2 Compressor", section = "LIFE", snap = "block", box = B(-0.5, 0.5, 0, 1.3, -0.35, 0.35),
                 mats = { "steel" }, vol = 0.91, fill = "solid", mass = { steel = 0.16 }, cost = 4200,

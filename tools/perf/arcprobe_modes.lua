@@ -75,6 +75,26 @@ function AR.put_in(rec, lx, ly, lz)
     yield()
   end
 end
+-- The Ops strip with long lines (2026-11-11: a third wrapped line spilled
+-- under its frame): two earlier lines and a four-line one typing, pictured
+-- mid-line and finished. The frame must hold every line.
+function AR.ops_shots()
+  local OS = findScript("ops_strip")
+  if not (OS and OS.say and OS.logLine) then P("AR OPSSHOT: no strip") return end
+  OS.clear()
+  OS.logLine("Logged. The Depot ships Life Support now: CO2 scrubbers, oxygen generators, air tank racks, the airlock receiver and the equalise valve.")
+  OS.logLine("Shelter: seal a room, then make its air your own.")
+  local long = "Ops here. Your hut closed round the outside's gas; the rack's purge pump has emptied it and the regulator is filling it with air. Keep a scrubber running for an hour and the Depot opens the fluid network to you."
+  OS.say(long)
+  wait_for(function() return OS.current ~= nil and #(OS.current.shown or "") > 120 end, 15, "the strip typing")
+  AR.shot("arc_ops_typing")
+  OS.skipLine()
+  wait(0.5)
+  AR.shot("arc_ops_full")
+  P("AR OPSSHOT: lines %d (cpl %d, max %d) · history %d · current %s", OS.linesOf and OS.linesOf(long) or -1, OS.CPL or -1, OS.LINES_MAX or -1,
+    #(OS.history() or {}), tostring(OS.current and #OS.current.shown))
+end
+
 -- warp at `rate` until fn() or `tmo` real seconds; → met, real s
 function AR.warp_until(rate, fn, tmo, every)
   local t0 = W()
@@ -90,7 +110,8 @@ function AR.warp_until(rate, fn, tmo, every)
 end
 
 -- A steel hut on its slabs: 4 × 2 m inside, 2.2 m high (17.6 m³), a door at
--- x 1, a CO2 Scrubber, an O2 Generator, a light and a 63 A breaker panel inside.
+-- x 1, a CO2 Scrubber, an O2 Generator, an Air Tank Rack, a light and a 63 A
+-- breaker panel inside.
 function AR.hut_pieces()
   local T, H = 0.2, math.pi / 2
   local P_ = {}
@@ -106,6 +127,9 @@ function AR.hut_pieces()
   -- (an O2 Generator: an alien home's outside air holds no oxygen, and a
   -- scrubber only takes the CO2 out)
   add("o2gen.steel", 2.0, T, -0.6, 0)
+  -- (an Air Tank Rack: its Purge empties an alien home's air out of the hut
+  -- and its regulator refills it, base-building §36)
+  add("airTank.steel", 3.2, T, -0.6, 0)
   add("lightFitting.steel", 3.0, T + 2.2 - 0.001, 0, 0, math.pi)
   add("breaker63.steel", 4.9, 1.2, 0.5, -H)
   return P_
@@ -289,15 +313,48 @@ function AR.arc()
       tostring(pw and pw.onFoot), tostring((RA.airAt(a.x, a.y, a.z))), st0 and st0.out and st0.out.p or -1, st0 and st0.out and st0.out.x or -1)
   end
   AR.check("crew_inside", csid == hsid, "the crew in room %s of structure %s", tostring(crid), tostring(csid))
-  -- (an alien home's outside holds no O2: the hut closed round it. An O2
-  -- Generator makes 2.8e-5 atm·m³/s, a day and more for 18 m³; the probe
-  -- fills the room with normal air as Air Tank Racks would, and leaves the
-  -- scrubber and the generator to hold it)
+  -- (an alien home's outside holds no O2: the hut closed round it. The rack's
+  -- PURGE, from its menu as the player would: the gas pumped overboard, the
+  -- regulator refilling the hut; never a direct fill)
   local st1 = RA.state(hsid)
   if st1 and st1.out and (st1.out.x or 0) < 0.15 then
-    local nr = RA.pressurise(hsid, math.max(1.0, st1.out.p or 1.0))
-    P("AR AIR: the outside has O2 %.3f at %.2f atm: the hut filled with air (%s room(s))", st1.out.x or -1, st1.out.p or -1, tostring(nr))
+    local rid = crid or 1
+    local q0 = RA.airOf(hsid, rid)
+    local rack = nil
+    for _, p in ipairs(hrec.bp) do if p.id == "airTank.steel" then rack = p.uid end end
+    -- the rack's menu, opened on it (its rows: the plan, the switch)
+    local CM, rn = findScript("context_menu"), rack and ST.nodeOf(hsid, rack)
+    local okm = false
+    if CM and rn then
+      local w = rn.worldPos
+      local t = CM.resolve({ node = rn, x = w.x, y = w.y, z = w.z }, astro())
+      okm = t ~= nil and CM.openFor(t) == true
+    end
+    wait(0.8)
+    local rows, info = {}, nil
+    for _, e in ipairs(CM and CM.entries and CM.entries() or {}) do
+      rows[#rows + 1] = tostring(e.id)
+      if e.id == "ra_purge_i" or (type(e.id) == "string" and e.id:find("ra_purge_i", 1, true)) then info = type(e.value) == "function" and e.value() or e.value end
+    end
+    P("AR PURGE MENU: opened %s · rows %s · plan: %s", tostring(okm), table.concat(rows, ","), tostring(info))
+    local pi = RA.purgeInfo(hsid, rid)
+    AR.shot("arc_3_purge_menu")
+    local ok, warn = RA.startPurge(hsid, rid, "hand")
+    P("AR PURGE: outside O2 %.3f at %.2f atm · the hut %.2f atm CO2 %.0f %% (%s) · plan %s · started %s %s",
+      st1.out.x or -1, st1.out.p or -1, q0 and q0.p or -1, q0 and 100 * q0.co2 / math.max(q0.p, 1e-6) or -1, q0 and tostring(q0.why) or "-",
+      RA.purgeLine(pi), tostring(ok), tostring(warn))
+    wait(3.0)
+    AR.shot("arc_3_purging")
+    if CM and CM.close then CM.close() end
+    local a0p = save.get("agency.clock") or 0
+    local okp, rsp = AR.warp_until(10, function() local q = RA.airOf(hsid, rid); return q and not q.purging and q.breathable end, 90)
+    local q1 = RA.airOf(hsid, rid)
+    AR.check("purged", okp and q1 and q1.breathable and not (RA.lastPurge and RA.lastPurge.why ~= "done"),
+      "the hut purged and refilled from its rack: %.2f atm · O2 %.2f · CO2 %.4f atm in %.0f s game (%.0f s real at 10x; plan %.0f + %.0f s) · rack %.1f m³ left",
+      q1 and q1.p or -1, q1 and q1.o2 or -1, q1 and q1.co2 or -1, (save.get("agency.clock") or 0) - a0p, rsp, pi and pi.plan.pump or -1, pi and pi.plan.fill or -1,
+      (RA.state(hsid).tanks or {})[rack] or -1)
   end
+  AR.ops_shots()
 
   wait(9.5)   -- (the goal banners' 9 s)
   AR.pick("shelter"); wait(0.6)

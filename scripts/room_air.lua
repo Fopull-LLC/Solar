@@ -74,6 +74,22 @@
 -- An alarm sounds while a room that held air vents (DEPRESSURISATION, with
 -- the cause: the door left open, the gap), and the air going bad is said once.
 --
+-- ── THE ROOM PURGE (an Air Tank Rack's purge pump) ──────────────────────────
+-- A room that closes round a world's air holds that air: on a CO2 or N2 world
+-- at 1.2 atm it is unbreathable, and the regulator never opens (it feeds only
+-- under 97 % of an atmosphere). PURGE (the rack's menu, the terminal's AIR
+-- page) is what a real habitat does: pump-down and backfill. Every rack in
+-- the room runs its purge pump (RP_S m³/s at the room's pressure each, RP_KW
+-- from the base grid) and dumps the gas overboard, down to RP_P; the purge is
+-- then done and the racks' regulator refills the room to 1 atm with air
+-- (an 18 m³ hut from 1.2 atm: ~4.8 min of pumping with one rack, ~1.2 min of
+-- refill, 18 m³ of the rack's 60). The regulator stays shut while a purge
+-- is under way, and the pump stops without power (the room holds as it is).
+-- It needs the racks to hold the refill, a sealed room and the power; it never
+-- refuses because crew are inside: they are warned (helmets on) and it runs.
+-- The pump-down is the closed form's venting branch, to a vacuum, with an
+-- event at RP_P (exact in one step, like the rest).
+--
 -- SAVE: air.<sid> = { a (agency clock), rooms = { { k (the room's key), N, x, c, V, f } … },
 -- tanks = { { u (uid), q } … } } — lists, not tables keyed by number: the
 -- save hands keys like a room's 12-digit key back as it pleases
@@ -116,6 +132,10 @@ FAIL_DP = 0.5                -- a badly damaged seal (FAIL_DMG) blows out with t
 FAIL_DMG = 0.6
 REPAIR_S = 24.0              -- re-seating a seal (an Engineer halves it)
 BLOWN_C = 1.0                -- a seal that has blown out: a breach (m³/s per atm)
+-- the room purge (an Air Tank Rack's `purge`, m³/s; its draw RP_KW while it pumps)
+RP_S = 0.3                   -- a rack's purge pump, m³/s at the room's pressure (when a rack names none)
+RP_KW = 2.0                  -- its draw on the base grid while it pumps
+RP_P = 0.01                  -- pumped down to this (atm), then the regulator refills the room
 
 local min, max, abs, exp, sqrt, ln = math.min, math.max, math.abs, math.exp, math.sqrt, math.log
 
@@ -130,6 +150,8 @@ local min, max, abs, exp, sqrt, ln = math.min, math.max, math.abs, math.exp, mat
 -- hydrogen), Jx, JN (gas a Room Gas Outlet brings, atm·m³/s, while the room
 -- is under 1 atm: st.jon), and with tau, slow (a leak slow enough that the
 -- regulator keeps feeding it, an excess-flow valve shutting it on a breach).
+-- (roompurge) with tau, pT: the pump-down stops at pT atm: rep.purged, and
+-- rep.left the s of dt not stepped (the caller carries on without the pump).
 function advance(st, M, dt, rep)
   rep = rep or { segs = 0, events = {} }
   rep.segs = rep.segs or 0
@@ -169,6 +191,10 @@ function advance(st, M, dt, rep)
       if not st.feed and st.q > EPS and F > 0 and neq < FEED_ON * V and n > FEED_ON * V then
         at(-tau * ln((FEED_ON * V - neq) / (n - neq)), "feed_on")
       end
+      if M.pT then
+        if n <= M.pT * V + EPS then rep.purged, rep.left = true, left; rep.events[#rep.events + 1] = "purged"; break end
+        if neq < M.pT * V then at(-tau * ln((M.pT * V - neq) / (n - neq)), "purged") end
+      end
       local k = exp(-te / tau)
       st.N = Neq + (st.N - Neq) * k
       st.x = xeq + (st.x - xeq) * k
@@ -180,7 +206,8 @@ function advance(st, M, dt, rep)
       rep.events[#rep.events + 1] = ev
       if ev == "tank_empty" then st.q = 0
       elseif ev == "full" then st.feed = false; st.jon = false
-      elseif ev == "feed_on" then st.feed = true end
+      elseif ev == "feed_on" then st.feed = true
+      elseif ev == "purged" then rep.purged, rep.left = true, left; break end
     end
     return st, rep
   end
@@ -321,6 +348,25 @@ function o2Left(st, V, crew, G)
   local need = (crew or 0) * USE - (G or 0)
   if need <= 0 then return nil end
   return max(0, st.x - O2_MIN * V) / need
+end
+
+-- (roompurge) A purge's plan for V m³ holding n atm·m³ of gas: Sp the racks'
+-- purge pumps (m³/s), F their regulators' flow (atm·m³/s), q their air.
+-- → { pump (s down to RP_P; nil with no pump), fill (s back to 1 atm; nil
+-- with no flow), need (atm·m³ of air the refill takes), short (q < need) }
+function purgePlan(V, n, Sp, F, q)
+  local nT = RP_P * V
+  local pump = nil
+  if (Sp or 0) > 0 then pump = (n > nT) and (V / Sp) * ln(n / nT) or 0 end
+  local need = V * (1 - RP_P)
+  local fill = ((F or 0) > 0) and need / F or nil
+  return { pump = pump, fill = fill, need = need, short = (q or 0) < need - 1e-6 }
+end
+-- Is this air foreign (the outside's, not a habitat's): CO2 over PURGE_CO2 of
+-- the gas or O2 under PURGE_O2 (the airlock's purge rule). → bool
+function foulAir(A)
+  local tot = A.N + A.x + A.c
+  return tot > EPS and ((A.c / tot) > PURGE_CO2 or (A.x / tot) < PURGE_O2)
 end
 
 -- A room's air as the outside's (a room closed round air that was there).
@@ -498,7 +544,9 @@ local function solve(sid)
               -- (S7) the O2 Generators' water cells (kg), the airlock receivers'
               -- air ({ N, x, c }), what the outlets bring each room, the H2 made
               cells = {}, recv = {}, inject = old and old.inject or {}, h2 = old and old.h2 or {}, made = old and old.made or {},
-              fail = old and old.fail or {}, warn = old and old.warn or {} }
+              fail = old and old.fail or {}, warn = old and old.warn or {},
+              -- (roompurge) the rooms a purge is pumping down: rid → { t0 (agency) }
+              purge = {} }
   local pout, xout, cout = out_of(s, rec)
   -- the air the new rooms hold: the old rooms' by the cells they share, the
   -- outside's in a cell no room held (a wall closed round open air)
@@ -537,6 +585,16 @@ local function solve(sid)
     end
     s.air[r.id] = { N = N, x = x, c = c, f = f }
     if (N + x + c) / math.max(r.m3, 1e-6) >= 0.8 then s.pres[r.id] = true end
+    -- (roompurge) a purge under way carries on in the room of the same key
+    if old and old.purge and old.R then
+      for rid0, e in pairs(old.purge) do
+        local r0 = old.R.byId[rid0]
+        if r0 and r0.key == r.key then s.purge[r.id] = e end
+      end
+    end
+    for _, k in ipairs(saved and type(saved.purge) == "table" and saved.purge or {}) do
+      if tonumber(k) == r.key then s.purge[r.id] = { t0 = s.a or 0 } end
+    end
     if r.airlock then
       local C = { rid = r.id, doors = r.doors, wants = {}, entered = nil, target = nil, allow = nil, cyc = nil }
       if old and old.cham then for _, oc in pairs(old.cham) do if oc.key == r.key then C.entered = oc.entered end end end
@@ -689,7 +747,11 @@ local function nets_of(sid, s)
       if L.life.o2 and pow and not L.off then n.G = n.G + L.life.o2 end
       if L.life.o2 and L.life.water and not L.off then n.gens = n.gens or {}; n.gens[#n.gens + 1] = L end
       if L.life.scrub and pow and not L.off then n.S = n.S + L.life.scrub end
-      if L.life.store then n.F = n.F + (L.life.flow or 0); n.tanks[#n.tanks + 1] = L end
+      if L.life.store then
+        n.F = n.F + (L.life.flow or 0); n.tanks[#n.tanks + 1] = L
+        -- (roompurge) each rack's purge pump, on the base grid
+        if pow and not L.off then n.Sp = (n.Sp or 0) + (L.life.purge or RP_S) end
+      end
       -- (X2) the compressor's makeup is the outside's mix less its O2; the
       -- concentrator makes O2 where the outside has it
       if (L.life.n2 or L.life.o2c) and pow then
@@ -723,6 +785,11 @@ local function nets_of(sid, s)
       if v.kind ~= "seal" then n.bleed = true end
     end
   end
+  -- (roompurge) a network with a room being purged is purged whole
+  for rid in pairs(s.purge or {}) do
+    local n = byRoom[rid]
+    if n then n.purge = true end
+  end
   -- what the Room Gas Outlets bring (fluid_net sets it, kg/s → atm·m³/s)
   for rid, j in pairs(s.inject or {}) do
     local n = byRoom[rid]
@@ -745,6 +812,30 @@ end
 local function nets(sid, s)
   if s.netsDirty or not s.nets then s.nets, s.byRoom = nets_of(sid, s); s.netsDirty = false end
   return s.nets, s.byRoom
+end
+
+-- (roompurge) A purge over (done: pumped down; open: the room opened to the
+-- outside; stop: by hand): the network's rooms let go, the grid told (the
+-- pumps' draw), said in the base log and, with the crew there, a caption.
+lastPurge = nil
+local function purge_end(sid, s, n, why)
+  local first = nil
+  for _, id in ipairs(n.rooms) do
+    if s.purge[id] then s.purge[id] = nil; first = first or id end
+  end
+  n.purge = nil
+  s.netsDirty = true
+  lastPurge = { sid = sid, rid = first, why = why, t = now(), a = s.a }
+  local BG = ref("base_grid"); if BG and BG.markDirty then BG.markDirty() end
+  local msg = (why == "done" and string.format("Room %s purged to %.2f atm: the racks are refilling it with air", tostring(first), RP_P))
+              or (why == "open" and string.format("Room %s's purge stopped: the room is open to the outside", tostring(first)))
+              or string.format("Room %s's purge stopped", tostring(first))
+  local BL = ref("base_log")
+  if BL and BL.add then pcall(BL.add, sid, why == "open" and "warn" or "air", msg) end
+  if crew.sid == sid then
+    local fx = ref("sfx"); if fx and fx.caption then pcall(fx.caption, msg) end
+  end
+  if log then log("room_air: " .. msg .. " (structure " .. tostring(sid) .. ")") end
 end
 
 -- Step structure sid's air to agency time a (exact, capped for a catch-up).
@@ -771,8 +862,34 @@ local function advance_struct(sid, s, a)
     for _, L in ipairs(n.gens or {}) do W = (W or 0) + (s.cells[L.uid] or 0); wcap = wcap + L.life.water end
     st.w, st.h2 = W, 0
     if n.V > 0 then
-      advance(st, { V = n.V, crew = n.crew, G = n.G, S = n.S, F = (st.q > EPS) and n.F or 0, tau = n.tau, slow = n.slow, pout = pout, xout = xout,
-                    cout = cout, W = W, Jx = n.Jx, JN = n.JN, Jc = n.Jc }, dt)
+      local M = { V = n.V, crew = n.crew, G = n.G, S = n.S, F = (st.q > EPS) and n.F or 0, tau = n.tau, slow = n.slow, pout = pout, xout = xout,
+                  cout = cout, W = W, Jx = n.Jx, JN = n.JN, Jc = n.Jc }
+      if n.purge and n.openings > 0 then
+        purge_end(sid, s, n, "open")
+        advance(st, M, dt)
+      elseif n.purge then
+        -- (roompurge) the regulator waits for the pump-down; the pumps draw
+        -- the network to a vacuum alongside whatever valves it has open
+        -- (conductances add: τ = V / (Gv + Sp), the outside weighted Gv / (Gv + Sp))
+        local F = M.F
+        M.F, st.feed = 0, false
+        if (n.Sp or 0) > 0 then
+          local Gv = n.Gv or 0
+          local Gt = Gv + n.Sp
+          local _, rep = advance(st, { V = n.V, tau = n.V / Gt, slow = false, pout = pout * Gv / Gt, xout = xout, cout = cout, F = 0,
+                                       pT = RP_P, Jx = n.Jx, JN = n.JN, Jc = n.Jc }, dt)
+          if rep.purged then
+            purge_end(sid, s, n, "done")
+            M.F = (st.q > EPS) and n.F or 0
+            advance(st, M, rep.left or 0)
+          end
+        else
+          advance(st, M, dt)   -- (no power: the pump stops, the room holds as it is)
+        end
+        M.F = F
+      else
+        advance(st, M, dt)
+      end
     end
     n.jon = st.jon
     sts[#sts + 1] = st
@@ -819,7 +936,113 @@ function airOf(sid, rid)
   st.crew = s.crewIn[rid] or 0
   st.G, st.S = n and n.G or 0, n and n.S or 0
   st.left = o2Left(A, r.m3, n and n.crew or 0, n and n.G or 0)
+  st.purging = n ~= nil and n.purge == true
+  st.foul = foulAir(A)
   return st
+end
+
+-- ── (roompurge) the room purge ──────────────────────────────────────────────
+-- "45 s" | "4.8 min"
+function fmtSecs(t)
+  if not t then return "—" end
+  if t < 90 then return string.format("%.0f s", t) end
+  return string.format("%.1f min", t / 60)
+end
+-- A purge plan in a line (purgeInfo's): what it takes and why you'd want it
+function purgeLine(pi)
+  if not pi then return "—" end
+  local pl = pi.plan
+  local cost = string.format("%s to pump down (%.1f kW), %s to refill · %.0f of %.0f m³ of air", fmtSecs(pl.pump), pi.kw, fmtSecs(pl.fill), pl.need, pi.q)
+  if pi.foul then return "the room holds the outside's gas: purge it · " .. cost end
+  return cost
+end
+-- Room rid's network and the air its racks hold: → n, q | nil
+local function purge_net(sid, rid)
+  local s = S[sid]
+  if not (s and s.R and s.R.byId[rid]) then return nil end
+  local _, byRoom = nets(sid, s)
+  local n = byRoom and byRoom[rid]
+  if not n then return nil end
+  local q = 0
+  for _, L in ipairs(n.tanks) do q = q + (s.tanks[L.uid] or 0) end
+  return n, q, s
+end
+function purging(sid, rid) local n = purge_net(sid, rid); return n ~= nil and n.purge == true end
+-- Why a purge of room rid can't start now, or nil. (Never the crew in it:
+-- they are warned, not refused.)
+function purgeWhy(sid, rid)
+  local n, q, s = purge_net(sid, rid)
+  if not n then return "no such room" end
+  local r = s.R.byId[rid]
+  if n.purge then return string.format("Room %s is already being purged", tostring(rid)) end
+  if r.airlock then return "an airlock purges its own chamber as it cycles" end
+  if r.leaky or not r.sealed then return string.format("Room %s isn't sealed: a purge would only pull the outside in", tostring(rid)) end
+  if #n.tanks == 0 then return string.format("no Air Tank Rack in Room %s: the purge pump and the air to refill it are on a rack", tostring(rid)) end
+  if n.openings > 0 then return string.format("Room %s is open to the outside: shut it first", tostring(rid)) end
+  if not s.pow then return "no power: the racks' purge pumps run on the base grid" end
+  local A = { N = 0, x = 0, c = 0 }
+  for _, id in ipairs(n.rooms) do local a = s.air[id]; A.N, A.x, A.c = A.N + a.N, A.x + a.x, A.c + a.c end
+  local pl = purgePlan(n.V, A.N + A.x + A.c, n.Sp or 0, n.F, q)
+  if pl.short then
+    return string.format("the racks hold %.0f m³ of air; refilling Room %s takes %.0f m³: refill them or add a rack", q, tostring(rid), pl.need)
+  end
+  return nil
+end
+-- What a purge of room rid would take, or is doing (worked out when asked:
+-- the menu asks once when it opens). → { purging, foul, p, V, rooms, crew,
+-- racks, q, plan = purgePlan's, kw } | nil
+function purgeInfo(sid, rid)
+  local n, q, s = purge_net(sid, rid)
+  if not n then return nil end
+  local A = { N = 0, x = 0, c = 0 }
+  for _, id in ipairs(n.rooms) do local a = s.air[id]; A.N, A.x, A.c = A.N + a.N, A.x + a.x, A.c + a.c end
+  local tot = A.N + A.x + A.c
+  local Sp = 0
+  for _, L in ipairs(n.tanks) do if not L.off then Sp = Sp + (L.life.purge or RP_S) end end
+  local kw = 0
+  for _, L in ipairs(n.tanks) do if not L.off then kw = kw + (L.life.purgeKW or RP_KW) end end
+  return { purging = n.purge == true, foul = foulAir(A), p = tot / math.max(n.V, 1e-9), V = n.V, rooms = #n.rooms,
+           crew = n.crew or 0, racks = #n.tanks, q = q, plan = purgePlan(n.V, tot, Sp, n.F, q), kw = kw, pow = s.pow == true }
+end
+-- Start purging room rid (its whole network). → ok, why | ok, warning
+function startPurge(sid, rid, by)
+  local w = purgeWhy(sid, rid)
+  if w then return false, w end
+  local s = S[sid]
+  advance_struct(sid, s, agency_now())
+  local n = purge_net(sid, rid)
+  for _, id in ipairs(n.rooms) do s.purge[id] = { t0 = s.a } end
+  s.netsDirty = true
+  local BG = ref("base_grid"); if BG and BG.markDirty then BG.markDirty() end
+  -- the crew in it are warned, never refused (Ty's sandbox: danger is allowed)
+  local warn = nil
+  if (n.crew or 0) > 0 then
+    warn = string.format("Room %s has crew in it: the purge pumps their air out. Helmets on.", tostring(rid))
+    local inRoom = false
+    for _, id in ipairs(n.rooms) do if crew.sid == sid and crew.rid == id then inRoom = true end end
+    if inRoom then
+      local bc = ref("big_caption")
+      if bc and bc.show then bc.show("PURGE", warn, 4.0, helmetOff() and "alarm" or "result") end
+    end
+  end
+  local BL = ref("base_log")
+  local pi = purgeInfo(sid, rid)
+  if BL and BL.add then
+    pcall(BL.add, sid, warn and "warn" or "air", string.format("Room %s purge started (~%.0f s to pump down, ~%.0f s to refill)%s", tostring(rid),
+      pi and pi.plan.pump or 0, pi and pi.plan.fill or 0, warn and (": " .. warn) or ""))
+  end
+  if audio and audio.play then pcall(audio.play, "audio/foley/servo_run.ogg", { track = "SFX", volume = 0.35 }) end
+  lastPurge = { sid = sid, rid = rid, why = "start", t = now(), a = s.a, warn = warn, by = by }
+  return true, warn
+end
+-- Stop room rid's purge by hand (the regulator then fills what is there).
+function stopPurge(sid, rid)
+  local n, _, s = purge_net(sid, rid)
+  if not (n and n.purge) then return false, "no purge under way" end
+  advance_struct(sid, s, agency_now())
+  n = purge_net(sid, rid)
+  if n and n.purge then purge_end(sid, s, n, "stop") end
+  return true
 end
 
 function solveNow(sid) solve(sid) end
@@ -1356,6 +1579,16 @@ end
 -- (S7) the airlock pumps as grid loads: kW an Airlock Wall's pump draws now
 function gridAux(sid, uid)
   local s = S[sid]
+  -- (roompurge) an Air Tank Rack's purge pump while its room is purged
+  if s and s.purge and next(s.purge) and s.R then
+    local _, byRoom = nets(sid, s)
+    for _, L in ipairs(s.life) do
+      if L.uid == uid and L.life.store and L.rid and not L.off then
+        local n = byRoom and byRoom[L.rid]
+        return (n and n.purge and s.pow) and (L.life.purgeKW or RP_KW) or 0
+      end
+    end
+  end
   if not (s and s.dch and s.dch[uid]) then return 0 end
   local C = s.cham[s.dch[uid]]
   local d = s.R.doors[uid]
@@ -1455,7 +1688,12 @@ local function save_struct(sid, s)
   local cells, recv = {}, {}
   for u, w in pairs(s.cells or {}) do cells[#cells + 1] = { u = u, w = w } end
   for u, q in pairs(s.recv or {}) do recv[#recv + 1] = { u = u, N = q.N, x = q.x, c = q.c } end
-  save.set("air." .. tostring(sid), { a = s.a, rooms = rooms, tanks = tanks, cells = cells, recv = recv })
+  local purge = nil
+  for rid in pairs(s.purge or {}) do
+    local r = s.R.byId[rid]
+    if r then purge = purge or {}; purge[#purge + 1] = r.key end
+  end
+  save.set("air." .. tostring(sid), { a = s.a, rooms = rooms, tanks = tanks, cells = cells, recv = recv, purge = purge })
 end
 function saveNow() for sid, s in pairs(S) do if s.R then save_struct(sid, s) end end end
 -- (scenarios) a start state already lived in: every sealed room of sid at
@@ -1498,7 +1736,7 @@ local function provider(t, ctx)
     else
       local a = airOf(sid, rid)
       out[#out + 1] = { id = "ra_room", type = "info", label = "Room " .. rid, group = "Life support",
-        value = function() local q = airOf(sid, rid); return q and string.format("%.2f atm · O2 %.0f %% · CO2 %.1f %%%s", q.p, 100 * q.o2 / math.max(q.p, 1e-6), 100 * q.co2 / math.max(q.p, 1e-6), q.venting and " · VENTING" or "") or "—" end }
+        value = function() local q = airOf(sid, rid); return q and string.format("%.2f atm · O2 %.0f %% · CO2 %.1f %%%s", q.p, 100 * q.o2 / math.max(q.p, 1e-6), 100 * q.co2 / math.max(q.p, 1e-6), q.venting and " · VENTING" or (q.purging and " · PURGING" or "")) or "—" end }
       if L.store then
         out[#out + 1] = { id = "ra_tank", type = "info", label = "Air", group = "Life support",
           value = function() return string.format("%.1f of %.0f m³ at 1 atm", s.tanks[uid] or 0, L.store) end }
@@ -1515,6 +1753,25 @@ local function provider(t, ctx)
             if audio and audio.play then pcall(audio.play, "audio/foley/hiss_cylinder.ogg", { track = "SFX", volume = 0.4 }) end
             return true
           end }
+        -- (roompurge) the purge: its plan worked out once, as the menu opens
+        local pi, why0 = purgeInfo(sid, rid), purgeWhy(sid, rid)
+        if pi then
+          out[#out + 1] = { id = "ra_purge_i", type = "info", label = "Purge", group = "Life support",
+            value = function()
+              local q = airOf(sid, rid)
+              if q and q.purging then
+                return string.format("PUMPING DOWN %.2f atm → %.2f overboard · then the regulator refills it", q.p, RP_P)
+              end
+              return purgeLine(pi)
+            end,
+            warn = function() local q = airOf(sid, rid); return q ~= nil and (q.purging or (pi.foul and not q.breathable)) end }
+          out[#out + 1] = { id = "ra_purge", type = "toggle", label = string.format("Purge Room %s", tostring(rid)), group = "Life support", keep = true,
+            hint = pi.plan.pump and pi.plan.fill and fmtSecs(pi.plan.pump + pi.plan.fill) or nil,
+            on = function() return purging(sid, rid) end,
+            act = function(want) if want then return startPurge(sid, rid, "hand") end return stopPurge(sid, rid) end,
+            enabled = function() return purging(sid, rid) or why0 == nil end,
+            why = function() return why0 end }
+        end
       elseif L.receiver then
         out[#out + 1] = { id = "ra_recv", type = "info", label = "Receiver", group = "Life support",
           value = function() local q = s.recv[uid] or { N = 0, x = 0, c = 0 }; local n = q.N + q.x + q.c

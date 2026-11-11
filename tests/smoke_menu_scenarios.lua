@@ -74,6 +74,19 @@ do
   for _ = 1, 120 do local e = O.tick(q, 1 / 60); if e == "idle" then idle = true end end
   check(idle and q.fade == 1, "the strip fades once the last line is done")
 end
+-- THE FRAME (2026-11-11: a third wrapped line spilled under it)
+do
+  check(O.TEXT_W == O.W - 2 * O.PAD - O.WHO_W - O.GAP_X and O.TEXT_W > 0, "the text column has a fixed width: " .. tostring(O.TEXT_W))
+  check(O.linesOf("short") == 1 and O.linesOf(string.rep("word ", 30), 68) == 3 and O.linesOf(string.rep("x", 150), 68) == 3,
+    string.format("linesOf: words wrap, a long word breaks (%d, %d)", O.linesOf(string.rep("word ", 30), 68), O.linesOf(string.rep("x", 150), 68)))
+  local long = string.rep("Logged. The Depot ships Life Support now. ", 4)
+  local hist = { { text = long }, { text = long }, { text = "one line" } }
+  local from = O.histFrom(hist, long)
+  local used = O.linesOf(long)
+  for i = from, #hist do used = used + math.min(O.HIST_LINES, O.linesOf(hist[i].text)) end
+  check(used <= O.LINES_MAX and from > 1, string.format("long lines: the oldest scroll away (from %d, %d lines of %d)", from, used, O.LINES_MAX))
+  check(O.histFrom({ { text = "a" }, { text = "b" }, { text = "c" } }, "d") == 1, "short lines: all three kept")
+end
 
 -- ── 2. THE OPS STRIP, in a scene ────────────────────────────────────────────
 do
@@ -107,9 +120,14 @@ do
   check(S.current and #S.current.shown > 5, "the line is typing: " .. tostring(S.current and S.current.shown))
   local strip = by(last_tree, "key", "strip")
   check(strip and strip.style == "hud/instrument" and strip.pin == "bottom", "a CRT display in a bezel, bottom of the screen")
+  local full, line = by(last_tree, "key", "full"), by(last_tree, "name", "Ops Strip Line")
+  check(full and full.text:find("helmet off in", 1, true) and full.opacity == 0 and full.w == S.TEXT_W and line and line.w == S.TEXT_W,
+    "the frame is sized for the whole line from its first character (an invisible copy), every text at the column's fixed width")
   strip.onClicked()
   S.update(node, 1 / 60)
   check(played[#played] == "chime" and S.queue().cur.typed, "a click finishes the line, with the closing chirp")
+  local ln = by(last_tree, "name", "Ops Strip Line")
+  check(ln and ln.text == "We need a shelter we can take a helmet off in.", "and the whole line is drawn at once: " .. tostring(ln and ln.text))
   for _ = 1, 60 * 8 do S.update(node, 1 / 60) end
   check(not el.visible and S.current == nil, "the strip goes away when it is done")
 end

@@ -196,7 +196,8 @@ local function grid_row(sid, uid, d)
     if st and st.off then return "switched off · draws nothing · " .. head end
     local served = BG.partServed and BG.partServed(sid, uid)
     local use = pw.kind == "load" and pw.use or nil
-    return string.format("%s%s · %s", use and string.format("draws %.2f kW", use) or "a plant load",
+    -- (an aux load draws only while it works: a plant's pump, a rack's purge pump)
+    return string.format("%s%s · %s", use and string.format("draws %.2f kW", use) or ((pw.use or 0) > 0 and string.format("up to %.1f kW while it works", pw.use) or "a plant load"),
       served == false and " · NOT SERVED" or "", head)
   end
   if pw.kind == "store" then return "a store on " .. head end
@@ -235,7 +236,9 @@ local function room_row(sid, uid, p, d)
   if not (ok and r) then return nil end
   local q = RA.airOf(sid, r.id)
   if not q then return "Room " .. tostring(r.id) end
-  return string.format("Room %s · %.2f atm · O2 %.0f %%", tostring(r.id), q.p or 0, 100 * (q.o2 or 0) / math.max(q.p or 0, 1e-6))
+  -- (roompurge) a purge under way, or a sealed room still holding the outside's gas
+  local tag = q.purging and " · PURGING" or ((q.foul and q.sealed and not q.airlock and not q.leaky) and " · the outside's gas: purge it at an Air Tank Rack" or "")
+  return string.format("Room %s · %.2f atm · O2 %.0f %%%s", tostring(r.id), q.p or 0, 100 * (q.o2 or 0) / math.max(q.p or 0, 1e-6), tag)
 end
 local function plant_row(sid, uid, d)
   if not (d and (d.nuclear or d.pump or d.reject or d.console or d.turbine or d.press)) then return nil end

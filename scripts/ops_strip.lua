@@ -31,6 +31,19 @@ GAP = 0.6           -- s between a finished line and the next queued one
 FADE = 0.5          -- s the strip takes to fade once the last line is done
 HISTORY = 3         -- earlier lines kept above the current one
 OPS = "OPS"         -- the speaker when none is named
+-- THE FRAME (2026-11-11: a third wrapped line spilled under it). Every text
+-- has a fixed width, so it is measured where it wraps (a `grow` text was
+-- measured at the whole row's width and drew more lines than its frame
+-- held); an earlier line takes at most HIST_LINES lines (ellipsised), and the
+-- oldest scroll away while the lines would pass LINES_MAX (CPL: the
+-- characters a line holds, the readout's mono cut at TEXT_W, measured).
+W = 640             -- the strip's width
+PAD, GAP_X = 10, 8  -- its padding; the speaker-to-text gap
+WHO_W = 92          -- the speaker's column
+TEXT_W = W - 2 * PAD - WHO_W - GAP_X
+CPL = 68
+HIST_LINES = 2
+LINES_MAX = 7
 
 -- ── pure ────────────────────────────────────────────────────────────────────
 
@@ -157,6 +170,34 @@ end
 
 function busyQ(q) return q.cur ~= nil or #q.waiting > 0 end
 
+-- The lines a text takes at CPL characters a line (word wrap, estimated).
+function linesOf(text, cpl)
+  cpl = cpl or CPL
+  local n, col = 1, 0
+  for w in tostring(text or ""):gmatch("%S+") do
+    local l = ulen(w)
+    if col == 0 then col = l
+    elseif col + 1 + l <= cpl then col = col + 1 + l
+    else n = n + 1; col = l end
+    while col > cpl do n = n + 1; col = col - cpl end
+  end
+  return n
+end
+-- The earlier lines that fit above the current text: the newest first kept,
+-- each HIST_LINES at most, all within LINES_MAX with the current line's.
+-- → the first index of hist to show (#hist + 1: none)
+function histFrom(hist, curText)
+  local used = curText and linesOf(curText) or 0
+  local from = #hist + 1
+  for i = #hist, 1, -1 do
+    local l = math.min(HIST_LINES, linesOf(hist[i].text))
+    if used + l > LINES_MAX then break end
+    used = used + l
+    from = i
+  end
+  return from
+end
+
 -- A line said elsewhere (the dialogue panel): straight into the history, no
 -- typing, no chirp; the strip shows it for a few seconds when it is next up.
 function logQ(q, text, who)
@@ -217,6 +258,9 @@ end
 function skipLine()
   local r = skip(Q)
   if r == "typed" then chirp("chime") end
+  -- (the whole line up now: the next update redraws it, or the typewriter's
+  -- half line stayed up through the hold)
+  if r then logged = true end
   return r
 end
 
@@ -224,7 +268,7 @@ end
 -- layout), above the tool belt on foot.
 -- (on foot: above the walk-up prompt and the tool hint, which reach up to
 -- about 130 from the bottom)
-local FOOT_Y, W = -168, 640
+local FOOT_Y = -168
 local function strip_y()
   local fh = ref("flight_hud")
   local vc = nil
@@ -241,20 +285,30 @@ local function describe()
   local c = Q.cur
   local a = 1 - Q.fade
   local rows = {}
-  for i, h in ipairs(Q.hist) do
-    rows[#rows + 1] = { "row", key = "h" .. i, w = "100%", h = "fit", pad = 0, gap = 8, align = "start",
-      { "text", key = "w", style = "menu/slotTag", w = 92, h = "fit", text = speaker(h.who), textAlign = "end" },
-      { "text", key = "t", style = "hud/readout", w = "grow", h = "fit", wrap = true, opacity = 0.55, text = h.text } }
+  -- (fixed text widths: a wrapped text is measured at the width it draws at;
+  -- the oldest lines scroll away before the strip passes LINES_MAX)
+  for i = histFrom(Q.hist, c and c.text), #Q.hist do
+    local h = Q.hist[i]
+    rows[#rows + 1] = { "row", key = "h" .. i, w = "100%", h = "fit", pad = 0, gap = GAP_X, align = "start",
+      { "text", key = "w", style = "menu/slotTag", w = WHO_W, h = "fit", text = speaker(h.who), textAlign = "end" },
+      { "text", key = "t", style = "hud/readout", w = TEXT_W, h = "fit", wrap = true, maxLines = HIST_LINES, overflow = "ellipsis",
+        opacity = 0.55, text = h.text } }
   end
   if c then
-    rows[#rows + 1] = { "row", key = "cur", w = "100%", h = "fit", pad = 0, gap = 8, align = "start",
-      { "text", key = "w", style = "hud/micro", w = 92, h = "fit", text = speaker(c.who), textAlign = "end" },
-      { "text", key = "t", name = "Ops Strip Line", style = "hud/readout", w = "grow", h = "fit", wrap = true,
-        text = typed(c.text, c.n) .. (c.typed and "" or "▌") } }
+    -- (the current line is sized for all of it from its first character: the
+    -- typewriter fills a frame already tall enough, it never grows under it)
+    rows[#rows + 1] = { "row", key = "cur", w = "100%", h = "fit", pad = 0, gap = GAP_X, align = "start",
+      { "text", key = "w", style = "hud/micro", w = WHO_W, h = "fit", text = speaker(c.who), textAlign = "end" },
+      -- (a box with no stack: its two texts lie one over the other, and it
+      -- fits the larger, the whole line, invisible)
+      { "box", key = "tc", w = TEXT_W, h = "fit",
+        { "text", key = "full", style = "hud/readout", w = TEXT_W, h = "fit", wrap = true, opacity = 0, text = c.text .. "▌" },
+        { "text", key = "t", name = "Ops Strip Line", style = "hud/readout", w = TEXT_W, h = "fit", wrap = true,
+          text = typed(c.text, c.n) .. (c.typed and "" or "▌") } } }
   end
   return {
     { "button", key = "strip", style = "hud/instrument", pin = "bottom", y = strip_y(), w = W, h = "fit",
-      dir = "column", pad = 10, gap = 3, align = "stretch", opacity = a, focusable = false,
+      dir = "column", pad = PAD, gap = 3, align = "stretch", opacity = a, focusable = false,
       tooltip = c and "Click (or Space in a briefing) to finish the line" or nil,
       onClicked = function() skipLine() end,
       items = rows, function(r) return r end },

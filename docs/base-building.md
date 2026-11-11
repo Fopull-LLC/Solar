@@ -2574,8 +2574,8 @@ Built 2026-11-09 (`work/expansion/PLAN.md` §6.3, §7.2). The air itself is
   amount, CO₂ included, to the outside's, exactly (`advance`'s `cout`; one
   step = many to 1e-6 in smoke_atmo).
 - **Flushing is the work**: ten scrubbers take two days to clear a 30 m³ room
-  of a CO₂ world's air; venting it to the chamber's receiver and refilling it
-  from an Air Tank Rack or an N₂ Compressor plus an O₂ source is quicker.
+  of a CO₂ world's air; the Air Tank Rack's **Purge** (§36) pumps it overboard
+  and refills the room with air in minutes.
 
 ### The new LIFE pieces
 
@@ -4416,3 +4416,27 @@ New: `timber.saw` (the saw jobs), a part's `paid.planks`. Nothing old changes me
 
 - `tests/smoke_kit_wood.lua`: the material, masses and prices, the TIMBER pieces, planks-first quotes and their card and ledger lines, recipes, leaky rooms, the saw's rates and job arithmetic, the Depot's lots, strip and damage rows. `smoke_kit` checks every timber prefab's bounds; `smoke_recipes` every timber recipe.
 - `tools/perf/woodprobe.sh <engine> wood` (20/20 on 0.118.3-dev.1496): the motorcycle ridden 150 m out and braked to a stop, both banks levelled and a 1.7 m gap dug 15 m ahead of it, a 6 m bridge built over it in its frame (two beams, three decks, six fences, four posts); ridden across at 4–8 m/s (its root 0.43 m over the bridge's base at mid-span, as on the run-up), stepped off and walked back (the walker 1.05 m over the deck); a 4 × 4 m hut (21 pieces) holds no air, its plank door swung 92° as the walker came in; 500 kg of planks ordered, a timber wall paid from them (106 kg + $22), the Sawbench sawing 2 timber by hand and stopped (timber back). Pictures `buildshots/wd*.png`. (The probe measures the bike by its tyres' drawn places, never `assembly.info`'s tick pose against `space.body`: that mix put the bridge 16 m off.)
+
+## 36. Purging a room (the Air Tank Rack's purge pump, 11-11)
+
+Found by the progression arc (P2): on a home world with 1.2 atm of oxygen-free air a newly sealed room closes round that air; an O2 Generator needs more than a game day to fill 18 m³, and the racks' regulator never opens over 0.97 atm. The Shelter milestone ("an hour of the room's own air") could not be done there.
+
+**What it does** (`scripts/room_air.lua`, THE ROOM PURGE): pump-down and backfill, what a real habitat does. Every Air Tank Rack in the room has a purge pump (`life.purge` 0.3 m³/s at the room's pressure, `life.purgeKW` 2 kW from the base grid, the rack's `power = aux`). PURGE runs every rack's pump in the room's network and dumps the gas overboard down to `RP_P` (0.01 atm); the purge is then done and the racks' regulator refills the room to 1 atm with air. While it runs the regulator stays shut; without power the pumps stop and the room holds as it is (it carries on when the power returns). The pump-down is `advance`'s venting branch to a vacuum with an event at `pT` (one step = many to 1e-6), so a purge under warp or a catch-up lands where a step a second does.
+
+| hut | pump-down | refill | air used | total |
+|---|---|---|---|---|
+| 17.6 m³ from 1.2 atm of CO₂, one rack | 4.7 min at 2 kW | 70 s | 17.4 of 60 m³ | 5.6 min to breathable |
+
+The 0.01 atm left is ≤ 0.012 atm of CO₂ in the refilled room (under `CO2_MAX`), and a running scrubber takes the rest.
+
+**When it refuses** (`purgeWhy`): no rack in the room, the room not sealed or open to the outside, an airlock (its cycle purges its chamber), no power, or the racks holding less air than the refill takes ("refill them or add a rack"). Never the crew: purging with people inside is allowed; it says "Room 1 has crew in it: the purge pumps their air out. Helmets on." (a big caption, an alarm when the active crew's helmet is off) and runs.
+
+**Where it shows** (each worked out when the panel opens, `purgeInfo`/`purgeLine`):
+- the rack's menu: a **Purge** row (the plan: "the room holds the outside's gas: purge it · 4.7 min to pump down (2.0 kW), 70 s to refill · 17 of 60 m³ of air", or PUMPING DOWN while it runs) and the **Purge Room N** switch (its hint the total time; off stops it by hand);
+- the terminal's AIR page: the room's row says OUTSIDE GAS or PURGING, and a `[ PURGE ]` key under each sealed room with a rack;
+- part_info's Air row: "· PURGING", or "· the outside's gas: purge it at an Air Tank Rack".
+- the base log: started (with the warning), purged, stopped.
+
+**Save**: `air.<sid>.purge` = the keys of the rooms being purged (a new session carries on). The arc probe's Shelter step now builds the hut with a rack and purges it (no direct fill).
+
+Tests: `tests/smoke_room_purge.lua` (45: the pure pump-down and plan, a CO₂ world and an N₂ world to breathable in minutes, the crew warned, the grid draw, one step = many, no power, the refusals, stop, save, the rack's menu and the AIR page).
