@@ -1017,12 +1017,13 @@ end
 -- stopped sending them (every stand above was still made).
 check("an engine without per-source shadows: the field stops sending castShadow", ff.shadowOpts == false,
   tostring(ff.shadowOpts))
--- (meshfold 11-11: no cast line inside the sun map, where a plant past it popped lighter)
+-- (meshfold 11-11: no hard cast line inside the sun map, where a plant past it
+-- popped lighter; adopt1500, 0691: a kind with a distance thins out over a fade)
 local no_line = true
-for k, v in pairs(ff.SHADOW_KIND) do if v.cast and v.dist then no_line = false end end
-check("grass and ferns cast no sun shadow, trees and bushes to the map's edge (no distance line), once the engine takes it",
-  ff.SHADOW_KIND.grass.cast == false and ff.SHADOW_KIND.fern.cast == false and ff.SHADOW_KIND.broadleaf.cast == true
-  and ff.SHADOW_KIND.bush.cast == true and no_line)
+for k, v in pairs(ff.SHADOW_KIND) do if v.cast and v.dist and not ((v.fade or 0) > 0 and v.fade < v.dist) then no_line = false end end
+check("grass casts no sun shadow, ferns near the crew with a fade, trees and bushes to the map's edge; no hard distance line",
+  ff.SHADOW_KIND.grass.cast == false and ff.SHADOW_KIND.fern.cast == true and (ff.SHADOW_KIND.fern.fade or 0) > 0
+  and ff.SHADOW_KIND.broadleaf.cast == true and ff.SHADOW_KIND.bush.cast == true and no_line)
 
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}

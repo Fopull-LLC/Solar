@@ -959,16 +959,26 @@ local BEND_KIND = { grass = true, fern = true, reed = true, bush = true, shrub =
 -- (meshfold, plant flicker, Ty 11-11: "a plant lighter than everything near
 -- me, flickering as I drive".) A plant past its source's shadowDistance is
 -- not in the sun map, so it loses its own shadow (the canopy over its lower
--- leaves) and the ground's under it: it read lighter than the self-shaded
--- plants just inside the line, and changed as the drive crossed it (ferns at
--- 25 m, bushes 40, trees 60). There is no line now inside the sun map: a kind
--- either never casts (grass, moss, reeds, and now ferns and succulents, small
--- enough that their own shade is lost in the ground's) or casts as far as
--- the map reaches (`dist` nil: the graphics level's shadow distance, 220 m
--- on High), where the terrain's shadows end too.
+-- leaves) and the ground's under it: with a hard cut it read lighter than the
+-- self-shaded plants just inside the line, and changed as the drive crossed
+-- it (ferns at 25 m, bushes 40, trees 60). meshfold took every line out of
+-- the sun map: grass, moss, reeds, ferns and succulents never cast, the rest
+-- cast as far as the map reaches.
+--
+-- (adopt1500, engine card 0691, shadowFade.) A source's shadows can now thin
+-- out on a dithered noise pattern over the last `fade` m before `dist`
+-- instead of stopping at a line, so a plant crossing it fades rather than
+-- pops. Ferns and succulents cast again near the crew (they shade their own
+-- lower fronds, which meshfold lost: they read a little lighter up close),
+-- out to `dist` with the last `fade` m dithered. A kind with `dist` nil casts
+-- as far as the map reaches (the graphics level's shadow distance, 220 m on
+-- High), where the terrain's shadows end too. (gpusweep forest, High 1440p:
+-- the ferns' casting is inside the noise, sun map 1.29-1.67 ms against 1.33;
+-- bushes to 80 m and trees to 140 m with a fade saved 0.3 ms once and nothing
+-- the second time, so they stay to the map's edge; grass to 12 m cost +0.2.)
 SHADOW_KIND = {
   grass = { cast = false }, moss = { cast = false }, reed = { cast = false },
-  fern = { cast = false }, succulent = { cast = false },
+  fern = { cast = true, dist = 22, fade = 7 }, succulent = { cast = true, dist = 22, fade = 7 },
   bush = { cast = true }, shrub = { cast = true }, cactus = { cast = true },
   broadleaf = { cast = true }, conifer = { cast = true }, palm = { cast = true },
   bulb = { cast = true }, coral = { cast = true },
@@ -1034,13 +1044,16 @@ function make_source(p, sp, fg, w)
     local sh = shadowOpts ~= false and SHADOW_KIND[sp.kind]
     if sh then
       opts.castShadow = sh.cast
-      if sh.cast and sh.dist then opts.shadowDistance = sh.dist end
+      if sh.cast and sh.dist then
+        opts.shadowDistance = sh.dist
+        if (sh.fade or 0) > 0 then opts.shadowFade = sh.fade end
+      end
     end
     local ok, id = pcall(scatter.create, opts)
     if not ok and sh and shadowOpts == nil then
-      -- an engine before 0661: the same source without the two options
+      -- an engine before 0661 (or 0691, shadowFade): the same source without them
       shadowOpts = false
-      opts.castShadow, opts.shadowDistance = nil, nil
+      opts.castShadow, opts.shadowDistance, opts.shadowFade = nil, nil, nil
       ok, id = pcall(scatter.create, opts)
     elseif ok and sh then
       shadowOpts = true

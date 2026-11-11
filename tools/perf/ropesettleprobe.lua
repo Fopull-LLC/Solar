@@ -338,7 +338,7 @@ local function main()
   local n0c, ms0 = rc.settleChecks or 0, rc.settleMs or 0
   local s0 = rc.settles or 0
   hold(5.0)
-  P("COST asleep 5 s: %d signature reads, %d settles, dearest check or re-lay so far %.3f ms", (rc.settleChecks or 0) - n0c,
+  P("COST asleep 5 s: %d feed and plate reads, %d settles, dearest check or re-lay so far %.3f ms", (rc.settleChecks or 0) - n0c,
     (rc.settles or 0) - s0, rc.settleMs or -1)
   R("asleep", (rc.settles or 0) == s0, "nothing changed, nothing laid again (%d)", (rc.settles or 0) - s0)
 
@@ -349,6 +349,17 @@ local function main()
     dig(add(add(add(foot, A.u, -2.0), A.t1, o[1]), A.t2, o[2]), 2.6)
   end
   settle()
+  -- (adopt1500, 0689) the feed holds the five digs, their centres in the frame the layouts are in
+  if terrain.editsSince then
+    local recs = terrain.editsSince(math.max(0, terrain.editSerial() - 5)) or {}
+    local c0 = add(foot, A.u, -2.0)
+    local r1 = recs[1]
+    local err = r1 and len(r1.x - c0.x, r1.y - c0.y, r1.z - c0.z) or -1
+    R("feed_frame", #recs == 5 and r1 and r1.kind == "dig" and err >= 0 and err < 0.01,
+      "%d edits in the feed, the first a %s %.2f m round, %.4f m from the dig's body-relative centre (body %s)", #recs,
+      tostring(r1 and r1.kind), r1 and r1.r or -1, err, tostring(r1 and r1.body))
+    P("feed: rope_climb woken by the feed %d times, too old %d", rc.feedWakes or -1, rc.feedTooOld or -1)
+  end
   local ok1 = wait_settle(n1, 12)
   local c1 = check_line(idA, "ledge dug")
   local L1 = rc.layoutOf(idA)
@@ -410,7 +421,7 @@ local function main()
     cam_at(newA, add(add(add(gn, A.t2, 3.5), A.t1, 2.5), A.u, 1.8), add(gn, A.u, 0.6), A.u)
     hold(0.6); shot("4_fallen_davit")
   end
-  P("COST end: %d signature reads in all, dearest check or re-lay %.3f ms, %d settles, %d falls", rc.settleChecks or -1,
+  P("COST end: %d feed and plate reads in all, dearest check or re-lay %.3f ms, %d settles, %d falls", rc.settleChecks or -1,
     rc.settleMs or -1, rc.settles or -1, rc.falls or -1)
   PCAM.eye = nil
   wait_for(function() return pending == 0 end, 10, "the pictures")

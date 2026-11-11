@@ -1013,54 +1013,70 @@ end
 -- ── the line settles again ──────────────────────────────────────────────────
 -- (playtest 2026-11-11: "I'd like the ability to mine near my ropes and
 -- they'll move to rebalance where they should be, without having to pick up
--- and replace them"). A laid line is asleep: nothing of it runs. Near the
--- crew (SETTLE.near m), one line at a time, every SETTLE.every s, the
--- ground's field is read at its SIGNATURE (a point every SETTLE.step m along
--- the line, and two under the davit's plate): a dig, a fill, a crater or a
--- drill anywhere along it moves those numbers, whoever made the edit. A
--- base's kit structure changing (structures.version) wakes the lines near
--- the crew too. A woken line is laid again from what is there once the
--- ground has been quiet SETTLE.quiet s (no edits pending, the signature the
--- same since), and swapped in only if it moved; a line is also laid again
--- once when the crew first comes near it in a session (an edit made while
--- nobody was near is read then). Ground gone from under the
--- davit's plate (an edit the dig guard did not stop) drops the davit to the
--- ground below it, and the line falls with it.
-SETTLE = { near = 90, every = 0.25, step = 0.5, eps = 0.03, quiet = 0.6, moved = 0.03, most = 80 }
+-- and replace them"). A laid line is asleep: nothing of it runs. The engine
+-- keeps a FEED of the terrain edits that landed (engine card 0689,
+-- terrain.editSerial / editsSince: whoever made them, a dig, a fill, a crater,
+-- a drill, a scenario, a mod), each with its centre and how far it can have
+-- reached (r). Every SETTLE.every s the field asks for what landed since it
+-- last looked (nothing at all when the serial has not moved) and wakes the
+-- lines whose path, or the ground under whose davit plate, is within
+-- r + SETTLE.margin of an edit. A paint edit changes no shape and wakes
+-- nothing. A caller more than the feed's 1,024 edits behind is told "too old"
+-- and wakes every line once. A base's kit structure changing
+-- (structures.version) wakes the lines near the crew too. A woken line near
+-- the crew (SETTLE.near m) is laid again from what is there once the ground
+-- has been quiet SETTLE.quiet s (no edits pending, none near it since), and
+-- swapped in only if it moved; a woken line far from the crew waits until the
+-- crew comes near (its colliders may not be built there). A line is also laid
+-- again once when the crew first comes near it in a session (an edit made in
+-- an earlier session the line missed is read then). Ground gone from under
+-- the davit's plate (an edit the dig guard did not stop) drops the davit to
+-- the ground below it, and the line falls with it.
+-- (Until 0689 this read the field at a SIGNATURE, a point every 0.5 m along
+-- one line every 0.25 s, ropebike bcb0afa.)
+SETTLE = { near = 90, every = 0.25, quiet = 0.6, moved = 0.03, margin = 1.5 }
 settles = 0            -- probes: lines laid again after the ground changed
-settleChecks = 0       -- probes: signature reads
+settleChecks = 0       -- probes: edit-feed reads (editsSince calls) and plate reads
 settleMs = 0           -- probes: the dearest check or re-lay so far (ms)
 falls = 0              -- probes: davits dropped with their ground
-local sig = {}         -- id → { q = {…} } the field at the signature when last read
+feedWakes = 0          -- probes: lines woken by an edit in the feed
+feedTooOld = 0         -- probes: times the feed answered "too old" (every line woken)
+local seen = {}        -- id → true once laid again this session (or first looked at)
 local woke = {}        -- id → when the line was woken (its ground changed)
-local settle_t, settle_i = -10, 0
+local settle_t = -10
 local struct_ver = nil
-function settleReset() sig, woke = {}, {} end
+local edit_serial = nil   -- the feed's serial when it was last read (nil: not yet)
+function settleReset() seen, woke = {}, {} end
 
--- The signature's points (body-relative): along the line, then under the
--- plate (G the ground point, u up).
-function sigPoints(L, G, u)
-  local pts = {}
-  local n = min(SETTLE.most, floor(L.total / SETTLE.step) + 1)
-  local step = n > 1 and L.total / (n - 1) or 0
-  for k = 0, n - 1 do
-    local x, y, z = at(L, k * step)
-    pts[#pts + 1] = { x, y, z }
-  end
+-- Does an edit at (cx, cy, cz) (body-relative) reaching `reach` m come
+-- near the line L or its plate's ground point G? The closest distance from
+-- the centre to each straight piece of the line, and to G.
+function editReaches(L, G, cx, cy, cz, reach)
+  local r2 = reach * reach
   if G then
-    pts[#pts + 1] = { G[1] - u[1] * 0.2, G[2] - u[2] * 0.2, G[3] - u[3] * 0.2 }
-    pts[#pts + 1] = { G[1] - u[1] * 0.6, G[2] - u[2] * 0.6, G[3] - u[3] * 0.6 }
+    local dx, dy, dz = cx - G[1], cy - G[2], cz - G[3]
+    if dx * dx + dy * dy + dz * dz <= r2 then return true end
   end
-  return pts
-end
--- Has the field moved at any of them? (q, q0: the numbers now and before)
-function sigMoved(q, q0, eps)
-  if not (q and q0) or #q ~= #q0 then return true end
-  for i = 1, #q do
-    if abs(q[i] - q0[i]) > (eps or SETTLE.eps) then return true end
+  local p, n = L and L.p, L and L.n or 0
+  if not p then return false end
+  for i = 1, max(n - 1, 1) do
+    local j = 3 * (i - 1)
+    local ax, ay, az = p[j + 1], p[j + 2], p[j + 3]
+    if not ax then break end
+    local bx, by, bz = p[j + 4] or ax, p[j + 5] or ay, p[j + 6] or az
+    local ex, ey, ez = bx - ax, by - ay, bz - az
+    local ll = ex * ex + ey * ey + ez * ez
+    local f = 0
+    if ll > 1e-12 then
+      f = ((cx - ax) * ex + (cy - ay) * ey + (cz - az) * ez) / ll
+      if f < 0 then f = 0 elseif f > 1 then f = 1 end
+    end
+    local dx, dy, dz = cx - (ax + ex * f), cy - (ay + ey * f), cz - (az + ez * f)
+    if dx * dx + dy * dy + dz * dz <= r2 then return true end
   end
   return false
 end
+
 -- How far apart two layouts are (m): the largest gap between points the same
 -- arc length along each, the difference in length, 1 m if one lies on the
 -- ground and the other not.
@@ -1079,16 +1095,14 @@ function layoutGap(A, B)
   return g
 end
 
-local function read_sig(e, b, L)
-  local pts = sigPoints(L, { e.x, e.y, e.z }, L.u)
-  local q = {}
-  for i, p in ipairs(pts) do
-    local v = terrain.query(b.x + p[1], b.y + p[2], b.z + p[3])
-    if v == nil then return nil end
-    q[i] = v
-  end
+-- The ground under the plate: the field 0.2 and 0.6 m below it (> 0.1 both:
+-- air, the footing is gone). nil when the field is not known there.
+local function plate_air(e, b, u)
+  local q1 = terrain.query(b.x + e.x - u[1] * 0.2, b.y + e.y - u[2] * 0.2, b.z + e.z - u[3] * 0.2)
+  local q2 = terrain.query(b.x + e.x - u[1] * 0.6, b.y + e.y - u[2] * 0.6, b.z + e.z - u[3] * 0.6)
   settleChecks = settleChecks + 1
-  return q
+  if q1 == nil or q2 == nil then return nil end
+  return q1 > 0.1 and q2 > 0.1
 end
 
 -- The ground under the plate is gone: the davit drops to the ground below.
@@ -1100,7 +1114,7 @@ local function fall_davit(id, e, b)
   if C and C.id == id and release then release("fall", "the rope's footing gave way") end
   local by, name = e.by, e.n
   pcall(dep.remove, id)
-  layouts[id], sig[id], woke[id], stale[id] = nil, nil, nil, nil
+  layouts[id], seen[id], woke[id], stale[id] = nil, nil, nil, nil
   if save.delete then save.delete("rope." .. tostring(id)) else save.set("rope." .. tostring(id), false) end
   version = version + 1
   falls = falls + 1
@@ -1114,8 +1128,7 @@ local function fall_davit(id, e, b)
   end
 end
 
--- One line looked at: its signature read, woken when it moved, laid again
--- once quiet.
+-- One woken line near the crew: laid again once its ground is quiet.
 local function settle_one(id, a)
   local e = dep_entry(id)
   local L = layouts[id]
@@ -1123,25 +1136,14 @@ local function settle_one(id, a)
   local b = space.body(e.b)
   if not b then return end
   if len3(e.gx - a.x, e.gy - a.y, e.gz - a.z) > SETTLE.near then return end
-  local q = read_sig(e, b, L)
-  if not q then return end
-  local S = sig[id]
-  if not S then
-    -- first seen this session: laid again once from what is there (the
-    -- ground may have changed while nobody was near to read it)
-    sig[id] = { q = q }
-    if not woke[id] then woke[id] = -10 end
-  elseif sigMoved(q, S.q) then
-    S.q = q
-    woke[id] = now()
-    return
-  end
   local w = woke[id]
   if not w or now() - w < SETTLE.quiet then return end
   if terrain.pending and terrain.pending() > 0 then return end
+  seen[id] = true
   -- the plate's ground: both points under it in the air → gone
-  local nq = #q
-  if q[nq] > 0.1 and q[nq - 1] > 0.1 then fall_davit(id, e, b) return end
+  local gone = plate_air(e, b, L.u)
+  if gone == nil then return end
+  if gone then fall_davit(id, e, b) return end
   local L2, why = lay(id)
   if not L2 then
     if why ~= "unknown" and why ~= "no davit" then woke[id] = nil end
@@ -1149,7 +1151,6 @@ local function settle_one(id, a)
   end
   local was_stale = stale[id]
   woke[id], stale[id] = nil, nil
-  sig[id] = { q = read_sig(e, b, L2) or q }
   local gap = layoutGap(L, L2)
   if gap > SETTLE.moved or was_stale then
     layouts[id] = L2
@@ -1163,6 +1164,41 @@ local function settle_one(id, a)
   end
 end
 
+-- What landed in the ground since the feed was last read: the lines it came
+-- near wake. (The centres are in the terrain node's own frame, which for a
+-- planet is its body-relative frame, the frame the layouts are in: no world
+-- point is kept or mixed.)
+local function read_feed(list)
+  if not (terrain.editSerial and terrain.editsSince) then return end
+  local s = terrain.editSerial()
+  if edit_serial == nil then edit_serial = s return end
+  if s == edit_serial then return end
+  local recs, why = terrain.editsSince(edit_serial)
+  settleChecks = settleChecks + 1
+  edit_serial = s
+  if recs == nil then
+    -- further behind than the feed keeps: every line looks again once
+    feedTooOld = feedTooOld + 1
+    log("rope: the terrain edit feed says " .. tostring(why) .. ": every line looks at its ground again")
+    for _, e in ipairs(list) do woke[e.id] = now() end
+    return
+  end
+  for _, r in ipairs(recs) do
+    if (r.serial or 0) > edit_serial then edit_serial = r.serial end
+    if r.kind ~= "paint" then
+      local reach = (r.r or 0) + SETTLE.margin
+      for _, e in ipairs(list) do
+        local L = layouts[e.id]
+        if L and (r.body == nil or e.b == nil or r.body == e.b)
+          and editReaches(L, { e.x, e.y, e.z }, r.x, r.y, r.z, reach) then
+          if not woke[e.id] then feedWakes = feedWakes + 1 end
+          woke[e.id] = now()
+        end
+      end
+    end
+  end
+end
+
 local function settle_tick()
   if now() - settle_t < SETTLE.every then return end
   settle_t = now()
@@ -1172,6 +1208,7 @@ local function settle_tick()
   local list = dep.list("rope")
   if #list == 0 then return end
   local t0 = os.clock()
+  read_feed(list)
   -- a kit structure changed: the lines near the crew wake
   local st = ref("structures")
   local sv = st and st.version
@@ -1181,14 +1218,20 @@ local function settle_tick()
     end
   end
   struct_ver = sv
-  -- (a woken line first, else the next in turn: one line a check)
-  local pick = nil
-  for _, e in ipairs(list) do if woke[e.id] then pick = e.id break end end
-  if not pick then
-    settle_i = settle_i % #list + 1
-    pick = list[settle_i].id
+  -- one line a check: a woken line near the crew, else one first come near
+  -- this session (laid again once)
+  local pick, first = nil, nil
+  for _, e in ipairs(list) do
+    if layouts[e.id] and e.gx and len3(e.gx - a.x, e.gy - a.y, e.gz - a.z) <= SETTLE.near then
+      if woke[e.id] then pick = e.id break end
+      if not first and not seen[e.id] then first = e.id end
+    end
   end
-  if layouts[pick] then settle_one(pick, a) end
+  if not pick and first then
+    pick = first
+    if not woke[pick] then woke[pick] = -10 end
+  end
+  if pick then settle_one(pick, a) end
   local ms = (os.clock() - t0) * 1000
   if ms > settleMs then settleMs = ms end
 end

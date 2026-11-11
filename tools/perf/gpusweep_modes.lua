@@ -266,7 +266,8 @@ function GS.drive(scene, tag)
       local done = false
       yield(); yield()
       local ok = pcall(camera.capture, { w = 640, h = 360, ui = false, draws = false }, function(bytes)
-        if bytes then assets.writeBytes(nm, bytes) end
+        -- (off the frame: a busy disk held it 15 s, adopt1500)
+        if bytes then assets.writeBytes(nm, bytes, { async = true }) end
         done = true
       end)
       if ok then wait_for(function() return done end, 5, "drive shot") end
@@ -553,6 +554,35 @@ TOGGLES.shadowkindold = {
     ff.clearAll(); GS.regrow("the new config back")
   end,
 }
+-- (adopt1500, 0691 shadowFade) other SHADOW_KIND configs, each regrown, against the field's own:
+-- shadowmeshfold: meshfold's (ferns and succulents never cast, the rest to the map's edge);
+-- shadowtreefade: bushes to 80 m (fade 15), trees to 140 m (fade 25), ferns as the field's;
+-- shadowgrass: grass casts to 12 m (fade 4) too
+function GS.shadowcfg(edit, label)
+  return {
+    on = function(c)
+      local ff = findScript("flora_field")
+      c.sk = ff.SHADOW_KIND
+      local t = {}
+      for k, v in pairs(c.sk) do t[k] = { cast = v.cast, dist = v.dist, fade = v.fade } end
+      for k, v in pairs(edit) do t[k] = v end
+      ff.SHADOW_KIND = t
+      ff.clearAll(); GS.regrow(label)
+    end,
+    off = function(c)
+      local ff = findScript("flora_field")
+      ff.SHADOW_KIND = c.sk
+      ff.clearAll(); GS.regrow("the field's config back")
+    end,
+  }
+end
+TOGGLES.shadowmeshfold = GS.shadowcfg({ fern = { cast = false }, succulent = { cast = false } }, "meshfold's config")
+do
+  local B, T = { cast = true, dist = 80, fade = 15 }, { cast = true, dist = 140, fade = 25 }
+  TOGGLES.shadowtreefade = GS.shadowcfg({ bush = B, shrub = B, cactus = B, broadleaf = T, conifer = T, palm = T, bulb = T, coral = T },
+    "bushes 80/15, trees 140/25")
+end
+TOGGLES.shadowgrass = GS.shadowcfg({ grass = { cast = true, dist = 12, fade = 4 } }, "grass to 12 m")
 -- every LightProbes volume in the scene switched off (E's GI-ambient question)
 TOGGLES.probes0 = {
   on = function(c)

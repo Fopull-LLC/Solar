@@ -231,20 +231,24 @@ do
   check(Lw and Lw.g and math.abs(Lw.p[#Lw.p - 1] - 5) < 0.1, string.format("a 1.5 m ledge holds it (ends %.2f m up)", Lw and Lw.p[#Lw.p - 1] or -1))
 end
 
--- THE LINE SETTLES AGAIN: its signature, how far two layouts are apart
+-- THE LINE SETTLES AGAIN: which edits in the terrain feed (engine 0689) come
+-- near the line, how far two layouts are apart
 do
-  local pts = R.sigPoints(L, G, U)
-  local nline = math.floor(L.total / R.SETTLE.step) + 1
-  check(#pts == nline + 2, string.format("signature: a point every %.1f m and two under the plate (%d)", R.SETTLE.step, #pts))
-  check(near(pts[#pts][2], G[2] - 0.6) and near(pts[#pts - 1][2], G[2] - 0.2), "signature: the plate's two points are under it")
-  local q0 = {}
-  for i = 1, #pts do q0[i] = 0.02 end
-  local q1 = {}
-  for i = 1, #pts do q1[i] = q0[i] end
-  check(not R.sigMoved(q1, q0), "signature: the same ground has not moved")
-  q1[5] = 0.02 + R.SETTLE.eps * 2
-  check(R.sigMoved(q1, q0), "signature: a dig beside the line moves it")
-  check(R.sigMoved(nil, q0) and R.sigMoved({ 1 }, q0), "signature: a missing read counts as moved")
+  check(R.SETTLE.margin and R.SETTLE.margin > 0, "feed: a margin past each edit's reach")
+  -- a point half way down the line, and one 3 m out from it
+  local mx, my, mz = R.at(L, L.total * 0.5)
+  check(R.editReaches(L, nil, mx, my, mz, 0.1), "feed: an edit on the line wakes it")
+  check(R.editReaches(L, nil, mx, my, mz - 3, 3.2), "feed: a dig 3 m out reaching 3.2 m wakes it")
+  check(not R.editReaches(L, nil, mx, my, mz - 3, 2.5), "feed: one reaching 2.5 m does not")
+  -- between two of the line's points (the closest place is on a piece, not a point)
+  local ax, ay, az = L.p[1], L.p[2], L.p[3]
+  local bx, by, bz = L.p[4], L.p[5], L.p[6]
+  local cx, cy, cz = (ax + bx) / 2, (ay + by) / 2, (az + bz) / 2
+  check(R.editReaches(L, nil, cx + 0.5, cy, cz, 0.6), "feed: an edit beside a long piece of the line, between its points")
+  -- the plate's ground: an edit under the davit wakes it even off the line
+  check(R.editReaches(L, G, G[1] + 5, G[2] - 0.6, G[3] + 5, 7.2), "feed: a dig under the plate wakes the line")
+  check(not R.editReaches(L, G, G[1] + 60, G[2], G[3] + 60, 5), "feed: a dig 85 m off wakes nothing")
+  check(not R.editReaches(nil, nil, 0, 0, 0, 5), "feed: no layout, nothing woken")
   check(near(R.layoutGap(L, L), 0, 1e-9), "gap: a layout is no distance from itself")
   -- the floor under the cliff dug 3 m deeper: the line falls further
   local castD = world(function(z) return z > 0 and 10 or -3 end)
