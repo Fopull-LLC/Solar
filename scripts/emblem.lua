@@ -1831,7 +1831,10 @@ end
 
 local function cache_write(sig, epx, fpx)
   if not (assets and assets.writeBytes) then return end
-  pcall(assets.writeBytes, cache_path(), sig .. "\n" .. epx .. fpx)
+  -- (off the frame: a plain write fsyncs on it, 189 ms for this one on a busy
+  -- disk, fpstall 2026-11-11; a readBytes of it waits for the write, and a
+  -- quit waits for what was handed over)
+  pcall(assets.writeBytes, cache_path(), sig .. "\n" .. epx .. fpx, { async = true })
 end
 
 -- ── JOBS: builds spread over frames ─────────────────────────────────────────

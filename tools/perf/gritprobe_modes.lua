@@ -20,15 +20,26 @@
 -- scenario each, PB RESULT lines too). Pictures: save/user/gritshots/.
 local GR = { tag = "grit", shots = 0 }
 
+-- The picture is written OFF the frame ({ async = true }). A plain
+-- assets.writeBytes to user:// is atomic and fsyncs on the frame, and on the
+-- shared disk under other agents' runs that took 0.9-7.5 s (2026-11-11
+-- fpstall): the capture callback's frame was then charged to the scenario
+-- begun right after the shot as a multi-second "scriptsCallbacks" frame, and
+-- the first-person fire window (hold 3 s of game time) was that one frame.
+-- Two frames after the answer let perfbench read the capture frame before
+-- the caller's next sc_begin.
 function GR.shot(nm)
   local done = false
   local ok, err = pcall(camera.capture, { w = 1280, h = 720, ui = false, draws = true }, function(bytes, why)
-    if bytes then assets.writeBytes("user://gritshots/" .. GR.tag .. "_" .. nm .. ".png", bytes); P("GR SHOT %s_%s", GR.tag, nm)
+    if bytes then
+      pcall(assets.writeBytes, "user://gritshots/" .. GR.tag .. "_" .. nm .. ".png", bytes, { async = true })
+      P("GR SHOT %s_%s", GR.tag, nm)
     else P("GR SHOT %s failed: %s", nm, tostring(why)) end
     done = true
   end)
   if not ok then P("GR capture error %s", tostring(err)); return end
   wait_for(function() return done end, 6, "shot " .. nm)
+  yield(); yield()
   GR.shots = GR.shots + 1
 end
 
@@ -701,4 +712,43 @@ function GR.run_digshot()
   GR.warp_to(-0.12, true)
   set("dusk")
   tb.sim = nil
+end
+
+-- ── gritwrites: the game's own pictures still land on disk ─────────────────
+-- (fpstall 2026-11-11: the F12 screenshot on foot and in the builder, and the
+-- craft library's thumbnail, write their bytes OFF the frame now.) Each file
+-- is looked for on disk after the write; `GR WRITE <what>: ok|MISSING`.
+function GR.run_writes()
+  wait_ready(90)
+  local function list(dir)
+    local ok, l = pcall(assets.getContents, dir)
+    return (ok and type(l) == "table") and l or {}
+  end
+  local function check(what, dir, pat, before)
+    local had = {}
+    for _, p in ipairs(before) do had[tostring(p)] = true end
+    local hit = nil
+    wait_for(function()
+      for _, p in ipairs(list(dir)) do if not had[tostring(p)] and tostring(p):match(pat) then hit = p end end
+      return hit ~= nil
+    end, 15, what)
+    local sz = hit and assets.readBytes and select(2, pcall(assets.readBytes, hit))
+    P("GR WRITE %s: %s (%s, %s bytes)", what, hit and "ok" or "MISSING", tostring(hit), tostring(type(sz) == "string" and #sz or "?"))
+  end
+  tap("f12")
+  check("on foot F12 screenshot", "user://screenshots", "solar_%d+%.png$", list("user://screenshots"))
+  local BH = enter_vab("w_enter")
+  if not BH then P("GR WRITE builder: no builder"); return end
+  wait(2.0)
+  local s0 = list("user://screenshots")
+  tap("f12")
+  check("builder F12 screenshot", "user://screenshots", "solar_%d+%.png$", s0)
+  local B = findScript("builder")
+  local c0 = list("user://crafts")
+  if B and B.libraryPut then
+    -- (a new slug each run: the scratch project keeps its user:// folder)
+    local sl = string.format("fpstall_probe_%d", #c0)
+    pcall(B.libraryPut, "fpstall probe", sl)
+    check("craft library thumbnail", "user://crafts", sl .. "%.png$", c0)
+  else P("GR WRITE craft library thumbnail: no builder.libraryPut") end
 end

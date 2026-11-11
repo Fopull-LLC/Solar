@@ -146,10 +146,23 @@ local function load_hand()
   hand_id = id
 end
 
+-- The belt is asked for many times a frame: every held() (tool_belt's
+-- toolId() alone is called a dozen times a frame) walked the whole registry,
+-- each item resolving "astro" through crew (two cross-script calls) and
+-- reading its gear bag out of the save (fpstall 2026-11-11: ~2 ms a frame,
+-- charged to tool_belt, idle or not). It is built once a frame and again
+-- only if a bag changed in the frame (inventory.bagVer counts every write).
+-- Callers only read it.
+local belt_c = { list = nil }
 function belt()
   local I, V = items(), inv()
   if not (I and V) then return {} end
-  return I.belt(function(id) return V.itemCount(PACK, id) end)
+  local c, t, ver = belt_c, time, V.bagVer
+  if t ~= nil and c.list and c.t == t and c.ver == ver and c.I == I and c.V == V then return c.list end
+  local pack = (V.resolve and V.resolve(PACK)) or PACK
+  c.list = I.belt(function(id) return V.itemCount(pack, id) end)
+  c.t, c.ver, c.I, c.V = t, ver, I, V
+  return c.list
 end
 
 local function in_belt(id, b)

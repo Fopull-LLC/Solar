@@ -2,7 +2,7 @@
 # gritprobe.sh — the gritty-realism pass (2026-11-10): the Terrain Laser's dig,
 # a cave, alien skies and an airless night, a fog bank. Pictures and costs.
 #
-#   gritprobe.sh <engine> [modes]     modes: gritdig gritcave gritsky gritfog gritdigshot (default the first four)
+#   gritprobe.sh <engine> [modes]     modes: gritdig gritcave gritsky gritfog gritdigshot gritwrites (default the first four)
 #   env: WORK LOCK SOLAR TAG PATCHES BENCH_PARAMS BENCH_STRS as bench.sh, e.g.
 #        BENCH_STRS='("gfx", "High")'          the graphics level (default High)
 #        SHOTS=<dir>                            where the pictures are copied (default $WORK/shots/<TAG>)
@@ -27,7 +27,8 @@ s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
               '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "gritdig" then GR.run_dig()\n'
               '    elseif MODE == "gritcave" then GR.run_cave()\n    elseif MODE == "gritsky" then GR.run_sky()\n'
-              '    elseif MODE == "gritfog" then GR.run_fog()\n    elseif MODE == "gritdigshot" then GR.run_digshot()')
+              '    elseif MODE == "gritfog" then GR.run_fog()\n    elseif MODE == "gritdigshot" then GR.run_digshot()\n'
+              '    elseif MODE == "gritwrites" then GR.run_writes()')
 open(p, 'w').write(s)
 PY
 luajit -e "assert(loadfile('$S/tools/perfbench.lua'))" || exit 3

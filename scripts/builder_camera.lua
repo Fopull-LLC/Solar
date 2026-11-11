@@ -531,7 +531,7 @@ local function screenshot()
   shot_n = shot_n + 1
   local path = string.format("user://screenshots/solar_%04d.png", shot_n)
   pcall(camera.capture, { w = math.min(4096, sw), h = math.min(4096, sh), ui = not S.ui_hidden, draws = false },
-    function(bytes) if bytes then assets.writeBytes(path, bytes) end end)
+    function(bytes) if bytes then pcall(assets.writeBytes, path, bytes, { async = true }) end end)
   local b = B()
   if b and b.hint then b.hint("screenshot saved — " .. path:gsub("^user://", ""), 2.5) end
 end

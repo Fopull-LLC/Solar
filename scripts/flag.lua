@@ -273,10 +273,14 @@ local function take_photo()
     local path = rec.photo
     local okc, err = pcall(camera.capture, cam, { w = 640, h = 360, format = "jpeg", quality = 88 }, function(bytes, why)
       if bytes and assets and assets.writeBytes then
-        local okw, werr = assets.writeBytes(path, bytes)
-        state.photo = okw and path or ("write failed: " .. tostring(werr))
-        local dep = ref("deployables")
-        if okw and dep and dep.setPhoto then dep.setPhoto(id, path) end
+        -- off the frame (a plain write fsyncs on it: fpstall 2026-11-11)
+        state.photo = "saving"
+        local okq, qerr = pcall(assets.writeBytes, path, bytes, { async = true }, function(okw, werr)
+          state.photo = okw and path or ("write failed: " .. tostring(werr))
+          local dep = ref("deployables")
+          if okw and dep and dep.setPhoto then dep.setPhoto(id, path) end
+        end)
+        if not okq then state.photo = "write failed: " .. tostring(qerr) end
       else
         state.photo = "capture failed: " .. tostring(why)
       end

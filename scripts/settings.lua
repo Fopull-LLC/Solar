@@ -450,7 +450,12 @@ function gfxReset()
   gfxVersion = gfxVersion + 1
 end
 
-function flush()
+-- flush(true): the write goes off the frame (a plain write to user:// is
+-- atomic and fsyncs ON the frame: 1.3 s on a busy disk, fpstall 2026-11-11).
+-- The resting slider's write is async; onDestroy and a caller's st.flush()
+-- write at once, as before (the engine settles an async write to the same
+-- file before a plain one; reads and a quit wait for async writes too).
+function flush(async)
   if not next(pending) then return end
   local keys = pending
   pending, pending_at = {}, nil
@@ -458,7 +463,9 @@ function flush()
     -- the whole store, every time: it is a few hundred bytes
     local t = { gfx_level = values.gfx_level }
     for _, k in ipairs(KEYS) do if values[k] ~= nil then t["opt_" .. k] = values[k] end end
-    local ok, err = pcall(assets.writeJson, STORE, t)
+    local ok, err
+    if async then ok, err = pcall(assets.writeJson, STORE, t, { async = true })
+    else ok, err = pcall(assets.writeJson, STORE, t) end
     if not ok then print("settings: " .. tostring(err)) end
     return
   end
@@ -1273,7 +1280,7 @@ function update(node, dt)
     eng.panel, eng.page = nil, nil
   end
   -- A slider fires every frame it moves; the store is written once it rests.
-  if pending_at and clock - pending_at > 0.5 then flush() end
+  if pending_at and clock - pending_at > 0.5 then flush(true) end
   -- The interface size: a drag lands when the button comes up; and twice a
   -- second it is re-asserted, which follows a window resized under Auto and a
   -- layer the scene rebuilt.

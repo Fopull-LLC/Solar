@@ -9849,7 +9849,7 @@ function libraryPut(name, sl, st)
   save.set("shipyard.current", name)
   if camera and camera.capture and assets and assets.writeBytes then
     pcall(camera.capture, { w = 256, h = 144, ui = false, draws = false }, function(bytes)
-      if bytes then pcall(assets.writeBytes, "user://crafts/" .. sl .. ".png", bytes) end
+      if bytes then pcall(assets.writeBytes, "user://crafts/" .. sl .. ".png", bytes, { async = true }) end
     end)
   end
   return st

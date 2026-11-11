@@ -175,6 +175,33 @@ function JP.cruise(vc, vt, hands)
 end
 
 JP_SETTLE_HOLD = 0.5   -- s inside the band that make a landing settled
+-- AIR BY THE TICK (fpstall 2026-11-11): the frame loop below samples the
+-- tyres once a frame, and on a loaded machine (frames 0.13-0.15 s) a 0.14 s
+-- hop off the small kicker can fall between two samples. JP.AT counts the
+-- tyres' contact every physics tick (perfbench's fixedUpdate, JP_TICK) once
+-- armed near the lip: the longest spell with neither tyre down, and whether
+-- one is going on now.
+JP.AT = nil
+function JP.air_tick(dt)
+  local A = JP.AT
+  local vc = A and A.vc
+  if not (A and A.on and vc and vc.R2) then return end
+  local down = false
+  for _, w in ipairs(vc.R2.wheels or {}) do
+    local t = w.tyre
+    if t and t.valid then
+      local cf = t.contactForce
+      if (cf ~= nil and cf > 0) or (cf == nil and t.grounded == true) then down = true end
+    end
+  end
+  if down then
+    if A.cur then A.best = math.max(A.best, A.cur) end
+    A.cur = nil
+  else
+    A.cur = (A.cur or 0) + dt
+    A.seen = true
+  end
+end
 -- one jump: from where it is to the kicker at k.d0, at k.v; logged to k.d0 + 60
 function JP.jump(vc, k)
   local tag = k.tag
@@ -197,6 +224,9 @@ function JP.jump(vc, k)
   local settled_at
   JP.calm = nil
   local p_all, p_an = 0, 0   -- (every flat tick, if it never held its speed there)
+  local prev_tick = JP_TICK
+  JP.AT = { vc = vc, on = false, best = 0 }
+  JP_TICK = function(dt) if prev_tick then prev_tick(dt) end; JP.air_tick(dt) end
   while time - t0 < 40 do
     local d, lat = JP.along(vc)
     local hands = (d < k.d0 - 3) or (td and time - td > 2.5)
@@ -213,9 +243,13 @@ function JP.jump(vc, k)
     if not t_lip and d < k.d0 - 3 and d > k.d0 - 30 and f + r == 2 then p_all, p_an = p_all + pitch, p_an + 1 end
     if f + r == 1 then JP.t_one = JP.t_one or time; one = time - JP.t_one else JP.t_one, one = nil, 0 end
     if not t_lip and d >= lip - 0.3 then t_lip = time; roll_lip, yaw_lip, pitch_lip, v_lip = roll, yaw, pitch, sp; JP.lat_lip = lat end
-    if t_lip and not air and f + r == 0 then air = true; t_air0 = time end
-    if air and not td and f + r > 0 then
-      td = time; airtime = time - t_air0
+    -- (the ticks' count is armed from 1.5 m short of the lip: a hop can
+    -- start on a tick before the frame whose d reads past lip - 0.3)
+    local A = JP.AT
+    if not A.on and d >= lip - 1.5 then A.on = true end
+    if t_lip and not air and (f + r == 0 or A.seen) then air = true; t_air0 = time end
+    if air and not td and f + r > 0 and not A.cur then
+      td = time; airtime = (A.best > 0) and A.best or (time - t_air0)
       roll_td, yaw_td, pitch_td, v_td = roll, yaw, pitch, sp
     end
     if not t_lip and time >= (JP.alog or 0) then
@@ -257,6 +291,9 @@ function JP.jump(vc, k)
     if t_lip and not air and time - t_lip > 2.0 then break end   -- it never left the ground
   end
   hold_w(false)
+  JP_TICK = prev_tick
+  P("JP AIR %s: by the tick %.3f s (the longest spell with no tyre down), as measured %.3f s", tag, JP.AT.best, airtime)
+  JP.AT.on = false
   local r = { tag = tag, v = k.v, kick = string.format("%.0f%% x %.1f m", k.g * 100, k.len), v_lip = v_lip, air = airtime,
     pitch_lip = pitch_lip and math.deg(pitch_lip), pitch_td = pitch_td and math.deg(pitch_td), roll_td = roll_td and math.deg(roll_td),
     yaw_td = yaw_td, peak_roll = math.deg(peak_roll), peak_yaw = peak_yaw, peak_bars = peak_bars, settle = settle, swings = n_sign, fell = fell, landed = td ~= nil, vloss = (v_td or 0) - (v_min or v_td or 0), lat = select(2, JP.along(vc)),
@@ -279,6 +316,10 @@ function JP.bike(name)
   -- A/B switches: ride2=0 the rider before BIKE_RIDE2; ftrav / rtrav the
   -- fork's and the swing arm's travel (m, as the wheel's Travel setting)
   if params.ride2 and tonumber(params.ride2) == 0 then vc.BIKE_RIDE2 = false end
+  -- hold=0: no hands-off line hold (BIKE_HOLD); rolltyres=0: the roll torque
+  -- about the frame's front, not the tyres' line (BIKE_ROLL_TYRES) — bcb0afa's A/Bs
+  if params.hold and tonumber(params.hold) == 0 then vc.BIKE_HOLD = false end
+  if params.rolltyres and tonumber(params.rolltyres) == 0 then vc.BIKE_ROLL_TYRES = false end
   -- packkg=kg: the rider carries that much in the pack (as crewSeatT reads
   -- a full pack: it sits in the saddle with them)
   if tonumber(params.packkg) then vc.CREW_T = 0.1 + tonumber(params.packkg) / 1000 end

@@ -2387,13 +2387,17 @@ local function screenshot()
   local show = not cinematic
   local ok, err = pcall(camera.capture, { w = sw, h = sh, ui = show, draws = show }, function(bytes, why)
     if not bytes then print("camera: screenshot failed — " .. tostring(why)) return end
-    local wok, werr = assets.writeBytes(path, bytes)
-    if wok then
-      print("camera: screenshot " .. path)
-      shot_msg, shot_msg_t = "Screenshot saved — " .. path:gsub("^user://", ""), time
-    else
-      print("camera: screenshot not written — " .. tostring(werr))
-    end
+    -- written off the frame: a plain write to user:// fsyncs on the frame,
+    -- seconds on a busy disk (fpstall 2026-11-11)
+    local qok, qerr = pcall(assets.writeBytes, path, bytes, { async = true }, function(wok, werr)
+      if wok then
+        print("camera: screenshot " .. path)
+        shot_msg, shot_msg_t = "Screenshot saved — " .. path:gsub("^user://", ""), time
+      else
+        print("camera: screenshot not written — " .. tostring(werr))
+      end
+    end)
+    if not qok then print("camera: screenshot not written — " .. tostring(qerr)) end
   end)
   if not ok then print("camera: screenshot " .. tostring(err)) end
 end
