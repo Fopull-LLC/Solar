@@ -56,8 +56,10 @@ defaults = {
   reach_craft = 400.0,    -- …and from a flying craft's camera
   --@range 5 200 --@units m
   close_range = 40.0,     -- the menu closes when the actor is this far from its target
-  --@range 2 30 --@units Hz
-  refresh = 8.0,          -- how often the open menu is re-described (live values)
+  --@range 1 30 --@units Hz
+  refresh = 4.0,          -- how often the open menu's live values are read again (its rows are kept)
+  --@range 0.5 10 --@units s
+  rows_keep = 2.0,        -- the providers are asked for the rows again this often (and at once after a press, a sub-panel, the structures changing)
 }
 
 -- Published.
@@ -81,7 +83,11 @@ local el = nil
 local W_MENU = 272
 local st = { stack = {}, x = 0, y = 0, rect = nil, desc_t = -1, msg = nil, msg_t = -10, msg_bad = false,
              job = nil, lit = {}, focus_next = false, rmb = nil, pad_prev = false, lmb_prev = false,
-             lib_t = -10, list = {}, title = nil, sub = nil }
+             lib_t = -10, list = {}, title = nil, sub = nil,
+             dirty = true, rows_t = -10, rows_ver = nil, gen = 0, sig = nil }
+-- What the menu costs (probes, tests/smoke_interact.lua): provider passes,
+-- describes, ui.make calls and their wall milliseconds.
+PROF = { rows = 0, rows_ms = 0, describes = 0, desc_ms = 0, makes = 0, make_ms = 0, worst_ms = 0 }
 
 function isOpen() return open end
 
@@ -421,7 +427,7 @@ function openFor(t, who, sx, sy)
   end
   if not sx then sx, sy = crosshair() end
   target, actor, open = t, who, true
-  st.stack, st.desc_t, st.msg = {}, -1, nil
+  st.stack, st.desc_t, st.msg, st.dirty, st.sig, st.actor_t = {}, -1, nil, true, nil, nil
   st.x, st.y = to_du(sx, sy)
   st.focus_next = true
   light(t)
@@ -485,15 +491,15 @@ function handle(e, dir)
     local ok, why = r.usable(e)
     if not ok then toast(why, true) return false end
     st.stack[#st.stack + 1] = { sub = e.sub, title = e.title or e.label, subtitle = e.subtitle }
-    st.desc_t, st.focus_next = -1, true
+    st.dirty, st.focus_next = true, true
     return true
   end
   if e.type == "info" or e.type == "meter" or e.type == "header" then return false end
   local ok, why, job = r.press(e, dir)
-  if job then start_job(job, e) st.desc_t = -1 return true end
+  if job then start_job(job, e) st.dirty = true return true end
   if not ok then toast(why or "can't do that", true)
   elseif why then toast(why) end
-  if ok and not e.keep and e.type == "action" then close() else st.desc_t = -1 end
+  if ok and not e.keep and e.type == "action" then close() else st.dirty = true end
   return ok
 end
 
@@ -534,7 +540,7 @@ local function readout(e, i)
     return { "col", key = "w" .. i, w = "100%", h = "fit", gap = 1, pad = 0,
       { "text", key = "l", style = "hud/micro", w = "100%", h = 14, text = lbl, maxLines = 1, overflow = "ellipsis" },
       { "text", key = "v", style = warn and "hud/valueWarn" or "hud/value", w = "100%", h = "fit", wrap = true, maxLines = 4,
-        overflow = "ellipsis", text = val } }
+        overflow = "ellipsis", text = val } }, val
   end
   local row = { "row", key = "r" .. i, w = "100%", h = "fit", gap = 6, pad = 0, align = "center",
     -- a short printed legend and a wide number; a long legend (a stack in a
@@ -543,14 +549,14 @@ local function readout(e, i)
       textValign = "center", maxLines = 1, overflow = "ellipsis" },
     { "text", key = "v", style = warn and "hud/valueWarn" or "hud/value", w = (#lbl > 12) and 72 or "grow", h = 16,
       textAlign = "end", textValign = "center", text = val or "—", maxLines = 1, overflow = "ellipsis" } }
-  if e.type ~= "meter" then return row end
+  if e.type ~= "meter" then return row, val end
   local f = math.max(0, math.min(1, tonumber(live(e.frac)) or 0))
   local GW = W_MENU - 2 * 12 - 2 * 8
   return { "col", key = "m" .. i, w = "100%", h = "fit", gap = 2, pad = 0, row,
     { "row", key = "g", w = "100%", h = 5, pad = 0, gap = 0, radius = 1, fill = { 0.01, 0.02, 0.015 },
       border = 1, borderColor = { 0, 0, 0, 0.8 },
       { "box", key = "f", w = math.max(1, math.floor(GW * f + 0.5)), h = 5, radius = 1,
-        fill = warn and WARN or PHOS } } }
+        fill = warn and WARN or PHOS } } }, val
 end
 
 local function key_row(e, i, first)
@@ -597,8 +603,9 @@ local function describe(list, title, subtitle)
         rows[#rows + 1] = screen_rows
         h = h + 18
       end
-      screen_rows[#screen_rows + 1] = readout(e, i)
-      local v = e.type == "info" and words(e.value)
+      local row, val = readout(e, i)
+      screen_rows[#screen_rows + 1] = row
+      local v = e.type == "info" and val
       local extra = (type(v) == "string" and #v > LONG) and (15 + 17 * math.min(4, math.ceil(#v / 30))) or 0
       h = h + (e.type == "meter" and 25 or (extra > 0 and extra or 19))
     else
@@ -651,6 +658,24 @@ local function describe(list, title, subtitle)
   st.rect = { x = x, y = y, w = W_MENU, h = h }
   return { "col", key = "ctx", style = "panel/frame", pin = "topLeft", x = x, y = y, w = W_MENU, h = "fit",
     gap = 4, pad = 12, align = "stretch", items = rows, function(r) return r end }
+end
+
+-- What the plate shows, as one string: when it is what was made last time
+-- the engine is not asked to reconcile it again. (pure: tests)
+local SIG_KEYS = { "text", "style", "selected", "w", "h", "x", "y", "disabled", "tooltip", "name", "opacity" }
+function treeSig(t, acc)
+  acc = acc or {}
+  if type(t) ~= "table" then return acc end
+  if type(t[1]) == "string" then acc[#acc + 1] = t[1] end
+  if t.key ~= nil then acc[#acc + 1] = "#" .. tostring(t.key) end
+  for _, k in ipairs(SIG_KEYS) do
+    local v = t[k]
+    if v ~= nil and type(v) ~= "table" and type(v) ~= "function" then acc[#acc + 1] = k .. "=" .. tostring(v) end
+  end
+  for _, v in ipairs(t) do if type(v) == "table" then treeSig(v, acc) end end
+  if type(t.items) == "table" then for _, v in ipairs(t.items) do treeSig(v, acc) end end
+  acc[#acc + 1] = "/"
+  return acc
 end
 
 local function mouse_in_menu()
@@ -729,9 +754,14 @@ local function still_valid()
   elseif t.node and t.node.valid == false then
     return false
   end
-  -- the actor changed (boarded, stepped out): the menu was theirs
-  local now = actorNow()
-  if not now or now.id ~= actor.id then return false end
+  -- the actor changed (boarded, stepped out): the menu was theirs (asked
+  -- four times a second: it walks every craft and the belt)
+  local tn = time or 0
+  if not st.actor_t or tn - st.actor_t >= 0.25 or tn < st.actor_t then
+    st.actor_t = tn
+    local now = actorNow()
+    if not now or now.id ~= actor.id then return false end
+  end
   if actor.kind == "crew" and actor.node and actor.node.distanceTo then
     local n = (t.node and t.node.valid ~= false) and t.node or nil
     if n and actor.node:distanceTo(n) > params.close_range then return false end
@@ -940,7 +970,7 @@ function update(node, dt)
       toast("called off", true)
     elseif #st.stack > 0 then
       table.remove(st.stack)
-      st.desc_t, st.focus_next = -1, true
+      st.dirty, st.focus_next = true, true
     else
       close()
       return
@@ -968,18 +998,55 @@ function update(node, dt)
         elseif r == false then toast(r2 or "it didn't work", true) end
       end
     end
-    st.desc_t = -1
+    if not st.job then st.dirty = true end
   end
   -- the plate, re-described a few times a second (live numbers)
   local W, H = layer_size()
   if el.width ~= W then el.width = W end
   if el.height ~= H then el.height = H end
   el.visible = true
-  if (time or 0) - st.desc_t >= 1 / params.refresh then
-    st.desc_t = time or 0
-    local list, title, sub = entries()
-    st.list = list
-    ui.make(node, { describe(list, title, sub) })
+  -- The plate. Its ROWS are the providers' answer, asked on opening, after a
+  -- press, a sub-panel or a job, when the structures change, and every
+  -- `rows_keep` s; between, only the LIVE values in them (a function for a
+  -- value, a meter, a toggle, a hint) are read again, `refresh` times a
+  -- second (a job's bar faster), and the engine is handed the tree only when
+  -- what it shows changed. (Ty 11-11: every provider asked eight times a
+  -- second — the salvage rows' support walk among them — took a base part's
+  -- menu to 1 fps.)
+  local now = time or 0
+  local ST = ref("structures")
+  local ver = ST and ST.version
+  local need_rows = st.dirty or st.rows_ver ~= ver or now - st.rows_t >= (params.rows_keep or 2.0)
+  local hz = st.job and 12 or params.refresh
+  if need_rows or now - st.desc_t >= 1 / hz then
+    st.desc_t = now
+    local clock = app and app.wallClock
+    local w0 = clock and clock()
+    if need_rows then
+      st.list, st.title, st.sub = entries()
+      st.rows_t, st.rows_ver, st.dirty = now, ver, false
+      st.gen = st.gen + 1
+      PROF.rows = PROF.rows + 1
+    end
+    local w1 = w0 and clock()
+    local tree = describe(st.list, st.title, st.sub)
+    local sig = st.gen .. "|" .. table.concat(treeSig(tree), "|")
+    local w2 = w0 and clock()
+    local made = false
+    if sig ~= st.sig then
+      st.sig, made = sig, true
+      local okm, err = pcall(ui.make, node, { tree })
+      if not okm and log and st.mkerr ~= err then st.mkerr = err; log("context: ui.make failed: " .. tostring(err)) end
+      PROF.makes = PROF.makes + 1
+    end
+    if w0 then
+      local w3 = clock()
+      if need_rows then PROF.rows_ms = PROF.rows_ms + (w1 - w0) * 1000 end
+      PROF.describes = PROF.describes + 1
+      PROF.desc_ms = PROF.desc_ms + (w2 - w1) * 1000
+      if made then PROF.make_ms = PROF.make_ms + (w3 - w2) * 1000 end
+      PROF.worst_ms = math.max(PROF.worst_ms, (w3 - w0) * 1000)
+    end
   end
   if st.focus_next and ui and ui.focus and find then
     local f = find("CtxFirstRow")

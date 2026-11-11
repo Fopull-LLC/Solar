@@ -186,6 +186,51 @@ do
     "…a live hint, label and title are resolved into their words")
 end
 
+-- ── the open menu asks its providers once, then reads live values (Ty 11-11:
+-- every provider asked 8 times a second took a base part's menu to 1 fps) ──
+do
+  local makes, asked, reads, reading = 0, 0, 0, 1.0
+  local REG = load_script("context_registry.lua", env({}, {}, {}))
+  REG.register("prop", function()
+    asked = asked + 1
+    return { { id = "rd", type = "info", label = "Reading", value = function() reads = reads + 1; return string.format("%.1f", reading) end },
+             { id = "sw", type = "toggle", label = "Switch", on = function() return true end, act = function() return true end } }, "Piece"
+  end, { id = "t", order = 1 })
+  local STR = { version = 1 }
+  local scripts = { context_registry = REG, planet_walker = { onFoot = true }, structures = STR }
+  local astro = { id = 14, name = "Astronaut", valid = true, distanceTo = function() return 1 end }
+  local CM = load_script("context_menu.lua", env({}, scripts, {
+    input = { pressed = function() return false end, button = function() return false end, mouse = function() return 0, 0 end,
+              mouse_delta = function() return 0, 0 end, setMouseLocked = function() end, action = function() return false end },
+    ui = { make = function() makes = makes + 1 end, focus = function() end },
+    camera = { screenRect = function() return 0, 0, 1280, 720 end },
+    find = function(n) if n == "Astronaut" then return astro end end }))
+  local node = { getcomponent = function() return { visible = false } end }
+  CM.start(node)
+  CM.openFor({ kind = "prop", node = { id = 6, name = "Pump", valid = true }, label = "Pump" }, { kind = "crew", node = astro, id = "astro" }, 640, 360)
+  local function run(secs) for _ = 1, math.floor(secs * 60) do T = T + 1 / 60; CM.update(node, 1 / 60) end end
+  run(0.02)
+  check(asked == 1 and makes == 1, "opening: the providers asked once, the plate made once (" .. asked .. ", " .. makes .. ")")
+  local r0 = reads
+  run(1.5)
+  check(asked == 1, "held 1.5 s: the providers are not asked again (" .. asked .. ")")
+  check(reads - r0 >= 4 and reads - r0 <= 8, "…its live value read at the refresh rate, 4 Hz (" .. (reads - r0) .. " reads)")
+  check(makes == 1, "…nothing changed: the engine is not handed the plate again (" .. makes .. " makes)")
+  reading = 2.0
+  run(0.3)
+  check(makes == 2 and asked == 1, "a live value changed: the plate made again from the kept rows (" .. makes .. " makes, " .. asked .. " asks)")
+  STR.version = 2
+  run(0.02)
+  check(asked == 2, "the structures changed: the providers asked again at once (" .. asked .. ")")
+  run(2.1)
+  check(asked == 3, "…and every rows_keep (2 s) anyway (" .. asked .. ")")
+  CM.press("sw")
+  run(0.02)
+  check(asked >= 4, "a press asks them again at once (" .. asked .. ")")
+  local P = CM.PROF
+  check(P.rows == asked - 1 or P.rows == asked, "PROF counts the provider passes (" .. tostring(P.rows) .. ")")
+end
+
 -- ── logic_net: the authority ────────────────────────────────────────────────
 local LN
 do

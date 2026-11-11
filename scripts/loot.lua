@@ -831,6 +831,41 @@ end
 roleOf = role_of
 local function pack_of(ctx) return (ctx and ctx.actor and ctx.actor.pack) or "astro" end
 local function counter(ctx) local I = inv(); return function(id) return I and I.itemCount(pack_of(ctx), id) or 0 end end
+-- What comes down with (sid, uid) and which rooms it vents: the structural
+-- half of a strip quote, kept while the structures are unchanged (the falls)
+-- and for a second (the rooms' air). A piece's menu reads the quote in five
+-- rows at every refresh; the support graph walk under it once took 50-250 ms
+-- (Ty 11-11: a base part's menu brought the game to 1 fps).
+local SQ = {}
+local function strip_reach(sid, uid, rec)
+  local ST = ref("structures")
+  local ver = ST and ST.version
+  local key = tostring(sid) .. ":" .. tostring(uid)
+  local c = SQ[key]
+  if not (c and c.rec == rec and c.ver == ver and c.n == #(rec.bp or {})) then
+    local uids = { uid }
+    local SN, KS = ref("base_snap"), ref("kit_snap")
+    if SN and SN.dependents then
+      local ok, list = pcall(SN.dependents, rec, defs, uid)
+      if ok then for _, u in ipairs(list or {}) do uids[#uids + 1] = u end end
+    end
+    if KS and KS.fallsWith then
+      local ok, list = pcall(KS.fallsWith, rec, defs, uids)
+      if ok then for _, u in ipairs(list or {}) do uids[#uids + 1] = u end end
+    end
+    if next(SQ) and not SQ[key] then
+      local n = 0
+      for _ in pairs(SQ) do n = n + 1 end
+      if n > 32 then SQ = {} end
+    end
+    c = { rec = rec, ver = ver, n = #(rec.bp or {}), uids = uids, vt = -1e9 }
+    SQ[key] = c
+  end
+  if now() - c.vt >= 1.0 or c.vents == nil then c.vents, c.vt = ventsOf(sid, uid), now() end
+  local uids = {}
+  for i, u in ipairs(c.uids) do uids[i] = u end
+  return uids, c.vents
+end
 -- What stripping (sid, uid) would give and cost. → q = { item, mats, secs,
 -- share, uids (it and what falls with it), falls, vents, tool, toolName,
 -- why (a physical refusal) }, nil
@@ -841,18 +876,9 @@ function stripQuote(sid, uid, ctx)
   local tool, tk, tname = toolFor("strip", counter(ctx))
   local q = stripYield(d, p, M and M.kg, crateable(p.id, d), tk)
   q.tool, q.toolName = tool, tname
-  local uids = { uid }
-  local SN, KS = ref("base_snap"), ref("kit_snap")
-  if SN and SN.dependents then
-    local ok, list = pcall(SN.dependents, rec, defs, uid)
-    if ok then for _, u in ipairs(list or {}) do uids[#uids + 1] = u end end
-  end
-  if KS and KS.fallsWith then
-    local ok, list = pcall(KS.fallsWith, rec, defs, uids)
-    if ok then for _, u in ipairs(list or {}) do uids[#uids + 1] = u end end
-  end
+  local uids, vents = strip_reach(sid, uid, rec)
   q.uids, q.falls = uids, #uids - 1
-  q.vents = ventsOf(sid, uid)
+  q.vents = vents
   if role_of(ctx) ~= "engineer" then q.why = "an Engineer strips a piece for parts (the fixings, the bolts, what is worth keeping)"
   elseif not tool then q.why = "needs a Repair Kit or the Terrain Laser in the pack" end
   if d.film then q.why = "it is paint: there is nothing to strip" end

@@ -398,21 +398,21 @@ function solid(p, d)
 end
 
 -- Do two yawed rectangles overlap by more than `m` (m)? (separating axes)
+-- (no tables made: the support graph asks this tens of thousands of times,
+-- and a menu's "what falls with it" with it — Ty 11-11, a part's menu at 1 fps)
+local abs, cos, sin, min, max = math.abs, math.cos, math.sin, math.min, math.max
+-- r's extent along axis (ax, az); r's own axes are (c, -s) and (s, c)
+local function apart(a, ca, sa, b, cb, sb, ax, az, m)
+  local ea = abs(ca * ax - sa * az) * a.hx + abs(sa * ax + ca * az) * a.hz
+  local eb = abs(cb * ax - sb * az) * b.hx + abs(sb * ax + cb * az) * b.hz
+  local pa, pb = a.x * ax + a.z * az, b.x * ax + b.z * az
+  return min(pa + ea, pb + eb) - max(pa - ea, pb - eb) <= m
+end
 function rectOverlap(a, b, m)
-  local function axes(r) local c, s = math.cos(r.yaw), math.sin(r.yaw); return { { c, -s }, { s, c } } end
-  local function proj(r, ax)
-    local A = axes(r)
-    local ctr = r.x * ax[1] + r.z * ax[2]
-    local e = math.abs(A[1][1] * ax[1] + A[1][2] * ax[2]) * r.hx + math.abs(A[2][1] * ax[1] + A[2][2] * ax[2]) * r.hz
-    return ctr - e, ctr + e
-  end
-  for _, r in ipairs({ a, b }) do
-    for _, ax in ipairs(axes(r)) do
-      local a0, a1 = proj(a, ax)
-      local b0, b1 = proj(b, ax)
-      if math.min(a1, b1) - math.max(a0, b0) <= m then return false end
-    end
-  end
+  local ca, sa = cos(a.yaw), sin(a.yaw)
+  local cb, sb = cos(b.yaw), sin(b.yaw)
+  if apart(a, ca, sa, b, cb, sb, ca, -sa, m) or apart(a, ca, sa, b, cb, sb, sa, ca, m)
+     or apart(a, ca, sa, b, cb, sb, cb, -sb, m) or apart(a, ca, sa, b, cb, sb, sb, cb, m) then return false end
   return true
 end
 
@@ -530,39 +530,76 @@ local function sig_of(rec)
   end
   return n .. ":" .. string.format("%.6f", s)
 end
--- uid → hang for every piece of `rec` that is held from the ground somehow
--- (absent: nothing reaches it). `gone` = uids taken away (not cached).
-function supportMap(rec, defs, gone)
-  local sig = not gone and sig_of(rec) or nil
-  local c = sig and map_cache[rec]
-  if c and c.sig == sig then return c.map, c.list, c.cells end
-  local list, cells = nodes_of(rec, defs, gone)
+-- THE GRAPH, kept per structure until its parts change: the nodes, the cell
+-- index and each node's links (who it holds, and how: `adj` = { n, w, … },
+-- n taking m's hang + w), so asking with pieces taken away (`gone`: a
+-- menu's "what falls with it", a demolition) is a walk over links, not the
+-- geometry again. (Ty 11-11: a piece's menu asked it five times a refresh,
+-- 50-250 ms each, and the game ran at 1 fps.)
+local function graph_of(rec, defs)
+  local sig = sig_of(rec)
+  local c = map_cache[rec]
+  if c and c.sig == sig then return c end
+  local list, cells = nodes_of(rec, defs, nil)
+  for _, m in ipairs(list) do
+    local adj = {}
+    local ma = m.a
+    near_nodes(cells, ma, m.r + 0.2, function(n)
+      -- (two pieces further apart than their reaches cannot touch)
+      local dx, dz, rr = n.a.x - ma.x, n.a.z - ma.z, n.r + m.r
+      if n ~= m and dx * dx + dz * dz <= rr * rr then
+        local w = weight(n, m)
+        if w then adj[#adj + 1] = n; adj[#adj + 1] = w end
+      end
+    end)
+    m.adj = adj
+  end
+  local films = {}
+  for _, p in ipairs(rec.bp or {}) do
+    local d = defs(p.id)
+    if d and d.film and d.snap ~= "mount" then films[#films + 1] = { p = p, d = d } end
+  end
+  c = { sig = sig, list = list, cells = cells, films = films }
+  map_cache[rec] = c
+  return c
+end
+-- the 0-1 breadth-first search from the grounded pieces over the links,
+-- skipping `gone` → uid → hang
+local function hang_map(list, gone)
   local hang = {}
   local dq, head, tail = {}, 0, 0   -- a deque: 0-weight links in front
-  local function push_front(n) head = head - 1; dq[head] = n end
-  local function push_back(n) dq[tail] = n; tail = tail + 1 end
   for _, n in ipairs(list) do
-    if grounded(n.p, n.a) then hang[n] = 0; push_back(n) end
+    if not (gone and gone[n.p.uid]) and grounded(n.p, n.a) then hang[n] = 0; dq[tail] = n; tail = tail + 1 end
   end
   while head < tail do
     local m = dq[head]
     dq[head] = nil
     head = head + 1
     local hm = hang[m]
-    near_nodes(cells, m.a, m.r + 0.2, function(n)
-      if n ~= m then
-        local w = weight(n, m)
-        if w and (hang[n] == nil or hm + w < hang[n]) and hm + w <= MAX_HANG then
-          hang[n] = hm + w
-          if w == 0 then push_front(n) else push_back(n) end
+    local adj = m.adj
+    for i = 1, #adj, 2 do
+      local n, w = adj[i], adj[i + 1]
+      local h = hm + w
+      if h <= MAX_HANG and not (gone and gone[n.p.uid]) then
+        local hn = hang[n]
+        if hn == nil or h < hn then
+          hang[n] = h
+          if w == 0 then head = head - 1; dq[head] = n else dq[tail] = n; tail = tail + 1 end
         end
       end
-    end)
+    end
   end
   local map = {}
   for n, h in pairs(hang) do map[n.p.uid] = h end
-  if sig then map_cache[rec] = { sig = sig, map = map, list = list, cells = cells } end
-  return map, list, cells
+  return map
+end
+-- uid → hang for every piece of `rec` that is held from the ground somehow
+-- (absent: nothing reaches it). `gone` = uids taken away (not cached).
+function supportMap(rec, defs, gone)
+  local g = graph_of(rec, defs)
+  if gone and next(gone) ~= nil then return hang_map(g.list, gone), g.list, g.cells end
+  if not g.map then g.map = hang_map(g.list, nil) end
+  return g.map, g.list, g.cells
 end
 -- The hang the new part `np` (def `nd`) would have in `rec`: 0 grounded, nil
 -- held by nothing within MAX_HANG.
@@ -594,33 +631,37 @@ end
 function fallsWith(rec, defs, uids)
   local gone, out = {}, {}
   for _, u in ipairs(uids) do gone[u] = true end
-  local changed = true
-  while changed do
-    changed = false
-    local map = supportMap(rec, defs, gone)
-    for _, p in ipairs(rec.bp or {}) do
-      local d = not gone[p.uid] and defs(p.id)
-      if d and d.kit then
-        local falls
-        if d.snap == "mount" then
-          falls = true
-          local a = solid(p, d)
-          for _, o in ipairs(rec.bp) do
-            local od = not gone[o.uid] and o.uid ~= p.uid and defs(o.id)
-            if od and od.snap ~= "mount" then
-              local b = solid(o, od)
-              local grow = { x = b.x, z = b.z, hx = b.hx + 0.06, hz = b.hz + 0.06, yaw = b.yaw }
-              if math.min(a.y1, b.y1 + 0.06) - math.max(a.y0, b.y0 - 0.06) > 0 and rectOverlap(a, grow, 0.0) then falls = false break end
-            end
-          end
-        elseif d.film then
-          falls = false
-        else
-          falls = map[p.uid] == nil
-        end
-        if falls then gone[p.uid] = true; out[#out + 1] = p.uid; changed = true end
+  -- (one walk: a piece nothing holds holds nothing, so taking it away too
+  -- changes no other piece's hang; mounts hold nothing either)
+  local g = graph_of(rec, defs)
+  local map = hang_map(g.list, gone)
+  local mounts = {}
+  for _, p in ipairs(rec.bp or {}) do
+    local d = not gone[p.uid] and defs(p.id)
+    if d and d.kit then
+      if d.snap == "mount" then mounts[#mounts + 1] = p
+      elseif not d.film and map[p.uid] == nil then gone[p.uid] = true; out[#out + 1] = p.uid end
+    end
+  end
+  -- a mount goes when no solid that stays is at its face (the cell index
+  -- names the few near it; films are few and looked at all)
+  local function holds(a, b)
+    local grow = { x = b.x, z = b.z, hx = b.hx + 0.06, hz = b.hz + 0.06, yaw = b.yaw }
+    return math.min(a.y1, b.y1 + 0.06) - math.max(a.y0, b.y0 - 0.06) > 0 and rectOverlap(a, grow, 0.0)
+  end
+  for _, p in ipairs(mounts) do
+    local d = defs(p.id)
+    local a = solid(p, d)
+    local held = false
+    near_nodes(g.cells, a, math.sqrt(a.hx * a.hx + a.hz * a.hz) + 0.2, function(n)
+      if not held and not gone[n.p.uid] and n.p.uid ~= p.uid and holds(a, n.a) then held = true end
+    end)
+    if not held then
+      for _, f in ipairs(g.films) do
+        if not gone[f.p.uid] and f.p.uid ~= p.uid and holds(a, solid(f.p, f.d)) then held = true break end
       end
     end
+    if not held then gone[p.uid] = true; out[#out + 1] = p.uid end
   end
   return out
 end
