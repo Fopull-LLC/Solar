@@ -555,6 +555,9 @@ local function run_tick(now)
       if n > 0 then
         local BR = ref("base_roles")
         if BR and BR.creditRun then pcall(BR.creditRun, r, done, (r.cycles or 0) - cy0) end
+        -- (progression P1) a feat: a run's cycle done
+        local F = (r.cycles or 0) > cy0 and ref("feats") or nil
+        if F and F.mark then pcall(F.mark, "run_cycle", { n = (r.cycles or 0) - cy0 }) end
       end
       if r.state == "cancelled" then finish_cancel(r) break end
       if n > 0 or r.state ~= st0 or r.ph ~= ph0 or (r.state == "waiting" and r.why ~= last_ph[id]) then

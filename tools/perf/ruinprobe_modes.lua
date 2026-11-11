@@ -386,3 +386,196 @@ function RN.run()
   OMv.close()
   RN.result()
 end
+
+-- ── near: THE RUIN NEAR HOME (progression R1) and the first feat grants (P1)
+--   a fresh career: the near site sited 330–400 m from the pad and stamped
+--   from the first minute, not found from the pad; pictured from two sides
+--   and from the pad; First Steps done → Ops's one radio line; walked to:
+--   found; the crate (shift note, crated Solar Panel, Repair Kit), the
+--   locker opened with the note's code; the core read (the next site found);
+--   the Solar Array locked, the claim founds a base, the Solar Array and the
+--   Battery Bank open (feats.base_founded); the knocked array repaired.
+--   `old` (BENCH_PARAMS '("nearold", 1.0)', a copied probe save booted as
+--   slot 1): the save had no near site; it gets one, clear of its structures.
+-- `RN PASS|FAIL near_<check>`; pictures save/user/ruinshots/near_*.png.
+function RN.near()
+  wait_ready(120)
+  wait(2)
+  local RU, ST, B, C, inv, L, RS, F = findScript("ruins"), findScript("structures"), findScript("bases"), findScript("crew"),
+    findScript("inventory"), findScript("loot"), findScript("research"), findScript("feats")
+  if not RN.check("near_scene", RU and ST and B and C and inv and L and RS and F and RU.nearOf ~= nil,
+    "ruins %s loot %s research %s feats %s", tostring(RU ~= nil), tostring(L ~= nil), tostring(RS ~= nil), tostring(F ~= nil)) then RN.result() return end
+  if perf.enable then perf.enable(true) end
+  local gx = findScript("graphics")
+  if gx and gx.set then gx.set(tostring(params.gfx or "High")) end
+  local b = home()
+  local bf = findScript("base_facilities")
+  local fp = bf and bf.footprint
+  local old = (params.nearold or 0) > 0
+  if old then
+    local SS = save.get("ruins.s") or {}
+    local had = SS[b.name .. "#near"]
+    local nst = 0
+    for _, r in ipairs(ST.list()) do if r.b == b.name and not r.ru then nst = nst + 1 end end
+    RN.check("near_old_save", had == nil, "the copied save has no near site (%s); %d structures of the player's on %s", tostring(had ~= nil), nst, b.name)
+  end
+  local s = RU.nearOf(b.name)
+  if not RN.check("near_site", s ~= nil, "%s: %s (%s, %d days)", b.name, s and s.name or "none", s and s.kind or "-", s and s.age or 0) then RN.result() return end
+  -- 1. sited by the 1 Hz tick with the crew at the pad
+  local a = astro()
+  local pad_d = RU.groundDist(b.radius, a.x - b.x, a.y - b.y, a.z - b.z, fp.x, fp.y, fp.z)
+  wait_for(function() local e = RU.state(s.id); return e.g ~= nil or e.alias ~= nil end, 40, "the near site sited")
+  local e = RU.state(s.id)
+  local d = e.g and RU.groundDist(b.radius, fp.x, fp.y, fp.z, e.g.x, e.g.y, e.g.z) or -1
+  local pk = RU.nearStats.picked or {}
+  RN.check("near_ring", d >= 329.5 and d <= 400.5 or (old and d > 0), "sited %.0f m from the spaceport's middle (spot %s, phase %s, %.2f m over 11 m; %s spots, last tick %.2f ms); crew %.0f m from the middle",
+    d, tostring(pk.i), tostring(pk.ph), pk.spread or -1, tostring(RU.nearStats.tries), RU.nearStats.ms or -1, pad_d)
+  if old then
+    local worst = 1e9
+    for _, r in ipairs(ST.list()) do
+      if r.b == b.name and not r.ru and e.g then worst = math.min(worst, RU.groundDist(b.radius, e.g.x, e.g.y, e.g.z, r.x, r.y, r.z)) end
+    end
+    RN.check("near_old_clear", e.g ~= nil and worst >= RU.BUILT_MIN, "an old save got the site, %.0f m from the nearest of its own structures (≥ %d)", worst, RU.BUILT_MIN)
+  end
+  -- (an old save's crew stands wherever it was saved: walk it within stamping range)
+  if old and e.g then RN.crew_at(s, 300) end
+  wait_for(function() return RU.state(s.id).sid ~= nil end, 40, "the near site stamped")
+  e = RU.state(s.id)
+  if not RN.check("near_stamped", e.sid ~= nil, "stamped from the pad as structure %s (%d pieces)", tostring(e.sid), e.n or 0) then RN.result() return end
+  local nn, secs = RN.wait_spawned(ST, e.sid, 20)
+  P("RN NEAR: %d nodes in %.1f s", nn, secs)
+  RN.check("near_not_found", not RU.discovered(s.id), "not found from the pad (%.0f m: found within %d m)", RU.stats.dist or -1, RU.NEAR_FIND_R)
+  local rec = ST.get(e.sid)
+  local arrays, knocked, bank, locker = 0, 0, nil, nil
+  for _, p in ipairs(rec.bp) do
+    if p.id == "solarArray" then arrays = arrays + 1; if p.wr then knocked = knocked + 1 end end
+    if p.id == "batteryBank" then bank = p end
+    if p.id == "locker.steel" then locker = p end
+  end
+  RN.check("near_yard", arrays == 2 and knocked == 1 and bank ~= nil, "%d Solar Arrays (%d knocked), a Battery Bank %s", arrays, knocked, tostring(bank ~= nil))
+  RN.cost("the near ruin standing, crew at the pad", 3)
+  -- 2. pictures: daylight on it, two sides, then from the pad
+  local g = e.g
+  local gl = math.sqrt(g.x * g.x + g.y * g.y + g.z * g.z)
+  RN.daylight({ x = g.x / gl, y = g.y / gl, z = g.z / gl }, 60)
+  local pc = findScript("planet_camera")
+  if pc and pc.setFreecam then pc.setFreecam(true) end
+  RN.cam(g, 13, 9, 15, 1.5, 1, -2)
+  wait(2)
+  RN.shot("near_a", false)
+  RN.cam(g, -11, 8, -14, 2, 1, -1)
+  wait(1)
+  RN.shot("near_b", false)
+  RN.cam(g, 4, 1.7, 9, 1, 1.2, 0)
+  wait(1)
+  RN.shot("near_door", false)
+  do
+    -- from the pad: eye 3 m over the middle, looking at the site
+    local fl = math.sqrt(fp.x ^ 2 + fp.y ^ 2 + fp.z ^ 2)
+    local gr = bf.groundR and bf.groundR() or fl
+    local u = { x = fp.x / fl, y = fp.y / fl, z = fp.z / fl }
+    -- (the crew and the body read now, in the same pass: a world point kept
+    -- from step 1 is metres off by now, docs/positions-and-frames.md)
+    local an, bn = astro(), home()
+    local ar = math.sqrt((an.x - bn.x) ^ 2 + (an.y - bn.y) ^ 2 + (an.z - bn.z) ^ 2)
+    local au = { x = (an.x - bn.x) / ar, y = (an.y - bn.y) / ar, z = (an.z - bn.z) / ar }
+    VP.cam_fixed({ x = au.x * (ar + 2.5), y = au.y * (ar + 2.5), z = au.z * (ar + 2.5) }, { x = g.x + g.ux * 3, y = g.y + g.uy * 3, z = g.z + g.uz * 3 })
+    wait(2)
+    RN.shot("near_from_pad", false)
+    local _ = gr and u
+  end
+  VP.cam_off()
+  -- 3. First Steps done: Ops points at it, on the radio, once
+  local OS = findScript("ops_strip")
+  local said0 = OS and OS.history and #OS.history() or 0
+  -- (an old save past First Steps: Ops spoke as soon as the site was sited, and the strip may have faded)
+  local early = RU.lastPointer ~= nil
+  local pd = save.get("prog.done") or {}
+  pd.first_steps = true
+  save.set("prog.done", pd)
+  wait_for(function() return RU.lastPointer ~= nil end, 6, "Ops's line")
+  RN.check("near_pointer", RU.lastPointer ~= nil and RU.lastPointer.id == s.id, "Ops: %s", RU.lastPointer and RU.lastPointer.line or "nothing")
+  wait(2.5)
+  RN.shot("near_ops_line", true)
+  local cur = OS and OS.current and OS.current.text
+  RN.check("near_pointer_strip", cur ~= nil or early or (OS and OS.history and #OS.history() > said0), "on the Ops strip: %s%s", tostring(cur),
+    early and " (said at load: this save was past First Steps)" or "")
+  wait(4)
+  local again = RU.lastPointer and RU.lastPointer.t
+  wait(2.5)
+  RN.check("near_pointer_once", RU.lastPointer.t == again and RU.state(s.id).ptr ~= nil, "said once (saved: ptr %s)", tostring(RU.state(s.id).ptr))
+  -- 4. walked to: found
+  RN.crew_at(s, 160)
+  wait(2.5)
+  RN.check("near_160_not_found", not RU.discovered(s.id), "160 m: not yet")
+  RN.crew_at(s, 80)
+  wait_for(function() return RU.discovered(s.id) end, 6, "found at 80 m")
+  RN.check("near_found", RU.discovered(s.id) and F.has("ruin_found"), "80 m: found (%s) · feat ruin_found %s", tostring(RU.state(s.id).dsc), tostring(F.has("ruin_found")))
+  RN.crew_at(s, 12)
+  wait(2)
+  -- 5. the crate, the note, the locker
+  local crate = nil
+  for _, p in ipairs(rec.bp) do if p.id == "crate.steel" then crate = p end end
+  local items = {}
+  local codes_key = nil
+  if crate then
+    L.prepare(rec.id, crate.uid)
+    local cid = L.cidOf(rec.id, crate.uid)
+    for _, it in ipairs(inv.itemList(cid) or {}) do
+      items[#items + 1] = it.id .. "×" .. it.n
+      local key = L.logKeyOf(it.id)
+      local lr = key and L.logRecord(key)
+      if lr and lr.codes then codes_key = key end
+    end
+  end
+  table.sort(items)
+  RN.check("near_crate", #items > 0 and table.concat(items, " "):find("part:vab.solar", 1, true) ~= nil and table.concat(items, " "):find("repairkit", 1, true) ~= nil and codes_key ~= nil,
+    "the outside crate: %s", table.concat(items, ", "))
+  local lk = locker and L.lockOf(rec.id, locker.uid)
+  RN.check("near_locker_locked", lk == "locked", "the locker is %s", tostring(lk))
+  if codes_key then L.readLog(codes_key) end
+  local code = locker and L.knownCode(rec.id, locker.uid)
+  local okc, whyc = false, "no code"
+  if code then okc, whyc = L.enterCode(rec.id, locker.uid, code) end
+  RN.check("near_locker_opened", okc and L.lockOf(rec.id, locker.uid) == "open" and F.has("lock_opened"), "the shift note's code %s opens it (%s) · feat lock_opened %s", tostring(code), tostring(whyc or "ok"), tostring(F.has("lock_opened")))
+  local lore = RU.lore(s)
+  RN.check("near_log", #lore == 3 and s.otherName and lore[3]:find(s.otherName, 1, true) ~= nil, "the log: %s", table.concat(lore, " / "))
+  -- 6. the core: read (at the lab's call), the next site found from its log
+  local okp = RU.pullCore(s.id, "astro")
+  local other0 = s.other and RU.discovered(s.other)
+  local nr = RU.readCores("astro")
+  RN.check("near_core", okp and nr == 1 and F.has("core_read") and (other0 or (s.other and RU.discovered(s.other))),
+    "the core read (+%s RP); the next site, %s, found from its log: %s", tostring(RU.lastRead and RU.lastRead.rp), tostring(s.otherName), tostring(s.other and RU.discovered(s.other)))
+  -- 7. the claim founds a base: the Solar Array and the Battery Bank open
+  local locked0 = not RS.isUnlocked("solarArray") and not RS.isUnlocked("batteryBank")
+  RN.check("near_locked_before", locked0 or old, "before: solarArray %s · %s", tostring(RS.isUnlocked("solarArray")), tostring(RS.lockLine("solarArray")))
+  local ctx = { actor = { kind = "crew", node = astro(), id = C.activeId(), pack = "astro" }, ref = findScript, toast = function(m) P("RN TOAST %s", m) end }
+  C.patch(C.activeId(), { role = "engineer" })
+  local okcl, whycl = RU.claim(s.id, ctx)
+  local bid = nil
+  wait_for(function() local br = RU.baseOf(s.id); bid = br and br.id; return bid ~= nil end, 8, "the base founded")
+  RN.check("near_claim", okcl and bid ~= nil and B.count() >= 1, "claimed (%s): base #%s, %d base(s)", tostring(whycl or "ok"), tostring(bid), B.count())
+  wait(1)
+  RN.check("near_unlocked", RS.isUnlocked("solarArray") and RS.isUnlocked("batteryBank") and F.has("base_founded"),
+    "after: solarArray %s, batteryBank %s · feat base_founded %s · ruin_claimed %s", tostring(RS.isUnlocked("solarArray")), tostring(RS.isUnlocked("batteryBank")),
+    tostring(F.has("base_founded")), tostring(F.has("ruin_claimed")))
+  local hist = {}
+  for _, h in ipairs(OS and OS.history and OS.history() or {}) do hist[#hist + 1] = tostring(h.who) .. ": " .. tostring(h.text) end
+  if OS and OS.current then hist[#hist + 1] = "(now) " .. tostring(OS.current.text) end
+  P("RN NEAR OPS: %s", table.concat(hist, " | "))
+  -- 8. the knocked array stood up again with the crate's Repair Kit
+  local worn = nil
+  for _, p in ipairs(ST.get(e.sid).bp) do if p.id == "solarArray" and p.wr then worn = p end end
+  local kits = inv.itemCount("astro", "repairkit") or 0
+  local okr = worn and RU.repairPiece(e.sid, worn.uid)
+  RN.check("near_repair", okr and ST.getPart(e.sid, worn.uid).wr == nil, "the knocked array repaired (Repair Kits in the pack: %d)", kits)
+  RN.crew_at(s, 40)
+  wait(2)
+  if pc and pc.setFreecam then pc.setFreecam(true) end
+  RN.cam(g, 12, 8, -16, 2, 1, -4)
+  wait(1.5)
+  RN.shot("near_claimed", false)
+  VP.cam_off()
+  RN.cost("claimed, crew 40 m off", 3)
+  RN.result()
+end

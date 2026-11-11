@@ -429,7 +429,9 @@ end
 function blueprintOf(site)
   if site and site.full then return site.full end      -- (F8) an authored ruin's own blueprint
   local g = GRAMMAR[site and site.kind] or GRAMMAR.camp
-  return g(site)
+  local P = g(site)
+  if site and site.near and nearExtras then nearExtras(site, P) end   -- (R1: THE RUIN NEAR HOME below)
+  return P
 end
 function kinds() return { "camp", "mine", "hab", "reactor", "relay", "sinkcamp" } end
 
@@ -530,7 +532,10 @@ function lockPlan(site, kept)
   for k, e in ipairs(kept or {}) do
     local name = type(e.id) == "string" and e.id:match("^([%w]+)") or ""
     local roll = r()
-    if (LOCK_DOORS[name] and roll < pd) or (LOCK_STORES[name] and roll < LOCK_STORE) then
+    if site and site.near and nearLocked then
+      -- (R1: THE RUIN NEAR HOME below: the locker, never a door)
+      if nearLocked(name) then out[k] = codeOf(site, e.ri or k) end
+    elseif (LOCK_DOORS[name] and roll < pd) or (LOCK_STORES[name] and roll < LOCK_STORE) then
       out[k] = codeOf(site, e.ri or k)
     end
   end
@@ -613,6 +618,7 @@ LORE_C = {
 }
 function lore(site)
   if site and type(site.lore) == "table" then return site.lore end   -- (F8) an authored ruin's own log
+  if site and site.near and nearLore then return nearLore(site) end    -- (R1: THE RUIN NEAR HOME below)
   local r = rng(hash((site and site.seed or 1) .. ":lore"))
   local a = LORE_A[1 + math.floor(r() * #LORE_A)]
   local b = LORE_B[1 + math.floor(r() * #LORE_B)]
@@ -824,6 +830,9 @@ local function say(title, line, secs)
   if log then log("ruins: " .. title .. " · " .. tostring(line or "")) end
 end
 
+-- (progression P1) a thing done: scripts/feats.lua
+local function feat(id, ctx) local F = ref("feats"); if F and F.mark then pcall(F.mark, id, ctx) end end
+
 local SITES = nil      -- body → { site … }
 local BYID = {}        -- id → site
 local S = nil          -- ruins.s (the save's), cached
@@ -862,6 +871,7 @@ local function build_sites()
       local w = world(b.name)
       local list = sitesFor(b.name, w, b.name == home, b.radius or w.radius)
       if cave_sites then cave_sites(b.name, w, list) end   -- (worlds W5: CAVE RUINS below)
+      if near_sites then near_sites(b.name, w, list, b.name == home) end   -- (R1: THE RUIN NEAR HOME below)
       SITES[b.name] = list
       for _, s in ipairs(list) do BYID[s.id] = s end
     end
@@ -919,6 +929,7 @@ function discover(id, how, quiet)
   write()
   bump()
   stats.found = stats.found + 1
+  feat("ruin_found", { key = id, b = s.body })   -- (progression P1)
   if not quiet then
     local x, y, z = pointOf(s)
     if how == "telescope" then
@@ -1101,6 +1112,7 @@ function stampNow(id, force)
   if e.sid and ST.get(e.sid) then return e.sid end
   if e.drop then return nil, "no room" end
   if not e.g then
+    if s.near then return nil, "wait" end   -- (R1: sited by near_tick, never dropped)
     local g, why = siteGround(s, force)
     if not g then
       if why ~= "wait" then e.drop = why; write(); if log then log("ruins: " .. s.name .. " dropped: " .. tostring(why)) end end
@@ -1211,13 +1223,15 @@ local function tick()
   local R = b.radius or 800
   local px, py, pz = fx - b.x, fy - b.y, fz - b.z
   stats.dist = nil
+  if near_tick then near_tick(name, b, px, py, pz, list) end   -- (R1: THE RUIN NEAR HOME below)
   for _, s in ipairs(list) do
     if not s.pending then
       local x, y, z = pointOf(s)
       local d = groundDist(R, px, py, pz, x, y, z)
       stats.dist = math.min(stats.dist or 1e18, d)
       local e = peek(s.id)
-      if d < DISCOVER_R and not (e and (e.dsc or e.drop)) then discover(s.id, "proximity") end
+      -- (R1: the ruin near home is found by walking up to it, not from the pad)
+      if d < (s.near and NEAR_FIND_R or DISCOVER_R) and not (e and (e.dsc or e.drop)) then discover(s.id, "proximity") end
       e = peek(s.id)
       if d < STAMP_R and not (e and (e.sid or e.drop)) then
         local t0 = stamp_wait[s.id] or now()
@@ -1305,6 +1319,8 @@ function readCores(pack)
     if save and save.set and save.get then save.set("res.pts", (save.get("res.pts") or 0) + rw.rp) end
     local e = id and state(id)
     if e then e.read = agency_now(); write() end
+    feat("core_read", { key = id or "?", b = s.body })   -- (progression P1)
+    if s.near and s.other then discover(s.other, "log") end   -- (R1: its log names the next site)
     -- the site's blueprint, as it stood, into the library
     local BP, pb = ref("blueprints"), ref("parts_base")
     local saved = nil
@@ -1427,6 +1443,7 @@ function claim(id, ctx, force)
   if not force and role_of(ctx) ~= "engineer" then return false, "an Engineer claims a site (the tower's records, the grid's breakers)" end
   e.cl, e.tc = agency_now(), 1
   if not e.dsc then e.dsc, e.dt = "proximity", agency_now() end
+  feat("ruin_claimed", { key = id, b = s.body })   -- (progression P1; the tower's founding marks base_founded)
   write()
   fill_silo(id)
   -- (the tower founds its base on the records' next change: base_tower)
@@ -2027,4 +2044,424 @@ function cave_tick(name, b, px, py, pz, list)
       end
     end
   end
+end
+
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- THE RUIN NEAR HOME (progression R1, work/progression/PLAN.md §4). Ty, 11-11:
+-- "at least one abandoned base should spawn near the home base." Kept apart
+-- from the rest of the file: it hooks in at marked lines (blueprintOf,
+-- lockPlan, lore, build_sites, tick, stampNow, readCores).
+--
+--   THE SITE   one more site on the home world, "<home>#near" (sitesFor is
+--              untouched: every other site keeps its seed, id and kind). A
+--              survey camp (3 in 5) or a relay post, empty 400–900 days.
+--              An old save gets it on load too, unless one of its sites
+--              already stands within NEAR_HAVE m of the spaceport (that one
+--              is pointed at instead: e.alias).
+--   SITING     once the crew is within STAMP_R of the pad: a spot in the
+--              ring NEAR_RING m from the spaceport's middle (bases.SPACING
+--              and BASE_MIN hold, so claiming it founds a legal base; inside
+--              STAMP_R from the pad, so it stands from the first minute).
+--              The flattest of 16 bearings at NEAR_MID; else the first flat
+--              spot of 36 bearings × 3 radii; else the flattest under
+--              NEAR_RELAX m; else rings further out (NEAR_FAR); else the
+--              flattest dry, clear spot of all. Never dropped: a world with
+--              no dry ground in the whole annulus tries again next session.
+--              Clear of the player's structures (BUILT_MIN), bases
+--              (BASE_MIN), the Tracking Station (BASE_MIN) and other ruins.
+--              Its door faces the pad. NEAR_BUDGET spots a tick (nearStep).
+--   THE YARD   the camp's (or relay's) build plus a power yard: two Solar
+--              Arrays (one sound, one knocked over: a Repair Kit once
+--              claimed) and a flat Battery Bank; a Personnel Locker always
+--              on a code, never a door; the shift note with the code in the
+--              outside crate, with a crated Solar Panel and a Repair Kit
+--              (loot.planSite); the terminal's Data Core.
+--   THE LOG    an authored three-entry log (nearLore) naming the next site;
+--              its survey note (loot) finds it, and so does reading the core.
+--   FOUND      by walking up to it (NEAR_FIND_R), not from the pad: the
+--              crew stands within DISCOVER_R of it the moment they land.
+--   THE POINTER once First Steps is done, Ops says on the radio where it is
+--              (ops_strip, one line, once: ruins.s[id].ptr). No marker.
+--   CLAIMING   as any ruin: its tower founds a base (base_tower), which
+--              grants the Solar Array and the Battery Bank (feats).
+-- Not in a scenario (game.mode "scenario": the author's world is the author's).
+--
+-- Pure: NEAR_*, nearSite, nearPlan, ringDir, nearClear, nearStep, compass,
+-- nearExtras, nearLocked, nearLore. Probes: nearNow(), nearOf(body).
+NEAR_RING = { 330, 400 }   -- m from the spaceport's middle
+NEAR_MID = 365
+NEAR_FIND_R = 120.0        -- m: found by walking up to it
+NEAR_RELAX = 3.0           -- m over 11 m: a ruin may lean
+NEAR_FAR = { 450, 525, 600, 700, 800 }
+NEAR_HAVE = 450.0          -- m: an old save's site this near the spaceport is the near one
+NEAR_BUDGET = 24           -- spots looked at a tick (9 field raycasts each)
+NEAR_KIND = { { "camp", 3 }, { "relay", 2 } }
+NEAR_AGE = { 400, 900 }
+nearStats = { tries = 0, ms = 0, picked = nil }
+
+-- The near site of home world `name` (pure). `others`: the world's sites
+-- (its name is kept apart from theirs; `other` = the first real one, the
+-- site its log names).
+function nearSite(name, w, others)
+  w = type(w) == "table" and w or {}
+  local r = rng(hash(tostring(name) .. ":" .. tostring(w.seed or 0) .. ":near"))
+  local kind = pick(r, NEAR_KIND)
+  local co = 1 + math.floor(r() * #COMPANIES)
+  local num = 1 + math.floor(r() * 9)
+  local taken = {}
+  local other = nil
+  for _, o in ipairs(others or {}) do
+    taken[o.name or ""] = true
+    if not other and not o.pending and not o.near then other = o end
+  end
+  for _ = 1, 9 do
+    if not taken[siteName(co, kind, num)] then break end
+    num = num % 9 + 1
+  end
+  return { id = tostring(name) .. "#near", body = name, kind = kind, class = "inhabited", near = true,
+           ux = 0, uy = 1, uz = 0, age = math.floor(NEAR_AGE[1] + r() * (NEAR_AGE[2] - NEAR_AGE[1])), yaw = 0,
+           seed = math.floor(r() * 2147483000) + 1, co = co, num = num, name = siteName(co, kind, num),
+           other = other and other.id or nil, otherName = other and other.name or nil, life = nil }
+end
+
+-- The spots tried, in order (pure): { b (bearing, rad), d (m), ph }:
+-- ph 1 the 16 bearings at NEAR_MID, ph 2 36 bearings × 3 radii in the ring,
+-- ph 3 36 bearings on each of NEAR_FAR.
+function nearPlan(seed)
+  local r = rng(seed or 1)
+  local b0 = r() * 2 * math.pi
+  local P = {}
+  for k = 0, 15 do P[#P + 1] = { b = b0 + k * 2 * math.pi / 16, d = NEAR_MID, ph = 1 } end
+  for _, d in ipairs({ NEAR_MID, NEAR_RING[1] + 5, NEAR_RING[2] - 5 }) do
+    for k = 0, 35 do P[#P + 1] = { b = b0 + (k + 0.5) * 2 * math.pi / 36, d = d, ph = 2 } end
+  end
+  for _, d in ipairs(NEAR_FAR) do
+    for k = 0, 35 do P[#P + 1] = { b = b0 + k * 2 * math.pi / 36, d = d, ph = 3 } end
+  end
+  return P
+end
+
+-- The unit direction `d` m along the ground from unit (fx, fy, fz) on bearing
+-- `b` (0 = the tangent basis's e1; pure).
+function ringDir(fx, fy, fz, b, d, R)
+  local e1x, e1y, e1z, e2x, e2y, e2z = tangent(fx, fy, fz)
+  local th = d / (R or 800)
+  local c, sn = math.cos(th), math.sin(th)
+  local tx = e1x * math.cos(b) + e2x * math.sin(b)
+  local ty = e1y * math.cos(b) + e2y * math.sin(b)
+  local tz = e1z * math.cos(b) + e2z * math.sin(b)
+  local ux, uy, uz = fx * c + tx * sn, fy * c + ty * sn, fz * c + tz * sn
+  local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+  return ux / l, uy / l, uz / l
+end
+
+-- Is the body-relative ground point clear for the near site? (pure)
+-- w = { R, fp = {x,y,z} (the spaceport's middle), station = {x,y,z} | nil,
+-- bases = { {x,y,z} }, structs = { {x,y,z} } (the player's), ruins = { {x,y,z} } }
+function nearClear(w, gx, gy, gz)
+  local R = w.R or 800
+  if w.fp and groundDist(R, gx, gy, gz, w.fp.x, w.fp.y, w.fp.z) < NEAR_RING[1] - 1 then return false, "the spaceport" end
+  if w.station and groundDist(R, gx, gy, gz, w.station.x, w.station.y, w.station.z) < BASE_MIN then return false, "the Tracking Station" end
+  for _, p in ipairs(w.bases or {}) do
+    if groundDist(R, gx, gy, gz, p.x, p.y, p.z) < BASE_MIN then return false, "a base" end
+  end
+  for _, p in ipairs(w.structs or {}) do
+    if groundDist(R, gx, gy, gz, p.x, p.y, p.z) < BUILT_MIN then return false, "a structure" end
+  end
+  for _, p in ipairs(w.ruins or {}) do
+    if groundDist(R, gx, gy, gz, p.x, p.y, p.z) < 60 then return false, "another ruin" end
+  end
+  return true
+end
+
+-- One step of the search (pure). st = { plan, res, i, clear(gx,gy,gz) → ok }
+-- (kept between ticks); probe(p) → { spread, dry, gx, gy, gz, … } | nil, why
+-- ("wait": the ground isn't made: try again later; anything else: no ground
+-- there). → the index of the spot taken | nil, "more" | "wait" | "no room"
+function nearStep(st, probe, budget)
+  st.plan = st.plan or nearPlan(st.seed)
+  st.res = st.res or {}
+  st.i = st.i or 1
+  local P, res = st.plan, st.res
+  local function ok(r, lim) return type(r) == "table" and r.dry and r.clear and r.spread <= lim end
+  local function best(lo, hi, lim)
+    local bi, bs = nil, math.huge
+    for i, p in ipairs(P) do
+      local r = res[i]
+      if p.ph >= lo and p.ph <= hi and ok(r, lim) and r.spread < bs then bi, bs = i, r.spread end
+    end
+    return bi
+  end
+  local spent = 0
+  while true do
+    local p = P[st.i]
+    local ph = p and p.ph or 99
+    if ph > 1 and not st.d1 then st.d1 = true; local k = best(1, 1, FLAT_SPREAD); if k then return k end end
+    if ph > 2 and not st.d2 then st.d2 = true; local k = best(1, 2, NEAR_RELAX); if k then return k end end
+    if ph > 3 then
+      local k = best(3, 3, NEAR_RELAX) or best(1, 2, math.huge) or best(3, 3, math.huge)
+      if k then return k end
+      return nil, "no room"
+    end
+    if spent >= (budget or 1e9) then return nil, "more" end
+    local r, why = probe(p)
+    if r == nil and why == "wait" then return nil, "wait" end
+    if type(r) == "table" and r.dry and st.clear then
+      local c, cwhy = st.clear(r.gx, r.gy, r.gz)
+      r.clear, r.why = c, cwhy
+    elseif type(r) == "table" and r.clear == nil then
+      r.clear = not st.clear
+    end
+    res[st.i] = r or false
+    spent = spent + 1
+    st.i = st.i + 1
+    if ph >= 2 and ok(r, FLAT_SPREAD) then return st.i - 1 end
+  end
+end
+
+-- "north-east": the way from unit u to point t, on the ground (pure; north
+-- is the body's +Y, as latlon's).
+WAYS = { "north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west" }
+function compass(ux, uy, uz, tx, ty, tz)
+  local nx, ny, nz = -ux * uy, 1 - uy * uy, -uz * uy
+  local nl = math.sqrt(nx * nx + ny * ny + nz * nz)
+  if nl < 1e-6 then nx, ny, nz, nl = 1, 0, 0, 1 end
+  nx, ny, nz = nx / nl, ny / nl, nz / nl
+  local ex, ey, ez = uy * nz - uz * ny, uz * nx - ux * nz, ux * ny - uy * nx
+  local d = tx * ux + ty * uy + tz * uz
+  local vx, vy, vz = tx - ux * d, ty - uy * d, tz - uz * d
+  local fe, fn = vx * ex + vy * ey + vz * ez, vx * nx + vy * ny + vz * nz
+  local a = math.atan2 and math.atan2(fe, fn) or math.atan(fe, fn)
+  local k = math.floor(((a / (2 * math.pi)) * 8 + 0.5)) % 8
+  return WAYS[k + 1]
+end
+
+-- The power yard and the store, appended to the build (every piece before
+-- keeps its index). A camp's yard behind the hut; a relay's arrays are its
+-- own (the first stood up again), a locker and a desk by its junction box.
+function nearExtras(site, P)
+  local function add(id, x, y, z, yaw, roll, rl, extra)
+    local e = { id = id, x = x, y = y, z = z, yaw = yaw or 0, pitch = 0, roll = roll or 0, rl = rl }
+    for k, v in pairs(extra or {}) do e[k] = v end
+    P[#P + 1] = e
+    return #P
+  end
+  if site.kind == "relay" then
+    for _, p in ipairs(P) do
+      if p.id == "solarArray" then p.roll = 0; p.rl = "power"; break end   -- (the other stays over: rl array, knocked)
+    end
+    local tb = add("table.steel", -0.15, T, 0.45, 0, 0, "fix")
+    add("monitor.steel", -0.15, T + 0.74, 0.4, 0, 0, "fix", { dep = tb })
+    add("locker.steel", -0.75, T, -1.2, Q, 0, "store", { paint = "olive" })
+  else
+    add("solarArray", -0.6, 0, -6.5, 0, 0, "power")
+    add("solarArray", 3.9, 0, -6.5, 0, -1.15, "array")   -- (4.5 m apart: the fallen one clear of the standing one)
+    add("batteryBank", 7.0, 0, -3.6, 0, 0, "power", { fill = 0 })
+  end
+  return P
+end
+-- The near site's locks: its lockers, never a door (pure)
+function nearLocked(name) return name == "locker" end
+
+-- The near site's log: the survey team, why they left, where the others went.
+NEAR_LORE = {
+  { "Day %d before the agency's calendar. %s's survey team moves into the camp: four of us, two arrays, one battery bank, a year's contract.",
+    "%d days before Day 1. %s sets the camp on the flat by the old survey line: panels up, the bank charging, the core logging every shift." },
+  { "The storm took the east array over in the night. The bank never held a whole night after that, and the company would not ship a new one.",
+    "The battery ran flat every night once the east array went over. We stopped heating the hut and started counting days." },
+  { "The others went on to %s. Its position is in the survey note in the crate. The locker code is in there too.",
+    "Packed what we could. The rest of the crew walked to %s: the survey note in the crate has where. Locker code's on it." },
+}
+function nearLore(site)
+  local r = rng(hash(tostring(site and site.seed or 1) .. ":nearlore"))
+  local a = NEAR_LORE[1][1 + math.floor(r() * 2)]
+  local b = NEAR_LORE[2][1 + math.floor(r() * 2)]
+  local c = NEAR_LORE[3][1 + math.floor(r() * 2)]
+  local d = math.floor((site and site.age or 400) + 30 + r() * 40)
+  return { string.format(a, d, COMPANIES[site and site.co or 1] or "Pell Groundworks"), b,
+           string.format(c, site and site.otherName or "the relay over the ridge") }
+end
+
+-- ── the scene ───────────────────────────────────────────────────────────────
+local NEAR = { st = {}, said = {} }
+function near_sites(name, w, list, home)
+  if not home then return end
+  if save and save.get and save.get("game.mode") == "scenario" then return end
+  local s = nearSite(name, w, list)
+  local e = peek(s.id)
+  if e and e.g then
+    local l = math.sqrt(e.g.x ^ 2 + e.g.y ^ 2 + e.g.z ^ 2)
+    if l > 1e-6 then s.ux, s.uy, s.uz = e.g.x / l, e.g.y / l, e.g.z / l end
+  else
+    -- (not sited yet: every list skips it as it skips a pending site, until near_tick sites it)
+    s.pending = true
+  end
+  if e and e.alias then s.pending = true end
+  list[#list + 1] = s
+end
+function nearOf(body)
+  for _, s in ipairs(sites(body)) do if s.near then return s end end
+  return nil
+end
+
+-- The world as the near site's clearance reads it (body-relative points).
+function NEAR.world(name, R, fp)
+  local w = { R = R, fp = fp, bases = {}, structs = {}, ruins = {} }
+  local net = ref("comms")
+  local b = space and space.body and space.body(name)
+  if net and net.station and b then
+    local ok, sx, sy, sz = pcall(net.station)
+    if ok and sx then w.station = { x = sx - b.x, y = sy - b.y, z = sz - b.z } end
+  end
+  local B = ref("bases")
+  for _, r in ipairs(B and B.list and B.list() or {}) do if r.b == name then w.bases[#w.bases + 1] = r end end
+  local ST = ref("structures")
+  for _, r in ipairs(ST and ST.list and ST.list() or {}) do if r.b == name and not r.ru then w.structs[#w.structs + 1] = r end end
+  for _, o in ipairs(sites(name)) do
+    local e = peek(o.id)
+    if not o.near and e and e.g and e.sid then w.ruins[#w.ruins + 1] = e.g end
+  end
+  return w
+end
+
+-- 9 field raycasts round a ring spot: → { spread, dry, gx, gy, gz, ux, uy, uz, exact } | nil, why
+function NEAR.probe(b, R, relief, sea, fu, p, force)
+  local ux, uy, uz = ringDir(fu.x, fu.y, fu.z, p.b, p.d, R)
+  local h0, exact = cast(b, R, relief, ux, uy, uz)
+  if not h0 then return nil, "wait" end
+  if not exact and not force then return nil, "wait" end
+  local hs = { h0 }
+  local f1x, f1y, f1z, f2x, f2y, f2z = tangent(ux, uy, uz)
+  for j = 0, 7 do
+    local a = j * math.pi / 4
+    local d = 11 / R
+    local vx = ux + (f1x * math.cos(a) + f2x * math.sin(a)) * d
+    local vy = uy + (f1y * math.cos(a) + f2y * math.sin(a)) * d
+    local vz = uz + (f1z * math.cos(a) + f2z * math.sin(a)) * d
+    local l = math.sqrt(vx * vx + vy * vy + vz * vz)
+    local h = cast(b, R, relief, vx / l, vy / l, vz / l)
+    if not h then return nil, "wait" end
+    hs[#hs + 1] = h
+  end
+  local lo, hi, sum = 1e18, -1e18, 0
+  for _, h in ipairs(hs) do lo = math.min(lo, h); hi = math.max(hi, h); sum = sum + h end
+  local gr = sum / #hs - 0.15
+  return { spread = hi - lo, dry = not (sea > 0 and h0 < sea + 1.0), gx = ux * gr, gy = uy * gr, gz = uz * gr,
+           ux = ux, uy = uy, uz = uz, exact = exact }
+end
+
+-- The ground frame for a spot: up, and front toward the spaceport (its door faces the pad).
+function nearFrame(r, fp)
+  local ux, uy, uz = r.ux, r.uy, r.uz
+  local dx, dy, dz = fp.x - r.gx, fp.y - r.gy, fp.z - r.gz
+  local d = dx * ux + dy * uy + dz * uz
+  local fx, fy, fz = dx - ux * d, dy - uy * d, dz - uz * d
+  local l = math.sqrt(fx * fx + fy * fy + fz * fz)
+  if l < 1e-6 then fx, fy, fz = tangent(ux, uy, uz); l = 1 end
+  return { x = r.gx, y = r.gy, z = r.gz, ux = ux, uy = uy, uz = uz, fx = fx / l, fy = fy / l, fz = fz / l }
+end
+
+-- Ops on the radio, once First Steps is done: where the structure is (pure
+-- but for the save's word on the programme). → the line | nil
+function nearLine(tgt, fp, R, x, y, z)
+  local l = math.sqrt(fp.x ^ 2 + fp.y ^ 2 + fp.z ^ 2)
+  local d = groundDist(R, fp.x, fp.y, fp.z, x, y, z)
+  local way = compass(fp.x / l, fp.y / l, fp.z / l, x, y, z)
+  return string.format("Survey flight logged a structure about %d m %s of the pad. An old %s by the look of it, nobody on our books. Worth a walk.",
+    math.floor(d / 50 + 0.5) * 50, way, LABEL[tgt.kind] or "survey camp")
+end
+lastPointer = nil
+function NEAR.pointer(s, e, fp, R)
+  if e.ptr or NEAR.said[s.id] then return end
+  local tgt = s
+  if e.alias then tgt = site(e.alias) or s end
+  if discovered(tgt.id) then return end
+  local done = save and save.get and save.get("prog.done")
+  if not (type(done) == "table" and done.first_steps) then return end
+  local line = nearLine(tgt, fp, R, pointOf(tgt))
+  NEAR.said[s.id] = true
+  e.ptr = agency_now()
+  write()
+  lastPointer = { id = tgt.id, line = line, t = now() }
+  local strip = ref("ops_strip")
+  if strip and strip.say then pcall(strip.say, line, "Ops")
+  elseif caption then pcall(caption, "Ops: " .. line) end
+  if log then log("ruins: OPS: " .. line) end
+end
+
+function near_tick(name, b, px, py, pz, list)
+  local s = nil
+  for _, o in ipairs(list) do if o.near then s = o end end
+  if not s then return end
+  local bf = ref("base_facilities")
+  local fp = bf and bf.footprint
+  if not (fp and fp.body == name) then return end
+  local R = b.radius or 800
+  local e = peek(s.id)
+  if e and (e.g or e.alias) then NEAR.pointer(s, e, fp, R) return end
+  -- (an old save with a site already near home: that one is the near one)
+  for _, o in ipairs(list) do
+    local eo = peek(o.id)
+    if not o.near and not o.pending and eo and eo.g and groundDist(R, fp.x, fp.y, fp.z, eo.g.x, eo.g.y, eo.g.z) < NEAR_HAVE then
+      state(s.id).alias = o.id
+      write()
+      if log then log(string.format("ruins: near home already: %s", o.name)) end
+      return
+    end
+  end
+  if groundDist(R, px, py, pz, fp.x, fp.y, fp.z) > STAMP_R then return end
+  local st = NEAR.st[s.id]
+  if st and st.gave_up then return end
+  if not st then st = { t0 = now(), seed = s.seed }; NEAR.st[s.id] = st end
+  local w0 = wall()
+  local wv = NEAR.world(name, R, fp)
+  st.clear = function(gx, gy, gz) return nearClear(wv, gx, gy, gz) end
+  local w = world(name)
+  local relief, sea = tonumber(w.relief) or 60, tonumber(w.sea) or 0
+  local fl = math.sqrt(fp.x ^ 2 + fp.y ^ 2 + fp.z ^ 2)
+  local fu = { x = fp.x / fl, y = fp.y / fl, z = fp.z / fl }
+  local force = now() - st.t0 > 20
+  local k, why = nearStep(st, function(p) return NEAR.probe(b, R, relief, sea, fu, p, force) end, NEAR_BUDGET)
+  nearStats.tries = st.i - 1
+  nearStats.ms = (wall() - w0) * 1000
+  if k then
+    local r = st.res[k]
+    local g = nearFrame(r, fp)
+    local e2 = state(s.id)
+    e2.g = g
+    write()
+    s.ux, s.uy, s.uz, s.pending = r.ux, r.uy, r.uz, nil
+    nearStats.picked = { i = k, ph = st.plan[k].ph, d = st.plan[k].d, spread = r.spread,
+                         dist = groundDist(R, fp.x, fp.y, fp.z, g.x, g.y, g.z) }
+    NEAR.st[s.id] = nil
+    bump()
+    if log then log(string.format("ruins: the ruin near home, %s (%s), sited %.0f m from the pad (spot %d, phase %d, %.1f m over 11 m) after %d spots, %.2f ms",
+      s.name, s.kind, nearStats.picked.dist, k, nearStats.picked.ph, r.spread, st.i - 1, nearStats.ms)) end
+  elseif why == "no room" then
+    st.gave_up = true
+    if log then log("ruins: no dry, clear ground 330-800 m round the spaceport for the ruin near home: next session") end
+  end
+end
+
+-- Probe: site the near ruin now (the crew near the pad), however many ticks it takes.
+function nearNow(force)
+  if not SITES then build_sites() end
+  local a = find and find("Astronaut")
+  if not a then return nil, "no crew" end
+  local name = space.dominant(a.x, a.y, a.z)
+  local b = name and space.body(name)
+  if not b then return nil, "no body" end
+  local s = nearOf(name)
+  if not s then return nil, "no near site" end
+  if force and NEAR.st[s.id] then NEAR.st[s.id].t0 = -100 end
+  for _ = 1, 40 do
+    near_tick(name, b, a.x - b.x, a.y - b.y, a.z - b.z, sites(name))
+    local e = peek(s.id)
+    if e and (e.g or e.alias) then return s end
+    local st = NEAR.st[s.id]
+    if st and st.gave_up then return nil, "no room" end
+    if force and st then st.t0 = -100 end
+  end
+  return nil, "wait"
 end

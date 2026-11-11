@@ -413,6 +413,28 @@ do
     (got[1] and got[1].title or "none") .. " / " .. (got[2] and got[2].title or "-"))
 end
 
+-- ── (progression P1) the programme's `feat` goal kind ───────────────────────
+do
+  local ms = { id = "test_feats", title = "Test Feats", reward = 100, rep = 0,
+               goals = { { kind = "feat", id = "base_founded", label = "a base of your own" },
+                         { kind = "feat", id = "ruin_stripped", n = 3, label = "strip three pieces" } } }
+  table.insert(mi.PROGRAMME, ms)
+  store["feats"] = nil
+  mi.progTick()
+  local perm = (store["prog.perm"] or {})["test_feats"] or {}
+  check("a feat goal waits until the feat is done", not perm[1] and not perm[2])
+  store["feats"] = { base_founded = { n = 1 }, ruin_stripped = { n = 2 } }
+  mi.progTick()
+  perm = (store["prog.perm"] or {})["test_feats"] or {}
+  local lines = mi.progGoalLines("test_feats")
+  check("…met once it is (read from the save's feats)", perm[1] == true and not perm[2])
+  check("…a counted feat shows how far along it is", lines[2] and lines[2]:find("(2 of 3)", 1, true) ~= nil, lines[2])
+  store["feats"].ruin_stripped.n = 3
+  mi.progTick()
+  check("…and the milestone completes on the last one", (store["prog.done"] or {}).test_feats == true)
+  table.remove(mi.PROGRAMME)
+end
+
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}
 for _, c in ipairs(checks) do

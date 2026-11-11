@@ -232,6 +232,9 @@ local CATALOGUE = {
 --   orbitrelay n        comms.relayStats().orbit[home] ≥ n
 --   linked   class=     a body of that class (moon / planet) is in
 --                       comms.linkedBodies()
+--   feat     id= n=     (progression P1) a thing done in the world, n times
+--                       (scripts/feats.lua: a base founded, a ruin found, a
+--                       lock opened …), read from the save's `feats`
 --
 -- The comms numbers come from the relay network (comms.lua); they are polled
 -- once a second, guarded, and a network that does not report yet is a goal
@@ -1762,6 +1765,13 @@ end
 
 local function pct(v) return string.format("%d%%", math.floor((v or 0) * 100 + 1e-6)) end
 
+-- (P1) how many times feat `id` is done (feats.lua's record in the save)
+function featCount(id)
+  local t = save.get("feats")
+  local e = type(t) == "table" and t[id] or nil
+  return type(e) == "table" and (tonumber(e.n) or 0) or 0
+end
+
 -- Is goal i of milestone m met right now? (The tick latches it.)
 local function prog_goal_now(m, i, g, niches)
   if g.kind == "sample" then
@@ -1790,6 +1800,8 @@ local function prog_goal_now(m, i, g, niches)
     return (progNet.sky or 0) >= g.frac - 1e-6
   elseif g.kind == "orbitrelay" then
     return (progNet.orbit or 0) >= (g.n or 1)
+  elseif g.kind == "feat" then
+    return featCount(g.id) >= (g.n or 1)
   elseif g.kind == "linked" then
     local home = homeName()
     for _, name in ipairs(progNet.linked or {}) do
@@ -1841,6 +1853,8 @@ local function prog_tail(g)
     return "   (now " .. pct(g.kind == "groundcov" and progNet.ground or progNet.sky) .. ")"
   elseif g.kind == "orbitrelay" then
     return string.format("   (%d in orbit)", progNet.orbit or 0)
+  elseif g.kind == "feat" and (g.n or 1) > 1 then
+    return string.format("   (%d of %d)", math.min(featCount(g.id), g.n), g.n)
   end
   return ""
 end

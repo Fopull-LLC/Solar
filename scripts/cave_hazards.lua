@@ -1136,6 +1136,9 @@ local function first_entry(name, kind)
   stats.firsts = stats.firsts + 1
   last.first = { t = now(), kind = kind, body = name, comp = newc, rp = rp }
   local fact = K.facts and K.facts[1] or ""
+  -- (progression P1) a feat: a cave kind entered (once a kind)
+  local F = ref("feats")
+  if F and F.mark then pcall(F.mark, "cave_kinds", { key = kind, b = name }) end
   say("first:" .. kind, string.upper(K.label or kind) .. string.format(" · +%d RP", rp), fact, 5.0)
 end
 

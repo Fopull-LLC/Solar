@@ -2160,6 +2160,13 @@
                     params: [],
                     pinned_bools: Some([]),
                 ),
+                // things done in the world (progression P1): research's
+                // feat locks and grants, the programme's feat goals
+                (
+                    kind: "feats",
+                    enabled: true,
+                    params: [],
+                ),
             ],
             id: Some(59),
         ),

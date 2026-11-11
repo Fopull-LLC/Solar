@@ -1025,6 +1025,14 @@ kind("room_unbreathable", { fail = true, req = { "struct" }, eval = function(g, 
   return held >= secs, string.format("unbreathable %d s of %d (%s)", math.floor(held), math.floor(secs), tostring(a.why or "air"))
 end })
 
+-- feat: (progression P1) a thing done in the world, n times (scripts/feats.lua:
+-- base_founded, ruin_found, lock_opened …): { id = "<feat>", n = 1 }
+kind("feat", { req = { "id" }, eval = function(g, W)
+  local n = W.featCount and W.featCount(g.id) or 0
+  local want = g.n or 1
+  return n >= want, string.format("%d of %d", math.min(n, want), want)
+end })
+
 -- ── F8 (scenarios2 SC-4): authored ruins and Data Cores ───────────────────
 -- core_read: { id = "<core id>" } (or ids = { … }, count = n): the core has
 -- been read (`sealed = true`: sealed unread instead; `any = true`: either).
@@ -1240,6 +1248,7 @@ function goalLabel(g)
   if k == "craft_pressure" then return string.format("%s's pressure", tostring(g.craft):gsub("^craft:", "")) end
   if k == "core_read" then return g.sealed and "Seal the Data Core" or "Read the Data Core" end
   if k == "ruin" then return g.claimed and "Claim the site" or (g.restored and "Restore it" or "The ruin") end
+  if k == "feat" then return (tostring(g.id or "feat"):gsub("_", " ")) end
   return k
 end
 
@@ -1485,6 +1494,10 @@ function validate(sc, ctx)
   if st.funds ~= nil and type(st.funds) ~= "number" then E("start.funds", "a number") end
   for i, id in ipairs(st.research or {}) do
     if ctx.techExists and not ctx.techExists(id) then E(string.format("start.research[%d]", i), "no research id " .. tostring(id)) end
+  end
+  for i, f in ipairs(type(st.feats) == "table" and st.feats or {}) do
+    local id = type(f) == "table" and (f.id or f[1]) or f
+    if type(id) ~= "string" then E(string.format("start.feats[%d]", i), "a feat id, or { id, n }") end
   end
   if st.safety ~= nil and st.safety ~= "rescue" and st.safety ~= "death" and st.safety ~= "invincible" then
     E("start.safety", "rescue, death or invincible")

@@ -161,6 +161,9 @@ function reconcile()
           ST.put(rec)
           r = B.get(bid)
           log(string.format("tower: %s founded on %s (structure %s)", r.n, tostring(rec.b), tostring(rec.id)))
+          -- (progression P1) a feat: a base of your own (a tower, or a claimed ruin's)
+          local F = ref("feats")
+          if F and F.mark then pcall(F.mark, "base_founded", { key = bid, b = rec.b }) end
           -- the player just placed it: the name field opens
           if lp and lp.sid == rec.id and lp.uid == p.uid then just_founded = bid end
         end

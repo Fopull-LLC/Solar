@@ -109,6 +109,9 @@ SPARES = {
   reactor = { "flValve.steel", "flGauge.steel", "breaker63.steel", "lsDose.steel", "lsTemp.steel" },
   relay   = { "breaker63.steel", "lwRx.steel", "lwTx.steel", "lsPower.steel" },
 }
+-- (R1) what the ruin near home's outside crate always holds: a crated craft
+-- Solar Panel and a Repair Kit (the knocked array wants one once claimed)
+NEAR_CRATE = { "part:vab.solar", "repairkit" }
 -- where a log is most likely kept (a diary under a bunk, a note in a drawer)
 LOG_AFFINITY = { bunk = 6, locker = 5, workbench = 4, cabinet = 3, shelf = 2, crateS = 1, crate = 1 }
 
@@ -212,7 +215,11 @@ function siteLogs(site, info)
   end
   -- a survey note with another site's position
   local others = info.others or {}
-  if #others > 0 and r() < 0.85 then
+  -- (R1: the ruin near home always leaves its survey note, on the site its log names)
+  if site and site.near and site.other then
+    for _, o in ipairs(others) do if o.id == site.other then others = { o } break end end
+  end
+  if #others > 0 and ((site and site.near) or r() < 0.85) then
     local o = others[1 + math.floor(r() * #others)]
     local fmt = LOG_SURVEY[1 + math.floor(r() * #LOG_SURVEY)]
     out[#out + 1] = { key = string.format("r:%s:%d", id, #out + 1), title = "Survey note", who = who(), when = day(),
@@ -239,12 +246,28 @@ function planSite(site, containers, ores, logs, known)
     return (a.c.uid or 0) < (b.c.uid or 0)
   end)
   local function put(c, lg) local it = plan[c.uid].items; local id = "datalog:" .. lg.key; it[id] = (it[id] or 0) + 1 end
+  -- (R1: the ruin near home: its outside crate holds the shift note, a crated
+  -- Solar Panel and a Repair Kit, whatever the dice rolled)
+  local nearCrate = nil
+  if site and site.near then
+    for _, c in ipairs(containers or {}) do
+      if not c.locked and c.piece == "crate" then nearCrate = c break end
+    end
+    if not nearCrate then for _, c in ipairs(containers or {}) do if not c.locked and c.piece == "crateS" then nearCrate = c break end end end
+    if nearCrate then
+      local it = plan[nearCrate.uid].items
+      for _, id in ipairs(NEAR_CRATE) do it[id] = math.max(it[id] or 0, 1) end
+    end
+  end
   for _, lg in ipairs(logs or {}) do
     local best = nil
+    if nearCrate and (lg.codes or lg.coords) then best = { c = nearCrate, n = 1 } end
     -- a log with codes never goes into a container one of its codes opens (nor any locked one)
-    for _, s in ipairs(slots) do
-      local ok = not (lg.codes and s.c.locked)
-      if ok and s.n > 0 then best = s; break end
+    if not best then
+      for _, s in ipairs(slots) do
+        local ok = not (lg.codes and s.c.locked)
+        if ok and s.n > 0 then best = s; break end
+      end
     end
     if not best then for _, s in ipairs(slots) do if not (lg.codes and s.c.locked) then best = s; break end end end
     if best then best.n = math.max(0, best.n - 1); put(best.c, lg) end
@@ -355,6 +378,7 @@ local function agency_now()
 end
 local function sget(k) return save and save.get and save.get(k) or nil end
 local function sset(k, v) if save and save.set then save.set(k, v) end end
+local function feat(id, ctx) local F = ref("feats"); if F and F.mark then pcall(F.mark, id, ctx) end end   -- (progression P1)
 local function blog(sid, k, txt, who) local BL = ref("base_log"); if BL and BL.add then pcall(BL.add, sid, k, txt, who) end end
 local function play(path, sid, uid, vol, dist)
   if not (audio and audio.play) then return end
@@ -696,6 +720,7 @@ function enterCode(sid, uid, code, who)
     patch_state(sid, uid, { kpo = true })
     bolt(sid, uid, false)
     if who ~= false then learn(sid, uid, code) end
+    if who ~= false then feat("lock_opened", { key = tostring(sid) .. ":" .. tostring(uid) }) end   -- (P1)
     play("audio/foley/latch_clunk.ogg", sid, uid, 0.7, 20)
     blog(sid, "lock", string.format("%s opened with its code", tostring(label_of(sid, uid))), who)
     bump()
@@ -776,6 +801,7 @@ function forceLock(sid, uid, who, tool)
     if ST and ST.put then ST.put(rec) end
   end
   play("audio/foley/steel_drop.ogg", sid, uid, 1.0, 60)
+  if who ~= false then feat("lock_opened", { key = tostring(sid) .. ":" .. tostring(uid) }) end   -- (P1: forced counts too)
   lastNoise = { sid = sid, uid = uid, what = "forced", t = now(), loud = 60 }
   stats.forced = stats.forced + 1
   blog(sid, "forced", string.format("%s: its lock FORCED%s", tostring(label_of(sid, uid)), tool and (" with " .. tostring(tool)) or ""), who)
@@ -984,6 +1010,8 @@ function strip(sid, uid, ctx)
   blog(sid, "strip", string.format("%s stripped for parts%s", tostring(d.label or p.id), (q.falls or 0) > 0 and string.format(" (%d more came down)", q.falls) or ""))
   -- a ruin stripped is a ruin touched: it stays in the records
   if rec.ru then local RU = ref("ruins"); local e = RU and RU.state and RU.state(rec.ru); if e and not e.tc then e.tc = 1; if RU.saveStates then RU.saveStates() end end end
+  -- (progression P1) a feat: a ruin's piece stripped (once a piece)
+  if rec.ru then feat("ruin_stripped", { key = tostring(rec.ru) .. ":" .. tostring(p.ri or uid), b = rec.b }) end
   bump()
   local msg = string.format("stripped: %s%s", yieldText(q), salv and " · the rest in a salvage crate beside it" or "")
   if warn then msg = msg .. " · " .. warn end

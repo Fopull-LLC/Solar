@@ -7,7 +7,9 @@
 # scanner and telescope discovery; the station's ruin entry and card; a crate,
 # the core, the claim, restore, repair; the claimed base's card.
 #
-#   ruinprobe.sh <engine> [modes]   modes: ruins (default)
+#   ruinprobe.sh <engine> [modes]   modes: ruins (default), near (progression R1:
+#        the ruin near home on a fresh career; BENCH_PARAMS='("nearold", 1.0)' with USERSAVE=1
+#        and SOLAR=<a copy holding a probe save> for an old save)
 #   env: WORK LOCK SOLAR TAG PATCHES as bench.sh (PATCHES=funds.patch);
 #        BENCH_PARAMS='("rkind", "camp")' to pick the kind of the main flow
 #
@@ -28,7 +30,7 @@ s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
-              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "ruins" then RN.run()')
+              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "ruins" then RN.run()\n    elseif MODE == "near" then RN.near()')
 open(p, 'w').write(s)
 PY
 rm -rf $S/proj/save/user/ruinshots

@@ -963,6 +963,12 @@
                     // system.ron, so it read as money appearing at random.
                     params: [],
                 ),
+                // (progression P1) feats: research reads them from the save
+                (
+                    kind: "feats",
+                    enabled: true,
+                    params: [],
+                ),
             ],
             id: Some(82),
         ),

@@ -619,6 +619,328 @@ do
     and S5.site(sm.id).caveLine ~= nil)
 end
 
+-- ── (progression R1) THE RUIN NEAR HOME ──────────────────────────────────────
+-- the site: camp or relay, young, its own name, the next site named; the
+-- ring placement on 50 worlds (330–400 m, flattest of 16 bearings), never
+-- dropped on steep ground (relaxed, then further out, then the flattest),
+-- never on the player's structures, bases or the Tracking Station; the yard
+-- (two arrays, one knocked, a flat bank), the locked locker, no locked door;
+-- the log; the crate (shift note, crated Solar Panel, Repair Kit); and the
+-- scene: sited near the pad, stamped, found only up close, Ops's one line
+-- after First Steps, an old save's site near home pointed at instead.
+do
+  -- the site
+  local kinds, ages_ok, names_ok = {}, true, true
+  for i = 1, 300 do
+    local others = RU.sitesFor("N" .. i, { atmo = 0.5, seed = i * 31, radius = 800 }, true, 800)
+    local s = RU.nearSite("N" .. i, { seed = i * 31 }, others)
+    kinds[s.kind] = (kinds[s.kind] or 0) + 1
+    if s.age < 400 or s.age > 900 then ages_ok = false end
+    for _, o in ipairs(others) do if o.name == s.name then names_ok = false end end
+    if i == 1 then
+      local first = nil
+      for _, o in ipairs(others) do if not o.pending then first = o break end end
+      check("the near site names the world's first real site", s.other == first.id and s.otherName == first.name and s.near == true)
+      check("…its id is <home>#near", s.id == "N1#near")
+    end
+  end
+  check("the near site is a survey camp or a relay post, never anything else", (kinds.camp or 0) + (kinds.relay or 0) == 300, (kinds.camp or 0) .. "/" .. (kinds.relay or 0))
+  check("…camps about 3 in 5", (kinds.camp or 0) > 150 and (kinds.camp or 0) < 210, kinds.camp)
+  check("…empty 400–900 days (younger than the others)", ages_ok)
+  check("…its name is never another site's", names_ok)
+
+  -- the plan
+  local P = RU.nearPlan(7)
+  local ph1, ring_ok = 0, true
+  for _, p in ipairs(P) do
+    if p.ph == 1 then ph1 = ph1 + 1; if p.d ~= RU.NEAR_MID then ring_ok = false end end
+    if p.ph == 2 and (p.d < RU.NEAR_RING[1] or p.d > RU.NEAR_RING[2]) then ring_ok = false end
+    if p.ph == 3 and p.d <= RU.NEAR_RING[2] then ring_ok = false end
+  end
+  check("the plan: 16 bearings at the ring's middle, then 108 spots in the ring, then further out", ph1 == 16 and ring_ok and #P == 16 + 108 + 36 * #RU.NEAR_FAR)
+
+  -- the placement over a fixture world: spread(ux,uy,uz) and wet(ux,uy,uz) from the test
+  local function unitv(x, y, z) local l = math.sqrt(x * x + y * y + z * z); return x / l, y / l, z / l end
+  local function place(seed, R, spread, wet, wv, budget)
+    local r = RU.rng(seed)
+    local fx, fy, fz = unitv(r() - 0.5, r() - 0.5, r() - 0.5)
+    local fp = { x = fx * R, y = fy * R, z = fz * R }
+    wv = wv or {}
+    wv.R, wv.fp = R, fp
+    local st = { seed = seed, clear = function(gx, gy, gz) return RU.nearClear(wv, gx, gy, gz) end }
+    local probe = function(p)
+      local ux, uy, uz = RU.ringDir(fx, fy, fz, p.b, p.d, R)
+      return { spread = spread(ux, uy, uz, p), dry = not wet(ux, uy, uz, p), gx = ux * R, gy = uy * R, gz = uz * R, ux = ux, uy = uy, uz = uz }
+    end
+    local k, why
+    for _ = 1, 200 do
+      k, why = RU.nearStep(st, probe, budget or 1e9)
+      if why ~= "more" then break end
+    end
+    local d = k and RU.groundDist(R, fp.x, fp.y, fp.z, st.res[k].gx, st.res[k].gy, st.res[k].gz) or nil
+    return k, why, d, st, fp
+  end
+  local function noise(ux, uy, uz, k) return 0.5 + 0.5 * math.sin(ux * k * 13.1 + uy * k * 7.3 + uz * k * 5.7) end
+  local in_ring, flat_pick, n = 0, 0, 50
+  for i = 1, n do
+    local R = 600 + (i * 37) % 350
+    local k, why, d, st = place(i * 101, R, function(ux, uy, uz) return 0.3 + 1.6 * noise(ux, uy, uz, 9) end, function() return false end)
+    if k and d >= RU.NEAR_RING[1] - 0.5 and d <= RU.NEAR_RING[2] + 0.5 then in_ring = in_ring + 1 end
+    if k then
+      -- the flattest of the 16 when one passes
+      local best = math.huge
+      for j = 1, 16 do local rr = st.res[j]; if rr and rr.spread <= RU.FLAT_SPREAD then best = math.min(best, rr.spread) end end
+      if best == math.huge or math.abs(st.res[k].spread - best) < 1e-9 then flat_pick = flat_pick + 1 end
+    end
+  end
+  check("50 worlds: the near site always in the 330–400 m ring", in_ring == n, in_ring)
+  check("…on the flattest of the 16 bearings when one is flat enough", flat_pick == n, flat_pick)
+  -- steep in the ring (2.4 m over 11 m everywhere): relaxed, still in the ring
+  local k, why, d, st = place(5, 800, function() return 2.4 end, function() return false end)
+  check("steep ring: relaxed to 3 m, still in the ring", k and d >= 329 and d <= 401 and st.res[k].spread == 2.4, why)
+  -- the whole ring a cliff, flat further out: further out
+  k, why, d = place(6, 800, function(_, _, _, p) return p.d <= 400 and 9 or 0.5 end, function() return false end)
+  check("a cliff ring: sited further out, never dropped", k and d > 400 and d <= 820, why)
+  -- steep everywhere (a pad on a mountain): the flattest of all, never dropped
+  k, why, d, st = place(7, 800, function(ux, uy, uz) return 6 + noise(ux, uy, uz, 5) * 4 end, function() return false end)
+  local minall = math.huge
+  for j = 1, 124 do local rr = st.res[j]; if rr then minall = math.min(minall, rr.spread) end end
+  check("steep everywhere: the flattest spot in the ring, never dropped", k and d >= 329 and d <= 401 and st.res[k].spread == minall, why)
+  -- the ring all under water, an island further out: there
+  k, why, d = place(8, 800, function() return 0.4 end, function(_, _, _, p) return p.d < 600 end)
+  check("a pad on a small island: sited on the first dry ring", k and d >= 599 and d <= 601, why)
+  -- all sea: the one honest failure (tries again next session)
+  k, why = place(9, 800, function() return 0.4 end, function() return true end)
+  check("all sea round the pad: no room (the scene tries again next session)", k == nil and why == "no room")
+  -- the player's structures and bases in the ring: clear of all of them
+  do
+    local R = 800
+    local r = RU.rng(11)
+    local fx, fy, fz = unitv(r() - 0.5, r() - 0.5, r() - 0.5)
+    local wv = { structs = {}, bases = {} }
+    -- a structure every 20° on the ring's middle, a base and the station on two more bearings
+    for a = 0, 17 do
+      local ux, uy, uz = RU.ringDir(fx, fy, fz, a * math.pi / 9, 365, R)
+      wv.structs[#wv.structs + 1] = { x = ux * R, y = uy * R, z = uz * R }
+    end
+    local bx, by, bz = RU.ringDir(fx, fy, fz, 1.0, 380, R)
+    wv.bases[1] = { x = bx * R, y = by * R, z = bz * R }
+    local sx, sy, sz = RU.ringDir(fx, fy, fz, 2.0, 60, R)
+    wv.station = { x = sx * R, y = sy * R, z = sz * R }
+    -- (re-seed the same footprint in place())
+    local k2, why2, d2, st2, fp = place(11, R, function() return 0.5 end, function() return false end, wv)
+    local g = k2 and st2.res[k2]
+    local okc = g ~= nil
+    if g then
+      for _, p in ipairs(wv.structs) do if RU.groundDist(R, g.gx, g.gy, g.gz, p.x, p.y, p.z) < RU.BUILT_MIN then okc = false end end
+      for _, p in ipairs(wv.bases) do if RU.groundDist(R, g.gx, g.gy, g.gz, p.x, p.y, p.z) < RU.BASE_MIN then okc = false end end
+      if RU.groundDist(R, g.gx, g.gy, g.gz, wv.station.x, wv.station.y, wv.station.z) < RU.BASE_MIN then okc = false end
+    end
+    check("never on the player's structures, bases or the Tracking Station", okc, why2)
+    check("…the structures pushed it out of the ring, it was not dropped", k2 ~= nil and d2 > 0, d2)
+  end
+  -- the budget: 24 spots a tick, the same answer as all at once
+  local ka = place(12, 800, function(ux, uy, uz) return 1.2 + 1.5 * noise(ux, uy, uz, 11) end, function() return false end)
+  local kb = place(12, 800, function(ux, uy, uz) return 1.2 + 1.5 * noise(ux, uy, uz, 11) end, function() return false end, nil, 24)
+  check("24 spots a tick: the same spot as all at once", ka ~= nil and ka == kb, tostring(ka) .. " " .. tostring(kb))
+
+  -- compass
+  check("compass: +Y from the equator is north, +Z east", RU.compass(1, 0, 0, 1, 1, 0) == "north" and RU.compass(1, 0, 0, 1, 0, 1) == "east"
+    and RU.compass(1, 0, 0, 1, -1, -1) == "south-west")
+
+  -- the yard
+  local yard_ok, knocked_ok, flat_ok, locks_ok, doors_ok = true, true, true, true, true
+  for i = 1, 40 do
+    local s = RU.nearSite("Y" .. i, { seed = i }, RU.sitesFor("Y" .. i, { atmo = 0.5, seed = i, radius = 800 }, true, 800))
+    local full = RU.blueprintOf(s)
+    local na, nb = 0, 0
+    for _, p in ipairs(full) do
+      if p.id == "solarArray" then na = na + 1 end
+      if p.id == "batteryBank" then nb = nb + 1; if p.fill ~= 0 then flat_ok = false end end
+      if not def(p.id) then yard_ok = false end
+    end
+    if na ~= 2 or nb ~= 1 then yard_ok = false end
+    local kept = RU.decay(full, s)
+    local sound, knock = 0, 0
+    for _, e in ipairs(kept) do if e.id == "solarArray" then if e.wr then knock = knock + 1 else sound = sound + 1 end end end
+    if sound ~= 1 or knock ~= 1 then knocked_ok = false end
+    local lp = RU.lockPlan(s, kept)
+    local lockers = 0
+    for kk, e in ipairs(kept) do
+      local nm = e.id:match("^([%w]+)")
+      if nm == "locker" then lockers = lockers + 1; if not lp[kk] then locks_ok = false end end
+      if RU.isLockDoor(e.id) and lp[kk] then doors_ok = false end
+    end
+    if lockers < 1 then locks_ok = false end
+  end
+  check("the yard: two Solar Arrays and a Battery Bank, every piece real", yard_ok)
+  check("…one array stands, one is knocked over (a Repair Kit once claimed)", knocked_ok)
+  check("…the bank arrives flat", flat_ok)
+  check("…its locker is always on a code", locks_ok)
+  check("…and never a door (the way in is never sealed)", doors_ok)
+
+  -- the log
+  local s = RU.nearSite("L", { seed = 3 }, RU.sitesFor("L", { atmo = 0.5, seed = 3, radius = 800 }, true, 800))
+  local l = RU.lore(s)
+  check("the near site's log: three entries, the last names the next site", #l == 3 and l[3]:find(s.otherName, 1, true) ~= nil, l[3])
+  check("…the same each time", RU.lore(s)[1] == l[1])
+
+  -- the crate (loot.planSite, siteLogs)
+  local LO = loadlib("loot.lua")
+  local kept = RU.decay(RU.blueprintOf(s), s)
+  local lp = RU.lockPlan(s, kept)
+  local conts, locks = {}, {}
+  for kk, e in ipairs(kept) do
+    local d = def(e.id)
+    if d and d.container then conts[#conts + 1] = { uid = kk, piece = LO.pieceName(e.id), key = e.ri, locked = lp[kk] ~= nil } end
+    if lp[kk] then locks[#locks + 1] = { uid = kk, code = lp[kk], label = "Personnel Locker" } end
+  end
+  local others = { { id = "X#2", name = "Wrong Camp", where = "1° N" }, { id = s.other, name = s.otherName, where = "12° N, 40° E" } }
+  local logs = LO.siteLogs(s, { kind = s.kind, age = s.age, locks = locks, others = others })
+  local survey = nil
+  for _, lg in ipairs(logs) do if lg.coords then survey = lg end end
+  check("its survey note is always there, and names the site its log names", survey ~= nil and survey.coords == s.other)
+  local plan = LO.planSite(s, conts, { "iron" }, logs, function() return true end)
+  local crate = nil
+  for _, c in ipairs(conts) do if c.piece == "crate" and not c.locked then crate = c break end end
+  local it = crate and plan[crate.uid].items or {}
+  local has_codes = false
+  for id in pairs(it) do
+    local key = id:match("^datalog:(.+)$")
+    for _, lg in ipairs(logs) do if lg.key == key and lg.codes then has_codes = true end end
+  end
+  check("the outside crate: the shift note with the locker's code", has_codes)
+  check("…a crated Solar Panel and a Repair Kit", (it["part:vab.solar"] or 0) >= 1 and (it.repairkit or 0) >= 1)
+  check("…a crated Solar Panel is a real part", PB.partInfo("vab.solar") ~= nil)
+end
+
+-- ── (R1) the scene: sited near the pad, found up close, Ops's one line ─────
+do
+  store = {}
+  local R = 850
+  local function V(x, y, z) return { x = x, y = y, z = z } end
+  local body = { name = "Draethos", x = -2000, y = 400, z = 900, radius = R }
+  local space = { body = function(n) return n == "Draethos" and body or nil end, dominant = function() return "Draethos" end }
+  local terrain = { raycast = function(o, d, max)
+    local ox, oy, oz = o.x - body.x, o.y - body.y, o.z - body.z
+    local b = ox * d.x + oy * d.y + oz * d.z
+    local c = ox * ox + oy * oy + oz * oz - R * R
+    local disc = b * b - c
+    if disc < 0 then return nil, "air" end
+    local t = -b - math.sqrt(disc)
+    return { pos = V(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t), distance = t, exact = true }
+  end }
+  local astro = V(0, 0, 0)
+  local fu = { x = 0.6, y = 0.64, z = 0.48 }
+  local fl = math.sqrt(fu.x ^ 2 + fu.y ^ 2 + fu.z ^ 2)
+  fu = { x = fu.x / fl, y = fu.y / fl, z = fu.z / fl }
+  local fp = { body = "Draethos", x = fu.x * R, y = fu.y * R, z = fu.z * R, radius = 175 }
+  local said = {}
+  local SCRIPTS = {}
+  local env = { save = SAVE, space = space, terrain = terrain, vec3 = V, time = 0,
+                find = function(n) return n == "Astronaut" and astro or nil end,
+                findScript = function(k) return SCRIPTS[k] end, log = function() end }
+  local ST = loadlib("structures.lua", { save = SAVE })
+  local B = loadlib("bases.lua", { save = SAVE })
+  SCRIPTS = { structures = ST, bases = B, parts_base = PB, base_facilities = { footprint = fp },
+              ops_strip = { say = function(t, who) said[#said + 1] = { t = t, who = who } end },
+              deployables = { agencyClock = function() return 5e6 end },
+              climate = { worldOf = function(n) return { atmo = 0.6, seed = 777, radius = R, relief = 40, sea = 0 } end } }
+  store["system.home"] = { bodies = { { name = "Draethos", radius = R } } }
+  store["base.body"] = "Draethos"
+  local function crew_at(ux, uy, uz) astro.x, astro.y, astro.z = body.x + ux * (R + 1.8), body.y + uy * (R + 1.8), body.z + uz * (R + 1.8) end
+  local function tick() env.time = env.time + 1.1; SCRIPTS.ruins.update(nil, 1.1) end
+  local S6 = loadlib("ruins.lua", env)
+  SCRIPTS.ruins = S6
+  local ns = S6.nearOf("Draethos")
+  check("a home world has a near site in the scene (an old save gets it too: nothing was saved)", ns ~= nil and ns.pending == true)
+  crew_at(fu.x, fu.y, fu.z)
+  tick()
+  local e = S6.state(ns.id)
+  local d = e.g and RU.groundDist(R, fp.x, fp.y, fp.z, e.g.x, e.g.y, e.g.z) or -1
+  check("the crew at the pad: the near site sited 330–400 m out", d >= 329.5 and d <= 400.5, d)
+  check("…its door faces the pad", e.g and (function()
+    local dx, dy, dz = fp.x - e.g.x, fp.y - e.g.y, fp.z - e.g.z
+    local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+    return (dx * e.g.fx + dy * e.g.fy + dz * e.g.fz) / l > 0.95
+  end)())
+  tick()
+  e = S6.state(ns.id)
+  check("…and stamped from the first minute (within 600 m)", e.sid ~= nil and ST.get(e.sid) ~= nil and ST.get(e.sid).ru == ns.id)
+  check("…not found from the pad (it is walked to)", not S6.discovered(ns.id))
+  check("…no word from Ops before First Steps", #said == 0)
+  store["prog.done"] = { first_steps = true }
+  tick()
+  check("First Steps done: Ops says where it is, once, on the radio", #said == 1 and said[1].who == "Ops" and said[1].t:find(" m ", 1, true) ~= nil
+    and said[1].t:find(RU.LABEL[ns.kind], 1, true) ~= nil, said[1] and said[1].t)
+  tick(); tick()
+  check("…only once", #said == 1)
+  -- walk to 80 m of it
+  local gl = math.sqrt(e.g.x ^ 2 + e.g.y ^ 2 + e.g.z ^ 2)
+  local gu = { x = e.g.x / gl, y = e.g.y / gl, z = e.g.z / gl }
+  local ux, uy, uz = RU.ringDir(gu.x, gu.y, gu.z, 0.3, 80, R)
+  crew_at(ux, uy, uz)
+  tick()
+  check("walked to 80 m: found", S6.discovered(ns.id))
+  -- a reload: the same near site, sited where it was
+  local S7 = loadlib("ruins.lua", env)
+  SCRIPTS.ruins = S7
+  local ns2 = S7.nearOf("Draethos")
+  check("a reload: the same near site, where it stands", ns2 and ns2.id == ns.id and not ns2.pending and math.abs(ns2.ux - gu.x) < 1e-9)
+
+  -- an OLD save whose structures fill the ring: clear of them
+  store = {}
+  store["system.home"] = { bodies = { { name = "Draethos", radius = R } } }
+  store["base.body"] = "Draethos"
+  said = {}
+  ST.reloadFromSave()
+  local recs = {}
+  for a = 0, 23 do
+    local sx, sy, sz = RU.ringDir(fu.x, fu.y, fu.z, a * math.pi / 12, 365, R)
+    local rec = ST.newRecord(nil, "Draethos", sx * R, sy * R, sz * R, V(sx, sy, sz), V(0, 0, 1), "wall.steel", { by = "player" })
+    recs[#recs + 1] = ST.add(rec)
+  end
+  local S8 = loadlib("ruins.lua", env)
+  SCRIPTS.ruins = S8
+  crew_at(fu.x, fu.y, fu.z)
+  for _ = 1, 12 do tick() end
+  local n8 = S8.nearOf("Draethos")
+  local e8 = S8.state(n8.id)
+  local clear8 = e8.g ~= nil
+  for _, sid in ipairs(recs) do
+    local r = ST.get(sid)
+    if e8.g and RU.groundDist(R, e8.g.x, e8.g.y, e8.g.z, r.x, r.y, r.z) < RU.BUILT_MIN then clear8 = false end
+  end
+  check("an old save with its structures round the ring: the site added, clear of every one", clear8,
+    e8.g and RU.groundDist(R, fp.x, fp.y, fp.z, e8.g.x, e8.g.y, e8.g.z))
+
+  -- an OLD save with a site already within 450 m of the pad: that one is pointed at, no second site
+  store = {}
+  store["system.home"] = { bodies = { { name = "Draethos", radius = R } } }
+  store["base.body"] = "Draethos"
+  ST.reloadFromSave()
+  local S9 = loadlib("ruins.lua", env)
+  SCRIPTS.ruins = S9
+  local first = nil
+  for _, x in ipairs(S9.sites("Draethos")) do if not x.pending then first = x break end end
+  local ax, ay, az = RU.ringDir(fu.x, fu.y, fu.z, 1.0, 420, R)
+  store["ruins.s"] = { [first.id] = { g = { x = ax * (R - 0.15), y = ay * (R - 0.15), z = az * (R - 0.15), ux = ax, uy = ay, uz = az, fx = 1, fy = 0, fz = 0 } } }
+  S9 = loadlib("ruins.lua", env)
+  SCRIPTS.ruins = S9
+  said = {}
+  store["prog.done"] = { first_steps = true }
+  crew_at(fu.x, fu.y, fu.z)
+  tick(); tick()
+  local n9 = S9.nearOf("Draethos")
+  check("an old save with a site 420 m out: no second near site (alias)", S9.state(n9.id).alias == first.id and S9.state(n9.id).g == nil)
+  check("…Ops points at that one", #said == 1 and said[1].t:find("400 m", 1, true) ~= nil, said[1] and said[1].t)
+
+  -- a scenario save: no near site
+  store = { ["game.mode"] = "scenario", ["system.home"] = { bodies = { { name = "Draethos", radius = R } } }, ["base.body"] = "Draethos" }
+  local S10 = loadlib("ruins.lua", env)
+  check("a scenario's world: no near site (the author's world is the author's)", S10.nearOf("Draethos") == nil)
+end
+
 if failed == 0 then
   print(string.format("RUINS SMOKE OK — %d checks passed", count))
   os.exit(0)

@@ -261,6 +261,8 @@ function W.partsNear(r, rad)
   return out
 end
 function W.flagOn(b) local dep = ref("deployables"); return dep and dep.hasFlagOn and dep.hasFlagOn(body_name(b)) == true end
+-- (progression P1) how many times a feat is done (scripts/feats.lua)
+function W.featCount(id) local F = ref("feats"); return F and F.count and F.count(id) or 0 end
 function W.crewDead(who)
   local C = ref("crew")
   if not C then return false end
@@ -2462,6 +2464,8 @@ local function stage_table(st, out)
   if st.funds then set_funds(st.funds) end
   if st.rp and rs and rs.addPoints then rs.addPoints(st.rp, "scenario") end
   for _, id in ipairs(st.research or {}) do if rs and rs.grant then rs.grant(id, "scenario") end end
+  -- (progression P1) feats the story starts with (a base already founded …)
+  if st.feats then local F = ref("feats"); if F and F.seed then F.seed(st.feats) end end
   if co and st.funds then out[#out + 1] = string.format("funds %d", co.balance()) end
   frames(1)
   stage_crew(st.crew, out)

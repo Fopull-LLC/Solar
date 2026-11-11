@@ -1533,6 +1533,13 @@ function place(sid, partId, p, payer, opts)
   if plan and plan.level and rec and part then level_ground(def, rec, part) end
   local c = ref("crew")
   if c and c.credit and by then pcall(c.credit, by, "built", 1, { body = p.body }) end
+  -- (progression P1) feats: a piece down; a timber one counts toward wood_built
+  local F = ref("feats")
+  if F and F.mark then
+    pcall(F.mark, "kit_placed", { b = p.body })
+    local km = type(partId) == "string" and partId:match("%.(%w+)$")
+    if km == "wood" then pcall(F.mark, "wood_built", { b = p.body }) end
+  end
   lastPlace = { sid = sid, uid = uid, id = partId, total = q.total, cost = q.cost, ship = q.ship, foot = q.foot, t = t, mode = p.mode }
   -- the ring: undo = a full refund within the minute; redo = buy it again
   local e = { label = "place " .. def.label, kind = "place", t = t, sid = sid, uid = uid, partId = partId,

@@ -117,6 +117,17 @@ TECH = {
   -- that already passed that goal has it.
   buildkit     = { cost = 0, label = "Build Kit", grantOnly = true, permGrant = { "relay_net", 1 },
                    grantLabel = "10% of the ground linked (Relay Network)" },
+  -- FEATS (progression P1, scripts/feats.lua; Ty 11-11: "make solar panels
+  -- unlock when you set up your first base"). `featGrant`: given the moment
+  -- the feat is marked, read from the save (feats.hasIn), so the builder and
+  -- the system scene agree with no script hop. `feat`: a lock that names a
+  -- thing to go and do ("needs a base of your own …"), then the price as
+  -- usual. A base is founded by a Base Station Tower or by claiming a ruin
+  -- (the one near home holds two arrays and a bank already: ruins.lua NEAR).
+  solarArray   = { cost = 0, label = "Solar Array", grantOnly = true, featGrant = "base_founded",
+                   grantLabel = "a base of your own (a Base Station Tower, or a claimed ruin)" },
+  batteryBank  = { cost = 0, label = "Battery Bank", grantOnly = true, featGrant = "base_founded",
+                   grantLabel = "a base of your own (a Base Station Tower, or a claimed ruin)" },
 }
 
 -- BASE parts behind a craft part's research (the BASE section's ids are not
@@ -172,6 +183,19 @@ local function done()
   return save.get("res.done") or {}
 end
 
+-- (P1) the feats the save holds: { [id] = { n, … } } (feats.lua). Read from
+-- the save, as permGrant is: the builder has no feats script of its own to ask.
+local function feat_n(id)
+  local t = save.get("feats")
+  local e = type(t) == "table" and t[id] or nil
+  return type(e) == "table" and (tonumber(e.n) or 0) or 0
+end
+function featDone(id) return feat_n(id) >= 1 end
+local function feat_label(id)
+  local F = findScript and findScript("feats", { quiet = true })
+  return (F and F.LABEL and F.LABEL[id]) or (tostring(id):gsub("_", " "))
+end
+
 -- A SANDBOX save (company.lua, `game.mode`) has the whole catalogue open from
 -- the start: money is no object there, so a research price is only a click.
 function isUnlocked(id)
@@ -179,6 +203,7 @@ function isUnlocked(id)
   if not TECH[id] then return true end
   if save.get("game.mode") == "sandbox" then return true end
   if TECH[id].progGrant and (save.get("prog.done") or {})[TECH[id].prog] then return true end
+  if TECH[id].featGrant and featDone(TECH[id].featGrant) then return true end
   local pg = TECH[id].permGrant
   if pg then
     local pm = (save.get("prog.perm") or {})[pg[1]]
@@ -208,7 +233,9 @@ function blockedBy(id)
   id = tid(id)
   local t = TECH[id]
   if not t or isUnlocked(id) then return nil end
-  if t.grantOnly then return "needs " .. (t.grantLabel or "a milestone") end
+  if t.grantOnly then return "needs " .. (t.grantLabel or (t.featGrant and feat_label(t.featGrant)) or "a milestone") end
+  -- (P1) a thing done in the world first: never a refusal there, a line here
+  if t.feat and not featDone(t.feat) then return "needs " .. feat_label(t.feat) end
   if t.after and not isUnlocked(t.after) then
     return "needs " .. labelOf(t.after)
   end
@@ -410,6 +437,11 @@ function study(mat, qty, origin)
   save.set("res.pts", points() + gained)
   if log then log(string.format("research: studied %s ×%s → +%d RP%s (total %d)", tostring(mat), tostring(qty),
     gained, first and " (a new kind)" or "", points())) end
+  -- (P1) a feat: an ore kind studied (once a kind)
+  if first and m and m.class and m.class(mat) == "ore" then
+    local F = findScript and findScript("feats", { quiet = true })
+    if F and F.mark then pcall(F.mark, "ore_studied", { key = mat }) end
+  end
   return gained, first
 end
 
