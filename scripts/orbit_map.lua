@@ -213,9 +213,8 @@ local function zoom_max()
   local sc = zoom_gen and zoom_gen.scale
   return ZOOM_MAX * ((sc and sc.sector) or 1.0)
 end
--- Parents re-inferred when the body list changes, or once a second (the SOI
--- tree only changes when the galaxy streams a system in or out).
-local map_pidx, pidx_n, pidx_t = {}, -1, -10.0
+-- Every body's parent index this frame (parentsNow, below: by name, kept 5 s).
+local map_pidx = {}
 -- The craft being flown, re-scanned twice a second rather than every frame.
 local subj_cache, subj_t = nil, -10.0
 
@@ -1347,6 +1346,446 @@ function mnvDraw(bodies, px_at, lk, vc)
   end
 end
 
+-- Every body's parent INDEX this frame. The parents are worked out by name
+-- (parent_indices is O(n²), a millisecond or two with a neighbour system in)
+-- when the list changes size or meets a new name, else every 5 s; each frame
+-- they are only put back on this frame's indices (the list's order is not
+-- kept frame to frame: a signature on its order recomputed every frame).
+PAR = { names = nil, t = -10.0, n = -1 }
+function parentsNow(bodies)
+  local n = #bodies
+  if not PAR.names or n ~= PAR.n or time - PAR.t > 5.0 or time < PAR.t then
+    local idx = parent_indices(bodies)
+    local names = {}
+    for i, b in ipairs(bodies) do local p = idx[i]; names[b.name] = p and bodies[p].name or false end
+    PAR.names, PAR.n, PAR.t = names, n, time
+    return idx
+  end
+  local at = {}
+  for i, b in ipairs(bodies) do at[b.name] = i end
+  local out = {}
+  for i, b in ipairs(bodies) do
+    local pn = PAR.names[b.name]
+    if pn == nil then PAR.names = nil return parentsNow(bodies) end
+    out[i] = pn and at[pn] or nil
+  end
+  return out
+end
+
+-- ── THE MAP'S CAMERA MODES (Ty 2026-11-11: "camera modes, so when focusing
+-- on a planet you could view it horizontal to the surface horizon … one where
+-- you orbitally spin the focused planet around like a ball") ─────────────────
+-- V (or the VIEW key under the menu button) cycles them; settings keep the
+-- choice (map_cam).
+--   FREE        the map's own: right-drag turns about the world's up.
+--   HORIZON     the camera's up is the local up at the look point and the
+--               horizon is level; right-drag orbits the point (heading, and
+--               height above the horizon), Ctrl+right-drag walks the point
+--               over the ground. On a world the point starts under the camera.
+--   ORBIT BALL  right-drag spins the focus like a ball in the hand, about any
+--               axis and through the poles, and a flick keeps it turning. Only
+--               the view turns (nothing in the simulation does): the camera
+--               goes round the ball the other way.
+--   FOLLOW      the focus centred, the view lined up with its velocity
+--               relative to its world (ahead, radial up), or with the ground
+--               under it while it is nearly still; right-drag looks round it.
+-- Frames (docs/positions-and-frames.md): update_map3d resolves the focus every
+-- frame; what lasts between frames here is a direction from a world's centre
+-- (planets only translate) or a direction in world axes, never a world point.
+-- A mode or focus change blends from the old view in the anchor world's frame:
+-- the eye's direction slerped and its distance eased in log space (never
+-- through the ball), the facing nlerped, over CAMM.BLEND s.
+CAMM = {
+  mode = "free",
+  ORDER = { "free", "horizon", "ball", "follow" },
+  NAME = { free = "FREE", horizon = "HORIZON", ball = "ORBIT BALL", follow = "FOLLOW" },
+  BLEND = 0.6,
+  DRAG = 0.0035,          -- radians a pixel (the FREE view's)
+  hz = { yaw = 0.0, pitch = 0.35, dir = nil, key = nil },
+  ball = { f = nil, u = nil, wa = 0.0, wb = 0.0, key = nil },
+  fol = { yaw = 0.0, pitch = 0.32, f = nil, key = nil, vel = false },
+  blend = nil,
+  last = nil,             -- last frame's pose: { b = anchor name, ex,ey,ez (from its centre), f = {}, u = {} }
+  sub = nil,              -- FOLLOW's frame this frame: "VELOCITY" | "SURFACE"
+  R = nil,                -- the anchor world's radius last frame (HORIZON's walk)
+  loaded = false,
+}
+local function v3n(x, y, z)
+  local l = math.sqrt(x * x + y * y + z * z)
+  if l < 1e-12 then return 0, 0, 0, 0 end
+  return x / l, y / l, z / l, l
+end
+CAMM.norm = v3n
+-- v turned by `a` radians about the unit axis k (Rodrigues)
+function CAMM.rot(vx, vy, vz, kx, ky, kz, a)
+  local c, s = math.cos(a), math.sin(a)
+  local cx, cy, cz = ky * vz - kz * vy, kz * vx - kx * vz, kx * vy - ky * vx
+  local d = (kx * vx + ky * vy + kz * vz) * (1 - c)
+  return vx * c + cx * s + kx * d, vy * c + cy * s + ky * d, vz * c + cz * s + kz * d
+end
+-- North and east on the tangent plane at up U (north toward the world's +Y,
+-- toward +Z at a pole)
+function CAMM.tangent(ux, uy, uz)
+  local rx, ry, rz = 0, 1, 0
+  if math.abs(uy) > 0.985 then rx, ry, rz = 0, 0, 1 end
+  local d = rx * ux + ry * uy + rz * uz
+  local nx, ny, nz = v3n(rx - ux * d, ry - uy * d, rz - uz * d)
+  local ex, ey, ez = ny * uz - nz * uy, nz * ux - nx * uz, nx * uy - ny * ux
+  return nx, ny, nz, ex, ey, ez
+end
+-- a direction's heading on the tangent plane at U (radians from north)
+function CAMM.heading(fx, fy, fz, ux, uy, uz)
+  local nx, ny, nz, ex, ey, ez = CAMM.tangent(ux, uy, uz)
+  return math.atan2(fx * ex + fy * ey + fz * ez, fx * nx + fy * ny + fz * nz)
+end
+-- HORIZON's pose round look point L with up U → eye, forward, up
+function CAMM.horizonPose(lx, ly, lz, ux, uy, uz, yaw, pitch, dist)
+  local nx, ny, nz, ex, ey, ez = CAMM.tangent(ux, uy, uz)
+  local cy, sy = math.cos(yaw), math.sin(yaw)
+  local hx, hy, hz = nx * cy + ex * sy, ny * cy + ey * sy, nz * cy + ez * sy
+  local cp, sp = math.cos(pitch), math.sin(pitch)
+  local dx, dy, dz = -hx * cp + ux * sp, -hy * cp + uy * sp, -hz * cp + uz * sp
+  local qx, qy, qz = CAMM.square(-dx, -dy, -dz, ux, uy, uz)
+  return lx + dx * dist, ly + dy * dist, lz + dz * dist, -dx, -dy, -dz, qx, qy, qz
+end
+-- up made square to forward (a fallback when they line up)
+function CAMM.square(fx, fy, fz, ux, uy, uz)
+  local d = fx * ux + fy * uy + fz * uz
+  local qx, qy, qz, l = v3n(ux - fx * d, uy - fy * d, uz - fz * d)
+  if l < 1e-4 then
+    local ax, ay, az = 0, 1, 0
+    if math.abs(fy) > 0.9 then ax, ay, az = 1, 0, 0 end
+    d = fx * ax + fy * ay + fz * az
+    qx, qy, qz = v3n(ax - fx * d, ay - fy * d, az - fz * d)
+  end
+  return qx, qy, qz
+end
+-- ORBIT BALL: the drag turns the view's basis (f forward, u up; right = f × u).
+-- Dragging right moves the ball's near face right (the eye goes left);
+-- dragging down moves it down (the eye goes up). a, b in radians.
+function CAMM.ballTurn(f, u, a, b)
+  local fx, fy, fz = f[1], f[2], f[3]
+  local ux, uy, uz = u[1], u[2], u[3]
+  if a ~= 0 then fx, fy, fz = CAMM.rot(fx, fy, fz, ux, uy, uz, -a) end
+  if b ~= 0 then
+    local rx, ry, rz = v3n(fy * uz - fz * uy, fz * ux - fx * uz, fx * uy - fy * ux)
+    fx, fy, fz = CAMM.rot(fx, fy, fz, rx, ry, rz, -b)
+    ux, uy, uz = CAMM.rot(ux, uy, uz, rx, ry, rz, -b)
+  end
+  fx, fy, fz = v3n(fx, fy, fz)
+  ux, uy, uz = CAMM.square(fx, fy, fz, ux, uy, uz)
+  return { fx, fy, fz }, { ux, uy, uz }
+end
+-- FOLLOW's frame from the focus's place r and velocity v relative to its
+-- world: VELOCITY (ahead along v, up radial) from 3 m/s, SURFACE (the last
+-- forward laid flat, else north) under 1.5 m/s, the one it was between.
+function CAMM.followFrame(rx, ry, rz, vx, vy, vz, prevF, wasVel)
+  local ux, uy, uz = v3n(rx, ry, rz)
+  if ux == 0 and uy == 0 and uz == 0 then ux, uy, uz = 0, 1, 0 end
+  local sp = math.sqrt(vx * vx + vy * vy + vz * vz)
+  local vel = sp > (wasVel and 1.5 or 3.0)
+  local fx, fy, fz
+  if vel then
+    fx, fy, fz = vx / sp, vy / sp, vz / sp
+  else
+    local px, py, pz = 0, 0, 0
+    if prevF then px, py, pz = prevF[1], prevF[2], prevF[3] end
+    local d = px * ux + py * uy + pz * uz
+    local l
+    fx, fy, fz, l = v3n(px - ux * d, py - uy * d, pz - uz * d)
+    if l < 1e-3 then fx, fy, fz = CAMM.tangent(ux, uy, uz) end
+  end
+  local qx, qy, qz = CAMM.square(fx, fy, fz, ux, uy, uz)
+  return fx, fy, fz, qx, qy, qz, vel
+end
+-- the blend's eye from a to c (both from the anchor's centre), s in 0..1:
+-- the direction slerped, the distance eased in log space
+function CAMM.blendEye(ax, ay, az, cx, cy, cz, s)
+  local adx, ady, adz, ra = v3n(ax, ay, az)
+  local cdx, cdy, cdz, rc = v3n(cx, cy, cz)
+  if ra < 1e-6 or rc < 1e-6 then return ax + (cx - ax) * s, ay + (cy - ay) * s, az + (cz - az) * s end
+  local d = math.max(-1, math.min(1, adx * cdx + ady * cdy + adz * cdz))
+  local w = math.acos(d)
+  local dx, dy, dz = adx, ady, adz
+  if w > 1e-4 and math.sin(w) > 1e-3 then
+    local k1, k2 = math.sin((1 - s) * w) / math.sin(w), math.sin(s * w) / math.sin(w)
+    dx, dy, dz = v3n(adx * k1 + cdx * k2, ady * k1 + cdy * k2, adz * k1 + cdz * k2)
+  elseif w > 1e-4 then
+    -- (opposite sides: round by any square direction, never through)
+    local px, py, pz = CAMM.square(adx, ady, adz, 0, 1, 0)
+    local a = w * s
+    dx, dy, dz = adx * math.cos(a) + px * math.sin(a), ady * math.cos(a) + py * math.sin(a), adz * math.cos(a) + pz * math.sin(a)
+  end
+  local r = math.exp(math.log(ra) + (math.log(rc) - math.log(ra)) * s)
+  return dx * r, dy * r, dz * r
+end
+function CAMM.smooth(s) s = math.max(0, math.min(1, s)); return s * s * (3 - 2 * s) end
+-- two unit directions mixed and renormalised (b where they cancel)
+local function nlerp(a, b, s)
+  local x, y, z, l = v3n(a[1] + (b[1] - a[1]) * s, a[2] + (b[2] - a[2]) * s, a[3] + (b[3] - a[3]) * s)
+  if l < 1e-4 then return b[1], b[2], b[3] end
+  return x, y, z
+end
+CAMM.nlerp = nlerp
+-- the closest the zoom may come: a world seen from its ground in HORIZON comes
+-- to 30 m off the point, a followed craft to 12 m; otherwise as before
+function CAMM.zmin(fradius, isBody)
+  if CAMM.mode == "horizon" and isBody then return 30 end
+  if CAMM.mode == "follow" and not isBody then return 12 end
+  return fradius * 1.6
+end
+function CAMM.set(m, why)
+  local ok = false
+  for _, k in ipairs(CAMM.ORDER) do if k == m then ok = true end end
+  if not ok then return false end
+  if m == CAMM.mode then return true end
+  CAMM.startBlend()
+  CAMM.mode = m
+  CAMM.hz.key, CAMM.ball.key, CAMM.fol.key = nil, nil, nil   -- (each mode starts from the view it inherits)
+  CAMM.ball.wa, CAMM.ball.wb = 0, 0
+  if why ~= "load" then
+    local sg = findScript and findScript("settings")
+    if sg and sg.set then pcall(sg.set, "map_cam", m) end
+  end
+  return true
+end
+function CAMM.startBlend()
+  local L = CAMM.last
+  if L then CAMM.blend = { t = 0, b = L.b, ex = L.ex, ey = L.ey, ez = L.ez, f = L.f, u = L.u } end
+end
+function CAMM.cycle()
+  for i, k in ipairs(CAMM.ORDER) do
+    if k == CAMM.mode then return CAMM.set(CAMM.ORDER[i % #CAMM.ORDER + 1]) end
+  end
+  return CAMM.set("free")
+end
+-- (the remembered mode, read once the settings are up)
+function CAMM.load()
+  if CAMM.loaded then return end
+  local sg = findScript and findScript("settings")
+  if not (sg and sg.get) then return end
+  CAMM.loaded = true
+  local ok, m = pcall(sg.get, "map_cam")
+  if ok and type(m) == "string" then CAMM.set(m, "load") end
+  CAMM.blend = nil
+end
+function CAMM.label()
+  local n = CAMM.NAME[CAMM.mode] or "FREE"
+  if CAMM.mode == "follow" and CAMM.sub then n = n .. " · " .. CAMM.sub end
+  return n
+end
+-- the mouse in a mode other than FREE (dx, dy pixels; Ctrl walks HORIZON's point)
+function CAMM.drag(mdx, mdy, pan, dt)
+  local m = CAMM.mode
+  local k = CAMM.DRAG
+  if m == "horizon" then
+    local H = CAMM.hz
+    local R = CAMM.R
+    if pan and H.dir and R and R > 0 and map_zoom then
+      -- the ground follows the hand: an arc as long as the drag at this distance
+      local u = H.dir
+      local nx, ny, nz, ex, ey, ez = CAMM.tangent(u[1], u[2], u[3])
+      local cy, sy = math.cos(H.yaw), math.sin(H.yaw)
+      local hx, hy, hz = nx * cy + ex * sy, ny * cy + ey * sy, nz * cy + ez * sy
+      local rx, ry, rz = v3n(hy * u[3] - hz * u[2], hz * u[1] - hx * u[3], hx * u[2] - hy * u[1])
+      local s = map_zoom * 0.0016 / R
+      local h0 = H.yaw - CAMM.heading(hx, hy, hz, u[1], u[2], u[3])
+      local dx, dy, dz = CAMM.rot(u[1], u[2], u[3], hx, hy, hz, -mdx * s)
+      dx, dy, dz = CAMM.rot(dx, dy, dz, rx, ry, rz, -mdy * s)
+      dx, dy, dz = v3n(dx, dy, dz)
+      -- (the heading carried: the old heading's direction, laid on the new ground)
+      local d = hx * dx + hy * dy + hz * dz
+      local fx, fy, fz, l = v3n(hx - dx * d, hy - dy * d, hz - dz * d)
+      if l > 1e-4 then H.yaw = CAMM.heading(fx, fy, fz, dx, dy, dz) + h0 end
+      H.dir = { dx, dy, dz }
+    else
+      H.yaw = H.yaw + mdx * k
+      H.pitch = math.max(0.06, math.min(1.48, H.pitch - mdy * k))   -- (as FREE: drag down, the eye goes down)
+    end
+  elseif m == "ball" then
+    local B = CAMM.ball
+    if B.f then
+      local a, b = mdx * k, mdy * k
+      B.f, B.u = CAMM.ballTurn(B.f, B.u, a, b)
+      if dt and dt > 0 then
+        local kk = 1 - math.exp(-20 * dt)
+        B.wa = B.wa + (a / dt - B.wa) * kk
+        B.wb = B.wb + (b / dt - B.wb) * kk
+      end
+    end
+  elseif m == "follow" then
+    local F = CAMM.fol
+    F.yaw = F.yaw - mdx * k
+    F.pitch = math.max(-1.3, math.min(1.45, F.pitch - mdy * k))
+  end
+end
+-- the ball's flick: it keeps turning after the hand lets go, slowing in ~1 s
+function CAMM.coast(dt, held, moved)
+  local B = CAMM.ball
+  if CAMM.mode ~= "ball" or not B.f then return end
+  if held then
+    -- (a hand held still stops it)
+    if not moved and dt > 0 then local kk = math.exp(-12 * dt); B.wa, B.wb = B.wa * kk, B.wb * kk end
+    return
+  end
+  if math.abs(B.wa) + math.abs(B.wb) < 1e-3 then B.wa, B.wb = 0, 0 return end
+  B.f, B.u = CAMM.ballTurn(B.f, B.u, B.wa * dt, B.wb * dt)
+  local kk = math.exp(-2.5 * dt)
+  B.wa, B.wb = B.wa * kk, B.wb * kk
+end
+local function body_named(bodies, name)
+  for i, b in ipairs(bodies) do if b.name == name then return b, i end end
+  return nil
+end
+-- The view for this frame: sets the camera node's place and facing.
+--   focus   this frame's look point (the focused world, or the craft/you)
+--   isBody  the focus is a world (map_focus > 1)
+--   subj    the subject's kinematics (x,y,z, vx,vy,vz relative to its world)
+--   free    FREE's pose: eye (ex,ey,ez) and its direction from the look point
+function CAMM.place(cam, focus, fname, fradius, isBody, subj, bodies, dt, fex, fey, fez, fdx, fdy, fdz)
+  local m = CAMM.mode
+  local an = isBody and fname or (space.dominant and space.dominant(focus.x, focus.y, focus.z))
+  local B, bi = body_named(bodies, an)
+  -- FREE's own pose (what the map always drew)
+  local ex, ey, ez = fex, fey, fez
+  local fx, fy, fz = -fdx, -fdy, -fdz
+  local ux, uy, uz = CAMM.square(fx, fy, fz, 0, 1, 0)
+  local key = (isBody and "b:" or "f:") .. tostring(fname)
+  -- (the view this one inherits: last frame's, else FREE's)
+  local L = CAMM.last
+  local pf = (L and L.f) or { fx, fy, fz }
+  local pu = (L and L.u) or { ux, uy, uz }
+  local pex, pey, pez = ex, ey, ez
+  if L and B and L.b == B.name then pex, pey, pez = B.x + L.ex, B.y + L.ey, B.z + L.ez end
+  CAMM.sub = nil
+  if B and m ~= "free" then
+    CAMM.R = B.radius
+    local fresh = false
+    if m == "horizon" then
+      local H = CAMM.hz
+      local lx, ly, lz, Ux, Uy, Uz
+      if H.key ~= key then
+        fresh = true
+        H.key = key
+        -- (low over the ground, looking along it to the curve of the horizon)
+        H.pitch = isBody and 0.15 or 0.2
+        if isBody then
+          local _, _, _, l0 = v3n(pex - B.x, pey - B.y, pez - B.z)
+          local dx, dy, dz = v3n(pex - B.x, pey - B.y, pez - B.z)
+          if l0 < 1e-6 then dx, dy, dz = 0, 1, 0 end
+          H.dir = { dx, dy, dz }
+          zoom_target = math.max(60, B.radius * 0.3)
+        else
+          H.dir = nil
+          zoom_target = 250
+        end
+        map_zoom = zoom_target
+      end
+      if isBody then
+        Ux, Uy, Uz = H.dir[1], H.dir[2], H.dir[3]
+        local r = B.radius + math.max(4, B.radius * 0.01)
+        lx, ly, lz = B.x + Ux * r, B.y + Uy * r, B.z + Uz * r
+      else
+        lx, ly, lz = focus.x, focus.y, focus.z
+        Ux, Uy, Uz = v3n(focus.x - B.x, focus.y - B.y, focus.z - B.z)
+        if Ux == 0 and Uy == 0 and Uz == 0 then Ux, Uy, Uz = 0, 1, 0 end
+      end
+      if fresh then H.yaw = CAMM.heading(pf[1], pf[2], pf[3], Ux, Uy, Uz) end
+      ex, ey, ez, fx, fy, fz, ux, uy, uz = CAMM.horizonPose(lx, ly, lz, Ux, Uy, Uz, H.yaw, H.pitch, map_zoom)
+    elseif m == "ball" then
+      local Bl = CAMM.ball
+      if Bl.key ~= key or not Bl.f then
+        fresh = true
+        Bl.key = key
+        local dx, dy, dz, l = v3n(focus.x - pex, focus.y - pey, focus.z - pez)
+        if l < 1e-6 then dx, dy, dz = pf[1], pf[2], pf[3] end
+        Bl.f = { dx, dy, dz }
+        Bl.u = { CAMM.square(dx, dy, dz, pu[1], pu[2], pu[3]) }
+        Bl.wa, Bl.wb = 0, 0
+        -- (from a view of this same world: keep the eye's distance from its
+        -- centre, never closer than the zoom allows)
+        local z = (L and L.b == B.name) and l or (map_zoom or l)
+        z = math.max(z, fradius * 1.6)
+        if L and L.b == B.name then zoom_target = z end
+        map_zoom = z
+      end
+      fx, fy, fz = Bl.f[1], Bl.f[2], Bl.f[3]
+      ux, uy, uz = Bl.u[1], Bl.u[2], Bl.u[3]
+      ex, ey, ez = focus.x - fx * map_zoom, focus.y - fy * map_zoom, focus.z - fz * map_zoom
+    elseif m == "follow" then
+      local F = CAMM.fol
+      -- its place and velocity relative to its world (a world: to its parent)
+      local rx, ry, rz, vx, vy, vz = 0, 1, 0, 0, 0, 0
+      if isBody then
+        local pi = bi and parentsNow(bodies)[bi]
+        local P = pi and bodies[pi]
+        if P then rx, ry, rz, vx, vy, vz = B.x - P.x, B.y - P.y, B.z - P.z, B.vx - P.vx, B.vy - P.vy, B.vz - P.vz end
+      else
+        rx, ry, rz = focus.x - B.x, focus.y - B.y, focus.z - B.z
+        if subj then vx, vy, vz = subj.vx or 0, subj.vy or 0, subj.vz or 0 end
+      end
+      local tfx, tfy, tfz, _, _, _, vel = CAMM.followFrame(rx, ry, rz, vx, vy, vz, F.f, F.vel)
+      F.vel = vel
+      if F.key ~= key or not F.f then
+        fresh = true
+        F.key, F.f, F.yaw, F.pitch = key, { tfx, tfy, tfz }, 0.0, 0.32
+        zoom_target = isBody and math.max(fradius * 4, 80) or 80
+        map_zoom = zoom_target
+      else
+        -- (rule 7: the facing eased, a direction, never a point)
+        local k = 1 - math.exp(-4 * dt)
+        F.f = { nlerp(F.f, { tfx, tfy, tfz }, k) }
+      end
+      CAMM.sub = vel and "VELOCITY" or "SURFACE"
+      local Rx, Ry, Rz = v3n(rx, ry, rz)
+      if Rx == 0 and Ry == 0 and Rz == 0 then Rx, Ry, Rz = 0, 1, 0 end
+      local Ux, Uy, Uz = CAMM.square(F.f[1], F.f[2], F.f[3], Rx, Ry, Rz)
+      local bx, by, bz = CAMM.rot(-F.f[1], -F.f[2], -F.f[3], Ux, Uy, Uz, F.yaw)
+      local cp, sp = math.cos(F.pitch), math.sin(F.pitch)
+      local dx, dy, dz = v3n(bx * cp + Ux * sp, by * cp + Uy * sp, bz * cp + Uz * sp)
+      ex, ey, ez = focus.x + dx * map_zoom, focus.y + dy * map_zoom, focus.z + dz * map_zoom
+      fx, fy, fz = -dx, -dy, -dz
+      ux, uy, uz = CAMM.square(fx, fy, fz, Ux, Uy, Uz)
+    end
+    if fresh and L and not CAMM.blend then CAMM.startBlend() end
+  end
+  -- the blend from the last view (a mode or focus change)
+  local Bd = CAMM.blend
+  local blending = false
+  if Bd then
+    local A = body_named(bodies, Bd.b)
+    Bd.t = Bd.t + (dt or 0)
+    if not A or Bd.t >= CAMM.BLEND then
+      CAMM.blend = nil
+    else
+      blending = true
+      local s = CAMM.smooth(Bd.t / CAMM.BLEND)
+      local rx, ry, rz = CAMM.blendEye(Bd.ex, Bd.ey, Bd.ez, ex - A.x, ey - A.y, ez - A.z, s)
+      ex, ey, ez = A.x + rx, A.y + ry, A.z + rz
+      fx, fy, fz = nlerp(Bd.f, { fx, fy, fz }, s)
+      local qx, qy, qz = nlerp(Bd.u, { ux, uy, uz }, s)
+      ux, uy, uz = CAMM.square(fx, fy, fz, qx, qy, qz)
+    end
+  end
+  cam.x, cam.y, cam.z = ex, ey, ez
+  if m == "free" and not blending then
+    -- (exactly the map's old facing)
+    cam.yaw = math.atan2(fdx, fdz)
+    cam.pitch = -math.asin(math.max(-1, math.min(1, fdy)))
+    cam.roll = 0
+  elseif lookRotation then
+    cam.yaw, cam.pitch, cam.roll = lookRotation(vec3(fx, fy, fz), vec3(ux, uy, uz))
+  end
+  if B then CAMM.last = { b = B.name, ex = ex - B.x, ey = ey - B.y, ez = ez - B.z, f = { fx, fy, fz }, u = { ux, uy, uz } } end
+  return ex, ey, ez
+end
+-- (the map opens on a fresh view: nothing to blend from)
+function CAMM.reset()
+  CAMM.last, CAMM.blend = nil, nil
+  CAMM.hz.key, CAMM.ball.key, CAMM.fol.key = nil, nil, nil
+  CAMM.ball.wa, CAMM.ball.wb = 0, 0
+end
+
 local function update_map3d(node, dt)
   if not map_view then return end
   soi_off = nil
@@ -1392,6 +1831,7 @@ local function update_map3d(node, dt)
     if input.pressed("2") then map_show.soi = not map_show.soi end
     if input.pressed("3") then map_show.markers = not map_show.markers end
     if input.pressed("4") then map_show.links = not map_show.links end
+    if input.pressed("v") then CAMM.cycle() end
   end
 
   -- Focusing a body (TAB) used to stream ITS real terrain in (terrain.warm),
@@ -1487,7 +1927,11 @@ local function update_map3d(node, dt)
   input.setMouseLocked(dragging)
   local cp, sp2 = math.cos(map_pitch2), math.sin(map_pitch2)
   local cy3, sy3 = math.cos(map_yaw2), math.sin(map_yaw2)
-  if dragging then
+  if dragging and CAMM.mode ~= "free" then
+    local mdx, mdy = input.mouse_delta()
+    CAMM.drag(mdx, mdy, input.key("ctrl"), dt)
+    CAMM.coast(dt, true, mdx ~= 0 or mdy ~= 0)
+  elseif dragging then
     local mdx, mdy = input.mouse_delta()
     if input.key("ctrl") then
       -- Pan: move the offset along the camera's right/up axes, scaled by zoom.
@@ -1506,26 +1950,24 @@ local function update_map3d(node, dt)
       cy3, sy3 = math.cos(map_yaw2), math.sin(map_yaw2)
     end
   end
+  if not dragging then CAMM.coast(dt, false) end
   local sc = input.scroll()
   -- (the wheel over the node's gizmo is the node's: mnvFrame, GZ.hot)
   local st_busy = mode == "station" and ST.ts and ST.ts.valid ~= false and ST.ts.ownsPointer and ST.ts.ownsPointer()
   if sc and sc ~= 0 and not GZ.hot and not st_busy then zoom_target = zoom_target * math.exp(-sc * 0.12) end
   if input.key("up") then zoom_target = zoom_target * math.exp(-1.5 * dt) end
   if input.key("down") then zoom_target = zoom_target * math.exp(1.5 * dt) end
-  zoom_target = math.max(fradius * 1.6, math.min(zoom_target, zoom_max()))
+  zoom_target = math.max(CAMM.zmin(fradius, map_focus > 1), math.min(zoom_target, zoom_max()))
   local lz0 = math.log(map_zoom)
   map_zoom = math.exp(lz0 + (math.log(zoom_target) - lz0) * (1 - math.exp(-12 * dt)))
   if cam_node then
+    -- FREE's pose, and the camera mode's view from it (CAMM.place)
     local dx3, dy3, dz3 = cp * sy3, sp2, cp * cy3
     local lx = focus.x + map_offx
     local ly = focus.y + map_offy
     local lz = focus.z + map_offz
-    cam_node.x = lx + dx3 * map_zoom
-    cam_node.y = ly + dy3 * map_zoom
-    cam_node.z = lz + dz3 * map_zoom
-    cam_node.yaw = math.atan2(dx3, dz3)
-    cam_node.pitch = -map_pitch2
-    cam_node.roll = 0
+    CAMM.place(cam_node, CAMM.mode == "free" and { x = lx, y = ly, z = lz } or focus, fname, fradius, map_focus > 1, node, bodies, dt,
+      lx + dx3 * map_zoom, ly + dy3 * map_zoom, lz + dz3 * map_zoom, dx3, dy3, dz3)
   end
 
   -- Everything below is sized and culled on SCREEN: a marker is so many
@@ -1542,9 +1984,7 @@ local function update_map3d(node, dt)
   -- Screen pixels per world unit at a distance.
   local function ppu(d) return sh / (2 * TANH * d) end
 
-  if #bodies ~= pidx_n or time - pidx_t > 1.0 then
-    map_pidx, pidx_n, pidx_t = parent_indices(bodies), #bodies, time
-  end
+  map_pidx = parentsNow(bodies)
   -- The SOI rings worth seeing: the ones the subject is inside, and the focus.
   local ring_for = {}
   local dn0 = space.dominant(node.x, node.y, node.z)
@@ -1563,7 +2003,7 @@ local function update_map3d(node, dt)
   -- button top-right. A label that lands under either is skipped — a far
   -- system's name used to float in the middle of the legend.
   local blocked = {}
-  for _, nm in ipairs({ "HUD Panel", "Menu Btn" }) do
+  for _, nm in ipairs({ "HUD Panel", "Menu Btn", "Map View Key" }) do
     local n = find(nm)
     if n and n.uiRect then
       local x, y, w, h = n:uiRect()
@@ -1712,7 +2152,7 @@ local function update_map3d(node, dt)
   -- another body's sphere of influence.
   local oe = db and space.elements(node.x, node.y, node.z, node.vx, node.vy, node.vz)
   if craft_flying and db and not node.grounded then
-    local pidx = parent_indices(bodies)
+    local pidx = map_pidx   -- (this frame's: refreshed above when the list changed)
     local vref = math.sqrt(node.vx ^ 2 + node.vy ^ 2 + node.vz ^ 2)
     local dvrate = math.max(0.5, vref * 0.12)
     MNV.lastPeriod = oe and oe.period or nil
@@ -1839,7 +2279,10 @@ local function update_map3d(node, dt)
     local focus_name = map_focus == 1 and (craft_flying and "your craft" or "you") or fname
     local mode = planning and "PLANNING A BURN" or (craft_flying and "FLYING" or "ORBIT MAP")
     lines[1] = string.format("%s  —  centred on %s", mode, focus_name)
-    lines[2] = "Right-drag  turn   ·   Ctrl + right-drag  pan   ·   Scroll  zoom   ·   Tab  next world   ·   M  close"
+    lines[2] = CAMM.mode == "free" and "Right-drag  turn   ·   Ctrl + right-drag  pan   ·   Scroll  zoom   ·   Tab  next world   ·   V  view   ·   M  close"
+      or CAMM.mode == "horizon" and "Right-drag  look round   ·   Ctrl + right-drag  walk the point   ·   Scroll  zoom   ·   Tab  next world   ·   V  view   ·   M  close"
+      or CAMM.mode == "ball" and "Right-drag  spin the world (flick it)   ·   Scroll  zoom   ·   Tab  next world   ·   V  view   ·   M  close"
+      or "Right-drag  look round   ·   Scroll  zoom   ·   Tab  next world   ·   V  view   ·   M  close"
     if map_focus > 1 then
       local b = bodies[map_focus - 1]
       local dx4, dy4, dz4 = node.x - b.x, node.y - b.y, node.z - b.z
@@ -2260,6 +2703,14 @@ local function map_coverage(net, px_at)
   local spot = (b.radius or 100) * math.sqrt(4 * math.pi / math.max(1, n)) * 0.28
   local was = draw.depthTest()
   draw.depthTest(true)
+  -- (seen from close to the ground, a HORIZON or FOLLOW view, the tint thins
+  -- to a quarter so the ground under it reads; whole from a third of a
+  -- radius up)
+  local fa = 1
+  if cam_node then
+    local cd = math.sqrt((cam_node.x - b.x) ^ 2 + (cam_node.y - b.y) ^ 2 + (cam_node.z - b.z) ^ 2) - (b.radius or 100)
+    fa = math.max(0.25, math.min(1, cd / ((b.radius or 100) * 0.35)))
+  end
   local held = g.held
   local gap = g.gaps and g.gaps.clusters and g.gaps.clusters[1]
   local in_gap = {}
@@ -2269,16 +2720,16 @@ local function map_coverage(net, px_at)
     local x, y, z = b.x + u[1] * r, b.y + u[2] * r, b.z + u[3] * r
     local c = g.cov[i]
     if c == 2 then
-      draw.disc(x, y, z, u[1], u[2], u[3], 0, spot, 0.25, 0.95, 0.78, 0.55)
+      draw.disc(x, y, z, u[1], u[2], u[3], 0, spot, 0.25, 0.95, 0.78, 0.55 * fa)
     elseif c == 1 then
-      draw.disc(x, y, z, u[1], u[2], u[3], 0, spot, 0.35, 0.62, 1.0, 0.5)
+      draw.disc(x, y, z, u[1], u[2], u[3], 0, spot, 0.35, 0.62, 1.0, 0.5 * fa)
     else
-      draw.disc(x, y, z, u[1], u[2], u[3], 0, spot * 0.45, 1.0, 0.35, 0.3, 0.35)
+      draw.disc(x, y, z, u[1], u[2], u[3], 0, spot * 0.45, 1.0, 0.35, 0.3, 0.35 * fa)
     end
     if held and held[i] then
-      draw.disc(x, y, z, u[1], u[2], u[3], spot * 1.12, spot * 1.32, 1.0, 0.86, 0.45, 0.8)
+      draw.disc(x, y, z, u[1], u[2], u[3], spot * 1.12, spot * 1.32, 1.0, 0.86, 0.45, 0.8 * fa)
     elseif in_gap[i] then
-      draw.disc(x, y, z, u[1], u[2], u[3], spot * 1.12, spot * 1.32, 1.0, 0.62, 0.18, 0.75)
+      draw.disc(x, y, z, u[1], u[2], u[3], spot * 1.12, spot * 1.32, 1.0, 0.62, 0.18, 0.75 * fa)
     end
   end
   -- the biggest gap's centre: a ring the size of the patch and a cross
@@ -2287,7 +2738,7 @@ local function map_coverage(net, px_at)
     local ux, uy, uz = gap.x, gap.y, gap.z
     local ang = math.acos(math.max(-1, 1 - 2 * gap.n / math.max(1, n)))
     local cx, cy, cz = b.x + ux * R * math.cos(ang), b.y + uy * R * math.cos(ang), b.z + uz * R * math.cos(ang)
-    draw.ring(cx, cy, cz, ux, uy, uz, R * math.sin(ang), 1.0, 0.62, 0.18, 0.9)
+    draw.ring(cx, cy, cz, ux, uy, uz, R * math.sin(ang), 1.0, 0.62, 0.18, 0.9 * fa)
     local px, py, pz = b.x + ux * R, b.y + uy * R, b.z + uz * R
     local s = spot * 1.6
     -- two strokes across the ground at the centre
@@ -2646,6 +3097,24 @@ function focusNode(n)
   map_offx, map_offy, map_offz = 0.0, 0.0, 0.0
 end
 
+-- Focus a world by name, as TAB would land on it (probes, the Tracking
+-- Station); false when no such world is in the list.
+function focusBody(name)
+  for i, b in ipairs(space.bodies() or {}) do
+    if b.name == name then
+      if not map_view then toggle() end
+      ST.fn, focus_override = nil, nil
+      map_focus = i + 1
+      zoom_target = nil
+      map_offx, map_offy, map_offz = 0.0, 0.0, 0.0
+      return true
+    end
+  end
+  return false
+end
+function camMode() return CAMM.mode, CAMM.label() end
+function setCamMode(m) return CAMM.set(m) end
+
 -- THE STATION (F2, the pause menu, the dish): the map in STATION mode,
 -- opened if it is shut. setMode swaps the density with the map up.
 function openStation()
@@ -2684,6 +3153,8 @@ function toggle()
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
   map_view = not map_view
   map_zoom, zoom_target = nil, nil -- re-fit to the focus every time it opens
+  CAMM.load()
+  CAMM.reset()
   map_focus = 1    -- always open on yourself
   map_offx, map_offy, map_offz = 0.0, 0.0, 0.0
   map_diag = false -- each opening may report one subject anomaly
@@ -2711,6 +3182,45 @@ function toggle()
   end
 end
 
+-- THE VIEW KEY (prefabs/MapViewKey): under the menu button while the chart is
+-- up, the camera mode in force on a grey key; a click cycles it as V does.
+-- Described again only when its legend changes.
+VK = { node = nil, making = false, text = nil, shown = nil }
+function viewKeyTick()
+  local want = map_view and mode == "chart" and not cineHidden()
+  local n = VK.node
+  if not (n and n.valid ~= false) then
+    VK.node, VK.text, VK.shown = nil, nil, nil
+    if not want or VK.making or not spawn then return end
+    local hud_ = find and find("Ship HUD")
+    if not hud_ then return end
+    VK.making = true
+    pcall(spawn, "MapViewKey", vec3(0, 0, 0), function(nn)
+      VK.making = false
+      VK.node = nn
+    end, hud_)
+    return
+  end
+  if VK.shown ~= want then
+    local el = n:getcomponent("UiElement")
+    if el then el.visible = want end
+    VK.shown = want
+  end
+  if not want then return end
+  local text = "VIEW  ·  " .. CAMM.label() .. "  ·  V"
+  if text ~= VK.text and ui and ui.make then
+    VK.text = text
+    ui.make(n, { "button", key = "viewkey", style = "hud/button", w = 200, h = 28, text = text, textAlign = "center",
+      textValign = "center", maxLines = 1, overflow = "ellipsis",
+      tooltip = "The map's camera: FREE · HORIZON (level with the ground) · ORBIT BALL (spin it) · FOLLOW (V)",
+      onClicked = function()
+        local fx = findScript and findScript("sfx")
+        if fx and fx.play then pcall(fx.play, "click") end
+        CAMM.cycle()
+      end })
+  end
+end
+
 escTakenAt = -1
 function start(_)
   map_view = false
@@ -2730,6 +3240,7 @@ function lateUpdate(node, dt)
   -- warp to node runs with the map shut too (the flight readout's WARP key)
   warpDrive(dt)
   mnvRegister()
+  viewKeyTick()
   -- (a name being typed into the station's field is not a key press)
   local ts = mode == "station" and map_view and STATION_REF() or nil
   local typing = ts and ts.typing and ts.typing() or false

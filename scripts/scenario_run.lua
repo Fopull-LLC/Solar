@@ -1919,10 +1919,48 @@ local function base_ctx(b)
   if sun then local dx, dy, dz = sun.x - b.x, sun.y - b.y, sun.z - b.z; local m = math.sqrt(dx * dx + dy * dy + dz * dz); sd = { x = dx / m, y = dy / m, z = dz / m } end
   -- nothing built at a spot: a ray down from 40 m over it (and 8 m round
   -- it) meets the ground, not a roof, a tank or a wall (the body read now)
+  -- (perfmap 2026-11-11) the siting search asks this hundreds of times, five
+  -- rays each, and a ray over ground still streaming costs milliseconds: a
+  -- spawn beat in play (Dust Season's Beck at far_flat) ran 30-50 ms frames.
+  -- Staging and spawn jobs are coroutines, so the search gives the frame back
+  -- after 2 ms of rays in play, 8 behind the curtain (the body is read again each ray: rule 1).
+  local ray_t0 = wall()
+  local gm_ = ref("game_manager")
+  local ray_ms = (gm_ and gm_.curtain) and 8.0 or 2.0   -- (behind the curtain nobody sees the frame)
+  -- (and one ray over far ground was measured at 14-29 ms by itself: no ray
+  -- at all where nothing is built within 80 m. What is built, body-relative,
+  -- read once: the structures on this world and the craft on it.)
+  local built = {}
+  do
+    local STr = ref("structures")
+    for _, rec in ipairs((STr and STr.list) and STr.list() or {}) do
+      if rec.b == b.name and rec.x then built[#built + 1] = { rec.x, rec.y, rec.z } end
+    end
+    local bb0 = space.body(b.name) or b
+    for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+      local n = v.node
+      if n and n.valid ~= false then built[#built + 1] = { n.x - bb0.x, n.y - bb0.y, n.z - bb0.z } end
+    end
+    -- (the spaceport's buildings, runway and pads: half a kilometre round it)
+    local bf = ref("base_facilities")
+    if bf and bf.baseBody == b.name and bf.baseX then built[#built + 1] = { bf.baseX - bb0.x, bf.baseY - bb0.y, bf.baseZ - bb0.z, 500 } end
+  end
+  local function near_built(px, py, pz)
+    for _, q in ipairs(built) do
+      local rr = q[4] or 80
+      if (q[1] - px) ^ 2 + (q[2] - py) ^ 2 + (q[3] - pz) ^ 2 < rr * rr then return true end
+    end
+    return false
+  end
   local function clear(dir, r)
     if not raycast then return true end
+    if not near_built(dir.x * r, dir.y * r, dir.z * r) then return true end
     local F = rulebook().groundFrame(dir.x, dir.y, dir.z)
     for _, o in ipairs({ { 0, 0 }, { 8, 0 }, { -8, 0 }, { 0, 8 }, { 0, -8 } }) do
+      if (wall() - ray_t0) * 1000 > ray_ms and coroutine.isyieldable and coroutine.isyieldable() then
+        coroutine.yield()
+        ray_t0 = wall()
+      end
       local bb = space.body(b.name) or b
       local px = dir.x * r + F.rx * o[1] + F.fx * o[2]
       local py = dir.y * r + F.ry * o[1] + F.fy * o[2]
@@ -1954,8 +1992,9 @@ local function base_ctx(b)
   local gq = 0
   local function ground(dir)
     gq = gq + 1
-    if gq % 8 == 0 and coroutine.isyieldable and coroutine.isyieldable() then
+    if (gq % 8 == 0 or (wall() - ray_t0) * 1000 > ray_ms) and coroutine.isyieldable and coroutine.isyieldable() then
       coroutine.yield()
+      ray_t0 = wall()
       local nb = space.body(b.name or "")
       if nb then b.x, b.y, b.z = nb.x, nb.y, nb.z end
     end

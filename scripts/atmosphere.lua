@@ -381,6 +381,27 @@ local function star()
   return star_name and space.body(star_name)
 end
 
+-- A world's record, kept 10 s (perfmap 2026-11-11). save.get turns the whole
+-- record into Lua again on every call (~3 ms a world on the playtest
+-- machine): the scan below read every world's twice a second and air_here
+-- the eye's world every frame, a regular hitch in the profile. The air's
+-- numbers change only when a probe or a reload writes the record; a new slot
+-- clears the cache, and at most one stale record is read again a frame, so
+-- the reads never land together.
+local wrec_cache, wrec_slot, wrec_frame = {}, nil, nil
+local function world_rec(name)
+  if not name then return nil end
+  local sl = save.slot and save.slot() or ""
+  if sl ~= wrec_slot then wrec_cache, wrec_slot = {}, sl end
+  local c = wrec_cache[name]
+  if c and time - c.t < 10.0 and time >= c.t then return c.w end
+  if c and wrec_frame == time then return c.w end   -- (one refresh a frame)
+  wrec_frame = time
+  local w = save.get("world." .. name)
+  wrec_cache[name] = { t = time, w = w or false }
+  return w or false
+end
+
 -- the air's character, per world, read once a second (the record can change:
 -- a probe, a reload)
 local char_cache = {}
@@ -428,7 +449,7 @@ local function scan_air(here, wsky)
   if time - scan_t < 0.5 then return end
   scan_t = time
   for _, b in ipairs(space.bodies() or {}) do
-    local w = save.get("world." .. b.name)
+    local w = world_rec(b.name)
     if w and (w.atmo or 0) > 0.01 then
       local grey, dim = 0, 0
       if wsky and wsky.body == b.name then grey, dim = wsky.grey or 0, wsky.dim or 0 end
@@ -479,7 +500,7 @@ local function air_here(x, y, z)
   if not b then return 0 end
   local dx, dy, dz = x - b.x, y - b.y, z - b.z
   local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-  local w = save.get("world." .. dom)
+  local w = world_rec(dom) or nil
   local rho, h = airAt(w, d - (b.radius or 1), b.radius)
   local sunUp = nil
   local s = star()

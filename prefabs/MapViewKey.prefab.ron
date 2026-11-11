@@ -1,0 +1,33 @@
+[
+    (
+        // THE MAP'S VIEW KEY: scripts/orbit_map.lua spawns this under the Ship
+        // HUD the first time the map opens, draws the key in it with ui.make
+        // (the camera mode in force; a click cycles it, as V does) and hides it
+        // while the map is shut. Under the menu button, its width fixed so the
+        // key never moves when the mode's name changes.
+        name: "Map View Key",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        ui: Some((
+            place: Pin(
+                anchor: TopRight,
+                offset: (-16.0, 52.0),
+            ),
+            size: (Fixed(200.0), Fixed(28.0)),
+            stack: Some((
+                dir: Column,
+                gap: 0.0,
+                pad: 0.0,
+                align: Start,
+                justify: Start,
+            )),
+            visible: false,
+            opacity: 1.0,
+        )),
+    ),
+]

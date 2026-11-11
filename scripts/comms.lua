@@ -854,18 +854,22 @@ local function wall_ms() return ((app and app.wallClock) and app.wallClock() or 
 local function ground_radii(name, body, grid, budget_ms)
   local g = ground_r[name]
   if g and g.done then return g end
-  local w = save.get("world." .. name)
-  local R = (w and w.radius) or body.radius or 100
+  -- (the world's record read once per world: save.get rebuilds the whole
+  -- record, and this runs a slice every frame until the grid is done)
   if not g then
+    local w = save.get("world." .. name)
+    local R = (w and w.radius) or body.radius or 100
     g = dec_radii(save.get("comms.ground." .. name), R, #grid) or {}
     g.R = R
+    g.relief = (w and w.relief) or R * 0.05
     g.done = g[#grid] ~= nil
     ground_r[name] = g
     if g.done then return g end
   end
+  local R = g.R
   g.grid, g.next, g.missing = grid, g.next or 1, g.missing or 0
   if g.wait and now() < g.wait then return g end
-  local top = R + ((w and w.relief) or R * 0.05) * 2 + 20
+  local top = R + (g.relief or R * 0.05) * 2 + 20
   local t_end = wall_ms() + (budget_ms or RADII_CALL_MS)
   local i, n = g.next, #grid
   while i <= n do
@@ -1153,6 +1157,11 @@ local function sustain_stats(name)
   local E = ref("electronics")
   if not (s and s.W and s.last and E) then return nil, s end
   if s.st and s.stLast == s.last and s.stW == s.W and s.stN == #s.tr.snaps then return s.st, s end
+  -- (under warp a snapshot lands every frame: the window's sums over every
+  -- sample and the gap clusters were redone each frame the map drew the
+  -- coverage. Four times a second is as fast as anyone reads them.)
+  if s.st and s.stW == s.W and s.stT and now() - s.stT < 0.25 and now() >= s.stT then return s.st, s end
+  s.stT = now()
   local st = E.sustainStats(s.tr, s.last, s.W)
   s.gaps = E.sustainGaps(E.surfaceGrid(E.COMMS.coverSamples), st.ok)
   s.st, s.stLast, s.stW, s.stN = st, s.last, s.W, #s.tr.snaps

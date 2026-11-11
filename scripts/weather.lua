@@ -381,17 +381,20 @@ end
 
 -- The world records are read through a small cache: save.get hands back a
 -- fresh table each call, and this is asked every frame.
-local wcache, wcache_t = {}, -100
-local gseed = nil
+-- Each entry is read again after 5 s on its own (perfmap 2026-11-11: the
+-- whole cache dropped at once, and every world asked for was read again in
+-- one frame, ~3 ms each).
+local wcache = {}
+local gseed, gseed_t = nil, -100
 local function world_of(name)
   if not name then return nil end
-  if time - wcache_t > 5.0 then wcache, wcache_t, gseed = {}, time, nil end
-  local w = wcache[name]
-  if w == nil then
-    w = save.get("world." .. name) or false
-    wcache[name] = w
+  if time - gseed_t > 5.0 or time < gseed_t then gseed, gseed_t = nil, time end
+  local c = wcache[name]
+  if not c or time - c.t > 5.0 or time < c.t then
+    c = { t = time, w = save.get("world." .. name) or false }
+    wcache[name] = c
   end
-  return w or nil
+  return c.w or nil
 end
 
 -- A world's own weather seed: its terrain seed, folded with the save's.

@@ -246,6 +246,7 @@ local DEFAULTS = {
   fov_fx = 1.0,               -- the field of view's widening at speed (0..1)
   crouch_toggle = true,       -- the Crouch key (C) toggles; false: hold (CTRL always holds)
   land_assist = true,         -- SAS flares an Aircraft onto its gear (vessel_controller landAssist)
+  map_cam = "free",           -- the map's camera mode (orbit_map CAMM): free | horizon | ball | follow
 }
 -- …and the ones whose default is "leave it alone" (a nil can't sit in a table).
 local OPTIONAL = { "fullscreen", "display", "text_scale", "captions", "reduced_motion", "color_filter",

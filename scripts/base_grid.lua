@@ -1027,8 +1027,19 @@ local function fresh()
     vers.st, vers.bs, vers.cb = ST.version, B.version, cv
     dirty = true
   end
+  -- (perfmap 2026-11-11) Every part-state write bumps structures.version (a
+  -- door, a heater's thermostat, a seal, a creak), and the readers asking
+  -- every frame (the map's base tags through base_tower.bases, the console's
+  -- POWER page, comms) each forced a whole rebuild on the next frame: up to
+  -- a rebuild a frame in Dust Season's storm with the map open (one measured
+  -- at 1.45 s). A rebuild in an earlier frame less than half a second ago
+  -- holds; update() rebuilds when the half second is up, as it always did.
+  -- (The same frame, or a clock that is not moving, still rebuilds at once.)
+  local t = now()
+  if dirty and t > last_rebuild and t - last_rebuild < FRESH_MIN then return end
   if dirty then rebuild() end
 end
+FRESH_MIN = 0.5
 function gridOf(bid) fresh() return G.byBase[bid] end
 -- (S5) A cable's flow now: → { P (kW, + from its a end to its z end), share
 -- (of its rating), loss (kW), cap (kW), dead, why, burnt, grid } | nil
