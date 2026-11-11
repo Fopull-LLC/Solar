@@ -4356,3 +4356,63 @@ child node (`MeshIn`, §32) of two more parts: 4 instances, merging on or off.
 - Instances: a plain wall 1 (was 4, 2 culled), a window wall 2 (its pane is
   glass), a door wall 4 (the leaf moves, its pane is glass, the lamp lens has
   its own set). kitperf numbers in `work/meshfold/NOTES.md`.
+
+## 35. Wood: a timber tier for the Build Kit (progression W1)
+
+Ty 2026-11-11: "we should also have cheaper building options like things made of wood for making bridges and simple structures and stuff. Obviously it shouldn't sustain crazy damage, like a storm on another planet, but on the home planet they'll last forever essentially, just not handle crazy heavy weights." The plan is `work/progression/PLAN.md` §3; this is slice W1 (the material and the pieces). The load model (W2: sag, creak, break) and weathering (W3: rot, fire) come later and read what is here.
+
+### The material (`parts_kit.lua` MATS.wood)
+
+- **Timber**: 550 kg/m³, `strength = 40` (a quarter of steel's 180: W2's capacities read it), `seal = false`, `rot = true` (W3's hook). `COSTK.wood = 0.22`; fills: a stud wall boarded both faces 22 %, joists and boards 25 %, rafters and shingles 20 %, sawn beams and posts solid, a framed truss 35 %; pieces whose class fill would be wrong name their own (a timber stair is stringers and treads: 0.105).
+- **It never holds air.** `seal = false` drops a piece's `seals`, so in `rooms.lua` a timber wall is a named leak and a timber floor no plane: a hut is never a sealed room. The honest reason to go to steel for Shelter.
+- **Worked numbers** (smoke_kit_wood): wall 106 kg $130 (steel 110 kg $600), floor 110 kg $110, beam4 176 kg $80, pillar2 $50, roofPitch $90, stairs $210.
+- **On 24 existing pieces**: floor, floor21, floor11, wall, halfWall, wall12, doorWall (and its mirrored variant), windowWall (a timber sash, its pane glass), openFrame, roofPitch, roofRidge, gable, pillar2, pillar4, beam2, beam4, rail, stairs, steps, ladder, ramp, pier, catwalk. M cycles to timber last.
+
+### The TIMBER pieces (first in the parts column)
+
+| piece | what | kg | $ |
+|---|---|---|---|
+| Log Post 3 m / 5 m | a 0.3 m peeled log (Bark016); set on the ground it is held by it (`gnd`) | 117 / 194 | 60 / 95 |
+| Timber Beam 6 m | 300 × 200 sawn, chamfered, through-bolted at its bearings | 198 | 120 |
+| King-post Truss 4 m | tie, rafters, king post, struts, galvanised gussets | 150 | 110 |
+| Bridge Deck 2 × 4 | planks across three runners, 2 cm gaps, nailed; wheels roll on it (one flat collider) | 240 | 170 |
+| Plank Floor 2 × 2 | boards on bearers, 80 mm | 90 | 80 |
+| Shingle Roof 2 × 2 | split shingles in staggered courses on battens and rafters, the pitched roof's frame | 70 | 90 |
+| Fence 2 m | posts, two rails, pointed pickets | 25 | 25 |
+| Plank Door Wall | a stud wall with a 1.0 × 2.05 m opening and a ledged-and-braced plank door on strap hinges | 95 | 150 |
+| Camp Mast | an 8 m peeled pole on raking struts, a radio box, a whip antenna: **founds a base** | 170 | 450 ($350 of it the whip) |
+| Mine Shoring Frame | a square set: two battered log legs, a cap, wedges; 1.5 m wide, 2 m clear | 140 | 110 |
+| Sawbench | trestles, a slotted top, a 0.5 m rip saw, its crank wheel and motor | 60 | 490 ($450 the saw) |
+
+- **The hinged door** (`door.swing = { hinge, deg }`, kit_live): the leaf turns about the vertical through its hinge, AWAY from whoever walks up (the side is picked while it is shut and kept until it shuts). Its strap hinges creak open and it shuts with a knock (CC0: the cave creak set, Kenney's wood impact). Its colliders turn with it. The clear opening is 0.95 × 2.03 m.
+- **The Camp Mast** has `tower = { mast = 7.5, draw = 0.5, spacing = 300, radius = 150, station = false }` and `script = "base_tower"`: `base_tower.reconcile` founds a base for ANY part whose record has a `tower` (it keyed on the id "tower" before), with that part's mast height and draw (base_grid takes each base's draw through `base_tower.drawOf`). `station = false`: it is a beacon-class relay powered or not, never a ground station (the Base Station Tower keeps that). Founding marks the feat `base_founded`, so a Camp Mast unlocks the Solar Array and the Battery Bank (P1).
+- **Shoring** is behind `research.TECH.shoring` (granted by the feat `cave_kinds`). `shore = true` is the hook for `cave_hazards` (the plan's ×0.15 on an unstable cell's fall odds and the frame taking a slab's hit): not wired in W1.
+
+### Planks (`materials.lua` plank, `scripts/timber.lua`)
+
+- A refined material counted in kg (density 550). A **timber** (what a tree yields, what the Intake took from a log) is a sawlog length: it saws to **25 kg** of planks, so a 4 × 4 m hut (~1.6 t) is ~64 timber, a dozen trees. (The timber's 1.2 kg is the pack's weight for one: its abstraction.)
+- **The Sawbench** (right-click): saw 1, 5 or all the timber in your pack (then the warehouse at home); it saws on the game clock (warp saws a lot) by hand at 10 kg of planks a minute (20 if an Engineer set it up), or 40 when a base grid serves it: its 0.6 kW is an aux load while it saws (`timber.gridAux`, base_grid's `partServed`). Planks go to the warehouse at home, to the setter's pack elsewhere. Stop gives back the whole timber not yet sawn. `machines.MACH.sawbench` holds the same numbers (0.9 kJ a kg of boards).
+- **The Depot**: the Materials Intake's menu sells planks in 100 and 500 kg lots at $0.60 a kg plus the usual shipping, into the warehouse (the Sawbench at home offers the same). The depot buys them back at $0.25 (they are for building).
+- **Paying for a timber piece** (`base_economy.quote`, `field_builder` `home_opts`): at home, when the warehouse holds the piece's mass in planks (`def.planks`), they are taken and only its fittings are paid (`def.fit` = $10 + 2 % of the steel price + its hardware: the mast's whip, the saw); the card reads "106 kg of your planks + $22 fittings". With too few it ships ready-cut at its price. Undo and Deconstruct give the planks back. Off-world the crated rule holds: a Fabricator makes a timber piece from planks (`recipes.KIT_MAT.wood = "plank"`, `FAB_TAKES.plank`).
+- **Strip** a timber piece: planks back (`loot.STRIP_MAT.wood`). The laser cuts wood faster than steel (`damage.F_MAT/E_VOL/RHO` rows), its sparks ember orange (`lasers.MAT_COL`). Paint on it is a stain (`kit_paint.BASE.wood`, dark).
+- `wood_built` (P1) counts timber pieces placed.
+
+### The look (`tools/gen_kit_wood.py`)
+
+Every board is its own box, its grain along its length, at a random place in the CC0 Wood062 set with its own tint; gaps of 4–8 mm show the dark behind. A wall is a real stud frame (plates, studs at 600, framed openings) with lapped weatherboards outside (each tilted so its foot stands proud), vertical boards inside, linings and casings round its holes. Logs are Bark016 browned, with sawn end grain; iron is black, post bases galvanised. Rough (the set's roughness, metallic 0): wood never shines. The generator is imported by `gen_kit_parts.py` (`install`): wood is added to the existing pieces without touching their steel builders, and their colliders are the existing piece's, so a timber floor walks and snaps exactly like a steel one. A timber wall is folded like every wall (§34: its inside is its own model's `TimberIn`/`SteelIn` slots, painted apart, `kit_paint.FOLD_GUESS.wood`) but keeps its own two texture sets (the atlas has no timber column): two instances, not one. Wood reflects 0.3 of the sky (at 1.0 a rough dark board read as blue-grey concrete outdoors), and its albedo is `textures/kit/timber_albedo.png`, Wood062 warmed and lifted toward a weathered pine (made by `timber_albedo()` from the CC0 set). Z-fighting: every member of a frame stands at its own depth, alternate courses of laps and shingles stop short at their ends, shingle joints keep 2 cm from those below, nails stand 2.5 mm proud; `zall` over every timber prefab is 0 (`work/prog_w1/zall_w.py`, ZW=1).
+
+### Save keys and old saves
+
+New: `timber.saw` (the saw jobs), a part's `paid.planks`. Nothing old changes meaning: every existing piece keeps its materials, ids and prices, and a save without timber loads as it did.
+
+### Left for later
+
+- W2: the load model (capacity from `strength` and span; sag, creak, break; the inspector's LOAD line). A wood bridge carries anything in W1.
+- W3: weathering off-world (`rot`), fire where there is oxygen; the shoring's hold on a cave's roof.
+- Sounds: plank footsteps, the saw running; a codex entry for planks.
+- Depot "sell all" sells planks with the rest of the warehouse.
+
+### Tests and the probe
+
+- `tests/smoke_kit_wood.lua`: the material, masses and prices, the TIMBER pieces, planks-first quotes and their card and ledger lines, recipes, leaky rooms, the saw's rates and job arithmetic, the Depot's lots, strip and damage rows. `smoke_kit` checks every timber prefab's bounds; `smoke_recipes` every timber recipe.
+- `tools/perf/woodprobe.sh <engine> wood` (20/20 on 0.118.3-dev.1496): the motorcycle ridden 150 m out and braked to a stop, both banks levelled and a 1.7 m gap dug 15 m ahead of it, a 6 m bridge built over it in its frame (two beams, three decks, six fences, four posts); ridden across at 4–8 m/s (its root 0.43 m over the bridge's base at mid-span, as on the run-up), stepped off and walked back (the walker 1.05 m over the deck); a 4 × 4 m hut (21 pieces) holds no air, its plank door swung 92° as the walker came in; 500 kg of planks ordered, a timber wall paid from them (106 kg + $22), the Sawbench sawing 2 timber by hand and stopped (timber back). Pictures `buildshots/wd*.png`. (The probe measures the bike by its tyres' drawn places, never `assembly.info`'s tick pose against `space.body`: that mix put the bridge 16 m off.)

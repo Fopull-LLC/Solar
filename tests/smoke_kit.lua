@@ -147,7 +147,7 @@ check(PB.partInfo("doorWall.steel").script == "kit_live" and PB.partInfo("wall.s
 check(PB.partInfo("lightFitting.steel").power.kind == "load" and PB.partInfo("lightFitting.steel").power.use > 0, "a light fitting is a load on the base grid")
 check(PB.partInfo("wall.glass") ~= nil and PB.partInfo("stairs.glass") == nil, "a material a piece doesn't come in is no part")
 check(K.matFor("stairs", "glass") == "steel" and K.matFor("wall", "glass") == "glass", "matFor falls back to the piece's first")
-check(K.nextMat("glass") == "steel" and K.nextMat("steel") == "concrete", "M cycles the materials")
+check(K.nextMat("glass") == "wood" and K.nextMat("wood") == "steel" and K.nextMat("steel") == "concrete", "M cycles the materials (timber last, W1)")
 check(PB.partInfo("padPlate") ~= nil and PB.partInfo("padPlate").kit == nil, "the BASE parts are untouched")
 check(PB.partInfo("shed").script == "kit_live" and PB.partInfo("shed").door and PB.partInfo("hab").door and PB.partInfo("hab").light,
   "the Shed and the Hab stay one-click and get a door and a light")

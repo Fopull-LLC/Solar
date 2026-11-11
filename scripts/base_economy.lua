@@ -79,6 +79,14 @@ function quote(def, section, body, home, footVol, opts)
              why = string.format("no crated %s within %.0f m: order one crated at home (K with it in hand) and bring it in a hold",
                def.label or "part", REACH) }
   end
+  -- (progression W1) a timber piece at home: the warehouse's planks pay for
+  -- its wood when it holds enough (`opts.planks` kg), and only its fittings
+  -- and hardware are bought (parts_kit `fit`: nails, bolts, brackets, a
+  -- mast's whip): no truck drives out. With too few it ships ready-cut.
+  if def.planks and def.fit and opts and (opts.planks or 0) >= def.planks then
+    return { mode = "money", cost = def.fit, ship = 0, foot = foot, total = def.fit + foot, planks = def.planks,
+             supplier = "your own planks" }
+  end
   local ship = shipping(cost)
   return { mode = "money", cost = cost, ship = ship, foot = foot, total = cost + ship + foot, supplier = supplierOf(section) }
 end
@@ -93,6 +101,10 @@ end
 -- ("$900 + $140 shipping · Pell Groundworks").
 function cardLines(q)
   if not q then return nil, nil end
+  if q.mode == "money" and q.planks then
+    return money(q.total), string.format("%d kg of your planks + %s fittings%s", q.planks, money(q.cost),
+      (q.foot or 0) > 0 and (" + " .. money(q.foot) .. " footing") or "")
+  end
   if q.mode == "money" then
     return money(q.total), string.format("%s + %s shipping · %s", money(q.cost), money(q.ship), q.supplier)
   end
@@ -125,6 +137,9 @@ end
 -- The ledger's line for a placement.
 function ledgerWhy(label, q)
   local foot = (q.foot or 0) > 0 and (" + " .. money(q.foot) .. " footing") or ""
+  if q.planks then
+    return string.format("%s · %s fittings%s (%d kg of the warehouse's planks)", label or "part", money(q.cost), foot, q.planks)
+  end
   return string.format("%s · %s + %s shipping%s (shipped by %s)", label or "part", money(q.cost), money(q.ship), foot, q.supplier)
 end
 

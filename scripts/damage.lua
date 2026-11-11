@@ -53,10 +53,10 @@
 --                                     (none at 0.5, A_HOLE at 0.05; cabin_air leaks by it)
 
 F_PART = { tank = 2e6, structural = 5e6, pod = 4e6, engine = 8e6, shield = 5e7 }
-F_MAT = { steel = 5e6, concrete = 2e7, glass = 5e5, regocrete = 1e7, graphite = 1e7, film = 1e4 }
+F_MAT = { steel = 5e6, concrete = 2e7, glass = 5e5, regocrete = 1e7, graphite = 1e7, film = 1e4, wood = 1e6 }
 -- J/m³ to melt (and blow out) the material: ρ × (heat to melt + latent)
-E_VOL = { steel = 7.9e9, concrete = 3.0e9, glass = 3.75e9, regocrete = 2.6e9, graphite = 2.0e10, film = 1e8, rock = 3.0e9 }
-RHO = { steel = 7850, concrete = 2300, glass = 2500, regocrete = 2000, graphite = 1700, film = 1200 }
+E_VOL = { steel = 7.9e9, concrete = 3.0e9, glass = 3.75e9, regocrete = 2.6e9, graphite = 2.0e10, film = 1e8, rock = 3.0e9, wood = 1.2e9 }   -- (W1: wood chars and blows out at ~2.2 MJ/kg)
+RHO = { steel = 7850, concrete = 2300, glass = 2500, regocrete = 2000, graphite = 1700, film = 1200, wood = 550 }
 A_HOLE = 0.01              -- m²: a 10 cm hole
 KERF = 0.05                -- m: a cut's width (the spot and its melt zone)
 CRATER_EV = 3.0e9          -- J/m³: rock melts (the plan)

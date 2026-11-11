@@ -330,7 +330,7 @@ end
 -- kgOf(mat) (materials.kg), crateable (bool: a part item resolves for it),
 -- toolK (TOOLS.strip factor). → { item = "part:<id>" | nil, mats = { mat = n },
 -- secs, share (what comes back), why (nil, or why it can't be crated) }
-STRIP_MAT = { steel = "steel", concrete = "regocrete", regocrete = "regocrete", glass = "glass", graphite = "graphite" }
+STRIP_MAT = { steel = "steel", concrete = "regocrete", regocrete = "regocrete", glass = "glass", graphite = "graphite", wood = "plank" }
 CRATE_MAX_KG = 60
 local function fittingish(d)
   if not d then return false end

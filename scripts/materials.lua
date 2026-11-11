@@ -137,10 +137,16 @@ REG = {
                  from = "water (electrolysed and liquefied: LOX/LH2)" },
   gas        = { name = "Propellant Gas",    kg = 1.0, value = 6,  tier = 2, class = "refined", density = 230, store = "tank",
                  from = "ammonia ice or methane clathrate" },
+  -- (progression W1) sawn softwood boards: what a timber kit piece is made of.
+  -- Sawn from timber at a Sawbench (scripts/timber.lua), bought at the Depot,
+  -- or stripped back off a timber piece. The depot pays little for them: they
+  -- are for building (it SELLS them at timber.PLANK_PRICE).
+  plank      = { name = "Planks",            kg = 1.0, value = 0.25, tier = 1, class = "refined", density = 550,
+                 from = "timber (a Sawbench)" },
 }
 
 -- The refined materials in the order a recipe and a card name them.
-REFINED = { "steel", "alloy", "wiring", "glass", "regocrete", "propellant", "gas" }
+REFINED = { "steel", "alloy", "wiring", "glass", "regocrete", "propellant", "gas", "plank" }
 -- A tank's fuel unit (builder.lua FUEL_T_PER_UNIT = 0.01 t) in kg of Propellant.
 PROP_KG_PER_UNIT = 10
 

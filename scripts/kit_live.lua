@@ -16,6 +16,9 @@
 --           a script moves: engine docs/scripting/physics.md). A door is
 --           eased in its parent's frame (planet-relative: nothing is kept in
 --           the world). A leaf servo and the seal's hiss play as it goes.
+--           (W1) `swing = { hinge = { x, z }, deg }` instead of `slide`: a
+--           hinged leaf (the Plank Door) turns about its hinge's vertical,
+--           away from whoever walked up to it.
 --   LIGHTS  a piece's `light` = { color, intensity, range }: its "Light"
 --           child carries a point light. On/off is the part's state
 --           (rec.st[uid].off), switched from its menu or a switch plate. The
@@ -97,7 +100,7 @@ function spawned(rec, part, node)
   if front then e.fx, e.fy, e.fz = front.x, front.y, front.z end
   if def.door then
     local d = child(node, "Door")
-    if d then e.doors[#e.doors + 1] = { node = d, rest = { x = d.x, y = d.y, z = d.z }, sgn = 1 } end
+    if d then e.doors[#e.doors + 1] = { node = d, rest = { x = d.x, y = d.y, z = d.z, yaw = d.yaw or 0 }, sgn = 1 } end
     local d2 = child(node, "Door2")
     if d2 then e.doors[#e.doors + 1] = { node = d2, rest = { x = d2.x, y = d2.y, z = d2.z }, sgn = -1 } end
   end
@@ -292,7 +295,9 @@ function setDoorHold(sid, uid, mode, by)
   end
   return true, warn
 end
-local SND = { open = "audio/foley/servo_short.ogg", heavy = "audio/foley/servo_run.ogg", seal = "audio/foley/hiss_seal.ogg" }
+local SND = { open = "audio/foley/servo_short.ogg", heavy = "audio/foley/servo_run.ogg", seal = "audio/foley/hiss_seal.ogg",
+              -- (W1) a plank door: its strap hinges creak, it shuts with a knock (CC0: the cave set, Kenney)
+              creak = "audio/ambience/cave_creak_2.ogg", knock = "audio/kenney/impact/impactWood_medium_002.ogg" }
 -- (graveyard2) a crew member WALKING (crew_body's steer: a scenario walk, a
 -- step aside) opens doors too: their walking point, body-relative, placed
 -- against this frame's body (frames doc rule 1). The walkers are looked up
@@ -354,7 +359,12 @@ local function step_door(e, dt, pts)
             end
             if vert then
               if dx * dx + dz * dz < near ^ 2 and math.abs(dy) < vert then want = 1 end
-            elseif dx * dx + dz * dz < near ^ 2 and dy > -1.6 and dy < 2.8 then want = 1 end
+            elseif dx * dx + dz * dz < near ^ 2 and dy > -1.6 and dy < 2.8 then
+              want = 1
+              -- (W1) a hinged leaf swings AWAY from whoever opens it: the side
+              -- is picked while it is shut and kept until it is shut again
+              if D.swing and e.open <= 0.001 and not e.swung then e.swing_sgn = (lp.z > (D.swing.hinge[2] or 0)) and 1 or -1 end
+            end
           end
         end
       end
@@ -394,17 +404,34 @@ local function step_door(e, dt, pts)
       local RA = ref("room_air")
       if RA and RA.doorMoved then RA.doorMoved(e.sid, e.uid) end
     end
-    if (was == 0 or was == 1) and audio and audio.play and valid(e.node) then
+    if D.swing and audio and audio.play and valid(e.node) and ((was == 0 or was == 1) or e.open == 0) then
+      local w = e.node.worldPos
+      if e.open == 0 then pcall(audio.play, SND.knock, w.x, w.y, w.z, { maxDistance = 20, track = "SFX", volume = 0.45 })
+      elseif was == 0 then pcall(audio.play, SND.creak, w.x, w.y, w.z, { maxDistance = 18, track = "SFX", volume = 0.3 }) end
+    elseif (was == 0 or was == 1) and audio and audio.play and valid(e.node) then
       local w = e.node.worldPos
       pcall(audio.play, D.heavy and SND.heavy or SND.open, w.x, w.y, w.z, { maxDistance = 25, track = "SFX", volume = 0.5 })
       if D.heavy and was == 1 then pcall(audio.play, SND.seal, w.x, w.y, w.z, { maxDistance = 20, track = "SFX", volume = 0.35 }) end
     end
     local o = e.open
     o = o * o * (3 - 2 * o)
+    e.swung = e.open > 0.001 or nil
     for _, d in ipairs(e.doors) do
       if valid(d.node) then
-        local s = D.slide
-        d.node.x, d.node.y, d.node.z = d.rest.x + s[1] * o * d.sgn, d.rest.y + s[2] * o * d.sgn, d.rest.z + s[3] * o * d.sgn
+        local W = D.swing
+        if W then
+          -- (W1) a hinged leaf: turned about the vertical through its hinge,
+          -- in the piece's frame (the leaf's node is the piece root's child)
+          local th = math.rad(W.deg or 90) * o * (e.swing_sgn or 1)
+          local hx, hz = W.hinge[1] or 0, W.hinge[2] or 0
+          local rx, rz = d.rest.x - hx, d.rest.z - hz
+          local c, s = math.cos(th), math.sin(th)
+          d.node.x, d.node.y, d.node.z = hx + rx * c + rz * s, d.rest.y, hz - rx * s + rz * c
+          d.node.yaw = (d.rest.yaw or 0) + th
+        else
+          local s = D.slide
+          d.node.x, d.node.y, d.node.z = d.rest.x + s[1] * o * d.sgn, d.rest.y + s[2] * o * d.sgn, d.rest.z + s[3] * o * d.sgn
+        end
       end
     end
   end

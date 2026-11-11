@@ -1,8 +1,8 @@
 # Progression: feats, and the ruin near home
 
 The progression rework (work/progression/PLAN.md) as built. Slices P1 (feats)
-and R1 (the ruin near home) are in; P2 (the nine milestones), the wood tier
-and the load model come later.
+and R1 (the ruin near home) are in, and W1 (the wood tier: docs/base-building.md §35); P2 (the nine milestones)
+and the load model (W2) come later.
 
 Ty, 11-11: *"make solar panels unlock when you set up your first base, and in
 general rework the whole progression to involve all the new mechanics"*;
@@ -17,8 +17,8 @@ happens:
 | Feat | Marked in | When |
 |---|---|---|
 | `kit_placed` (n) | field_builder `place` | a Build Kit piece paid and put down |
-| `wood_built` (n) | field_builder `place` | the piece is a `*.wood` one (the wood tier, later) |
-| `base_founded` | base_tower `reconcile` | a tower founds a base: one placed, or a claimed ruin's (key: the base id) |
+| `wood_built` (n) | field_builder `place` | the piece is a `*.wood` one (W1, base-building §35) |
+| `base_founded` | base_tower `reconcile` | a tower founds a base: a Base Station Tower or a Camp Mast placed (W1), or a claimed ruin's (key: the base id) |
 | `ruin_found` | ruins `discover` | any way a ruin is found (key: the site) |
 | `ruin_claimed` | ruins `claim` | |
 | `core_read` | ruins `readCores` | |

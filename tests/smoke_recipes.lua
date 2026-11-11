@@ -63,7 +63,7 @@ for _, id in ipairs(M.REFINED) do
   check(M.grade(id) == "refined" and M.isRefined(id), id .. " grades as refined")
   check(M.researchValue(id, nil, true) == 0, id .. " earns no research")
 end
-check(#M.REFINED == 7, "six refined materials and the propellant")
+check(#M.REFINED == 8, "six refined materials, the propellant and planks (W1)")
 check(M.density("steel") == 7850 and M.density("iron") == 4200, "densities: steel 7850, iron ore a litre of 4.2 kg")
 check(math.abs(M.litresOf("steel", 785) - 100) < 1e-9, "785 kg of steel is 100 L")
 check(M.inTank("propellant") and M.inTank("gas") and not M.inTank("steel"), "propellant and gas live in tanks")

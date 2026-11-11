@@ -125,9 +125,14 @@ TECH = {
   -- usual. A base is founded by a Base Station Tower or by claiming a ruin
   -- (the one near home holds two arrays and a bank already: ruins.lua NEAR).
   solarArray   = { cost = 0, label = "Solar Array", grantOnly = true, featGrant = "base_founded",
-                   grantLabel = "a base of your own (a Base Station Tower, or a claimed ruin)" },
+                   grantLabel = "a base of your own (a Camp Mast, a Base Station Tower, or a claimed ruin)" },
   batteryBank  = { cost = 0, label = "Battery Bank", grantOnly = true, featGrant = "base_founded",
-                   grantLabel = "a base of your own (a Base Station Tower, or a claimed ruin)" },
+                   grantLabel = "a base of your own (a Camp Mast, a Base Station Tower, or a claimed ruin)" },
+  -- (progression W1) timber shoring for the mines: given once a cave has
+  -- been explored (feats `cave_kinds`, marked by cave_hazards; the plan asks
+  -- two kinds, but featGrant reads one: P2 may raise it)
+  shoring      = { cost = 0, label = "Mine Shoring Frame", grantOnly = true, featGrant = "cave_kinds",
+                   grantLabel = "a cave explored" },
 }
 
 -- BASE parts behind a craft part's research (the BASE section's ids are not

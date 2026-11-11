@@ -100,9 +100,18 @@ MACH = {
               desc = "water → Propellant (LOX/LH2) into the Fuel Tanks on its outlet" },
   fabricator = { label = "Fabricator", kw = 3, heat = 0, cap = 2000,
               desc = "refined kg → crated parts: 10 s + 20 s a tonne, a queue of four" },
+  -- (progression W1) the Sawbench: timber → planks. A timber is a sawlog
+  -- length (its 1.2 kg is the pack's weight for one): it saws to `plank` kg of
+  -- boards. Not on the belts: its own menu runs it (scripts/timber.lua), by
+  -- hand at `hand` kg of planks a minute (an Engineer twice that) or on the
+  -- base grid at `powered` (`kw` while it saws). The arithmetic is timber's.
+  sawbench = { label = "Sawbench", kw = 0.6, heat = 0, hand = 10, powered = 40,
+              -- (e: 0.9 kJ a kg of boards: 0.6 kW rips 40 kg a minute)
+              recipes = { timber = { plank = 25, e = 0.9 } },
+              desc = "timber → planks: by hand 10 kg a minute, on the grid 40 (0.6 kW)" },
 }
 -- what a Fabricator's store takes (the refined solids)
-FAB_TAKES = { steel = true, alloy = true, wiring = true, glass = true, regocrete = true }
+FAB_TAKES = { steel = true, alloy = true, wiring = true, glass = true, regocrete = true, plank = true }
 
 -- The conversion of `kind`: { [mat in] = { outs = { [mat out] = kg/kg }, tot = Σ outs, e = kJ a kg in } },
 -- and its rate at duty 1 in kg/s of input for each input (the energy sets it).

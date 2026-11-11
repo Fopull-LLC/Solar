@@ -1,0 +1,67 @@
+// KIT PIECE — floor11 in wood (the modular structure kit; scripts/parts_kit.lua).
+// Root = the ground point; Mesh, its colliders (Wall N) and its live children.
+// Written by tools/gen_kit_parts.py — edit the generator, not this file.
+[
+    (
+        name: "KitFloor11_wood",
+        tags: ["base_part", "kit"],
+        transform: (
+            translation: (0.0000, 0.0000, 0.0000),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+    (
+        name: "Mesh",
+        transform: (
+            translation: (0.0000, 0.1000, 0.0000),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/kit/floor11_wood.glb",
+        ),
+        object_materials: {
+            "Timber": (
+                color: (1.0, 1.0, 1.0),
+                texture: Some("textures/kit/timber_albedo.png"),
+                normal_map: Some("textures/env/sets/Wood062/normal.png"),
+                normal_strength: 1.1,
+                roughness_map: Some("textures/env/sets/Wood062/orm.png"),
+                roughness: 1.0,
+                metallic: 0.0,
+                ao_map: Some("textures/env/sets/Wood062/orm.png"),
+                reflectivity: 0.3,
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+        parent: Some(0),
+    ),
+    (
+        name: "Wall 1",
+        transform: (
+            translation: (0.0000, 0.1000, 0.0000),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.5000, 0.1000, 0.5000),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+]

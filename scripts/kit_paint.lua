@@ -84,6 +84,8 @@ BASE = {
   concrete  = { 0.285, 0.273, 0.247 },
   regocrete = { 0.198, 0.154, 0.114 },
   glass     = { 0.257, 0.261, 0.260 },
+  -- (W1) sawn softwood: textures/kit/timber_albedo.png (Wood062 warmed) × the boards' tints; paint on it is a stain
+  wood      = { 0.243, 0.158, 0.094 },
   film      = { 0.70, 0.70, 0.70 },
   prop      = { 0.42, 0.42, 0.41 },
 }
@@ -284,6 +286,8 @@ FOLD_GUESS = {
   concrete = { out = { "Concrete", "Steel" }, inn = { "ConcreteIn", "SteelIn" } },
   regocrete = { out = { "Concrete", "Steel" }, inn = { "ConcreteIn", "SteelIn" } },
   glass = { out = { "Steel" }, inn = { "SteelIn" } },
+  -- (W1) a timber wall keeps its own sets: the boards and the iron (tools/gen_kit_wood.py)
+  wood = { out = { "Timber", "Steel" }, inn = { "TimberIn", "SteelIn" } },
 }
 local WHITE = { 1, 1, 1 }
 local function slot_paint(mesh, names, c)

@@ -687,6 +687,9 @@ local function provider(t, ctx)
     out[#out + 1] = { type = "info", id = "r" .. i, group = "LAST TAKEN", label = receipts[i].text }
   end
   fab_rows(out, ctx)
+  -- (progression W1) the timber yard: planks by the lot (scripts/timber.lua)
+  local TB = ref("timber")
+  if TB and TB.depotRows then TB.depotRows(out, ctx) end
   return out, "MATERIALS INTAKE", "the depot's bulk feed belt"
 end
 

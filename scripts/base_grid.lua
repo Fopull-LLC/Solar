@@ -217,8 +217,10 @@ function gridModel(g, pose, towerNeed, opts)
   for _, bid in ipairs(g.bases) do
     local bsid = opts.baseSid and opts.baseSid(bid) or nil
     if not (bsid and M.mainsOff[bsid]) then
-      M.loads[#M.loads + 1] = { kind = "tower", bid = bid, need = towerNeed or 2.0, label = "tower", sid = bsid }
-      M.need = M.need + (towerNeed or 2.0)
+      -- (W1) each base's own tower draw: a Camp Mast's is 0.5 (opts.towerNeedOf), the Tower's towerNeed
+      local tn = (opts.towerNeedOf and opts.towerNeedOf(bid)) or towerNeed or 2.0
+      M.loads[#M.loads + 1] = { kind = "tower", bid = bid, need = tn, label = "tower", sid = bsid }
+      M.need = M.need + tn
     end
   end
   for _, e in ipairs(g.parts) do
@@ -931,12 +933,16 @@ topology = function(a, clk)
   local bsid = {}
   for _, b in ipairs(blist) do bsid[b.id] = b.sid end
   local RP = ref("reactor_plant")
+  local BT = ref("base_tower")
   local opts = { cablesAt = at, state = breaker_state, baseSid = function(bid) return bsid[bid] end,
+                 towerNeedOf = BT and BT.drawOf or nil,
                  plantKW = RP and RP.gridGen or nil,
                  -- (S7) a plant's pumps, the fluid network's pumps and the airlocks' pumps
                  auxKW = function(sid, uid)
-                   local FN, RA, LX, LZ = ref("fluid_net"), ref("room_air"), ref("logistics"), ref("lasers")
+                   local FN, RA, LX, LZ, TB = ref("fluid_net"), ref("room_air"), ref("logistics"), ref("lasers"), ref("timber")
                    return (RP and RP.gridAux and RP.gridAux(sid, uid) or 0) + (FN and FN.gridAux and FN.gridAux(sid, uid) or 0)
+                          -- (W1) a Sawbench while it saws
+                          + (TB and TB.gridAux and TB.gridAux(sid, uid) or 0)
                           + (RA and RA.gridAux and RA.gridAux(sid, uid) or 0)
                           -- (X5) a quarry drive while it digs, a conveyor line while it runs, a tube blower
                           + (LX and LX.gridAux and LX.gridAux(sid, uid) or 0)
@@ -1167,7 +1173,8 @@ function rebuildNow() light_cache = {}; return rebuild() end
 function towerPower(bid)
   fresh()
   local g = G.byBase[bid]
-  local d = towers_need()
+  local BT = ref("base_tower")
+  local d = (BT and BT.drawOf and BT.drawOf(bid)) or towers_need()
   if not g then return { supply = 0, need = d, draw = d, powered = false, stored = 0, cap = 0, src = {} } end
   local M, s = G.models[g.id], G.status[g.id]
   local powered = false

@@ -54,18 +54,18 @@ FITTINGS_PLAIN = 0.10     -- structural kit pieces and BASE concrete (Q22)
 FAB_SECS0, FAB_SECS_T = 10, 20   -- a Fabricator's time: 10 s + 20 s a tonne (N4)
 
 -- the order materials are named in (materials.REFINED)
-ORDER = { "steel", "alloy", "wiring", "glass", "regocrete", "propellant", "gas" }
+ORDER = { "steel", "alloy", "wiring", "glass", "regocrete", "propellant", "gas", "plank" }
 LABEL = { steel = "Steel", alloy = "Alloy Steel", wiring = "Copper Wire", glass = "Glass", regocrete = "Regocrete",
-          propellant = "Propellant", gas = "Propellant Gas" }
+          propellant = "Propellant", gas = "Propellant Gas", plank = "Planks" }
 local SHORT = { steel = "Steel", alloy = "Alloy", wiring = "Wiring", glass = "Glass", regocrete = "Regocrete",
-                propellant = "Propellant", gas = "Gas" }
+                propellant = "Propellant", gas = "Gas", plank = "Planks" }
 
 ALLOY_SECTIONS = { AIRCRAFT = true, ROVER = true, AUTO = true }
 WIRED_MODS = { command = true, battery = true, antenna = true, solar = true, light = true, drive = true, hinge = true,
                piston = true, rotor = true, claw = true, drill = true, rtg = true, wheel = true }
 -- kit piece material → refined material (nil: not made off-world)
-KIT_MAT = { steel = "steel", concrete = "regocrete", regocrete = "regocrete", glass = "glass" }
-STRUCTURAL_KIT = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true,
+KIT_MAT = { steel = "steel", concrete = "regocrete", regocrete = "regocrete", glass = "glass", wood = "plank" }
+STRUCTURAL_KIT = { TIMBER = true, FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true,
                    PROPS = true }
 
 -- Overrides by part id: { mats = { mat = share of m … }, fittings = rate,
@@ -92,8 +92,9 @@ end
 
 -- (a kit piece that switches, lights, pumps, signals or powers: wired)
 local function kit_wired(def)
-  if def.light or def.screen or def.switch or def.door or def.lg or def.power or def.life or def.console or def.turbine
-    or def.pump or def.press or def.survey then return true end
+  -- (W1: a hinged plank door is iron and wood, no motor)
+  if def.light or def.screen or def.switch or (def.door and not def.door.swing) or def.lg or def.power or def.life or def.console or def.turbine
+    or def.pump or def.press or def.survey or def.tower then return true end
   if def.fl and (def.fl.kind == "pump" or def.fl.kind == "valve" or def.fl.kind == "gauge" or def.fl.kind == "reg") then return true end
   return false
 end

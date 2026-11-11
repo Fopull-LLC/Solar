@@ -167,9 +167,9 @@ PIPE_Y = 0.6
 --             { kind = "station" } (the Survey Station: weather, seismometer,
 --             magnetometer; fills its body's layers while it stands there)
 
-SECTION_ORDER = { "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGISTICS", "REFINERY", "LOGIC", "NUCLEAR", "SCIENCE", "DEFENCE", "FITTINGS", "PROPS", "DECALS" }
-EXTERIOR = { FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
-FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true,
+SECTION_ORDER = { "TIMBER", "FOUNDATION", "FLOOR", "WALL", "ROOF", "FRAME", "HAB", "SHIELD", "UTILITY", "POWER", "LIFE", "FLUID", "LOGISTICS", "REFINERY", "LOGIC", "NUCLEAR", "SCIENCE", "DEFENCE", "FITTINGS", "PROPS", "DECALS" }
+EXTERIOR = { TIMBER = true, FOUNDATION = true, FLOOR = true, WALL = true, ROOF = true, FRAME = true, HAB = true, SHIELD = true }
+FACES2 = { wall = true, halfWall = true, wall12 = true, doorWall = true, doorWallM = true, doubleDoor = true, windowWall = true, hutDoor = true,
            porthole = true, airlockWall = true, openFrame = true, ventWall = true, leadWall = true, gable = true,
            habSeg = true, habWindow = true }
 
@@ -182,6 +182,15 @@ MATS = {
                 desc = "regolith concrete mixed on site · the cheapest wall there is" },
   glass     = { label = "Glass", kgm3 = 2500, strength = 60, k = 0.95, u = 2.8, seal = true, blend = true,
                 desc = "laminated pane in a steel frame · light comes in" },
+  -- (progression W1, Ty 11-11: "cheaper building options like things made of
+  -- wood for making bridges and simple structures ... on the home planet
+  -- they'll last forever essentially, just not handle crazy heavy weights").
+  -- Sawn softwood: a quarter of steel's strength in this table (the load
+  -- model, W2, reads `strength`), and it never holds air (`seal = false`: a
+  -- timber room is leaky in rooms.lua, the honest reason steel exists).
+  -- `rot`: it weathers off the home world (W3 reads it; nothing does yet).
+  wood      = { label = "Timber", kgm3 = 550, strength = 40, k = 0.98, u = 1.1, seal = false, rot = true,
+                grainTex = "Wood062", desc = "sawn softwood · cheap, light, leaks air" },
   -- (S6: reactor-grade graphite, the moderator column's own; not in MAT_ORDER)
   graphite  = { label = "Graphite", kgm3 = 1700, strength = 30, k = 0.6, u = 1.0, seal = false,
                 desc = "nuclear-grade graphite bricks" },
@@ -189,17 +198,24 @@ MATS = {
   film      = { label = "Paint", kgm3 = 1200, strength = 1, k = 1.0, u = 0, seal = false,
                 desc = "a film of paint on a face" },
 }
-MAT_ORDER = { "steel", "concrete", "regocrete", "glass" }
-COSTK = { steel = 1.0, concrete = 0.58, regocrete = 0.47, glass = 1.5 }
--- what share of a piece's gross volume is the material, by class
+MAT_ORDER = { "steel", "concrete", "regocrete", "glass", "wood" }
+COSTK = { steel = 1.0, concrete = 0.58, regocrete = 0.47, glass = 1.5, wood = 0.22 }
+-- what share of a piece's gross volume is the material, by class (timber: a
+-- stud wall boarded both faces 22 %, joists and boards 25 %, rafters and
+-- shingles 20 %, a sawn beam or post solid, a framed truss 35 %)
 FILL = {
-  panel = { steel = 0.016, concrete = 1.0, regocrete = 1.0, glass = 0.1 },
-  floor = { steel = 0.019, concrete = 1.0, regocrete = 1.0, glass = 0.12 },
-  roof  = { steel = 0.017, glass = 0.1 },
-  solid = { steel = 1.0, concrete = 1.0, regocrete = 1.0 },
-  frame = { steel = 0.1, concrete = 1.0, regocrete = 1.0 },
-  truss = { steel = 0.0306 },
+  panel = { steel = 0.016, concrete = 1.0, regocrete = 1.0, glass = 0.1, wood = 0.22 },
+  floor = { steel = 0.019, concrete = 1.0, regocrete = 1.0, glass = 0.12, wood = 0.25 },
+  roof  = { steel = 0.017, glass = 0.1, wood = 0.2 },
+  solid = { steel = 1.0, concrete = 1.0, regocrete = 1.0, wood = 1.0 },
+  frame = { steel = 0.1, concrete = 1.0, regocrete = 1.0, wood = 1.0 },
+  truss = { steel = 0.0306, wood = 0.35 },
 }
+-- (W1) a timber piece paid from the home warehouse's planks: what the
+-- fittings cost besides (nails, bolts, brackets, hinges): FIT0 + FITK × the
+-- piece's steel price, plus its own hardware (`hw`: a Camp Mast's whip
+-- antenna, a Sawbench's saw). The planks it takes are its mass in kg.
+WOOD_FIT0, WOOD_FITK = 10, 0.02
 
 local function B(x0, x1, y0, y1, z0, z1) return { x0, x1, y0, y1, z0, z1 } end
 local WT, WH = 0.2, 2.2         -- a wall's thickness and height
@@ -660,6 +676,99 @@ PIECES = {
                 mats = { "steel" }, vol = 1.0, fill = "solid", mass = { steel = 1.08 }, cost = 700, shieldk = 0.25,
                 desc = "a steel tank of water, 0.5 m thick · light and cheap · lets a quarter through" },
 }
+
+-- ── TIMBER (progression W1; work/progression/PLAN.md §3; tools/gen_kit_wood.py;
+-- docs/base-building.md §35) ────────────────────────────────────────────────
+-- Wood is a material on the pieces below, and the TIMBER section's pieces are
+-- wood first. A timber piece is paid from the home warehouse's planks when it
+-- holds enough (`planks` kg, base_economy.quote), else at its price (COSTK).
+--   gnd     a log post is a pile: set on the terrain it is held by the
+--           ground like any piece placed there (kit_snap.grounded reads the
+--           placement's `gnd`); W2's load model treats a `gnd` post as founded
+--   door.swing = { hinge = { x, z }, deg }  a hinged leaf (kit_live): it
+--           turns `deg` about a vertical axis through `hinge` (piece frame),
+--           away from whoever opened it
+--   tower   the Camp Mast founds a base like the Base Station Tower
+--           (base_tower keys on `tower`); `station = false`: it never becomes
+--           a ground station, powered or not (a beacon-class mast)
+--   shore   a mine shoring frame: cave_hazards may read it (W1 leaves the hook;
+--           the plan's ×0.15 on an unstable cell's fall odds is not wired)
+--   saw     the Sawbench (scripts/timber.lua): timber → planks, by hand or
+--           on the base grid
+--   hw      $ of hardware a timber piece needs whatever pays its wood
+-- Load (W2: sag, creak, break) and weather (W3: rot) read `strength` and
+-- `rot`; nothing in W1 does.
+do
+  -- wood on the existing pieces, with its fill where the class's would be wrong
+  -- (a timber stair is stringers and treads, not 2.6 m³ of solid wood)
+  local WOOD_ON = {
+    floor = false, floor21 = false, floor11 = false, wall = false, halfWall = false, wall12 = false,
+    doorWall = false, doorWallM = false, windowWall = false, openFrame = 0.1, roofPitch = false, roofRidge = 0.15,
+    gable = false, pillar2 = false, pillar4 = false, beam2 = false, beam4 = false, rail = 0.15,
+    stairs = 0.105, steps = 0.13, ladder = 0.106, ramp = 0.23, pier = 0.6, catwalk = 0.41,
+  }
+  for k, f in pairs(WOOD_ON) do
+    local P = PIECES[k]
+    local mats = {}
+    for _, m in ipairs(P.mats) do mats[#mats + 1] = m end
+    mats[#mats + 1] = "wood"
+    P.mats = mats
+    if f then
+      local fk = {}
+      for m, v in pairs(P.fillk or {}) do fk[m] = v end
+      fk.wood = f
+      P.fillk = fk
+    end
+  end
+  local function T(t)
+    t.section = "TIMBER"
+    t.mats = t.mats or { "wood" }
+    t.fill = t.fill or "solid"
+    return t
+  end
+  local R = math.pi * 0.15 * 0.15     -- a 0.3 m log's section
+  for k, t in pairs({
+    post3     = { label = "Log Post 3 m", order = 1, snap = "post", box = B(-0.15, 0.15, 0, 3.0, -0.15, 0.15), vol = R * 3.0,
+                  costs = { wood = 60 }, cost = 60, gnd = true,
+                  desc = "a 0.3 m peeled log, 3 m · drives into the ground: a footing for a hut or a deck off rough ground" },
+    post5     = { label = "Log Post 5 m", order = 2, snap = "post", box = B(-0.15, 0.15, 0, 5.0, -0.15, 0.15), vol = R * 5.0,
+                  costs = { wood = 95 }, cost = 95, gnd = true,
+                  desc = "a 0.3 m log pile, 5 m · stands a bridge over a gully or in shallow water" },
+    beam6w    = { label = "Timber Beam 6 m", order = 3, snap = "floor", box = B(-3, 3, 0, 0.3, -0.1, 0.1), vol = 0.36,
+                  costs = { wood = 120 }, cost = 120,
+                  desc = "a 300 x 200 sawn beam, 6 m · the span piece: posts at its ends, a deck across it · a long span carries far less than a short one" },
+    trussW4   = { label = "King-post Truss 4 m", order = 4, snap = "floor", box = B(-2, 2, 0, 0.9, -0.1, 0.1), vol = 0.72,
+                  mass = { wood = 0.15 }, costs = { wood = 110 }, cost = 110,
+                  desc = "a bolted king-post truss, 4 m by 0.9 m deep · a roof's or a bridge's side · stiffer than a plain beam" },
+    deck24    = { label = "Bridge Deck 2 × 4", order = 5, snap = "floor", box = B(-1, 1, 0, 0.1, -2, 2), vol = 0.8,
+                  mass = { wood = 0.24 }, costs = { wood = 170 }, cost = 170, tile = 2,
+                  desc = "planks across three runners, 2 x 4 m · gaps between the boards · wheels roll on it" },
+    plankFloor = { label = "Plank Floor 2 × 2", order = 6, snap = "floor", box = B(-1, 1, 0, 0.08, -1, 1), vol = 0.32,
+                  mass = { wood = 0.09 }, costs = { wood = 80 }, cost = 80, seals = "y",
+                  desc = "boards on bearers, 80 mm · a hut's floor · leaks air" },
+    shingleRoof = { label = "Shingle Roof 2 × 2", order = 7, snap = "floor", box = B(-1, 1, 0, 1.155, -1, 1), slopeZ = 1.155,
+                  vol = 0.92, mass = { wood = 0.07 }, costs = { wood = 90 }, cost = 90, seals = "y",
+                  desc = "split shingles on battens and rafters, 30°, rising 1.15 m to its back edge" },
+    fence     = { label = "Fence 2 m", order = 8, snap = "wall", box = B(-1, 1, 0, 1.1, -0.05, 0.05), vol = 0.22,
+                  mass = { wood = 0.025 }, costs = { wood = 25 }, cost = 25,
+                  desc = "two rails and pickets between posts, 1.1 m · a deck's or a bridge's edge" },
+    hutDoor   = { label = "Plank Door Wall", order = 9, snap = "wall", box = B(-1, 1, 0, WH, -WT / 2, WT / 2), vol = 0.88,
+                  mass = { wood = 0.095 }, costs = { wood = 150 }, cost = 150, seals = "door",
+                  door = { swing = { hinge = { -0.47, 0 }, deg = 92 }, secs = 0.8, near = 2.0 },
+                  desc = "a ledged-and-braced plank door on strap hinges, 1.0 x 2.05 m · swings in as you come near" },
+    campMast  = { label = "Camp Mast", order = 10, snap = "post", box = B(-0.55, 0.55, 0, 8.0, -0.55, 0.55), vol = 0.4,
+                  mass = { wood = 0.17 }, costs = { wood = 450 }, cost = 450, hw = 350, script = "base_tower",
+                  tower = { mast = 7.5, draw = 0.5, spacing = 300, radius = 150, station = false },
+                  desc = "a guyed log mast with a whip antenna and its radio box · FOUNDS A BASE: your own, 150 m round it · a beacon-class relay, never a ground station · 0.5 EC/s from the base grid" },
+    shoring   = { label = "Mine Shoring Frame", order = 11, snap = "post", box = B(-1, 1, 0, 2.2, -0.15, 0.15), vol = 0.66,
+                  mass = { wood = 0.14 }, costs = { wood = 110 }, cost = 110, tech = "shoring", shore = true,
+                  desc = "a square set: two legs and a cap, wedged to the rock · 1.5 m wide, 2 m clear · holds a tunnel's roof" },
+    sawbench  = { label = "Sawbench", order = 12, snap = "block", box = B(-0.8, 0.8, 0, 0.95, -0.45, 0.45), vol = 0.2,
+                  mass = { wood = 0.06 }, costs = { wood = 490 }, cost = 490, hw = 450,
+                  saw = { hand = 10, kw = 0.6, powered = 40 }, power = { kind = "aux", use = 0.6 },
+                  desc = "a trestle bench with a crank-driven rip saw and its motor · timber → planks into the warehouse · by hand 10 kg a minute (an Engineer 20), on the base grid 40 (0.6 kW)" },
+  }) do PIECES[k] = T(t) end
+end
 
 -- ── HAB JUNCTIONS (Ty 11-10: "it just recognizes what's near it and forms the
 -- connection"; docs/base-building.md §29) ──────────────────────────────────
@@ -1299,6 +1408,8 @@ local function resolve(piece, mat)
     slope = 0.6, onDeck = P.snap ~= "slab", grade = P.grade or 1.2, footPad = P.footPad or 0.15, skirt = P.skirt,
     tile = P.tile, deck = P.deck, deckTop = P.deckTop, slopeZ = P.slopeZ, triangle = P.triangle,
     door = P.door, light = P.light, screen = P.screen, switch = P.switch, life = P.life, heat = P.heat,
+    -- (W1) timber: the founding mast, the shoring hook, the saw, a post's pile
+    tower = P.tower, shore = P.shore, saw = P.saw, gnd = P.gnd,
     -- (the interaction plan S5) a piece that holds things: { kg, L, what } (scripts/loot.lua)
     container = P.container,
     sym = P.sym or "x", mirror = P.mirror, hidden = P.hidden,
@@ -1329,6 +1440,13 @@ local function resolve(piece, mat)
     desc = string.format("%s · %s · %.2f t", P.desc or "", M.label, massOf(piece, mat)),
   }
   if P.seals and not M.seal then d.seals = nil end
+  -- (W1) a timber piece: the planks it takes (kg) and what its fittings and
+  -- hardware cost when the warehouse's planks pay for its wood
+  if mat == "wood" then
+    d.planks = math.floor(d.mass * 1000 + 0.5)
+    d.fit = math.floor(WOOD_FIT0 + WOOD_FITK * (P.cost or 0) + (P.hw or 0) + 0.5)
+    d.hw = P.hw
+  end
   -- shielding by record (thermal.shieldFactor): blocks and lead name theirs;
   -- a concrete or regocrete wall or floor lets its material's share through
   if P.shieldk then d.shield = { k = P.shieldk }

@@ -478,6 +478,27 @@ local function away_opts(id)
   local n, from = cratedInReach(id)
   return { crated = n, from = from, recipe = recipe_of(id) }
 end
+-- (progression W1) the quote's home options: a timber piece is paid from the
+-- warehouse's planks when it holds enough (base_economy.quote)
+local function home_opts(id)
+  local d = partInfo(id)
+  if not (d and d.planks) then return nil end
+  local V = ref("inventory")
+  return { planks = (V and V.count and V.count("base", "plank")) or 0 }
+end
+local function quote_opts(id, body) if body ~= home_body() then return away_opts(id) end return home_opts(id) end
+-- planks out of / back into the warehouse for a paid record → kg moved
+local function planks_take(kg)
+  local V = ref("inventory")
+  if not (V and kg and kg > 0) then return 0 end
+  if (V.count("base", "plank") or 0) < kg then return 0 end
+  return V.remove("base", "plank", kg) or 0
+end
+local function planks_back(kg)
+  local V = ref("inventory")
+  if not (V and kg and kg > 0) then return 0 end
+  return V.add("base", "plank", kg) or 0
+end
 -- Take one crated `id` from the containers in reach (nearest first, the pack
 -- last). → the container it came from | nil
 local function take_crated(id)
@@ -535,7 +556,7 @@ local function quote_of(id, footVol)
   if not (E and def) then return nil end
   local body = here_body()
   if creative() then body = home_body() end
-  return E.quote(def, section_of(id), body, home_body(), footVol, (body ~= home_body()) and away_opts(id) or nil)
+  return E.quote(def, section_of(id), body, home_body(), footVol, quote_opts(id, body))
 end
 
 -- K at home: order the part in hand CRATED, price + shipping, loaded into the
@@ -1464,7 +1485,7 @@ function place(sid, partId, p, payer, opts)
   -- sandbox builds anywhere for money, as at home)
   local qbody = creative() and home_body() or p.body
   local q = E.quote(def, section_of(partId), qbody, home_body(), plan and plan.vol or 0,
-    (qbody ~= home_body()) and away_opts(partId) or nil)
+    quote_opts(partId, qbody))
   local pre = opts and opts.prepaid
   if pre and q.mode ~= "money" then return nil, "a paste or a blueprint ships as one delivery: on the home world only" end
   if (q.mode ~= "money" and q.mode ~= "item") or payer ~= "money" then return nil, q.why or "nothing to pay with" end
@@ -1486,9 +1507,15 @@ function place(sid, partId, p, payer, opts)
       return nil, "the crated " .. tostring(def.label) .. " is no longer in reach"
     end
   elseif not co.spend(q.total, E.ledgerWhy(def.label, q)) then return nil, "can't afford it: " .. E.money(q.total) end
+  -- (W1) a timber piece paid with the warehouse's planks: they come out now
+  if not pre and q.planks and planks_take(q.planks) < q.planks then
+    if (q.total or 0) > 0 then if co.refund then co.refund(q.total, "returned: not enough planks") else co.earn(q.total, "returned") end end
+    return nil, string.format("the warehouse has fewer than %d kg of planks now", q.planks)
+  end
   local t = agency_now()
   local by = member()
-  local paid = { cost = q.cost, ship = q.ship, foot = q.foot, total = q.total, t = t, supplier = q.supplier, by = by, item = took }
+  local paid = { cost = q.cost, ship = q.ship, foot = q.foot, total = q.total, t = t, supplier = q.supplier, by = by, item = took,
+                 planks = (not pre) and q.planks or nil }
   local base = p.base or 0
   local ft = plan and plan.footing and { d = plan.footing.d, hx = plan.footing.hx, hz = plan.footing.hz } or nil
   local uid
@@ -1557,6 +1584,7 @@ function place(sid, partId, p, payer, opts)
     local amount = math.floor((pd and pd.total) or 0)
     ST.removeParts(e.sid, { e.uid })
     if pd and pd.item then return_crated(partId, pd.item) end
+    if pd and pd.planks then planks_back(pd.planks) end
     if amount > 0 then
       if co.refund then co.refund(amount, "returned: " .. def.label .. " (undone within a minute)") else co.earn(amount, "returned: " .. def.label) end
     end
@@ -1566,15 +1594,20 @@ function place(sid, partId, p, payer, opts)
   e.redo = function()
     local qb = creative() and home_body() or e.hdr.b
     local q2 = E.quote(def, section_of(partId), qb, home_body(), (e.part.ft and plan and plan.vol) or 0,
-      (qb ~= home_body()) and away_opts(partId) or nil)
+      quote_opts(partId, qb))
     local took2 = nil
     if q2.mode == "item" then
       if (q2.foot or 0) > 0 and not co.spend(q2.foot, def.label .. " footing (dry mix)") then e.res = nil return end
       took2 = take_crated(partId)
       if not took2 then e.res, e.why = nil, "no crated " .. tostring(def.label) .. " in reach" return end
     elseif q2.mode ~= "money" or not co.spend(q2.total, E.ledgerWhy(def.label, q2)) then e.res, e.why = nil, q2.why return end
+    if q2.planks and planks_take(q2.planks) < q2.planks then
+      if (q2.total or 0) > 0 and co.refund then co.refund(q2.total, "returned: not enough planks") end
+      e.res, e.why = nil, "not enough planks in the warehouse" return
+    end
     local t2 = agency_now()
-    e.part.paid = { cost = q2.cost, ship = q2.ship, foot = q2.foot, total = q2.total, t = t2, supplier = q2.supplier, by = by, item = took2 }
+    e.part.paid = { cost = q2.cost, ship = q2.ship, foot = q2.foot, total = q2.total, t = t2, supplier = q2.supplier, by = by, item = took2,
+                    planks = q2.planks }
     e.t = t2
     restore(e.sid, e.hdr, { e.part })
     if c and c.credit and by then pcall(c.credit, by, "built", 1, { body = e.hdr.b }) end
@@ -1634,12 +1667,14 @@ function deconstruct(sid, uid)
   local t = agency_now()
   local total, full = 0, true
   local crates = {}      -- (X4) the crated parts that go back in their crates
+  local planks = 0       -- (W1) a timber piece paid with planks gives them back
   for _, u in ipairs(uids) do
     local p = ST.getPart(sid, u)
     local amt, rule = E.deconstructRefund(p and p.paid, t)
     total = total + amt
     if rule ~= "full" then full = false end
     if p and p.paid and p.paid.item then crates[#crates + 1] = { id = p.id, prefer = p.paid.item } end
+    if p and p.paid and p.paid.planks then planks = planks + p.paid.planks end
   end
   for _, cr in ipairs(crates) do
     local dest, why = return_crated(cr.id, cr.prefer, true)
@@ -1655,7 +1690,8 @@ function deconstruct(sid, uid)
     #crates > 0 and string.format("%d crated part%s back in reach", #crates, #crates == 1 and "" or "s")
     or (full and "all of it back (within a minute)" or "the price back, fee kept"))
   if total > 0 then if co.refund then co.refund(total, why) else co.earn(total, why) end end
-  lastDecon = { sid = sid, uids = uids, refund = total, full = full, t = t, crates = #crates > 0 and crates or nil }
+  if planks > 0 then planks_back(planks) end
+  lastDecon = { sid = sid, uids = uids, refund = total, full = full, t = t, crates = #crates > 0 and crates or nil, planks = planks > 0 and planks or nil }
   local e = { label = "take down " .. lbl, kind = "decon", t = t, sid = sid, hdr = hdr, parts = saved, refund = total }
   e.undo = function()
     -- (the crated parts come out of their crates again first)
@@ -1668,8 +1704,13 @@ function deconstruct(sid, uid)
       end
       back[#back + 1] = { id = cr.id, cid = c2 }
     end
+    if planks > 0 and planks_take(planks) < planks then
+      for _, b in ipairs(back) do return_crated(b.id, b.cid) end
+      e.res, e.why = nil, string.format("the warehouse has fewer than %d kg of planks now", planks) return
+    end
     if e.refund > 0 and not co.spend(e.refund, "put back: " .. lbl .. " (undone within a minute)") then
       for _, b in ipairs(back) do return_crated(b.id, b.cid) end
+      if planks > 0 then planks_back(planks) end
       e.res = nil return
     end
     restore(e.sid, e.hdr, e.parts)
@@ -1684,6 +1725,7 @@ function deconstruct(sid, uid)
     end
     ST.removeParts(e.sid, us)
     for _, cr in ipairs(crates) do return_crated(cr.id, cr.prefer) end
+    if planks > 0 then planks_back(planks) end
     if e.refund > 0 then co.refund(e.refund, "taken down again: " .. lbl) end
     e.t = agency_now()
     e.res = e.refund

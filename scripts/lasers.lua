@@ -569,7 +569,8 @@ end
 
 -- ground energy waiting on a spot: { body, x,y,z (body-relative), e }
 local pits = {}
-local MAT_COL = { steel = { 0.55, 0.56, 0.55 }, concrete = { 0.62, 0.6, 0.56 }, regocrete = { 0.6, 0.48, 0.38 }, glass = { 0.7, 0.8, 0.82 } }
+local MAT_COL = { steel = { 0.55, 0.56, 0.55 }, concrete = { 0.62, 0.6, 0.56 }, regocrete = { 0.6, 0.48, 0.38 }, glass = { 0.7, 0.8, 0.82 },
+                  wood = { 0.85, 0.42, 0.14 } }   -- (W1: wood throws ember-orange sparks and chips)
 
 -- ── applying a hit ──────────────────────────────────────────────────────────
 -- E = J that arrives (after the air), d = the spot, F = its fluence, c = the

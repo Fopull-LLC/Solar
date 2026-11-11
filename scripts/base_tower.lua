@@ -133,7 +133,6 @@ local just_founded = nil
 function reconcile()
   local ST, B, pb = ref("structures"), ref("bases"), parts()
   if not (ST and B and pb and ST.list) then return 0 end
-  local def = towerDef()
   local seen, n = {}, 0
   local fb = ref("field_builder")
   local lp = fb and fb.lastPlace
@@ -142,7 +141,9 @@ function reconcile()
   for _, rec in ipairs(ST.list()) do
     local ruin = rec.ru and RU and RU.towerHeld and RU.towerHeld(rec)
     for _, p in ipairs(rec.bp) do
-      if p.id == "tower" and not ruin then
+      -- (W1) any part with a `tower` founds a base: the Tower, a Camp Mast
+      local def = defOf(p)
+      if def and def.tower and not ruin then
         local gx, gy, gz, ax, ay, az, U = tower_pose(ST, rec, p, def)
         local r = p.base and B.get(p.base) or nil
         if r and (r.sid ~= rec.id or r.uid ~= p.uid) then r = nil end   -- (a copy: found its own)
@@ -168,7 +169,10 @@ function reconcile()
           if lp and lp.sid == rec.id and lp.uid == p.uid then just_founded = bid end
         end
         tw[r.id] = { sid = rec.id, uid = p.uid, b = rec.b, gx = gx, gy = gy, gz = gz, ax = ax, ay = ay, az = az,
-                     ux = U.x, uy = U.y, uz = U.z }
+                     ux = U.x, uy = U.y, uz = U.z,
+                     -- (W1) what this one is: its mast, its draw, whether it can be a ground station
+                     mast = def.tower.mast or 11.6, draw = def.tower.draw or 2.0, station = def.tower.station ~= false,
+                     label = def.label or "Base Station Tower" }
         seen[r.id] = true
         n = n + 1
       end
@@ -184,6 +188,15 @@ function reconcile()
 end
 
 function towerOf(bid) return tw[bid] end
+-- (W1) a base's tower draw (base_grid's load for it): the Tower's 2 EC/s, a Camp Mast's 0.5
+function drawOf(bid)
+  local T = tw[bid]
+  if T and T.draw then return T.draw end
+  local def = towerDef()
+  return (def and def.tower and def.tower.draw) or 2.0
+end
+-- (W1) is base `bid` a ground station now: powered, and a tower that can be one
+local function station_now(T, pw) return pw.powered and (not T or T.station ~= false) end
 
 -- ── power: the base grid (M6, step 8; base_grid.lua) ────────────────────────
 -- The tower of base `bid` on its grid: { supply, need, draw, powered, stored,
@@ -238,7 +251,7 @@ function commsNodes(by, bodies, E)
   local out = {}
   local home = home_body()
   local def = towerDef()
-  local mast = (def and def.tower and def.tower.mast) or 11.6
+  local mast0 = (def and def.tower and def.tower.mast) or 11.6
   local ids = {}
   for id in pairs(tw) do ids[#ids + 1] = id end
   table.sort(ids)
@@ -249,11 +262,13 @@ function commsNodes(by, bodies, E)
     if b and r then
       local x, y, z = b.x + T.ax, b.y + T.ay, b.z + T.az
       local pw = power(id, bodies)
+      local mast = T.mast or mast0
+      local st = station_now(T, pw)
       local nd
-      if pw.powered and T.b == home then
+      if st and T.b == home then
         nd = { id = "t:" .. tostring(id), name = r.n, x = x, y = y, z = z, home = true, power = E.COMMS.station,
                agl = mast, tower = true, base = id, body = T.b }
-      elseif pw.powered then
+      elseif st then
         nd = { id = "t:" .. tostring(id), name = r.n, x = x, y = y, z = z, any = E.COMMS.station, relay = E.COMMS.station,
                rate = 2, agl = mast, tower = true, landed = true, base = id, body = T.b }
       else
@@ -343,7 +358,8 @@ function bases(opts)
         local s = net and net.statusOf and net.statusOf("t:" .. tostring(r.id)) or nil
         out[#out + 1] = { id = r.id, name = r.n, body = r.b, x = b.x + T.ax, y = b.y + T.ay, z = b.z + T.az,
                           gx = b.x + T.gx, gy = b.y + T.gy, gz = b.z + T.gz, ux = T.ux, uy = T.uy, uz = T.uz,
-                          tier = pw.powered and "ground station" or "mast", powered = pw.powered, supply = pw.supply,
+                          tier = station_now(T, pw) and "ground station" or "mast", powered = pw.powered, supply = pw.supply,
+                          tower = T.label,
                           need = pw.need, src = pw.src, linked = (s and s.connected) or false, strength = s and s.strength or 0,
                           hops = s and s.hops or 0, via = s and s.names or nil, why = s and s.why or nil,
                           coverage = cov_of(r.b), structures = count_near(r.b, T.gx, T.gy, T.gz),
@@ -414,8 +430,11 @@ function commitName(s)
   close_prompt()
   local net = ref("comms")
   if net and net.refreshNow then pcall(net.refreshNow) end
-  say(string.format("%s founded · its tower is %s", r and r.n or "the base",
-    (power(bid, nil, true).powered and "a ground station") or "a mast until its grid has 2 EC/s"))
+  local T = tw[bid]
+  local pw0 = power(bid, nil, true)
+  say(string.format("%s founded · its %s is %s", r and r.n or "the base", T and T.station == false and "mast" or "tower",
+    (station_now(T, pw0) and "a ground station") or (T and T.station == false and "a beacon-class mast")
+    or string.format("a mast until its grid has %.0f EC/s", drawOf(bid))))
   return true, r and r.n
 end
 function cancelName() if prompt then return commitName("") end return false end
@@ -425,9 +444,11 @@ local function prompt_tree()
   local B = ref("bases")
   local r = B and B.get(prompt.bid)
   local where = r and r.b or "?"
-  local line = "Base Station Tower on " .. tostring(where)
+  local T = tw[prompt.bid]
+  local line = ((T and T.label) or "Base Station Tower") .. " on " .. tostring(where)
   local pw = power(prompt.bid)
-  local tier = pw.powered and string.format("a ground station (%.1f EC/s on its grid)", pw.supply)
+  local tier = (T and T.station == false) and "a beacon-class mast: it relays, it never becomes a ground station (a Base Station Tower does)"
+    or pw.powered and string.format("a ground station (%.1f EC/s on its grid)", pw.supply)
     or string.format("a mast until its grid has %.0f EC/s: a Solar Array or an Isotope Skid within 150 m, a Battery Bank for the night", pw.draw or pw.need)
   local function submit(n)
     local ok, w = commitName((n and n.text) or prompt.text)
@@ -482,8 +503,11 @@ local function provider(t, ctx)
   if not (t and t.node) then return {} end
   local ST, B = ref("structures"), ref("bases")
   if not (ST and ST.partOfNode and B) then return {} end
-  local rec, part = ST.partOfNode(t.node)
-  if not (part and part.id == "tower") then return {} end
+  local FB = ref("field_builder")
+  local rec, part
+  if FB and FB.pickTarget then rec, part = FB.pickTarget(t) else rec, part = ST.partOfNode(t.node) end
+  local pd = part and defOf(part)
+  if not (pd and pd.tower) then return {} end
   local r = part.base and B.get(part.base)
   if not r then return {} end
   local bid = r.id
@@ -492,7 +516,7 @@ local function provider(t, ctx)
         local rr = B.get(bid); return rr and rr.n or "?" end },
     { id = "bt_power", type = "info", label = "Power", group = "Tower", value = function()
         local pw = power(bid)
-        return string.format("%.1f / %.1f EC/s · %s", pw.supply, pw.need, pw.powered and "ground station" or "mast")
+        return string.format("%.1f / %.1f EC/s · %s", pw.supply, pw.need, station_now(tw[bid], pw) and "ground station" or "mast")
       end },
     { id = "bt_grid", type = "info", label = "Grid", group = "Tower", value = function() return gridLine(power(bid)) end },
     { id = "bt_link", type = "info", label = "Link", group = "Tower", value = function()

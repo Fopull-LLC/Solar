@@ -2132,6 +2132,12 @@ def write_piece(piece, mat, fn, dry, fixture):
         f.write("]\n")
 
 
+# ── W1 (progression): wood on the pieces parts_kit gives it, and the TIMBER pieces (tools/gen_kit_wood.py;
+# after the writer: it wraps mats_of for wood's own sky reflectivity) ──
+import gen_kit_wood  # noqa: E402
+gen_kit_wood.install(sys.modules[__name__])
+
+
 def main():
     dry = "--dry" in sys.argv
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
