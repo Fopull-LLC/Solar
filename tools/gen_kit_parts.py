@@ -1821,9 +1821,163 @@ def paint_split(piece, m, children):
         m, inn = split_model(m, lambda mat, c: join_inside(c))
     elif f2 == "ring":
         m, inn = split_model(m, lambda mat, c: math.hypot(c[0], c[1] - HAX) < HR - HT * 0.5 and abs(c[2]) < 1.0 + 1e-3)
+    if f2 == "z":
+        # (meshfold, 11-11) a wall's inside is the same model's second set of slots, not a node
+        m = fold_inside(m, inn)
+        m.wall = "fold"
+        # (one set, a glass wall's steel: its slots already share it, and the atlas is not needed)
+        if len({k[:-2] if k.endswith("In") else k for k in m.parts}) > 1:
+            wall_atlas_uv(m)
+            m.wall = "atlas"
+        return m, kids
     if inn is not None and inn.parts:
         kids.append(("MeshIn", "mesh", (inn, (0, 0, 0))))
     return m, kids
+
+
+# ── (meshfold, 11-11) ONE INSTANCE A WALL ───────────────────────────────────
+# Engine 0685 draws a model whose parts differ only in material NUMBERS as one
+# instance (a slot table read per vertex), but only when every part binds the
+# same texture set. A wall was cladding (or concrete) and steel, two sets, and
+# its inside paint a child node ("MeshIn") of two more parts: 4 instances, 2
+# with builderperf's cull from outside. Now:
+#   * the inside faces are folded back into the wall's own model as slots of
+#     their own ("CladIn", "SteelIn", "ConcreteIn": the same set, reflectivity
+#     0.12, painted apart by kit_paint through node:material(slot)); and
+#   * every wall-class model samples ONE atlas, textures/kit/wallkit_*: the
+#     cladding, steel and concrete sets side by side across U, each with a
+#     gutter of its own wrapped edge. V still wraps (each set tiles across the
+#     atlas's full height); U cannot, so every connected face is moved into its
+#     set's column: shifted (its texture moves, its scale does not) and, if it
+#     is wider than a tile across U but not across V, turned a quarter (a
+#     rotation, never a mirror, so the normal map's handedness holds). A face
+#     may run half a gutter past its tile (the gutter is the set's own wrap).
+#     No wall face is wider than that both ways (work/meshfold/uvspan.py).
+#     The cladding's ribs run along V, and no cladding face needs turning.
+# So a plain wall is one instance, a window wall two (its pane is glass), a
+# door wall four (its leaf moves and its pane is glass; its lamp lens glows).
+WATLAS = "textures/kit/wallkit"
+# column: (x0, gutter, tile) in the albedo's pixels (the normal map's are the same,
+# the ORM's half): cladding | steel | concrete, steel in the middle, beside both of
+# the sets it is paired with, so a far mip's blur at a column's edge meets a grey
+# that belongs on the wall anyway.
+WCOLS = {"Clad": ("cladding", 0, 64, 1024), "Steel": ("steel", 1152, 32, 512), "Concrete": ("concrete", 1728, 64, 1024)}
+WATLAS_W, WATLAS_H = 2880, 1024
+
+
+def wall_atlas(dry=False):
+    """Write textures/kit/wallkit_{albedo,normal,orm}.png from textures/base's three sets."""
+    from PIL import Image
+    paths = []
+    for kind, half in (("albedo", False), ("normal", False), ("orm", True)):
+        k = 2 if half else 1
+        W, H = WATLAS_W // k, WATLAS_H // k
+        out = Image.new("RGB", (W, H))
+        for (src, x0, g, w) in WCOLS.values():
+            x0, g, w = x0 // k, g // k, w // k
+            t = Image.open(os.path.join(ROOT, "textures", "base", f"{src}_{kind}.png")).convert("RGB")
+            if t.size != (w, H):
+                t = t.resize((w, H), Image.LANCZOS)
+            out.paste(t.crop((w - g, 0, w, H)), (x0, 0))
+            out.paste(t, (x0 + g, 0))
+            out.paste(t.crop((0, 0, g, H)), (x0 + g + w, 0))
+        p = os.path.join(ROOT, f"{WATLAS}_{kind}.png")
+        paths.append(p)
+        if not dry:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            out.save(p, optimize=True)
+    if not dry:
+        import detail_maps as DM
+        DM.register_textures(paths)
+    return paths
+
+
+def wall_mat(n, normal):
+    t = WATLAS
+    return (f'(\n                color: (1.0, 1.0, 1.0),\n'
+            f'                texture: Some("{t}_albedo.png"),\n'
+            f'                normal_map: Some("{t}_normal.png"),\n'
+            f'                normal_strength: {normal},\n'
+            f'                roughness_map: Some("{t}_orm.png"),\n'
+            f'                roughness: 1.0,\n'
+            f'                metallic_map: Some("{t}_orm.png"),\n'
+            f'                metallic: 1.0,\n'
+            f'                ao_map: Some("{t}_orm.png"),\n'
+            f'                shading: Physical,\n            )')
+
+
+WALL_MATS = {"Clad": lambda: wall_mat("Clad", 1.2), "Steel": lambda: wall_mat("Steel", 1.0),
+             "Concrete": lambda: wall_mat("Concrete", 1.0)}
+
+
+def fold_inside(m, inn):
+    """m with inn's parts added as "<mat>In" slots (vertex colours kept)."""
+    from gen_part_meshes import Model as _Model
+    if inn is None or not inn.parts:
+        return m
+    for mat, (Ps, Ns, UVs, Is, _) in inn.parts.items():
+        P = np.vstack(Ps); N = np.vstack(Ns); UV = np.vstack(UVs); I = np.vstack(Is)
+        _Model.add(m, mat + "In", P, N, UV, I)
+        m.cols.setdefault(mat + "In", []).append(np.vstack(inn.cols[mat]))
+        m.tags.setdefault(mat + "In", []).append(np.zeros(len(I), np.int64))
+    return m
+
+
+def _components(I, nv):
+    par = np.arange(nv)
+
+    def f(a):
+        while par[a] != a:
+            par[a] = par[par[a]]
+            a = par[a]
+        return a
+    for t in I:
+        a = f(t[0])
+        for b in (t[1], t[2]):
+            rb = f(b)
+            if rb != a:
+                par[rb] = a
+    return np.array([f(i) for i in range(nv)])
+
+
+def wall_atlas_uv(m):
+    """Move each connected face of a wall-class model into its set's atlas column (in place)."""
+    for mat, e in m.parts.items():
+        base = mat[:-2] if mat.endswith("In") else mat
+        if base not in WCOLS:
+            raise SystemExit(f"wall atlas: a wall-class piece has a {mat} part (no atlas column)")
+        _, x0, g, w = WCOLS[base]
+        UV = np.vstack(e[2]).copy(); I = np.vstack(e[3])
+        lab = _components(I, len(UV))
+        for l in np.unique(lab):
+            sel = lab == l
+            uv = UV[sel]
+            sp = uv.max(0) - uv.min(0)
+            # (the gutters hold the set's own wrapped edge, so a face may run half a gutter past
+            # the tile on each side and still sample what the wrap would have shown)
+            lim = 1.0 + g / w
+            if sp[0] > lim:
+                if sp[1] > lim or base == "Clad":
+                    raise SystemExit(f"wall atlas: a {mat} face {sp[0]:.2f} x {sp[1]:.2f} tiles fits no column")
+                uv = np.stack([-uv[:, 1], uv[:, 0]], 1)       # a quarter turn
+                sp = uv.max(0) - uv.min(0)
+            # a whole-tile shift (the face samples exactly what it did) when the face then lies
+            # within the tile and half a gutter; else centred in the tile (its texture moves: a
+            # face that straddled the wrap, like a whole wall's cladding panel)
+            u0, u1, h = uv[:, 0].min(), uv[:, 0].max(), g / (2 * w)
+            k = math.floor(u0)
+            if u1 - k > 1 + h:
+                k = math.ceil(u1) - 1
+            u = uv[:, 0] - k
+            if u.min() < -h or u.max() > 1 + h:
+                u = uv[:, 0] - (u0 + u1) / 2 + 0.5
+            uv[:, 0] = (x0 + g + u * w) / WATLAS_W
+            UV[sel] = uv
+        # one block per part from here on (the vertex order is the part's stacked order)
+        e[0] = [np.vstack(e[0])]; e[1] = [np.vstack(e[1])]; e[2] = [UV]; e[3] = [I]
+        m.cols[mat] = [np.vstack(m.cols[mat])]
+        if mat in m.tags:
+            m.tags[mat] = [np.concatenate(m.tags[mat])]
 
 
 # ── writing ──────────────────────────────────────────────────────────────────
@@ -1832,11 +1986,15 @@ def f3(v):
     return f"({v[0]:.4f}, {v[1]:.4f}, {v[2]:.4f})"
 
 
-def mats_of(model, refl=None):
+def mats_of(model, refl=None, wall=False):
     def one(n):
-        t = MATS[n]()
-        if refl is not None and "shading: Physical" in t:
-            t = t.replace("shading: Physical", f"reflectivity: {refl},\n                shading: Physical")
+        # (meshfold) a wall's "<mat>In" slot: its inside, the 12 % sky of a room's face
+        inside = bool(wall) and n.endswith("In")
+        base = n[:-2] if inside else n
+        t = WALL_MATS[base]() if wall == "atlas" else MATS[base]()
+        r = INSIDE_REFL if inside else refl
+        if r is not None and "shading: Physical" in t:
+            t = t.replace("shading: Physical", f"reflectivity: {r},\n                shading: Physical")
         return f'            "{n}": {t}'
     return ",\n".join(one(n) for n in sorted(model.parts.keys()))
 
@@ -1868,7 +2026,7 @@ def node_empty(name, at, parent, tags=None):
 '''
 
 
-def node_mesh(name, glb, model, at, parent, cast=True, refl=None):
+def node_mesh(name, glb, model, at, parent, cast=True, refl=None, wall=False):
     shadow = "" if cast else "        cast_shadow: false,\n"
     return f'''    (
         name: "{name}",
@@ -1881,7 +2039,7 @@ def node_mesh(name, glb, model, at, parent, cast=True, refl=None):
             asset_path: "{glb}",
         ),
         object_materials: {{
-{mats_of(model, refl)},
+{mats_of(model, refl, wall)},
         }},
         scripts: [],
         parent: Some({parent}),
@@ -1919,7 +2077,8 @@ def write_piece(piece, mat, fn, dry, fixture):
     small = (hi - lo).max() < 0.7 or mat == "film"
     mesh_lo, mesh_hi = lo.copy(), hi.copy()
     nodes = [node_empty(name, (0, 0, 0), None, tags=["base_part", "kit"]),
-             node_mesh("Mesh", f"{FOLDER}/{glb}", m, c, 0, cast=not small, refl=FLOOR_REFL if piece in FLOOR_LIKE else None)]
+             node_mesh("Mesh", f"{FOLDER}/{glb}", m, c, 0, cast=not small, refl=FLOOR_REFL if piece in FLOOR_LIKE else None,
+                       wall=getattr(m, "wall", None))]
     for i, (bc, bs, q) in enumerate(sh.boxes):
         nodes.append(node_box(f"Wall {i + 1}", bc, bs, q, 0))
     all_lo, all_hi = lo.copy(), hi.copy()
@@ -1980,6 +2139,7 @@ def main():
     # (S4) the decal and grime atlases and their maps, the sign's blank face
     if not dry and (not only or "--tex" in sys.argv):
         gen_kit_props.textures()
+        wall_atlas()
     fixture =["-- Written by tools/gen_kit_parts.py: each kit prefab's mesh bounds (ground frame),", "-- its collider count and live children. tests/smoke_kit.lua reads it.", "return {"]
     for piece, (fn, mats) in PIECES.items():
         if only and piece not in only:

@@ -27,8 +27,9 @@
 -- ── THE RECORD (a structure's bp entry, so it saves, copies and travels in
 -- a blueprint with the piece) ───────────────────────────────────────────────
 --   paint    the swatch key of the whole piece, or of a wall's OUTSIDE (+Z)
---   paintIn  a wall-class piece's INSIDE (-Z) face: its "MeshIn" child (the
---            generator splits a wall's skins at its middle plane)
+--   paintIn  a wall-class piece's INSIDE (-Z) face: the "<mat>In" slots of its
+--            Mesh (meshfold, 11-11: CladIn, SteelIn, ConcreteIn, one instance
+--            with the outside's slots), or a hab can's "MeshIn" child
 --   pt       the agency clock when it was last painted (fresh paint is clean)
 --
 -- ── WEATHER (the light pass of plan §5's wear) ──────────────────────────────
@@ -229,6 +230,9 @@ end
 
 -- The nodes paint goes on: the piece's Mesh (and its door leaves, which are
 -- the same wall), and the MeshIn of a two-faced piece. → out{}, in{}
+-- (a two-faced WALL has no MeshIn now: its inside is slots of its Mesh, see
+-- slotsOf; `inn` is then empty and the Mesh is in `out`, so a rim or a
+-- highlight still covers both faces)
 -- (by name, as kit_live finds a door: a node's children() list can still be
 -- empty in the spawn callback that hands over a fresh piece, getChild is not)
 local function named(n, nm)
@@ -244,6 +248,52 @@ function surfaces(node)
   return out, inn
 end
 
+-- (meshfold, 11-11) A folded wall's Mesh: its slots, outside and inside, by
+-- the names the generator gives (tools/gen_kit_parts.py fold_inside: an
+-- inside slot is its outside's name + "In"). Read from the model once per
+-- prefab. → { out = { names }, inn = { names } } | false (not folded)
+-- Paint on such a piece is written to each slot's own colour (the prefab's
+-- override holds every slot's whole material, so only its colour changes)
+-- instead of setTint, which covers the whole model: the engine then draws
+-- the wall as ONE instance whatever its two faces wear (engine 0685).
+local SLOTS = {}
+function slotsOf(mesh, def)
+  local k = def and (def.prefab or def.id) or "?"
+  local s = SLOTS[k]
+  if s ~= nil then return s end
+  s = false
+  local ok, list = pcall(mesh.materials, mesh)
+  if ok and type(list) == "table" then
+    local o, i, seen = {}, {}, {}
+    for _, sl in ipairs(list) do
+      local nm = sl.material
+      if type(nm) == "string" and not seen[nm] then
+        seen[nm] = true
+        if nm:sub(-2) == "In" then i[#i + 1] = nm else o[#o + 1] = nm end
+      end
+    end
+    if #i > 0 then s = { out = o, inn = i } end
+  end
+  -- (a model not loaded yet answers no slots: asked again next time, and meanwhile the
+  -- names the generator gives a wall of this material; a name no part wears is unused)
+  if s or (ok and type(list) == "table" and #list > 0) then SLOTS[k] = s; return s end
+  return def and def.faces2 and FOLD_GUESS[def.mat] or false
+end
+FOLD_GUESS = {
+  steel = { out = { "Clad", "Steel" }, inn = { "CladIn", "SteelIn" } },
+  concrete = { out = { "Concrete", "Steel" }, inn = { "ConcreteIn", "SteelIn" } },
+  regocrete = { out = { "Concrete", "Steel" }, inn = { "ConcreteIn", "SteelIn" } },
+  glass = { out = { "Steel" }, inn = { "SteelIn" } },
+}
+local WHITE = { 1, 1, 1 }
+local function slot_paint(mesh, names, c)
+  c = c or WHITE
+  for _, nm in ipairs(names) do
+    pcall(function() mesh:material(nm).color = { c[1], c[2], c[3] } end)
+  end
+end
+slotWrites = 0         -- probes: slot colours written
+
 -- Tint a placed piece's node for its record: paint, inside paint, dust.
 -- dust = 0..1 on its outside; dcol = the dust colour. Clean and unpainted
 -- clears the tint (the identity costs nothing).
@@ -255,7 +305,15 @@ function apply(node, part, def, dust, dcol)
   -- (a two-faced piece's inside is its own swatch, or the outside's when it
   -- has none: an unsplit "paint the wall" coats both)
   local tI = surfaceTint(def.faces2 and (part.paintIn or part.paint) or part.paint, def, 0, dcol)
-  for _, n in ipairs(out) do tint(n, tO) end
+  local sl = def.faces2 and #inn == 0 and out[1] and out[1].name == "Mesh" and slotsOf(out[1], def)
+  if sl then
+    slot_paint(out[1], sl.out, tO)
+    slot_paint(out[1], sl.inn, tI)
+    slotWrites = slotWrites + #sl.out + #sl.inn
+    for k = 2, #out do tint(out[k], tO) end
+  else
+    for _, n in ipairs(out) do tint(n, tO) end
+  end
   for _, n in ipairs(inn) do tint(n, tI) end
   if DEBUG and log then
     log(string.format("kit_paint: %s %s out %d in %d · %s / %s", tostring(node.name), tostring(part.uid), #out, #inn,
@@ -270,6 +328,9 @@ function highlight(node, on, part, def, dust, dcol)
   if not valid(node) then return end
   local out, inn = surfaces(node)
   if on then
+    -- (a folded wall's paint is in its slots: the highlight stands in for it, as its tint did)
+    local sl = def and def.faces2 and #inn == 0 and out[1] and out[1].name == "Mesh" and slotsOf(out[1], def)
+    if sl then slot_paint(out[1], sl.out, nil); slot_paint(out[1], sl.inn, nil) end
     for _, n in ipairs(out) do pcall(n.setTint, n, { color = { 0.6, 0.9, 1.0 }, rim = { 0.2, 0.7, 1.0 }, rimStrength = 0.8 }) end
     for _, n in ipairs(inn) do pcall(n.setTint, n, { color = { 0.6, 0.9, 1.0 }, rim = { 0.2, 0.7, 1.0 }, rimStrength = 0.8 }) end
   else

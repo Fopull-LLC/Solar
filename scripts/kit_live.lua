@@ -78,7 +78,6 @@ local A = {}
 local near = {}         -- the entries with doors within REACH (rebuilt every SCAN)
 local scan_t, pool_t = -10, -10
 local paint_sign, paint_emblem   -- (S4: signs and the emblem, below)
-local wall_add                   -- (builderperf: a wall's inside face, below)
 
 function entries() return E end
 
@@ -117,7 +116,6 @@ function spawned(rec, part, node)
   if def.sign or def.emblem then e.face = child(node, "Face"); e.sign_t = -10 end
   E[key(rec.id, part.uid)] = e
   A[key(rec.id, part.uid)] = (#e.doors > 0 or e.light or e.screen or e.face) and e or nil
-  wall_add(e, node)
   if def.sign then paint_sign(e) end
   if def.emblem then paint_emblem(e) end
   scan_t = -10
@@ -788,134 +786,10 @@ end
 providerFn = provider
 local reg_on = false
 
--- ── a wall's inside, seen from outside it (builderperf, 11-10) ──────────────
--- A two-faced wall draws its room side as a child of its own ("MeshIn", so
--- paint and the 12 % sky reflection reach it apart): two more instances on
--- every wall (S4/S5), half the kit's instance count. Seen from the wall's
--- outer side (+Z), every face of MeshIn looks away AND lies behind the
--- wall's own outer face and reveals: it is never seen, so it is not drawn.
--- Where the camera stands against each wall's plane (body-relative: the
--- planet only translates) is tested in the camera pass: the walls within
--- WALL_NEAR every frame (an 8 m grid), the rest a slice a frame, each with a
--- margin for how far the camera moves in the time between two looks, so a
--- wall is drawn whole the frame the camera can see its inside. MeshIn casts
--- no shadow (the Mesh holds the wall's silhouette), so nothing else changes.
-WALL_CULL = true
-WALL_NEAR = 10.0
-local WCELL = 8.0
-local walls, wgrid, wcur, wdead = {}, {}, 1, 0
-local wcam = nil       -- { b, x, y, z }: last frame's camera, body-relative
-wallsHidden = 0
-local function wkey(x, y, z) return math.floor(x / WCELL) .. ":" .. math.floor(y / WCELL) .. ":" .. math.floor(z / WCELL) end
-wall_add = function(e, node)
-  local d = e.def
-  if not (d.faces2 and d.snap == "wall" and e.px and e.fx) then return end
-  local mi = child(node, "MeshIn")
-  if not mi then return end
-  e.mi, e.miv = mi, true
-  walls[#walls + 1] = e
-  local k = (e.b or "") .. "|" .. wkey(e.px, e.py, e.pz)
-  local c = wgrid[k]
-  if not c then c = {}; wgrid[k] = c end
-  c[#c + 1] = e
-end
--- (gone() and a fresh spawn of the same part mark an entry dead: no engine read here)
-local function wall_live(e) return not e.dead end
--- a plain wall (no script of its own): structures tells us as it lands and goes
-local W = {}
-function wallSpawned(rec, part, node)
-  local d = partsDef(part.id)
-  if not d then return end
-  local k = key(rec.id, part.uid)
-  local old = W[k]
-  if old then old.dead = true end
-  local e = { sid = rec.id, uid = part.uid, def = d, b = rec.b }
-  local ST = ref("structures")
-  local front, _up
-  if ST and ST.partPose then e.px, e.py, e.pz, _up, front = ST.partPose(rec, part, 0) end
-  if front then e.fx, e.fy, e.fz = front.x, front.y, front.z end
-  W[k] = e
-  wall_add(e, node)
-end
-function wallGone(sid, uid)
-  local k = key(sid, uid)
-  local e = W[k]
-  if e then e.dead = true; W[k] = nil end
-end
-local function wall_test(e, cx, cy, cz, margin)
-  local sd = (cx - e.px) * e.fx + (cy - e.py) * e.fy + (cz - e.pz) * e.fz
-  local show = sd <= margin
-  if show ~= e.miv then
-    if not pcall(function() e.mi.visible = show end) then e.dead = true return end
-    e.miv = show
-    wallsHidden = wallsHidden + (show and -1 or 1)
-  end
-end
-local function wall_cull()
-  if not WALL_CULL or #walls == 0 or not (camera and camera.screenToRay) then return end
-  local ok, ox, oy, oz = pcall(camera.screenToRay, 0, 0)
-  if not (ok and ox) then return end
-  local b0 = walls[1].b
-  local bb = b0 and space and space.body and space.body(b0)
-  if not bb then return end
-  local cx, cy, cz = ox - bb.x, oy - bb.y, oz - bb.z
-  -- how far the camera moved since the last frame (a cut or a teleport: far, so
-  -- nothing is hidden on that frame)
-  local mv = 0.0
-  if wcam and wcam.b == b0 then mv = math.sqrt((cx - wcam.x) ^ 2 + (cy - wcam.y) ^ 2 + (cz - wcam.z) ^ 2) else mv = 1e9 end
-  wcam = { b = b0, x = cx, y = cy, z = cz }
-  local m_near = 0.3 + 2 * mv
-  -- the near walls, every frame
-  local gx, gy, gz = math.floor(cx / WCELL), math.floor(cy / WCELL), math.floor(cz / WCELL)
-  for i = -1, 1 do for j = -1, 1 do for k = -1, 1 do
-    local c = wgrid[b0 .. "|" .. (gx + i) .. ":" .. (gy + j) .. ":" .. (gz + k)]
-    if c then for _, e in ipairs(c) do if e.b == b0 and not e.dead and wall_live(e) then wall_test(e, cx, cy, cz, m_near) end end end
-  end end end
-  -- the rest a slice a frame: all of them every ~8 frames
-  local n = #walls
-  local slice = math.max(64, math.ceil(n / 8))
-  local m_far = 0.3 + 2 * mv * (math.ceil(n / slice) + 1)
-  local i = 0
-  while i < slice and n > 0 do
-    if wcur > n then wcur = 1 end
-    local e = walls[wcur]
-    if not wall_live(e) then
-      -- gone (or spawned again as a new entry): out of the list, its grid cell swept later
-      e.dead = true
-      walls[wcur] = walls[n]; walls[n] = nil; n = n - 1
-      if e.miv == false then wallsHidden = wallsHidden - 1 end
-      wdead = wdead + 1
-    else
-      if e.b == b0 then wall_test(e, cx, cy, cz, m_far) end
-      wcur = wcur + 1
-    end
-    i = i + 1
-  end
-  if wdead > 200 then
-    wdead = 0
-    for k2, c in pairs(wgrid) do
-      local keep = {}
-      for _, e in ipairs(c) do if not e.dead then keep[#keep + 1] = e end end
-      wgrid[k2] = (#keep > 0) and keep or nil
-    end
-  end
-end
--- probes: how many walls have their inside face, and how many hide it now
-function wallStats() return #walls, wallsHidden end
-function setWallCull(on)
-  WALL_CULL = on and true or false
-  if not WALL_CULL then
-    for _, e in ipairs(walls) do if e.miv == false and valid(e.mi) then e.mi.visible = true; e.miv = true end end
-    wallsHidden = 0
-  end
-end
-
-local function late_cull() wall_cull() end
-function lateUpdate(node, dt)
-  if #walls == 0 then return end
-  local pc = ref("planet_camera")
-  if pc and pc.deferLate then pc.deferLate(node, dt, late_cull) else wall_cull() end
-end
+-- (meshfold, 11-11: a two-faced wall's inside is no longer a child node of its
+-- own ("MeshIn") but a second set of material slots in the wall's one model,
+-- drawn as one instance with it (engine 0685). The builderperf cull that hid
+-- MeshIn from outside, and wallSpawned / wallGone, went with it.)
 
 -- ── the driver ──────────────────────────────────────────────────────────────
 function start(node)
@@ -924,7 +798,6 @@ function start(node)
     if #all > 1 and all[1].node and all[1].node.id ~= node.id then node:destroy() return end
   end
   E, A, near, LIT = {}, {}, {}, {}
-  walls, wgrid, wcur, wdead, wcam, wallsHidden, W = {}, {}, 1, 0, nil, 0, {}
 end
 
 function update(node, dt)

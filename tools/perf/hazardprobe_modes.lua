@@ -420,6 +420,10 @@ function HZ.rubble(cv)
   HZ.check("a fall ahead: a heap that blocks the tunnel ahead (the crew not under it)", (ch.stats.piles or 0) > p2 and d1 < d0 - 1.0,
     "piles %d → %d, %.1f → %.1f m", p2, ch.stats.piles or 0, d0, d1)
   HZ.check("…no slab left hanging in the roof", hanging(f11) == 0)
+  -- the slabs fell by themselves: the heap lands once they are all down
+  -- (not at the 3 s fallback that waits on slabs that never land)
+  local downs = (pl.t or 0) - (lr.t or 0) - (ch.DUST_S or 1.5)
+  HZ.check("…its slabs came down by themselves (the heap landed before the 3 s fallback)", pl.t and downs < 2.9, "%.2f s after the drop", downs)
   local inv = findScript("inventory")
   if inv and inv.gearCount and inv.gearCount("astro", "laser") < 1 then inv.addGear("astro", "laser", 1) end
   pcall(tb.hold, "laser")
@@ -480,7 +484,12 @@ function HZ.slabdiag(cv)
   end
   for i, how in ipairs({ "plain", "rebuild", "vel" }) do
     b = home()
-    local p = { x = rel.x + t.x * i * 1.5, y = rel.y + t.y * i * 1.5, z = rel.z + t.z * i * 1.5 }
+    -- 3.5 m apart (a boulder is 1.3 m across: 1.5 m apart they overlapped
+    -- and shoved each other, 0688 review), each in open air
+    local p = { x = rel.x + t.x * i * 3.5, y = rel.y + t.y * i * 3.5, z = rel.z + t.z * i * 3.5 }
+    local hits = overlapSphere and overlapSphere(vec3(b.x + p.x, b.y + p.y, b.z + p.z), 0.7) or {}
+    local fl = terrain.raycast(vec3(b.x + p.x, b.y + p.y, b.z + p.z), vec3(-up.x, -up.y, -up.z), 30)
+    P("HZ DIAG %s spot: %d overlaps, floor %.2f m under", how, #hits, fl and fl.distance or -1)
     spawn("LooseBoulder", vec3(b.x + p.x, b.y + p.y, b.z + p.z), function(n)
       nodes[i] = { n = n, how = how }
       if how ~= "plain" then pcall(assembly.rebuild, n) end
@@ -500,7 +509,9 @@ function HZ.slabdiag(cv)
         local inf = assembly.info(n)
         local uu, rr = e.up or up, e.rel or rel
         local iv = inf and inf.vel
-        P("HZ DIAG t%.1f %s: height %.2f vel %s info.vel %s asleep %s wake %s", k * 0.5, e.how, dot(q, uu) - dot(rr, uu),
+        local fq = terrain.raycast(vec3(n.x, n.y, n.z), vec3(-uu.x, -uu.y, -uu.z), 30)
+        P("HZ DIAG t%.1f %s: floor %.2f m under, height %.2f vel %s info.vel %s asleep %s wake %s", k * 0.5, e.how,
+          fq and fq.distance or -1, dot(q, uu) - dot(rr, uu),
           n.vel and string.format("%.2f", dot(n.vel, uu)) or "-", iv and string.format("%.2f", dot(iv, uu)) or "-",
           tostring(inf and inf.asleep), tostring(inf and inf.wake))
       end

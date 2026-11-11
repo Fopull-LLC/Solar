@@ -90,8 +90,9 @@
 --           carry text kit_live draws (img:text in the project's fonts; the
 --           base's name until the player writes their own); `emblem` the
 --           agency's emblem. T turns any mount on its face (kit_snap.spinPose).
---   faces2  a two-faced piece (a wall, a hab can): its "MeshIn" child is its
---           inside, painted apart (kit_paint `paintIn`)
+--   faces2  a two-faced piece (a wall, a hab can): its inside is painted
+--           apart (kit_paint `paintIn`): a wall's "<mat>In" slots of its one
+--           Mesh (meshfold 11-11), a hab can's "MeshIn" child
 --   exterior  dust gathers on it with age (structural sections only)
 --
 -- ── POWER (S5; scripts/base_power.lua, docs/base-building.md §16) ───────────

@@ -4244,6 +4244,8 @@ view). Numbers in `work/builderperf/NOTES.md`.
     sun-map draw less a wall. A hab can's lining still casts.
   - **A concrete or regocrete panel's inside is the concrete alone** (its
     lifting inserts are on its top): 3 instances, was 4.
+  - (11-11: the next two bullets are gone, see §34: a wall's inside is slots
+    of its one model now.)
   - **A wall's inside is not drawn from outside it** (`kit_live`, "a wall's
     inside, seen from outside it"): from the wall's outer side every MeshIn
     face looks away and lies behind the wall's outer face and reveals. The
@@ -4313,3 +4315,44 @@ Ty 2026-11-10: "a lot of depth with how you can interact with every individual p
 - **Keypads.** Part state `kp` (the code), `kpo` (opened), `kpb` (forced). A locked door is bolted (kit_live `dh = "lock"`), so a console that reaches its bolt can still release it. Ruin doors lock by kind (power hall 85 %, hab 55 %, camp 30 %, mine 35 %, relay never), cabinets and lockers three in five. Three wrong codes lock a keypad out for 30 s. A code read in a log or on a ruin terminal's DATA page (ACCESS CODES) is offered as a key. Fit a code on your own lockers and doors from the menu. **Force** any lock: the Terrain Laser 25 s, a Repair Kit's cutter 40 s, the Gravity Gun as a pry bar 60 s (an Engineer 60 %, a door 1.25×). It is loud (`loot.lastNoise`, 60 m), breaks the lock for good, knocks a container and wrecks a door's seal (room_air.forceDoor: it vents if it holds pressure).
 - **Strip for parts** on any kit piece or machine: an Engineer with a Repair Kit or the Terrain Laser in the pack, 5–45 s by mass (the laser 0.7×). A sound fitting under 60 kg comes off crated (`part:<id>`); otherwise its material, 60 % back (rusted 45 %, knocked 40 %; concrete as regocrete). What stood only on it comes down too (a quarter of their material back). The pack takes what fits; the rest is a salvage crate beside it. Stripping a wall of a pressurised room vents it: allowed, warned on the menu ("If stripped: Room 2 (0.98 atm) VENTS").
 - **Cost.** Closed: the panel's prompt check at 8 Hz over an index of container and keypad pieces (arithmetic, no rays; 0.05 ms a check); loot.lua looks at the structures' version twice a second for a container taken down. Open: described at 4 Hz, `ui.make` only when what it shows changed. A ruin's roll is one-off (under 1 ms).
+
+## 34. One instance a wall: the inside folded into the model (meshfold, 11-11)
+
+Engine 0685 draws a model whose parts differ only in material numbers
+(colour, roughness, reflectivity, glow) as one instance: the parts are laid
+end to end and each vertex reads its part's material from a slot table. It
+merges only parts that bind the SAME texture set, and only within one model.
+A wall was cladding (or concrete) plus steel (two sets) and its inside a
+child node (`MeshIn`, §32) of two more parts: 4 instances, merging on or off.
+
+- **The inside is slots of the wall's own model** (`tools/gen_kit_parts.py`
+  `fold_inside`): the room-facing faces `paint_split` takes are added back as
+  `CladIn`, `SteelIn`, `ConcreteIn`, with the outside's set and 12 % sky
+  reflection. There is no `MeshIn` on a wall-class piece now (hab cans keep
+  theirs: their faces wrap round the can and do not fit the atlas below).
+- **One texture set for every wall-class piece**: `textures/kit/wallkit_*`
+  (albedo, normal 2880 × 1024, ORM 1440 × 512), the cladding, steel and
+  concrete sets side by side across U, each column with a gutter of its own
+  wrapped edge. V still wraps (each set tiles over the atlas's full height);
+  U cannot, so `wall_atlas_uv` moves every connected face into its set's
+  column: a whole-tile shift when the face then fits (it samples exactly what
+  it did), else centred in the tile (a whole wall's cladding panel straddled
+  the wrap: its texture moved half a tile), and a face wider than a tile
+  across U but not V is turned a quarter (a rotation, never a mirror, for the
+  normal map). The generator refuses a face that fits neither way, and
+  refuses to turn cladding (its ribs run along V). A glass wall (steel only)
+  keeps the steel set and needs no atlas. Regenerate: `python3
+  tools/gen_kit_parts.py` (the atlas is written with the kit's textures).
+- **Paint goes to the slots** (`kit_paint.slotsOf`, `apply`): a folded wall's
+  outside slots get the outside paint and dust, its inside slots the inside
+  paint, each as that slot's colour through `node:material(slot)` (the
+  prefab's override holds the slot's whole material, so only its colour
+  changes). setTint would cover both faces. The door leaves still take a
+  tint. A highlight sets the slots back to white for as long as it is on and
+  the paint comes back after.
+- **kit_live's wall cull is gone** (and `wallSpawned` / `wallGone`,
+  `setWallCull`, `tests/smoke_wall_cull.lua`): there is no inside node left
+  to hide. The inside faces now cast with the Mesh (the same instance).
+- Instances: a plain wall 1 (was 4, 2 culled), a window wall 2 (its pane is
+  glass), a door wall 4 (the leaf moves, its pane is glass, the lamp lens has
+  its own set). kitperf numbers in `work/meshfold/NOTES.md`.

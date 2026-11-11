@@ -50,6 +50,21 @@ function GS.cam_on()
       local look = vec3(a.x, a.y, a.z) + fwd * v.ahead
       return eye.x, eye.y, eye.z, look.x, look.y, look.z, up.x, up.y, up.z
     end
+    if v.mode == "drive" then
+      -- (meshfold) a drive: the eye `s` m along the heading from the crew, `h` m over the
+      -- ground under it (asked of the terrain each frame, body-relative), looking ahead
+      local p = vec3(rx, ry, rz) + fwd * (v.s or 0)
+      local pr = len(p.x, p.y, p.z)
+      local du = vec3(p.x / pr, p.y / pr, p.z / pr)
+      local gr = ground_r(b, du.x, du.y, du.z, pr + 40) or pr
+      -- (a little easing over the ground's steps while it moves every frame; none in the stepped
+      -- pictures, so every variant stands at exactly the same height at each step)
+      v.gr = (v.gr and not v.noease) and (v.gr + (gr - v.gr) * 0.25) or gr
+      local eye = vec3(b.x, b.y, b.z) + du * (v.gr + (v.h or 2.5))
+      local f2 = (fwd - du * fwd:dot(du)):normalized()
+      local look = eye + f2 * 20 + du * (20 * math.tan(math.rad(v.pitch or 0)))
+      return eye.x, eye.y, eye.z, look.x, look.y, look.z, du.x, du.y, du.z
+    end
     local eye = vec3(a.x, a.y, a.z) + up * ((v.h or 1.7) - 0.9)
     local look = eye + fwd * 20 + up * (20 * math.tan(math.rad(v.pitch or 0)))
     return eye.x, eye.y, eye.z, look.x, look.y, look.z, up.x, up.y, up.z
@@ -206,6 +221,61 @@ function GS.measure(scene, lv)
     scene, lv, w, h, o.scale, st.p50, st.p95, o.gpu, table.concat(pl, ", "), cm.draws or 0, cm.instances or 0, cm.chunks or 0,
     cm.props or 0, cm.lights or 0, cm.decals or 0)
   P("GSJSON %s", json(o))
+end
+
+-- (meshfold, plant flicker 11-11) A DRIVE through the scene at `gsdrive` m/s: the eye
+-- runs from -gsdrivelen to +gsdrivelen m along the heading, gsdriveh (4) m over the ground. Pass 1
+-- measures (frame times, GPU, sunMapDraws: "GS DRIVE"); pass 2 takes a 640x360 PNG every
+-- step (user://gpusweep/drive_<tag>_fNNNN.png) for tools/perf/drive_diff.py, which
+-- finds what changes between frames that the motion does not explain (a plant that
+-- turns lighter or darker as the drive crosses a distance).
+function GS.drive(scene, tag)
+  local spd, L = params.gsdrive or 15, params.gsdrivelen or 45
+  local keep = GS.view
+  GS.view = { mode = "drive", head = 0, h = params.gsdriveh or 4.0, pitch = -5, s = -L }
+  wait(2.5)
+  local name = "d_" .. tag
+  sc_begin(name)
+  local t0 = time
+  while GS.view.s < L do GS.view.s = -L + (time - t0) * spd; yield() end
+  sc_end(name)
+  local r = RECS[name]
+  local st = stats(r.dts)
+  local cm = {}
+  for k, v in pairs(r.cnt) do cm[k] = v / math.max(r.cn, 1) end
+  local ps = {}
+  for k, v in pairs(r.gp or {}) do ps[k] = v / math.max(r.gn, 1) end
+  local pl = {}
+  for _, e in ipairs(topk(ps, 8)) do pl[#pl + 1] = string.format("%s %.2f", e[1], e[2]) end
+  P("GS DRIVE %s %s | frame p50 %.1f p95 %.1f | GPU %.2f ms | %s | sunMapDraws %.0f culled %.0f props %.0f",
+    scene, tag, st.p50, st.p95, r.gn > 0 and r.gpu / r.gn or -1, table.concat(pl, ", "), cm.sunMapDraws or 0, cm.sunMapCulled or 0, cm.props or 0)
+  P("GSJSON %s", json({ scene = scene, preset = "drive_" .. tag, gpu = r.gn > 0 and r.gpu / r.gn or -1, passes = ps, p50 = st.p50, p95 = st.p95,
+    sunMapDraws = cm.sunMapDraws, sunMapCulled = cm.sunMapCulled, props = cm.props, instances = cm.instances }))
+  if (params.gsdriveshots or 1) > 0 then
+    GS.view.s, GS.view.gr, GS.view.noease = -L, nil, true
+    wait(2.5)
+    -- (a capture takes ~0.25 s to come back, so the pictures are taken in STEPS of
+    -- gsdrivestep m, each once the last is written: the same places in every variant, and
+    -- as far apart as a 15 m/s drive's frames at 30-40 fps)
+    local ds = params.gsdrivestep or 0.45
+    local i = 0
+    t0 = time
+    while GS.view.s < L do
+      i = i + 1
+      local nm = string.format("user://gpusweep/drive_%s_f%04d.png", tag, i)
+      local done = false
+      yield(); yield()
+      local ok = pcall(camera.capture, { w = 640, h = 360, ui = false, draws = false }, function(bytes)
+        if bytes then assets.writeBytes(nm, bytes) end
+        done = true
+      end)
+      if ok then wait_for(function() return done end, 5, "drive shot") end
+      GS.view.s = GS.view.s + ds
+    end
+    P("GS DRIVESHOTS %s %d frames over %.1f s (a step of %.2f m)", tag, i, time - t0, ds)
+  end
+  GS.view = keep
+  wait(1.0)
 end
 
 -- Every preset at the scene the crew (and GS.view) now stand in.
@@ -461,6 +531,28 @@ TOGGLES.shadowkind0 = {
     ff.clearAll(); GS.regrow("0661 config back")
   end,
 }
+-- (meshfold, plant flicker 11-11) flora_field's shadow config as it was before: ferns and
+-- succulents cast to 25 m, bushes/cactus 40 m, trees 60 m (a plant past its distance drew
+-- unshadowed, lighter than the self-shaded ones just inside: the pop Ty saw driving)
+TOGGLES.shadowkindold = {
+  on = function(c)
+    local ff = findScript("flora_field")
+    c.sk = ff.SHADOW_KIND
+    ff.SHADOW_KIND = {
+      grass = { cast = false }, moss = { cast = false }, reed = { cast = false },
+      fern = { cast = true, dist = 25 }, succulent = { cast = true, dist = 25 },
+      bush = { cast = true, dist = 40 }, shrub = { cast = true, dist = 40 },
+      broadleaf = { cast = true, dist = 60 }, conifer = { cast = true, dist = 60 }, palm = { cast = true, dist = 60 },
+      bulb = { cast = true, dist = 60 }, coral = { cast = true, dist = 60 }, cactus = { cast = true, dist = 40 },
+    }
+    ff.clearAll(); GS.regrow("the old 0661 config")
+  end,
+  off = function(c)
+    local ff = findScript("flora_field")
+    ff.SHADOW_KIND = c.sk
+    ff.clearAll(); GS.regrow("the new config back")
+  end,
+}
 -- every LightProbes volume in the scene switched off (E's GI-ambient question)
 TOGGLES.probes0 = {
   on = function(c)
@@ -564,6 +656,10 @@ function GS.run()
           -- what grows round the crew in this variant: per species, props by distance and LOD, est. triangles
           pcall(flora_inventory, sc .. "_" .. v)
           if not okm then P("GS ERROR variant %s: %s", v, tostring(em)) end
+          if (params.gsdrive or 0) > 0 then
+            local okd, ed = pcall(GS.drive, sc, lbl)
+            if not okd then P("GS ERROR drive %s: %s", lbl, tostring(ed)) end
+          end
           if T then pcall(T.off, c) end
           wait(1.5)
         end

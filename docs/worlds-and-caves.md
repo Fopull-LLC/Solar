@@ -461,7 +461,11 @@ The pocket is then **burnt out** for good (saved in `cave.burnt.<body>`).
   3. Then 1–3 slabs fall from inside the passage, as recorded rock comes down
      (`cave_rockfall_*`). Each slab is a `LooseBoulder` of scale `slabScale(H, W)`: 0.7–1.4 where
      there is room, never wider than 60 % of the passage, placed within its walls and under its
-     roof, and started downward at 2 m/s (a slab spawned still was seen hanging in the air).
+     roof, and started downward at 2 m/s. Each starts in open air: `overlapSphere` must find no
+     rock and no body where it would appear, and it must be its own width from the slabs before
+     it (`slabClear`). A spot that fails tries lower, nearer the middle, then the other side
+     (`SLAB_TRIES`); a slab with no clear spot is not dropped. (Slabs spawned overlapping each
+     other or the roof shoved each other about instead of falling.)
 - **The heap** (`rubblePile`). When the slabs are down (or 3 s on), what came down stays as
   terrain: three balls raised on the floor under the fall (the main one of radius r, a talus of
   0.7 r either side 0.6 r along the passage), painted the roof's palette slot

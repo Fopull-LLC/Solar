@@ -471,4 +471,7 @@
     "textures/vfx/decal/cave_salt.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/vfx/decal/cave_soot.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/vfx/decal/cave_sulfur.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/wallkit_albedo.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/wallkit_normal.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/wallkit_orm.png": (filter: SmoothMipmaps, wrap: Repeat),
 }

@@ -274,6 +274,11 @@ do
     ok(H.pileAlong(0, 2, -4) >= 0 and H.pileAlong(0, 2, -4) - 2 - H.PILE_CLEAR >= -4 + 0.39, "a heap ahead slides off the crew's boots, away from them")
     ok(H.pileAlong(0, 2, 4) <= 0 and 4 - (H.pileAlong(0, 2, 4) + 2) >= H.PILE_CLEAR + 0.39, "…and one behind, the other way")
     ok(H.pileAlong(5, 1.5, -4) == 5, "…a ball already clear stays put")
+    -- slabs start their own width apart (overlapping, they shoved each other about)
+    ok(H.slabClear({ 0, 0, 0 }, 0.6, {}), "the first slab has room")
+    ok(not H.slabClear({ 1.0, 0, 0 }, 0.6, { { 0, 0, 0, 0.6 } }), "a slab 1 m from another of the same size overlaps it: refused")
+    ok(H.slabClear({ 1.35, 0, 0 }, 0.6, { { 0, 0, 0, 0.6 } }), "…its width and a hand apart: placed")
+    ok(H.SLAB_TRIES[1][1] == 0 and H.SLAB_TRIES[1][2] == 1 and #H.SLAB_TRIES >= 5, "the planned spot first, then lower, nearer the middle, the other side")
     local f, h = { 0, 0, 0 }, { 0, 1.8, 0 }
     ok(H.pileBuries({ 0, 0, 0 }, 1.5, f, h), "a pile on the crew's feet would bury them")
     ok(H.pileBuries({ 1.5, 1.0, 0 }, 1.5, f, h), "…beside them, within reach")

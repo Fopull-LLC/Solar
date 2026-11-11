@@ -955,12 +955,23 @@ local BEND_KIND = { grass = true, fern = true, reed = true, bush = true, shrub =
 -- shadow near the crew, not on the far tree line. A kind missing here keeps
 -- the engine's default (it casts). Until the engine knows the two options,
 -- scatter.create refuses them once and the field stops sending them.
+--
+-- (meshfold, plant flicker, Ty 11-11: "a plant lighter than everything near
+-- me, flickering as I drive".) A plant past its source's shadowDistance is
+-- not in the sun map, so it loses its own shadow (the canopy over its lower
+-- leaves) and the ground's under it: it read lighter than the self-shaded
+-- plants just inside the line, and changed as the drive crossed it (ferns at
+-- 25 m, bushes 40, trees 60). There is no line now inside the sun map: a kind
+-- either never casts (grass, moss, reeds, and now ferns and succulents, small
+-- enough that their own shade is lost in the ground's) or casts as far as
+-- the map reaches (`dist` nil: the graphics level's shadow distance, 220 m
+-- on High), where the terrain's shadows end too.
 SHADOW_KIND = {
   grass = { cast = false }, moss = { cast = false }, reed = { cast = false },
-  fern = { cast = true, dist = 25 }, succulent = { cast = true, dist = 25 },
-  bush = { cast = true, dist = 40 }, shrub = { cast = true, dist = 40 },
-  broadleaf = { cast = true, dist = 60 }, conifer = { cast = true, dist = 60 }, palm = { cast = true, dist = 60 },
-  bulb = { cast = true, dist = 60 }, coral = { cast = true, dist = 60 }, cactus = { cast = true, dist = 40 },
+  fern = { cast = false }, succulent = { cast = false },
+  bush = { cast = true }, shrub = { cast = true }, cactus = { cast = true },
+  broadleaf = { cast = true }, conifer = { cast = true }, palm = { cast = true },
+  bulb = { cast = true }, coral = { cast = true },
 }
 shadowOpts = nil      -- nil: not tried yet; false: this engine refuses them
 

@@ -218,9 +218,12 @@ function CH.run()
   do
     local dw = ST.getPart(sid, walls[1])
     local n1 = ST.nodeOf(sid, walls[1])
-    local mi = n1 and n1:getChild("MeshIn")
-    BK.check("faces", dw and dw.paint == "orange" and dw.paintIn == "hull" and mi ~= nil, "the door wall: %s outside, %s inside (its MeshIn %s)",
-      tostring(dw and dw.paint), tostring(dw and dw.paintIn), mi and "there" or "missing")
+    -- (meshfold 11-11: a wall's inside is its Mesh's "<mat>In" slots, not a MeshIn child)
+    local m1 = n1 and n1:getChild("Mesh")
+    local KPp = findScript("kit_paint")
+    local sl = m1 and KPp and KPp.slotsOf and KPp.slotsOf(m1, findScript("parts_base").partInfo(dw.id))
+    BK.check("faces", dw and dw.paint == "orange" and dw.paintIn == "hull" and sl, "the door wall: %s outside, %s inside (its inside slots %s)",
+      tostring(dw and dw.paint), tostring(dw and dw.paintIn), sl and table.concat(sl.inn, ",") or "missing")
     local a1 = fb.undo()
     local p1 = ST.getPart(sid, rec.bp[#rec.bp].uid)
     fb.redo()

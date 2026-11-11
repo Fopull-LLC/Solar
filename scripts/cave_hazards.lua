@@ -365,6 +365,19 @@ function pileAlong(a, r, ac)
   if gap < want then return a + s * (want - gap) end
   return a
 end
+-- Where a slab may try to start, in order: { extra drop (share of the
+-- passage's height), offset kept (share), mirrored across (−1) }: the planned
+-- spot under the roof, then lower, then pulled in to the middle, then the
+-- other side.
+SLAB_TRIES = { { 0, 1 }, { 0.15, 1 }, { 0, 0.5 }, { 0.15, 0.5 }, { 0, 1, -1 }, { 0.25, 0 }, { 0.35, 0.5, -1 } }
+-- Is body-local point p (a slab of half-size hs) at least its own width from
+-- every slab already placed ({ x, y, z, hs })? Two slabs touch at hs + hs.
+function slabClear(p, hs, placed)
+  for _, q in ipairs(placed or {}) do
+    if len(p[1] - q[1], p[2] - q[2], p[3] - q[3]) < hs + (q[4] or hs) + 0.1 then return false end
+  end
+  return true
+end
 -- Would a ball (body-local centre c, radius r) bury the crew standing from
 -- foot point f to head point h (body-local)? The segment's distance to the
 -- centre under r + PILE_CLEAR.
@@ -798,6 +811,14 @@ local function dust(bname, lx, ly, lz, ux, uy, uz, k)
 end
 
 local seq = 0
+-- Is there open air for a slab of half-size hs at body-local (px, py, pz)?
+-- (one overlapSphere: the ground, a wall, the roof or a body there says no)
+local function air_at(b, px, py, pz, hs)
+  if not overlapSphere then return true end
+  local ok, hits = pcall(overlapSphere, vec3(b.x + px, b.y + py, b.z + pz), hs * 1.05)
+  if not ok then return true end
+  return type(hits) ~= "table" or #hits == 0
+end
 local function drop_slabs()
   local f = fall
   local u = {}
@@ -805,6 +826,7 @@ local function drop_slabs()
   local plan = rockfallPlan(u)
   local b = space.body(f.body)
   if not (b and spawn) then return end
+  local placed = {}
   for i, s in ipairs(plan) do
     -- sized to the passage, and inside it: never in the roof or a wall
     local sc = slabScale(f.H, f.W, u[7 + i])
@@ -813,10 +835,22 @@ local function drop_slabs()
     local c = clamp(s.dz, -(f.cn[2] - hs - 0.1), f.cn[1] - hs - 0.1)
     if f.ca[1] + f.ca[2] < 2 * hs + 0.2 then a = 0 end
     if f.cn[1] + f.cn[2] < 2 * hs + 0.2 then c = 0 end
-    local drop = math.min(hs + 0.25, math.max(hs, f.H - hs - 0.05))
-    local lx = f.lx - f.ux * drop + f.ax * a + f.nx * c
-    local ly = f.ly - f.uy * drop + f.ay * a + f.ny * c
-    local lz = f.lz - f.uz * drop + f.az * a + f.nz * c
+    -- a spot in open air: clear of the roof rock and the walls (overlapSphere
+    -- reports the ground and bodies), and its own width from the slabs
+    -- already placed (2026-11-11 review: slabs spawned overlapping each other
+    -- or the roof shoved each other about instead of falling)
+    local lx, ly, lz = nil, nil, nil
+    local top = math.min(hs + 0.3, math.max(hs, f.H - hs - 0.05))
+    for _, k in ipairs(SLAB_TRIES) do
+      local drop = math.min(top + k[1] * f.H, math.max(hs, f.H - hs - 0.05))
+      local aa, cc = a * k[2], c * k[2] * (k[3] or 1)
+      local px = f.lx - f.ux * drop + f.ax * aa + f.nx * cc
+      local py = f.ly - f.uy * drop + f.ay * aa + f.ny * cc
+      local pz = f.lz - f.uz * drop + f.az * aa + f.nz * cc
+      if slabClear({ px, py, pz }, hs, placed) and air_at(b, px, py, pz, hs) then lx, ly, lz = px, py, pz break end
+    end
+    if lx then
+    placed[#placed + 1] = { lx, ly, lz, hs }
     seq = seq + 1
     local nm = string.format("CaveSlab %d", seq)
     local rec = { name = nm, s = sc, lx = lx, ly = ly, lz = lz, hit = false, t0 = now(), landed = false }
@@ -829,9 +863,8 @@ local function drop_slabs()
       pcall(n.setAngles, n, math.random() * 6.28, math.random() * 6.28, math.random() * 6.28)
       local mf = ref("mineral_field")
       if mf and mf.adoptBody then pcall(mf.adoptBody, n, "LooseBoulder", f.mat, floor(3 * sc ^ 3 + 0.5) + 1, sc) end
-      -- it FALLS: started downward (planet-relative, as node.vel is), which
-      -- also wakes it (a body spawned still was seen hanging in the air,
-      -- 2026-11-11 hazardprobe before-shots)
+      -- started downward (planet-relative, as node.vel is): it comes off
+      -- the roof falling, not resting
       local function go()
         if n.valid == false then return end
         pcall(function() n.asleep = false; n.vel = vec3(-f.ux * 2.0, -f.uy * 2.0, -f.uz * 2.0) end)
@@ -844,11 +877,12 @@ local function drop_slabs()
       rec.look_t = now()
       stats.slabs = stats.slabs + 1
     end)
+    end
   end
   local fa = CLIPS.falls[math.random(1, #CLIPS.falls)]
   play_at(fa, f.body, f.lx - f.ux * 1.5, f.ly - f.uy * 1.5, f.lz - f.uz * 1.5, { volume = 1.0, min = 8, max = 100, secs = 5 })
   dust(f.body, f.lx, f.ly, f.lz, f.ux, f.uy, f.uz, 1.2)
-  last.rockfall.slabs = #plan
+  last.rockfall.slabs = #placed
 end
 
 -- The crew's feet and head, body-local, this frame (nil off foot).
@@ -962,44 +996,6 @@ local function fall_update()
       end
     end
   end
-  -- THE FALL HELD TO GRAVITY. In a cave the engine let a loose body drift
-  -- (2026-11-11 hazardprobe only=slabdiag: wake "unsupported", its speed
-  -- along up wandering ±3 m/s, 2.5 m down in 3 s; the same prefab on the
-  -- surface falls and settles; engine card draft in the slice's notes). A
-  -- slab still over the floor and falling slower than gravity would have it
-  -- is given that speed (planet-relative, as node.vel is); the engine still
-  -- owns its collisions and its rest.
-  do
-    local b = space.body(f.body)
-    local tf = t - DUST_S
-    if b and tf > 0 and tf < 3.0 then
-      if not f.g then
-        local g = 6
-        if space.gravity then
-          local ok, gx, gy, gz = pcall(space.gravity, b.x + f.fx, b.y + f.fy, b.z + f.fz)
-          if ok and gx then g = len(gx, gy, gz) end
-        end
-        f.g = g
-      end
-      for _, s in ipairs(f.slabs) do
-        local n = s.n
-        if n and n.valid ~= false and not s.landed and not s.buried then
-          local hgt = (n.x - b.x - f.fx) * f.ux + (n.y - b.y - f.fy) * f.uy + (n.z - b.z - f.fz) * f.uz
-          local hs = LB_HALF * (s.s or 1)
-          s.hgt = hgt - hs
-          local okv, v = pcall(function() return n.vel end)
-          if okv and v and hgt > hs + 0.25 then
-            local vu = v.x * f.ux + v.y * f.uy + v.z * f.uz
-            local want = -math.min(f.g * tf + 2.0, sqrt(2 * f.g * math.max(0.1, f.H)) + 2.0)
-            if vu > want + 0.5 then
-              local d = want - vu
-              pcall(function() n.vel = vec3(v.x + f.ux * d, v.y + f.uy * d, v.z + f.uz * d) end)
-            end
-          end
-        end
-      end
-    end
-  end
   -- hits: a slab within reach of the crew's chest while it still moves fast
   local wk = ref("planet_walker")
   local a = (wk and wk.node) or (find and find("Astronaut"))
@@ -1021,6 +1017,9 @@ local function fall_update()
         if s.px and fdt > 1e-4 then v = len(lx - s.px, ly - s.py, lz - s.pz) / fdt end
         s.px, s.py, s.pz, s.pt = lx, ly, lz, now()
         s.v = v
+        -- (still for a moment: it has come to rest; a slab passing the top of
+        -- its fall or bouncing is still for a frame, not for 0.25 s)
+        if v < 0.6 and fdt > 0 then s.still = (s.still or 0) + fdt else s.still = 0 end
         if d < 0.75 + 0.45 * s.s and v > 2.5 then
           s.hit = true
           local amt = slabHurt(s.s, v)
@@ -1030,7 +1029,7 @@ local function fall_update()
           last.hit = { t = now(), amount = amt, speed = v, s = s.s }
           play_at(CLIPS.hits[math.random(1, #CLIPS.hits)], f.body, n.x - b.x, n.y - b.y, n.z - b.z, { volume = 0.9, min = 3, max = 40, secs = 3 })
           if log then log(string.format("cave_hazards: hit by a falling slab, %.0f %% of health", amt * 100)) end
-        elseif not s.landed and t > DUST_S + 0.6 and v < 1.0 and (s.hgt or 0) < 0.5 then
+        elseif not s.landed and t > DUST_S + 0.5 and (s.still or 0) >= 0.25 then
           s.landed = true
           play_at(CLIPS.hits[math.random(1, #CLIPS.hits)], f.body, n.x - b.x, n.y - b.y, n.z - b.z, { volume = 0.7 * s.s, min = 4, max = 50, secs = 3 })
         end

@@ -1017,8 +1017,12 @@ end
 -- stopped sending them (every stand above was still made).
 check("an engine without per-source shadows: the field stops sending castShadow", ff.shadowOpts == false,
   tostring(ff.shadowOpts))
-check("grass casts no sun shadow and trees only to 60 m, once the engine takes it",
-  ff.SHADOW_KIND.grass.cast == false and ff.SHADOW_KIND.broadleaf.dist == 60 and ff.SHADOW_KIND.conifer.dist == 60)
+-- (meshfold 11-11: no cast line inside the sun map, where a plant past it popped lighter)
+local no_line = true
+for k, v in pairs(ff.SHADOW_KIND) do if v.cast and v.dist then no_line = false end end
+check("grass and ferns cast no sun shadow, trees and bushes to the map's edge (no distance line), once the engine takes it",
+  ff.SHADOW_KIND.grass.cast == false and ff.SHADOW_KIND.fern.cast == false and ff.SHADOW_KIND.broadleaf.cast == true
+  and ff.SHADOW_KIND.bush.cast == true and no_line)
 
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}
