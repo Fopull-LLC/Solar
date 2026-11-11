@@ -2661,3 +2661,169 @@ function fairingAutoDue(pct, band, airy)
   if not pct or pct <= 0 or not airy then return false end
   return (band or 0) <= 1 - pct / 100
 end
+
+-- ── FUEL FEED: which tanks feed which engines (2026-11-11) ─────────────────
+-- Ty: "stages don't automatically gate off fuel correctly with radial
+-- decouplers". KSP's rule, shared by the builder (the STAGE tab's fuel groups,
+-- its Δv) and the flight (vessel_controller fuelFeedTick):
+--   * fuel flows along the attachment tree, part to part;
+--   * a DECOUPLER blocks it, axial or radial, unless its crossfeed is on
+--     (`size.xfeed`, the radial decoupler's part setting, off by default) —
+--     so a booster's engines drink the booster's tanks and the core's drink
+--     the core's;
+--   * a FUEL LINE (`fline`, a drawn part held on by its source end, the far
+--     end's part in `size.to`) lets the group at its far end drink the group
+--     at its source end, across any decoupler, and the farthest source
+--     drains first: asparagus boosters empty before the core;
+--   * a group with engines but no tank at all (a bare engine bolted under a
+--     decoupler) is fed through that decoupler from the group beside it.
+--
+-- fuelGroups(recs, opts) → F, recs = a list or map of blueprint-shaped
+-- records { uid, parent, decouple, radial, fuel, thrust, fline, size }
+-- (flags 1/true), opts = { keep = uid (the crew's part: a tie-break),
+-- alive = function(uid) → bool }:
+--   F.of[uid]       the part's group id (every alive part has one)
+--   F.groups[gid]   { id, uids, tanks = {uid…}, engines = {uid…}, fuel,
+--                     from = {gid…} (fuel lines in), keep = bool }
+--   F.order[gid]    the groups an engine in gid drinks, the one to drain
+--                   first first: its fuel lines' sources (farthest first),
+--                   then its own
+local function feed_flag(v) return v == true or v == 1 end
+function fuelGroups(recs, opts)
+  opts = opts or {}
+  local alive = opts.alive
+  local by, list = {}, {}
+  for _, d in pairs(recs or {}) do
+    if d.uid and (not alive or alive(d.uid)) then by[d.uid] = d; list[#list + 1] = d.uid end
+  end
+  table.sort(list)
+  local kids = {}
+  for _, u in ipairs(list) do
+    local p = by[u].parent or 0
+    if p ~= 0 and by[p] then kids[p] = kids[p] or {}; kids[p][#kids[p] + 1] = u end
+  end
+  -- a decoupler without crossfeed passes nothing (it is a group of its own)
+  local function blocks(d)
+    return feed_flag(d.decouple) and not (type(d.size) == "table" and feed_flag(d.size.xfeed))
+  end
+  local F = { of = {}, groups = {}, order = {} }
+  local gid = 0
+  for _, u in ipairs(list) do
+    if not F.of[u] then
+      gid = gid + 1
+      local g = { id = gid, uids = {}, tanks = {}, engines = {}, fuel = 0, from = {} }
+      F.groups[gid] = g
+      local q = { u }
+      F.of[u] = gid
+      local wall = blocks(by[u])
+      while #q > 0 do
+        local x = table.remove(q)
+        local d = by[x]
+        g.uids[#g.uids + 1] = x
+        if (tonumber(d.fuel) or 0) > 0 then g.tanks[#g.tanks + 1] = x; g.fuel = g.fuel + tonumber(d.fuel) end
+        if (tonumber(d.thrust) or 0) > 0 then g.engines[#g.engines + 1] = x end
+        if x == opts.keep then g.keep = true end
+        if not wall then
+          local p = d.parent or 0
+          if p ~= 0 and by[p] and not F.of[p] and not blocks(by[p]) then F.of[p] = gid; q[#q + 1] = p end
+          for _, k in ipairs(kids[x] or {}) do
+            if not F.of[k] and not blocks(by[k]) then F.of[k] = gid; q[#q + 1] = k end
+          end
+        end
+      end
+      table.sort(g.uids); table.sort(g.tanks); table.sort(g.engines)
+    end
+  end
+  -- fuel lines: source group → far-end group
+  for _, u in ipairs(list) do
+    local d = by[u]
+    local to = type(d.size) == "table" and tonumber(d.size.to) or nil
+    if feed_flag(d.fline) and to and by[to] and (d.parent or 0) ~= 0 and by[d.parent] then
+      local a, b = F.of[d.parent], F.of[to]
+      if a and b and a ~= b then
+        local fr = F.groups[b].from
+        local dup = false
+        for _, x in ipairs(fr) do if x == a then dup = true end end
+        if not dup then fr[#fr + 1] = a end
+      end
+    end
+  end
+  -- a tankless engine group drinks through its decoupler from the group
+  -- beside it that has fuel (the crew's side first, then the fullest)
+  local beside = {}
+  for _, u in ipairs(list) do
+    local d = by[u]
+    if blocks(d) then
+      local nb = {}
+      local p = d.parent or 0
+      if p ~= 0 and by[p] then nb[#nb + 1] = F.of[p] end
+      for _, k in ipairs(kids[u] or {}) do nb[#nb + 1] = F.of[k] end
+      for _, a in ipairs(nb) do
+        for _, b in ipairs(nb) do
+          if a ~= b then beside[a] = beside[a] or {}; beside[a][#beside[a] + 1] = b end
+        end
+      end
+    end
+  end
+  for id, g in pairs(F.groups) do
+    if #g.engines > 0 and #g.tanks == 0 and #g.from == 0 and beside[id] then
+      local best = nil
+      for _, b in ipairs(beside[id]) do
+        local o = F.groups[b]
+        local bo = best and F.groups[best]
+        if #o.tanks > 0 and (not bo or (o.keep and not bo.keep)
+          or ((o.keep or false) == (bo.keep or false) and o.fuel > bo.fuel)) then best = b end
+      end
+      if best then g.from[1] = best; g.across = best end
+    end
+  end
+  -- drain order: breadth-first back along the lines, the farthest first
+  for id in pairs(F.groups) do
+    local depth, q = { [id] = 0 }, { id }
+    local h = 1
+    while q[h] do
+      local x = q[h]; h = h + 1
+      for _, s in ipairs(F.groups[x].from) do
+        if depth[s] == nil then depth[s] = depth[x] + 1; q[#q + 1] = s end
+      end
+    end
+    local ord = {}
+    for x in pairs(depth) do ord[#ord + 1] = x end
+    table.sort(ord, function(a, b)
+      if depth[a] ~= depth[b] then return depth[a] > depth[b] end
+      return a < b
+    end)
+    F.order[id] = ord
+    -- the same order in TIERS of equal depth: the groups of one tier are
+    -- drunk together, in proportion to what each holds (a pair of boosters
+    -- feeding the core empty side by side, not one after the other)
+    local tiers, last = {}, nil
+    for _, x in ipairs(ord) do
+      if depth[x] ~= last then tiers[#tiers + 1] = {}; last = depth[x] end
+      local t = tiers[#tiers]
+      t[#t + 1] = x
+    end
+    F.tiers = F.tiers or {}
+    F.tiers[id] = tiers
+  end
+  return F
+end
+-- Draw `need` from group `id`'s feed, tier by tier: `have(g)` says what group
+-- g holds, `take(g, units)` drinks from it and returns what it got. Within a
+-- tier each group gives in proportion to what it holds. → what was drawn.
+function fuelFeedDraw(F, id, need, have, take)
+  local got = 0
+  for _, tier in ipairs((F and F.tiers and F.tiers[id]) or { { id } }) do
+    if need - got <= 1e-12 then break end
+    local tot = 0
+    for _, g in ipairs(tier) do tot = tot + math.max(0, have(g) or 0) end
+    if tot > 0 then
+      local want = math.min(tot, need - got)
+      for _, g in ipairs(tier) do
+        local h = math.max(0, have(g) or 0)
+        if h > 0 then got = got + take(g, want * h / tot) end
+      end
+    end
+  end
+  return got
+end

@@ -372,6 +372,21 @@ Keys are keycaps (`panel/choice` latched in = active).
     flight fires them on one SPACE. What a decoupler drops is the side away
     from the crew (vessel_controller `SPLIT.sides`), the same in the tab and in
     flight.
+    - Clicking NEW STAGE adds an EMPTY stage: on top, or above the stage whose
+      title was clicked (`STAGEM.addBlank`). Events and engines are dragged
+      into it; its ✕ removes it while it is empty. The blueprint keeps the
+      empty stages' numbers in `stageBlank`. An empty stage fires nothing.
+    - Under the stack, FUEL lists the tank groups (electronics `fuelGroups`):
+      every decoupler, radial ones included, blocks fuel unless its Crossfeed
+      setting is on. A Fuel Line (drawn from the source to the part it feeds)
+      lets the far end drink the source first, across any decoupler, so
+      asparagus boosters empty before the core. The flight feeds engines by
+      the same groups (`fuelFeedTick`).
+    - A radial decoupler is a stand-off pylon 0.40 m long. When it fires, it
+      throws its booster out along its own +Y, a little aft, at its Eject
+      setting (m/s, mass × Δv through the booster's centre of mass), and the
+      core takes the equal and opposite push through its own (vessel_controller
+      `EJECT`).
   - CONTROLS: the keymap (section 6).
   - CRAFT: the outliner (named groups, sub-assemblies, symmetry sets), the history
     list, and the part and performance budget.

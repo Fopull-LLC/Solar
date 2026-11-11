@@ -64,6 +64,21 @@ function entries(B, uid)
     local ins = ref("builder_inspector")
     if ins and ins.setTab then ins.setTab("INSPECT") end
   end)
+  -- A DECOUPLER's settings (2026-11-11), on its whole symmetry ring: fuel
+  -- crossfeed (off by default: each side burns its own tanks) and, on a
+  -- radial one, the push that throws its booster clear (B.cmd "decCfg").
+  local dc = B.decouplerCfg and B.decouplerCfg(uid)
+  if dc then
+    item("xfeed", dc.xfeed and "Crossfeed: ON  (turn off)" or "Crossfeed: off  (turn on)", dc.n > 1 and ("×" .. dc.n) or nil, true,
+      function() B.cmd("decCfg", { uid = uid, key = "xfeed", value = not dc.xfeed }) end)
+    if dc.radial then
+      local steps = B.EJECT_STEPS or { 0, 2, 4.5, 7, 10 }
+      local nxt = steps[1]
+      for i, v in ipairs(steps) do if math.abs(v - (dc.eject or 0)) < 0.01 then nxt = steps[i % #steps + 1] end end
+      item("eject", string.format("Eject push: %s m/s  (next %s)", tostring(dc.eject), tostring(nxt)), nil, true,
+        function() B.cmd("decCfg", { uid = uid, key = "eject", value = nxt }) end)
+    end
+  end
   local ins = ref("builder_inspector")
   local acts = (ins and ins.controlsOf) and ins.controlsOf(B, rec) or {}
   for i, a in ipairs(acts) do

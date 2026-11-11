@@ -1771,15 +1771,19 @@ function fuelDraw(units, sec)
   while tanks[i] and need > 0 do
     local j = fuelTierEnd(i)
     local L = 0.0
-    -- (`sec`: one feed section's tanks only, fuelDrawFed; a tier is one height)
-    if not sec or tanks[i].sec == sec then
-      for k = i, j do L = L + math.max(0, tanks[k].left or 0) end
+    -- (`sec`: one feed group's tanks only, fuelDrawFed. A tier is one height,
+    -- and a booster ring's tanks are one tier of several groups: each tank is
+    -- asked, so one booster never drinks its twin's)
+    for k = i, j do
+      if not sec or tanks[k].sec == sec then L = L + math.max(0, tanks[k].left or 0) end
     end
     if L > 0 then
       local take = math.min(L, need)
       for k = i, j do
         local t = tanks[k]
-        t.left = math.max(0, (t.left or 0) - take * math.max(0, t.left or 0) / L)
+        if not sec or t.sec == sec then
+          t.left = math.max(0, (t.left or 0) - take * math.max(0, t.left or 0) / L)
+        end
       end
       need = need - take
     end
@@ -1805,9 +1809,42 @@ function feedSec(y, cuts)
   for i = 1, #cuts do if y >= cuts[i] - 0.01 then s = i end end
   return s
 end
-FEED = { cuts = {}, have = {} }
+FEED = { cuts = {}, have = {}, gen = nil, F = nil }
+-- THE FEED GROUPS (2026-11-11, electronics fuelGroups): the live parts split
+-- at every decoupler without crossfeed, joined by fuel lines. A radial
+-- decoupler gates its booster off like an axial one: the booster's engines
+-- drink the booster's tanks and the core's its own, unless the decoupler's
+-- crossfeed is on or a fuel line runs across (asparagus: the farthest source
+-- drains first). Rebuilt when a part leaves (integ.gen). nil without the
+-- rulebook (then the height sections below, as before).
+function feedGroupsNow()
+  if FEED.gen == integ.gen and FEED.F then return FEED.F end
+  local E = elib()
+  if not (E and E.fuelGroups and bp_by_uid) then return nil end
+  local live = function(u) return bp_by_uid[u] ~= nil and not integ.gone[u] and (part_hp[u] or 1) > 0 end
+  FEED.F = E.fuelGroups(bp_by_uid, { alive = live, keep = splitKeeper and splitKeeper() or nil })
+  FEED.gen = integ.gen
+  return FEED.F
+end
 function fuelFeedTick()
   local cuts, have = FEED.cuts, FEED.have
+  local F = feedGroupsNow()
+  if F then
+    for k in pairs(have) do have[k] = nil end
+    for _, t in ipairs(tanks) do
+      local s = F.of[t.uid] or 0
+      t.sec = s
+      have[s] = (have[s] or 0) + math.max(0, t.left or 0)
+    end
+    for _, e in ipairs(engines) do
+      local s = F.of[e.uid] or 0
+      e.sec = s
+      local tot = 0
+      for _, g in ipairs(F.order[s] or { s }) do tot = tot + (have[g] or 0) end
+      e.dry = tot <= 0
+    end
+    return
+  end
   for i = #cuts, 1, -1 do cuts[i] = nil end
   for k in pairs(have) do have[k] = nil end
   for _, ev in ipairs(events) do if ev.kind == "axial" then cuts[#cuts + 1] = ev.y end end
@@ -1837,7 +1874,35 @@ function fuelDrawFed(throttle, dt, cut)
       need[s] = (need[s] or 0) + throttle * dt * e.burn * (e.jet and (e.jb or 0) / math.max(throttle, 0.05) or 1)
     end
   end
-  for s, u in pairs(need) do fuelDraw(u, s) end
+  local F = FEED.F
+  for s, u in pairs(need) do
+    -- the feed order tier by tier: a fuel line's sources first (a pair of
+    -- them in proportion to what each holds: electronics fuelFeedDraw's
+    -- rule, run here — callbacks don't cross scripts), then the group's own
+    local tiers = F and F.tiers and F.tiers[s]
+    if tiers then
+      local got = 0
+      for _, tier in ipairs(tiers) do
+        if u - got <= 1e-12 then break end
+        local tot, hs = 0, {}
+        for k, g in ipairs(tier) do hs[k] = fuelGroupLeft(g); tot = tot + hs[k] end
+        if tot > 0 then
+          local want = math.min(tot, u - got)
+          for k, g in ipairs(tier) do
+            if hs[k] > 0 then got = got + fuelDraw(want * hs[k] / tot, g) end
+          end
+        end
+      end
+    else
+      fuelDraw(u, s)
+    end
+  end
+end
+-- What feed group `g`'s tanks still hold.
+function fuelGroupLeft(g)
+  local h = 0
+  for _, t in ipairs(tanks) do if t.sec == g then h = h + math.max(0, t.left or 0) end end
+  return h
 end
 
 -- Staged ignition. An engine the builder staged lights when its stage fires
@@ -9475,11 +9540,66 @@ function stageEventLive(ev)
   return #bs > 0
 end
 
+-- ══ EJECT RULEBOOK BEGIN (pure: tests/smoke_radial_eject.lua loads this block) ══
+-- THE RADIAL DECOUPLER'S CHARGE (2026-11-11, Ty: "radial decouplers should
+-- apply a bit of a force to shoot out the things they're attached to"). The
+-- booster is pushed OUT along the decoupler's own +Y (its mount normal: the
+-- builder stands a radial decoupler with +Y out of the face it is on) and a
+-- little AFT along the stack, so it falls clear of the core's engines. The
+-- push is the part's `size.eject` m/s (EJECT_DV by default) given to the
+-- whole piece that leaves, whatever it weighs: impulse = mass × Δv, through
+-- the piece's centre of mass (no spin). The core takes the equal and
+-- opposite impulse through ITS centre of mass: no spin, and a ring's pushes
+-- cancel, so it holds its course.
+EJECT_DV = 4.5
+EJECT_AFT = 0.15
+EJECT = {}
+-- the +Y column of a part's YXZ euler (the builder's and the engine's)
+function EJECT.partY(yaw, pitch, roll)
+  local cy, sy = math.cos(yaw or 0), math.sin(yaw or 0)
+  local cx, sx = math.cos(pitch or 0), math.sin(pitch or 0)
+  local cz, sz = math.cos(roll or 0), math.sin(roll or 0)
+  return -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz
+end
+-- The charge's Δv for a decoupler record (its setting, clamped 0..12).
+function EJECT.dv(d)
+  local v = d and type(d.size) == "table" and tonumber(d.size.eject) or nil
+  if v == nil then v = EJECT_DV end
+  return math.max(0, math.min(12, v))
+end
+-- The world direction of the push: the decoupler's +Y (part frame yaw, pitch,
+-- roll) carried by the craft's axes R, U, Z (tables x,y,z: this TICK's, from
+-- assembly.info), tipped EJECT_AFT down the stack (−U) and made unit.
+function EJECT.dir(d, R, U, Z)
+  local ly, uy, zy = EJECT.partY(d.yaw, d.pitch, d.roll)
+  local x = R.x * ly + U.x * uy + Z.x * zy
+  local y = R.y * ly + U.y * uy + Z.y * zy
+  local z = R.z * ly + U.z * uy + Z.z * zy
+  -- only the part across the stack pushes out; along the stack it is the tip
+  local along = x * U.x + y * U.y + z * U.z
+  x, y, z = x - U.x * along, y - U.y * along, z - U.z * along
+  local l = math.sqrt(x * x + y * y + z * z)
+  if l < 1e-4 then return nil end
+  x, y, z = x / l - U.x * EJECT_AFT, y / l - U.y * EJECT_AFT, z / l - U.z * EJECT_AFT
+  l = math.sqrt(x * x + y * y + z * z)
+  return { x = x / l, y = y / l, z = z / l }
+end
+-- The impulse on the piece (mass m tonnes, Δv dv along unit dir) and the
+-- reaction on the craft that stays: { x, y, z }, { x, y, z }.
+function EJECT.impulse(dir, m, dv)
+  local j = math.max(0, m or 0) * math.max(0, dv or 0)
+  local J = { x = dir.x * j, y = dir.y * j, z = dir.z * j }
+  return J, { x = -J.x, y = -J.y, z = -J.z }
+end
+-- ══ EJECT RULEBOOK END ══
+
 -- Cut the craft at decoupler `dec_uid`: the side without the crew leaves
 -- (SPLIT.sides). A piece with a command part of its own leaves as a craft you
 -- can switch to; anything else leaves as debris with a kick of `dv` m/s along
--- `kick` (world unit; nil = away from what stays).
-function separateAt(node, info, dec_uid, dv, kick, what)
+-- `kick` (world unit; nil = away from what stays). `react`: the craft that
+-- stays takes the equal and opposite impulse through its centre of mass (a
+-- radial decoupler's charge, EJECT).
+function separateAt(node, info, dec_uid, dv, kick, what, react)
   local dep = axial_departing(dec_uid)
   if not next(dep) then return false end
   local parts_nodes = {}
@@ -9491,6 +9611,8 @@ function separateAt(node, info, dec_uid, dv, kick, what)
     -- The piece that leaves carries a command part of its own (a rover under
     -- a lander, a probe on a booster, an empty pod): it goes as a LIVE craft
     -- you can switch to and fly, like an undocked module.
+    -- (it carries its own push, r2SplitCraft; it counts as reported in a ring's tally)
+    if type(react) == "table" then react.got = react.got + 1 end
     return r2SplitCraft(node, info, dec_uid, dep, parts_nodes)
   end
   -- Measured BEFORE the piece is marked gone (clearance skips gone parts):
@@ -9522,8 +9644,24 @@ function separateAt(node, info, dec_uid, dv, kick, what)
       -- piece only moves out of a real overlap first, releasePiece).
       local m = math.max(0.1, si.mass)
       local g2 = physTune.clear and gap or 0
-      assembly.impulseAt(stage, vec3(kx * dv * m, ky * dv * m, kz * dv * m),
+      local J, back = EJECT.impulse({ x = kx, y = ky, z = kz }, m, dv)
+      assembly.impulseAt(stage, vec3(J.x, J.y, J.z),
         vec3(si.com.x + kx * g2, si.com.y + ky * g2, si.com.z + kz * g2))
+      -- the charge pushes both ways: the core back through its own centre
+      -- of mass. A ring's pushes are summed (`react` is its tally) and given
+      -- once, when every booster of the ring is away, through the core's
+      -- centre of mass as it is then: they cancel across the stack, and no
+      -- push lands on a centre of mass read while a twin still hung on.
+      if type(react) == "table" and dv > 0 then
+        react.x, react.y, react.z = react.x + back.x, react.y + back.y, react.z + back.z
+      end
+      if type(react) == "table" then
+        react.got = react.got + 1
+        ejectReact(node, react)
+      end
+      if react then
+        log(string.format("eject: %.2f t at %.1f m/s, impulse %.2f along (%.2f, %.2f, %.2f)", m, dv, m * dv, kx, ky, kz))
+      end
       local fx = fxd()
       if fx then fx.separate(si.com.x, si.com.y, si.com.z, info.vel.x, info.vel.y, info.vel.z)
       else spawnEffect("SepPuff", si.com.x, si.com.y, si.com.z) end
@@ -9532,6 +9670,18 @@ function separateAt(node, info, dec_uid, dv, kick, what)
     log(string.format("%s away: %s (%d parts)", what == "ring" and "booster" or "stage", name, n_away))
   end)
   return true
+end
+
+-- A ring's summed charge reaction on the core (separateAt's tally), given once
+-- every booster that left has reported, through the core's centre of mass.
+function ejectReact(node, acc)
+  if acc.done or not acc.n or acc.got < acc.n then return end
+  acc.done = true
+  local hi = node and node.valid and assembly.info(node)
+  if not (hi and hi.com) then return end
+  if acc.x * acc.x + acc.y * acc.y + acc.z * acc.z < 1e-10 then return end
+  assembly.impulseAt(node, vec3(acc.x, acc.y, acc.z), vec3(hi.com.x, hi.com.y, hi.com.z))
+  log(string.format("eject: the core's reaction (%.2f, %.2f, %.2f) through its centre of mass", acc.x, acc.y, acc.z))
 end
 
 -- Fire ONE separation event (already taken off the list).
@@ -9578,19 +9728,34 @@ function fireEvent(node, info, ev)
     -- from the spine when it is the booster that leaves; when the crew rode
     -- the "booster" (a jet on a rocket's radial decoupler), the rocket is
     -- what leaves, away from the crew's side.
+    -- The push (EJECT): out along each decoupler's own +Y, a little aft, at
+    -- its `eject` setting, through the piece's centre of mass, the core taking
+    -- the reaction through its own. Directions from this TICK's axes
+    -- (assembly.info right/up: SPACE fires in fixedUpdate).
+    local ti = assembly.info(node) or info
+    local R, U = ti and ti.right, ti and ti.up
+    local Zt = (R and U) and { x = R.y * U.z - R.z * U.y, y = R.z * U.x - R.x * U.z, z = R.x * U.y - R.y * U.x } or nil
+    local acc = { got = 0, x = 0, y = 0, z = 0 }
+    local sent = 0
     for _, g in ipairs(ev.branches) do
       if bp_by_uid[g.uid] and not integ.gone[g.uid] then
         local dep = axial_departing(g.uid)
+        local d = bp_by_uid[g.uid]
         local kick = nil
         if dep[g.uid] then
-          local ol = math.sqrt(g.x * g.x + g.z * g.z)
-          local ox, oz = 1, 0
-          if ol > 1e-4 then ox, oz = g.x / ol, g.z / ol end
-          kick = { x = rx.x * ox + rz.x * oz, y = rx.y * ox + rz.y * oz, z = rx.z * ox + rz.z * oz }
+          kick = (R and U) and EJECT.dir(d, R, U, Zt) or nil
+          if not kick then
+            local ol = math.sqrt(g.x * g.x + g.z * g.z)
+            local ox, oz = 1, 0
+            if ol > 1e-4 then ox, oz = g.x / ol, g.z / ol end
+            kick = { x = rx.x * ox + rz.x * oz, y = rx.y * ox + rz.y * oz, z = rx.z * ox + rz.z * oz }
+          end
         end
-        separateAt(node, assembly.info(node) or info, g.uid, 4.5, kick, "ring")
+        if separateAt(node, assembly.info(node) or info, g.uid, EJECT.dv(d), kick, "ring", acc) then sent = sent + 1 end
       end
     end
+    acc.n = sent
+    ejectReact(node, acc)
   else
     -- An AXIAL cut: the spent stage falls back along the stack, away from
     -- what stays (a lander leaving its descent stage, the classic stack).

@@ -171,7 +171,18 @@ REG = {
   -- The RADIAL decoupler mounts on a flank and kicks its outboard branch
   -- away at staging (side boosters). It is itself a side host: booster
   -- stacks attach to its outer face.
-  radialDec = { prefab = "PartDecoupler", label = "Radial Decoupler", h = 0.25, rx = 0.51, rz = 0.51, mass = 0.05, cost = 180, top = false, bottom = false, kind = "structural", decouple = true, radial = true, side = true, strength = 350 },
+  -- 2026-11-11 (Ty: "radial decouplers should also look more like a bit of a
+  -- stand-off ... like the KSP radial decouplers"): a STAND-OFF PYLON, its own
+  -- mesh (tools/gen_part_meshes.py part_radial_dec): a saddle plate on the
+  -- tank wall, a short braced arm, and the bolted pusher plate the booster
+  -- hangs on, 0.40 m out (`h`, along its +Y, the mount normal), so a side
+  -- booster clears the core's wall. Its outer node is that plate. It blocks
+  -- fuel like a stack decoupler unless its crossfeed is on (part setting
+  -- `size.xfeed`, off by default; electronics fuelGroups) and throws its
+  -- booster clear with a charge of `size.eject` m/s (default EJECT_DV;
+  -- vessel_controller ejectImpulse). A craft saved before keeps its parts
+  -- where they were.
+  radialDec = { prefab = "PartRadialDec", label = "Radial Decoupler", h = 0.40, rx = 0.24, rz = 0.14, mass = 0.05, cost = 180, top = false, bottom = false, kind = "structural", decouple = true, radial = true, side = true, strength = 350, eject = 4.5 },
   -- Landing legs are RADIAL now (like fins): mount on the flank of a tank/engine
   -- with symmetry (X = ×N), each strut self-orients outward, and they fold down
   -- to deploy / up to stow as ONE symmetry ring (G in flight). No more stack
@@ -257,6 +268,14 @@ REG = {
   -- on another. A thin tube with a bolted lug each end, length as drawn, and
   -- a `brace` link at each end that stiffens big frames and booster rings.
   brace     = { prefab = "PartBrace",     label = "Brace",        h = 1.00, rx = 0.035, rz = 0.035, mass = 0.004, cost = 8, top = false, bottom = false, member = true, proc = "brace", prof = "brace", kind = "structural", strength = 200 },
+  -- FUEL LINE (2026-11-11, KSP's): drawn like the Brace — click the SOURCE
+  -- part (a booster's tank), then the part it feeds (the core). It hangs on
+  -- its source end only (`size.to` names the far end's part, no link there),
+  -- so it leaves with the booster and never ties the stages together; while
+  -- both ends are aboard the far end's engines drink the source's tanks
+  -- first, across any decoupler (electronics fuelGroups). Asparagus: lines
+  -- outer → inner → core.
+  fuelLine  = { prefab = "PartBrace",     label = "Fuel Line",    h = 1.00, rx = 0.035, rz = 0.035, mass = 0.012, cost = 40, top = false, bottom = false, member = true, proc = "brace", prof = "brace", fline = true, kind = "structural", strength = 60 },
   adapter   = { prefab = "PartAdapter",   label = "Adapter 1.0–0.5", h = 0.50, rx = 0.50, rz = 0.50, mass = 0.05, cost = 45, top = true, bottom = true, kind = "structural", strength = 500 },
 
   -- ── ROVERS ───────────────────────────────────────────────────────────────
@@ -397,6 +416,7 @@ DESC = {
   beamP = "drawn beam · any length · tube, box, I or truss · joins flush",
   panelP = "drawn panel · drag a rectangle · sheet or deck",
   brace = "two-point brace · click A, click B · stiffens a frame",
+  fuelLine = "click the source tank, then the part it feeds · drains first, across a decoupler",
   roverBody = "rover body · probe core, battery, lights · front = +X",
   seat = "open seat · F to sit and drive · faces +X · no wheel or battery",
   podMk2 = "three-seat capsule · 1 m stack · hatch on +X",
@@ -429,7 +449,7 @@ CATALOGUE = {
   { "COMMAND",   { "pod", "podMk2", "cabin", "probe", "seat", "nose", "noseS", "chute" } },
   { "ELECTRICAL",{ "battery", "solar", "light", "antenna", "beacon", "dish", "dishL" } },
   { "PROPULSION",{ "engineS", "engineM", "skipper", "tankS", "tankM", "radialTank", "rcs" } },
-  { "STRUCTURE", { "decoupler", "radialDec", "legs", "fins" } },
+  { "STRUCTURE", { "decoupler", "radialDec", "fuelLine", "legs", "fins" } },
   { "FRAME",     { "strut1", "strut2", "strut3", "beam1", "beam2", "ibeam2", "ibeam3",
                    "panel1", "panel2", "panel3", "plate", "hub", "adapter",
                    "beamP", "panelP", "brace" } },
@@ -483,6 +503,8 @@ PROFILES = {
   frame = { rx = 0.025, rz = 0.025, mass = 0.0024, cost = 18, strength = 160, label = "frame tube" },
   -- the Drive Chain (parts_auto): 520 roller chain, ~1.6 kg a metre
   chain = { rx = 0.02, rz = 0.02, mass = 0.0016, cost = 4, strength = 60, label = "chain" },
+  -- the Fuel Line: a braided hose in a brace's sleeve, ~12 kg a metre
+  fline = { rx = 0.035, rz = 0.035, mass = 0.012, cost = 34, strength = 60, label = "fuel line" },
 }
 
 -- A part's mass, cost and joint strength at a procedural size (§5.5):
@@ -498,7 +520,7 @@ function sizeOf(def, size)
   if not def then return nil end
   if def.proc and size then
     if def.proc == "member" or def.proc == "brace" or def.proc == "chain" then
-      local P = PROFILES[(def.proc == "chain" and "chain") or size.prof or def.prof or "box"] or PROFILES.box
+      local P = PROFILES[(def.proc == "chain" and "chain") or (def.fline and "fline") or size.prof or def.prof or "box"] or PROFILES.box
       local L = size.len or def.h
       local extra = (def.proc == "brace" or def.proc == "chain") and 6 or 0
       return { mass = P.mass * L, cost = math.floor(P.cost * L + extra + 0.5), strength = P.strength,

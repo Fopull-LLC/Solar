@@ -1970,6 +1970,70 @@ def part_plate():
     return m
 
 
+def part_radial_dec():
+    """RADIAL DECOUPLER as a STAND-OFF PYLON (2026-11-11, Ty: "more like a bit
+    of a stand-off ... like the KSP radial decouplers"). Frame as the builder
+    mounts it: +Y out of the tank wall (the mount normal), X along the host's
+    axis, Z round the hull. 0.48 × 0.40 × 0.26 m, centred:
+      * a saddle plate bolted to the tank wall (y = −0.20),
+      * a painted box arm with gussets and two diagonal tube braces,
+      * the separation plane (a dark frangible joint) with four pyro bolts,
+      * the pusher plate the booster hangs on (y = +0.20: the outer node),
+        and the two spring pushers that throw it clear,
+      * hazard stripes and a DANGER PYROTECHNIC stencil on the arm."""
+    m = Model()
+    H = 0.40
+    y0, y1 = -H / 2, H / 2
+    # saddle on the wall, with its bolts and a rubbing strip
+    box(m, "Metal", (0, y0 + 0.014, 0), (0.48, 0.028, 0.20), uv_m=4.0, bevel=0.006)
+    box(m, "Dark", (0, y0 + 0.031, 0), (0.40, 0.006, 0.16), uv_m=6.0)
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            for k in (0.0, 0.08):
+                p = np.array([sx * (0.21 - k), y0 + 0.028, sz * 0.075])
+                tube(m, "Metal", p - np.array([0, 0.002, 0]), p + np.array([0, 0.009, 0]), 0.008, segs=6, uv_m=8.0)
+    # the arm: a painted box beam, inner to the separation plane
+    ya, yb = y0 + 0.034, y1 - 0.055
+    box(m, "Paint2", (0, (ya + yb) / 2, 0), (0.12, yb - ya, 0.13), uv_m=2.0, bevel=0.008)
+    # gussets either side, root to mid-arm
+    for sx in (-1, 1):
+        for k in range(3):
+            t = (k + 0.5) / 3
+            box(m, "Paint3", (sx * (0.06 + 0.07 * (1 - t)), ya + 0.012 + 0.10 * t, 0),
+                (0.14 * (1 - t) + 0.01, 0.024, 0.012), uv_m=4.0)
+    # diagonal braces: saddle ends to the arm's outer end
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            tube(m, "Metal", (sx * 0.20, y0 + 0.03, sz * 0.07), (sx * 0.06, yb - 0.01, sz * 0.05), 0.011, segs=8, uv_m=4.0)
+    # separation plane: the frangible joint between two flange plates
+    box(m, "Metal", (0, yb + 0.006, 0), (0.30, 0.012, 0.20), uv_m=4.0, bevel=0.004)
+    box(m, "Dark", (0, yb + 0.017, 0), (0.27, 0.010, 0.17), uv_m=6.0)
+    # the pusher plate the booster hangs on, flush with the outer node
+    yp0 = yb + 0.022
+    box(m, "Metal", (0, (yp0 + y1) / 2, 0), (0.40, y1 - yp0, 0.26), uv_m=4.0, bevel=0.006)
+    # pyro bolts through the joint, heads on the arm side of the plate
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            p = np.array([sx * 0.115, yb, sz * 0.07])
+            tube(m, "Dark", p - np.array([0, 0.012, 0]), p + np.array([0, 0.022, 0]), 0.016, segs=8, uv_m=8.0)
+            tube(m, "Chrome", p - np.array([0, 0.020, 0]), p - np.array([0, 0.011, 0]), 0.010, segs=6, uv_m=8.0)
+    # the two spring pushers (spent charges kick the booster off them)
+    for sx in (-1, 1):
+        base = np.array([sx * 0.16, yp0 - 0.07, 0.0])
+        tube(m, "Dark", base, base + np.array([0, 0.045, 0]), 0.024, segs=10, uv_m=6.0)
+        tube(m, "Chrome", base + np.array([0, 0.045, 0]), np.array([sx * 0.16, yp0, 0.0]), 0.013, segs=8, uv_m=8.0)
+        box(m, "Metal", (sx * 0.16, yp0 - 0.07, 0), (0.06, 0.012, 0.06), uv_m=6.0)
+    # markings: hazard stripes and the pyro stencil on the arm's ±Z faces
+    ym = (ya + yb) / 2
+    for sz in (-1, 1):
+        zf = sz * 0.065
+        up = np.array([0.0, 1.0, 0.0])
+        right = np.array([-sz * 1.0, 0.0, 0.0])
+        flat_decal(m, "Decal", "hazard", (0, yb - 0.03, zf), right, up, 0.11, height=0.028)
+        flat_decal(m, "Stencil", "pyro", (0, ym, zf), right, up, 0.105, height=0.014)
+    return m
+
+
 def part_hub():
     """Strut hub: a 0.24 m machined cube with a bolted pad on every face."""
     m = Model()
@@ -2363,6 +2427,8 @@ def build_new_parts(dry=False, only=()):
         ("plate", part_plate, "PartPlate", (0.5, 0.05, 0.5), 0.06, "1 m deck plate"),
         ("hub", part_hub, "PartHub", (0.12, 0.12, 0.12), 0.008, "strut hub"),
         ("adapter", part_adapter, "PartAdapter", (0.5, 0.25, 0.5), 0.05, "1.0 → 0.5 m adapter"),
+        ("radial_dec", part_radial_dec, "PartRadialDec", (0.24, 0.20, 0.13), 0.05,
+         "radial decoupler: a stand-off pylon, +Y out of the wall (scripts/parts_registry radialDec)"),
         ("fairing_s", part_fairing_base(0.625), "PartFairingS", (0.625, 0.1, 0.625), 0.08, "1.25 m fairing base"),
         ("fairing_m", part_fairing_base(1.25), "PartFairingM", (1.25, 0.1, 1.25), 0.2, "2.5 m fairing base"),
     ]
@@ -2979,7 +3045,7 @@ def build_aero_parts(dry=False, only=()):
 
 ROUND2_KEYS = ("strut1", "strut2", "strut3", "beam1", "beam2", "ibeam2", "ibeam3", "panel1", "panel2",
                "panel3", "plate", "hub", "adapter", "rover_body", "fairing_s", "fairing_m", "wheel_s",
-               "wheel_m", "wheel_l", "hinge", "piston", "rotor", "claw", "drill", "solar", "proc")
+               "wheel_m", "wheel_l", "hinge", "piston", "rotor", "claw", "drill", "solar", "proc", "radial_dec")
 
 
 # ── VISUAL-ONLY VARIANTS (prefabs/vis/) ──────────────────────────────────────

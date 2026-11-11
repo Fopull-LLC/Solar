@@ -1070,6 +1070,28 @@ function stageStats()
     raw[k] = s
   end
   local s1 = raw[0]
+  -- THE FEED (electronics fuelGroups, 2026-11-11): a radial decoupler without
+  -- crossfeed walls its booster off, so the boosters burn their own tanks
+  -- while the core burns its own, side by side; with crossfeed on or a fuel
+  -- line from a booster into the core, the core drinks the boosters' tanks
+  -- first (the old model).
+  local iso = false
+  if n_boost > 0 then
+    local F = fuelGroupsB()
+    if F then
+      local reach = {}
+      for uid, p in pairs(parts) do
+        if not booster_uids[uid] and (p.def.thrust or 0) > 0 and p.y < (cuts[1] or math.huge) - 0.01 then
+          for _, g in ipairs(F.order[F.of[uid] or -1] or {}) do reach[g] = true end
+        end
+      end
+      iso = true
+      for u in pairs(booster_uids) do
+        local p = parts[u]
+        if p and (p.def.fuel or 0) > 0 and reach[F.of[u] or -1] then iso = false end
+      end
+    end
+  end
   local bm, bth, bth_sl, bburn, bfu = 0.0, 0.0, 0.0, 0.0, 0
   if n_boost > 0 then
     for u in pairs(booster_uids) do
@@ -1094,6 +1116,29 @@ function stageStats()
                      dv_sl = burn_dv(th_sl, burn, m0, m0 - bfu * U),
                      twr_sl = (th_sl > 0) and th_sl / (m0 * w.g) or 0,
                      tb = (burn > 0) and bfu / burn or 0 }
+    if iso then
+      -- side by side: the boosters' engines on their own tanks, the core's on
+      -- its own, until the boosters run dry (or the core does first: then the
+      -- boosters burn on alone); stage 1 starts with what the core has left
+      local tb_b = bburn > 0 and bfu / bburn or 0
+      local tb_c = s1.burn > 0 and s1.fu / s1.burn or math.huge
+      local t1 = math.min(tb_b, tb_c)
+      local cu = s1.burn > 0 and s1.burn * t1 or 0
+      local bu = bburn * t1
+      local m1 = m0 - (bu + cu) * U
+      local b = out.boosters
+      b.dv = burn_dv(th, burn, m0, m1)
+      b.dv_sl = burn_dv(th_sl, burn, m0, m1)
+      if tb_b > t1 and bburn > 0 then
+        b.dv = b.dv + burn_dv(bth, bburn, m1, m1 - (bfu - bu) * U)
+        b.dv_sl = b.dv_sl + burn_dv(bth_sl, bburn, m1, m1 - (bfu - bu) * U)
+      end
+      b.tb, b.iso, b.core_used = tb_b, true, cu
+      local c = {}
+      for k2, v2 in pairs(s1) do c[k2] = v2 end
+      c.m, c.fu = s1.m - cu * U, math.max(0, s1.fu - cu)
+      raw[0] = c
+    end
     out.dv = out.dv + out.boosters.dv
     out.dv_sl = out.dv_sl + out.boosters.dv_sl
     fu_all = fu_all + bfu
@@ -1213,6 +1258,15 @@ end
 --                            (asNew: a new stage inserted at `to`)
 --   STAGEM.swap(stages, i, j) → stages: two stages trade places
 --   STAGEM.index(stages, items) → uid → stage number (what the blueprint saves)
+--   STAGEM.addBlank(stages, at) → stages: an EMPTY stage inserted at `at`
+--                            (NEW STAGE, 2026-11-11: "pressing new stage
+--                            doesn't add a new empty stage"). It carries
+--                            `blank = true`, so sync, move and replace keep
+--                            it while it is empty; events are dragged into
+--                            it like any stage. The blueprint keeps the
+--                            empty ones' numbers (`stageBlank`).
+--   STAGEM.removeBlank(stages, i) → stages: an empty stage taken out
+--   STAGEM.blanks(stages) → { n… } the empty stages' numbers
 -- ENGINES are items too (2026-11-03: "engines should show in the stage UI and
 -- be grouped by symmetry"): a symmetry group of engines "eg<sym>" (one item,
 -- its count), a lone or split-off engine "e<uid>". An engine IGNITES when its
@@ -1276,7 +1330,9 @@ function STAGEM.sync(stages, items, saved)
     for _, k in ipairs(g) do
       if items[k] and not placed[k] then ng[#ng + 1] = k; placed[k] = true end
     end
-    if #ng > 0 then out[#out + 1] = ng end
+    -- (a stage NEW STAGE made stays while empty; any other closes)
+    if g.blank then ng.blank = true end
+    if #ng > 0 or ng.blank then out[#out + 1] = ng end
   end
   local fresh, by_n = {}, {}
   local keys = {}
@@ -1343,7 +1399,7 @@ end
 function STAGEM.move(stages, key, to, asNew)
   local out = {}
   for i, g in ipairs(stages) do
-    local ng = {}
+    local ng = { blank = g.blank }
     for _, k in ipairs(g) do if k ~= key then ng[#ng + 1] = k end end
     out[i] = ng
   end
@@ -1361,7 +1417,7 @@ function STAGEM.move(stages, key, to, asNew)
     end
   end
   local kept = {}
-  for _, g in ipairs(out) do if #g > 0 then kept[#kept + 1] = g end end
+  for _, g in ipairs(out) do if #g > 0 or g.blank then kept[#kept + 1] = g end end
   kept[0] = L
   return kept
 end
@@ -1369,7 +1425,7 @@ end
 -- split into its engines, or its engines joined back into the group).
 function STAGEM.replace(stages, key, keys, drop)
   local function fix(g)
-    local ng, hit = {}, false
+    local ng, hit = { blank = g.blank }, false
     for _, k in ipairs(g) do
       if k == key then
         hit = true
@@ -1383,8 +1439,9 @@ function STAGEM.replace(stages, key, keys, drop)
   local out = {}
   for i, g in ipairs(stages) do out[i] = (fix(g)) end
   out[0] = (fix(stages[0] or {}))
+  out[0].blank = nil
   local kept = {}
-  for _, g in ipairs(out) do if #g > 0 then kept[#kept + 1] = g end end
+  for _, g in ipairs(out) do if #g > 0 or g.blank then kept[#kept + 1] = g end end
   kept[0] = out[0]
   return kept
 end
@@ -1402,6 +1459,21 @@ function STAGEM.reorder(stages, i, j)
   local g = table.remove(stages, i)
   table.insert(stages, j, g)
   return stages
+end
+function STAGEM.addBlank(stages, at)
+  at = math.max(1, math.min(at or (#stages + 1), #stages + 1))
+  table.insert(stages, at, { blank = true })
+  return stages
+end
+function STAGEM.removeBlank(stages, i)
+  local g = stages[i]
+  if g and #g == 0 then table.remove(stages, i) end
+  return stages
+end
+function STAGEM.blanks(stages)
+  local out = {}
+  for n, g in ipairs(stages) do if #g == 0 then out[#out + 1] = n end end
+  return out
 end
 function STAGEM.index(stages, items)
   local out = {}
@@ -1510,6 +1582,15 @@ function sync_stage_order()
   if W.stage_sync_v == craftVersion and W.stage_items then return W.stage_items end
   local items = stage_items()
   stage_order = STAGEM.sync(stage_order, items, saved_stage)
+  -- a loaded blueprint's EMPTY stages go back where they were (stageBlank:
+  -- their numbers, ascending, so each lands among the ones before it)
+  if W.stage_blanks then
+    local bl = {}
+    for _, n in ipairs(W.stage_blanks) do if tonumber(n) then bl[#bl + 1] = math.floor(tonumber(n)) end end
+    table.sort(bl)
+    for _, n in ipairs(bl) do STAGEM.addBlank(stage_order, n) end
+    W.stage_blanks = nil
+  end
   W.stage_items, W.stage_sync_v = items, craftVersion
   return items
 end
@@ -1564,6 +1645,98 @@ function countLabels(set, n, skip)
   return table.concat(out, ", "), #order
 end
 
+-- THE FUEL GROUPS (electronics fuelGroups, 2026-11-11): the craft split at
+-- every decoupler without crossfeed and joined by fuel lines, as the flight
+-- feeds it. Cached per craft version.
+function fuelGroupsB()
+  local c = W.cache
+  if c.fg_v == craftVersion and c.fg then return c.fg end
+  local E = elib()
+  if not (E and E.fuelGroups) then return nil end
+  local recs = {}
+  for u, p in pairs(parts) do
+    if not p.carried then
+      local d = liveDef(p.def)
+      recs[#recs + 1] = { uid = u, parent = p.parent, decouple = p.def.decouple, radial = p.def.radial,
+                          fuel = d.fuel or 0, thrust = d.thrust or 0, fline = p.def.fline, size = p.size }
+    end
+  end
+  c.fg = E.fuelGroups(recs, { keep = stageKeep and stageKeep() or craft_root() })
+  c.fg_v = craftVersion
+  return c.fg
+end
+-- The STAGE tab's FUEL list: one row per tank group that matters (tanks or
+-- engines), copies round a symmetry ring folded into one ×n row:
+-- { key, name, n, tanks, fuel, engines (labels), uids, from = { names },
+--   across, warn }
+function fuelView()
+  local F = fuelGroupsB()
+  if not F then return nil end
+  local booster = {}
+  for u, p in pairs(parts) do
+    if p.def.radial and p.def.decouple then
+      for v in pairs(separation_of(u)) do booster[v] = true end
+    end
+  end
+  local fed = {}
+  for id, ord in pairs(F.order) do
+    if #F.groups[id].engines > 0 then for _, g in ipairs(ord) do fed[g] = true end end
+  end
+  -- names: CORE (the crew's), BOOSTER, else STACK k bottom-up
+  local ids, low = {}, {}
+  for id, g in pairs(F.groups) do
+    if #g.tanks > 0 or #g.engines > 0 then
+      ids[#ids + 1] = id
+      local y = math.huge
+      for _, u in ipairs(g.uids) do if parts[u] then y = math.min(y, parts[u].y) end end
+      low[id] = y
+    end
+  end
+  table.sort(ids, function(a, b) return low[a] < low[b] end)
+  local name, k = {}, 0
+  for _, id in ipairs(ids) do
+    local g = F.groups[id]
+    if g.keep then name[id] = "CORE"
+    elseif booster[g.uids[1]] then name[id] = "BOOSTER"
+    else k = k + 1; name[id] = "STACK " .. k end
+  end
+  local rows, by_sig = {}, {}
+  for _, id in ipairs(ids) do
+    local g = F.groups[id]
+    local eset = {}
+    for _, u in ipairs(g.engines) do eset[u] = true end
+    local elab = countLabels(eset, 2)
+    local from = {}
+    for _, f in ipairs(g.from) do
+      if name[f] then from[#from + 1] = name[f] .. (g.across == f and " (through the decoupler)" or " (fuel line)") end
+    end
+    table.sort(from)
+    local warn = nil
+    if #g.engines > 0 then
+      local tot = 0
+      for _, x in ipairs(F.order[id] or {}) do tot = tot + (F.groups[x].fuel or 0) end
+      if tot <= 0 then warn = "no fuel reaches these engines" end
+    elseif not fed[id] then
+      warn = "no engine drinks this: dead weight until it drops"
+    end
+    local sig = table.concat({ name[id], #g.tanks, g.fuel, elab, table.concat(from, ";"), tostring(warn) }, "|")
+    local r = by_sig[sig]
+    if r and name[id] == "BOOSTER" then
+      r.n = r.n + 1
+      for _, u in ipairs(g.uids) do r.uids[#r.uids + 1] = u end
+    else
+      r = { key = "f" .. id, name = name[id], n = 1, tanks = #g.tanks, fuel = g.fuel, engines = elab,
+            neng = #g.engines, uids = {}, from = from, warn = warn }
+      for _, u in ipairs(g.uids) do r.uids[#r.uids + 1] = u end
+      by_sig[sig] = r
+      rows[#rows + 1] = r
+    end
+  end
+  W.fuel_rows = {}
+  for _, r in ipairs(rows) do W.fuel_rows[r.key] = r.uids end
+  return rows
+end
+
 -- THE STAGE TAB'S DATA (builder_inspector draws it): one entry per stage in
 -- firing order, each with its events (what each one is, which parts it
 -- throws off, which engines it leaves burning) — the same model the flight
@@ -1613,7 +1786,7 @@ function stageView()
   end
   out.launch = { lights = (countLabels(lset, 3)), items = litems }
   for n, g in ipairs(stage_order) do
-    local st = { n = n, items = {} }
+    local st = { n = n, items = {}, blank = #g == 0 }
     for _, k in ipairs(g) do
       local it = items[k]
       if it then
@@ -4148,7 +4321,7 @@ local ROUND = {
   noseS = { 0.22, 0.22, 0.21, 0.19, 0.17, 0.14, 0.09, 0.02 },
   chute = { 0.22 },
   tankS = { 0.50 }, tankM = { 0.50 }, battery = { 0.50 }, cargo = { 0.50 },
-  decoupler = { 0.51 }, radialDec = { 0.51 },
+  decoupler = { 0.51 },   -- (the radial decoupler is a pylon now: its box)
   engineS = { 0.41, 0.33, 0.27, 0.21, 0.12, 0.47, 0.50, 0.51 },
   engineM = { 0.49, 0.42, 0.35, 0.28, 0.19, 0.28, 0.28, 0.51 },
   skipper = { 0.39, 0.36, 0.33, 0.30, 0.27, 0.39, 0.47, 0.51 },
@@ -5590,6 +5763,11 @@ local function make_blueprint()
   -- (every event of a stage carries its number: the flight fires them on one SPACE)
   local items = sync_stage_order()
   local stage_of = STAGEM.index(stage_order, items)
+  -- (the empty stages NEW STAGE made: no part carries their number)
+  do
+    local bl = STAGEM.blanks(stage_order)
+    if #bl > 0 then bp.stageBlank = bl end
+  end
   local i = 0
   -- (a part's modules depend on its definition alone: encoded once a
   -- definition per pass, not once a part — 3,000 parts are a handful of kinds)
@@ -5625,6 +5803,8 @@ local function make_blueprint()
       asl = d.asl,
       decouple = d.decouple and 1 or 0, legs = d.legs and 1 or 0,
       radial = d.radial and 1 or 0, chute = d.chute and 1 or 0,
+      -- a FUEL LINE (its far end's part in size.to: electronics fuelGroups)
+      fline = d.fline and 1 or nil,
       comms = d.comms and 1 or 0, aero = d.aero and 1 or 0,
       -- AERODYNAMICS (scripts/aero.lua): the part's aero spec, verbatim — the
       -- flight reads wings, control surfaces, jets, intakes, gear and drag
@@ -5864,6 +6044,7 @@ local function load_blueprint(bp)
   clear_stand()
   stage_order, saved_stage = {}, {}
   W.stage_sync_v, W.eng_split = nil, {}
+  W.stage_blanks = type(bp.stageBlank) == "table" and #bp.stageBlank > 0 and tcopy(bp.stageBlank) or nil
   fshapes = {}
   W.cache.ffit = nil
   wcfgs = {}
@@ -7359,6 +7540,14 @@ function draw_stage_badges()
   if stage_hover and (time or 0) - (W.stage_hover_t or 0) > 0.25 then stage_hover = nil end
   local items = sync_stage_order()
   local k = screen_k and screen_k() or 1
+  -- a hovered FUEL row: its tank group outlined
+  local fr = stage_hover and W.fuel_rows and W.fuel_rows[stage_hover]
+  if fr then
+    for i = 1, math.min(#fr, 200) do
+      local p = parts[fr[i]]
+      if p and not p.carried then outline(p, 0.95, 0.72, 0.2, 1.0) end
+    end
+  end
   for n = 0, #stage_order do
     local g = stage_order[n] or {}
     for _, key in ipairs(g) do
@@ -8098,7 +8287,7 @@ end
 -- neighbours). Closing a rectangle with its fourth beam welds both ends.
 function autoWeld(u, t)
   local A, G, p = attach_v2(), graph(), parts[u]
-  if not (A and A.autoWelds and G and p) then return 0 end
+  if not (A and A.autoWelds and G and p) or p.def.fline then return 0 end
   local ex, ey, ez = part_box(p)
   local near = {}
   local H = ensure_hash()
@@ -8107,7 +8296,8 @@ function autoWeld(u, t)
   for _, n in ipairs(G:neighbours(u)) do linked[n] = true end
   for _, v in ipairs(H:box(p.x - ex - 0.05, p.y - ey - 0.05, p.z - ez - 0.05, p.x + ex + 0.05, p.y + ey + 0.05,
                            p.z + ez + 0.05, {})) do
-    if v ~= u and parts[v] and not parts[v].carried then near[#near + 1] = arec(v) end
+    -- (never to a fuel line: it holds by its source end alone)
+    if v ~= u and parts[v] and not parts[v].carried and not parts[v].def.fline then near[#near + 1] = arec(v) end
   end
   local n = 0
   for _, l in ipairs(A.autoWelds(arec(u), near, linked)) do
@@ -8228,7 +8418,8 @@ function startDrawTool(id)
   hint(kind == "member" and "BEAM — click a start, then the end (ALT: end in the air · SHIFT+click chains · [ ] profile · ESC ends)"
     or (kind == "panel" and "PANEL — click one corner, then the opposite one ([ ] sheet or deck · ESC ends)"
     or (kind == "chain" and "CHAIN — click a gas engine, then the wheel it drives (ESC ends)"
-    or "BRACE — click point A on a part, then point B on another (ESC ends)")), 6.0)
+    or (def.fline and "FUEL LINE — click the SOURCE tank, then the part it feeds (ESC ends)"
+    or "BRACE — click point A on a part, then point B on another (ESC ends)"))), 6.0)
   return true
 end
 function drawingTool() return W.drawing and { id = W.drawing.id, kind = W.drawing.kind, prof = W.drawing.prof,
@@ -8276,6 +8467,20 @@ local function draw_place(A, d, m)
       if e and e.host and parts[e.host] then ends[#ends + 1] = { w, e.host } end
     end
   end
+  -- A FUEL LINE hangs on its SOURCE end only; its far end's part is named in
+  -- its size (`to`), with no link, so it never ties a booster to the core
+  -- (electronics fuelGroups reads it; the decoupler still drops the booster)
+  if def.fline then
+    local ea, eb = nil, nil
+    for _, e in ipairs(ends) do if e[1] == "a" then ea = e elseif e[1] == "b" then eb = e end end
+    if not (ea and eb) or ea[2] == eb[2] then
+      hint("a fuel line runs from one part to ANOTHER: click the source tank, then the part it feeds", 3.0)
+      return nil
+    end
+    ends = { ea }
+    m.size = tcopy(m.size) or {}
+    m.size.to = eb[2]
+  end
   for _, e in ipairs(ends) do around[e[2]] = true end
   local t = tx_begin("draw " .. (def.label or d.id), around)
   tx_touch(t, u)
@@ -8303,7 +8508,7 @@ local function draw_place(A, d, m)
   if p and G then
     for _, l in ipairs(links) do G:add(l) end
     if links[1] then p.parent, p.att = links[1].a, "surface" end
-    autoWeld(u, t)
+    if not def.fline then autoWeld(u, t) end
   end
   struct_changed()
   tx_commit(t)
@@ -9525,6 +9730,9 @@ local function instantiate(frag, ox, oy, oz, t)
       if p then
         local par = map[r.parent or 0]
         p.parent, p.att = par, (r.att ~= "" and r.att) or nil
+        -- a fuel line copied with the part it feeds feeds the copy (else the
+        -- same part as before: a booster pasted round a core feeds that core)
+        if type(p.size) == "table" and p.size.to and map[p.size.to] then p.size.to = map[p.size.to] end
         if type(r.wcfg) == "table" then wcfgs[u] = copy_wcfg(r.wcfg) end
         if type(r.fshape) == "table" then fshapes[u] = tcopy(r.fshape) end
       end
@@ -10006,6 +10214,7 @@ function craftNew()
   if partCount > 0 then craftSave() end
   clear_stand()
   stage_order, saved_stage = {}, {}
+  W.stage_blanks = nil
   W.stage_sync_v, W.eng_split = nil, {}
   groups_state.groups, groups_state.edited = nil, false
   W.craft = nil
@@ -10286,6 +10495,48 @@ function CMD.setParam(a)
   return true
 end
 
+-- A DECOUPLER's settings (2026-11-11), on its whole symmetry ring at once,
+-- one undo step: { uid, key, value } with key
+--   "xfeed"   true = fuel crosses it (a radial decoupler blocks it by default)
+--   "eject"   the separation push, m/s given to what it throws off
+-- Kept in the part's `size` table, which every save, copy and undo carries.
+EJECT_STEPS = { 0, 2, 4.5, 7, 10 }
+function CMD.decCfg(a)
+  local p = parts[a.uid or -1]
+  if not (p and p.def.decouple and (a.key == "xfeed" or a.key == "eject")) then return false end
+  local us = { a.uid }
+  if p.sym then
+    us = {}
+    for u, q in pairs(parts) do if q.sym == p.sym and q.def.decouple then us[#us + 1] = u end end
+    table.sort(us)
+  end
+  local t = tx_begin("set " .. a.key, us, nil)
+  tx_commit(t)
+  local v = a.value
+  if a.key == "xfeed" then v = v and true or nil end
+  if a.key == "eject" then v = tonumber(v); if v then v = math.max(0, math.min(12, v)) end end
+  for _, u in ipairs(us) do
+    local q = parts[u]
+    q.size = q.size or {}
+    q.size[a.key] = v
+    if next(q.size) == nil then q.size = nil end
+    hash_put(u, q)
+  end
+  craftVersion = craftVersion + 1
+  refresh_stats()
+  return true
+end
+-- The settings of decoupler `uid` as the part menu shows them.
+function decouplerCfg(uid)
+  local p = parts[uid or -1]
+  if not (p and p.def.decouple) then return nil end
+  local sz = p.size or {}
+  local n = 1
+  if p.sym then n = 0; for _, q in pairs(parts) do if q.sym == p.sym and q.def.decouple then n = n + 1 end end end
+  return { radial = p.def.radial == true, xfeed = sz.xfeed == true,
+           eject = tonumber(sz.eject) or p.def.eject or 4.5, n = n }
+end
+
 -- A FAIRING's shell (fairing redesign E1–E6): { uid, op } with op
 --   "fit"              grow it just enough to hold what sticks out (E3)
 --   "open", on         an open top (inter-stage skirt) or a nose (E2)
@@ -10494,6 +10745,8 @@ end
 --   { op = "split", key }           an engine group into its engines (same stage)
 --   { op = "join", key }            a split engine's group back as one item
 --   { op = "reset" }                the default order again
+--   { op = "blank", at }            NEW STAGE: an empty stage at `at` (default: on top)
+--   { op = "unblank", i }           an empty stage i taken out
 -- (`to` = 0 is the LAUNCH group: engines lit when the clamps let go)
 CMD.stage = function(a)
   sync_stage_order()
@@ -10530,6 +10783,10 @@ CMD.stage = function(a)
       drop[a.key] = nil
       stage_order = STAGEM.replace(stage_order, a.key, { "eg" .. sym }, drop)
     end
+  elseif a.op == "blank" then
+    stage_order = STAGEM.addBlank(stage_order, a.at)
+  elseif a.op == "unblank" and a.i then
+    stage_order = STAGEM.removeBlank(stage_order, a.i)
   elseif a.op == "reset" then
     stage_order, saved_stage = {}, {}
     W.stage_sync_v, W.eng_split = nil, {}

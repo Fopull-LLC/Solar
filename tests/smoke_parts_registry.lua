@@ -26,9 +26,9 @@ local R = env
 -- context-menu work adds the Stowage Locker to PAYLOAD (+1 part, +1 line).
 -- (+2 parts, +2 lines: the Pod Mk2 and the Crew Cabin, crew slice 2)
 -- (+2 parts, +2 lines: the Small Locker and the Saddle Box in PAYLOAD)
-local OLD_REG, OLD_DESC = 58, 34   -- 55 in the old builder, + the Small Nose Cone
+local OLD_REG, OLD_DESC = 59, 35   -- 55 in the old builder, + the Small Nose Cone, + the Fuel Line (2026-11-11)
 local OLD_SECTIONS = {
-  { "COMMAND", 8 }, { "ELECTRICAL", 7 }, { "PROPULSION", 7 }, { "STRUCTURE", 4 },
+  { "COMMAND", 8 }, { "ELECTRICAL", 7 }, { "PROPULSION", 7 }, { "STRUCTURE", 5 },
   { "FRAME", 16 }, { "PAYLOAD", 7 }, { "ROVER", 4 }, { "ROBOTICS", 5 },
 }
 

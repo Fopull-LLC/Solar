@@ -419,6 +419,40 @@ local function rule_feed(ctx, out, k)
       text = fmt("An engine drinks its own section's tanks only (vessel_controller feedSec), and %s's section has none. Add a Fuselage Tank on the same side of any decoupler.",
         nameOf(ctx, dryjets)) })
   end
+  -- R7b (2026-11-11): a radial decoupler walls its booster's fuel off unless
+  -- its crossfeed is on (electronics fuelGroups), so a booster engine with no
+  -- tank of its own on the booster, and no fuel line into it, never burns
+  if ctx.drops then
+    local fedTo = {}
+    for _, p in pairs(ctx.parts) do
+      if p.def.fline and type(p.size) == "table" and p.size.to then fedTo[p.size.to] = true end
+    end
+    local dry, seen = {}, {}
+    for u, p in pairs(ctx.parts) do
+      if p.def.radial and p.def.decouple and not (type(p.size) == "table" and p.size.xfeed) then
+        local set = ctx.drops(u) or {}
+        local fuel, eng, fed = 0, {}, false
+        for v in pairs(set) do
+          local q = ctx.parts[v]
+          if q then
+            if (q.def.fuel or 0) > 0 and not q.def.rcs then fuel = fuel + q.def.fuel end
+            if (q.def.thrust or 0) > 0 then eng[#eng + 1] = v end
+            if fedTo[v] then fed = true end
+          end
+        end
+        if #eng > 0 and fuel <= 0 and not fed then
+          for _, v in ipairs(eng) do if not seen[v] then seen[v] = true; dry[#dry + 1] = v end end
+        end
+      end
+    end
+    if #dry > 0 then
+      table.sort(dry)
+      row(out, { id = "R7b", rank = 0, kind = "rocket", uids = dry,
+        head = "A booster's engine has no tank: it never burns",
+        text = fmt("A radial decoupler stops fuel (unless its Crossfeed is on), and %s %s no tank on its own side of it. Put a tank on the booster, turn the decoupler's Crossfeed on, or run a Fuel Line into it.",
+          nameOf(ctx, dry), #dry == 1 and "has" or "have") })
+    end
+  end
   for s = 0, #cuts do
     local S = sec[s]
     if #S.engines > 0 and S.fuel <= 0 then

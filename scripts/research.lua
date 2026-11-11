@@ -69,6 +69,7 @@ TECH = {
   dishL      = { cost = 5200, label = "Deep Space Dish", mat = "silica", after = "dish", rep = 6,
                  prog = "sky", progLabel = "Eyes in the Sky" },
   radialDec  = { cost = 900,  label = "Radial Decoupler" },
+  fuelLine   = { cost = 700,  label = "Fuel Line",      after = "radialDec" },
   radialTank = { cost = 1200, label = "Radial Tank",    after = "tankM" },
   solar      = { cost = 2200, label = "Solar Panel",    mat = "silica",  after = "battery" },
   cargo      = { cost = 500,  label = "Cargo Bay",      mat = "iron" },

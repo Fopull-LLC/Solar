@@ -557,7 +557,8 @@ ABOUT = {
   engineM = "The upper-stage engine: at its best in vacuum, poor at sea level. Put a lifter under it to get off the ground.",
   skipper = "The lifter: huge thrust at sea level, heavy, and so-so in vacuum. The first stage of anything going far.",
   decoupler = "Splits the stack in two when its stage fires: everything below it falls away. The stage list shows what it drops.",
-  radialDec = "Holds a side booster or a drop tank on a flank and kicks it away when its stage fires. Ring it with symmetry.",
+  radialDec = "A stand-off pylon that holds a side booster clear of the tank wall and throws it out when its stage fires (Eject, below). Fuel stops at it unless Crossfeed is on: the booster burns its own tanks. Ring it with symmetry.",
+  fuelLine = "Click the source tank, then the part it feeds: the far end's engines drink the source first, across a decoupler. Lines outer → inner → core make asparagus staging. It leaves with its source.",
   legs = "Landing legs: they fold out on the Gear key and take the bump of a landing on rough ground.",
   battery = "Stores power for everything aboard: probe cores, wheels, lights and radios. Charge it with solar panels.",
   solar = "Makes power in sunlight: more nearer the star, none in a planet's shadow. Deploys on its key.",
@@ -737,6 +738,7 @@ local function inspect(B, out, top)
       onClicked = function() local c = ref("builder_camera"); if c and c.frameSelection then c.frameSelection() end end } }
   if def.wheel then out[#out + 1] = rule("r2"); wheel_rows(B, uid, rec, out) end
   if def.proc == "chain" then out[#out + 1] = rule("r2"); chain_rows(B, uid, rec, out) end
+  if def.decouple then out[#out + 1] = rule("r2"); decoupler_rows(B, uid, out) end
   if def.fairing and n == 1 then out[#out + 1] = rule("r2"); fairing_rows(B, uid, out) end
   if n == 1 and type(raw.mods) == "table" then
     local core, thermal = nil, false
@@ -867,14 +869,25 @@ local function stage_rows(B, out)
     out[#out + 1] = { "text", key = "sx", style = "panel/body", w = "100%", h = "fit", wrap = true,
       text = "Nothing to stage yet. Decouplers, radial decouplers, fairings and parachutes each add an event here; engines burn with the stage they sit in." }
   end
-  -- NEW STAGE on top: drop an event here to fire it after everything else
-  local function newzone(k, to, label)
-    return { "box", key = k, style = st.drag and "panel/rowActive" or "panel/row", w = "100%", h = 18, dropTarget = true,
-      text = label, textAlign = "center", textValign = "center", opacity = st.drag and 1.0 or 0.55,
-      tooltip = "Drop an event here to give it a stage of its own",
+  if st.selStage and (st.selStage > N or st.selStage < 1) then st.selStage = nil end
+  -- NEW STAGE (2026-11-11: "pressing new stage doesn't add a new empty
+  -- stage"): a click adds an EMPTY stage — on top, or right above the
+  -- selected stage (click a stage's title to select it), KSP's way — to drag
+  -- events and engines into. Dropping an event on it gives the event a stage
+  -- of its own there, as before.
+  local function newzone(k, to, label, at)
+    return { "button", key = k, style = st.drag and "panel/rowActive" or "panel/row", w = "100%", h = 20, dropTarget = true,
+      text = label, textAlign = "center", textValign = "center", opacity = st.drag and 1.0 or 0.8,
+      tooltip = "Click: add an empty stage here · drop an event here to give it a stage of its own",
+      onClicked = function()
+        B.cmd("stage", { op = "blank", at = at })
+        st.selStage = at
+      end,
       onDropped = function() if st.drag then move(st.drag, to, true) end st.drag, st.dragEngine = nil, nil end }
   end
-  if N > 0 then out[#out + 1] = newzone("ntop", N + 1, "+ NEW STAGE (fires last)") end
+  local top_at = st.selStage and (st.selStage + 1) or (N + 1)
+  out[#out + 1] = newzone("ntop", N + 1,
+    st.selStage and string.format("+ NEW STAGE (above stage %d)", st.selStage) or "+ NEW STAGE (fires last)", top_at)
   -- A STAGE IN YOUR HAND (its card's grip dragged): an orange line between
   -- the cards shows where it will go. Gap k lies between stage k+1 (above)
   -- and stage k (below), read off the pointer against the cards' laid-out
@@ -900,7 +913,7 @@ local function stage_rows(B, out)
     local sg = stages[n]
     list[#list + 1] = gap(n)
     local lifted = sd == n
-    local card = { "col", key = "s" .. n, name = "StageCard" .. n, style = lifted and "panel/rowActive" or "panel/row",
+    local card = { "col", key = "s" .. n, name = "StageCard" .. n, style = (lifted or st.selStage == n) and "panel/rowActive" or "panel/row",
       w = "100%", h = "fit", gap = 2, pad = 4, align = "stretch", opacity = lifted and 0.6 or nil,
       dropTarget = true,
       onDragOver = function() stage_over(N) end,
@@ -919,15 +932,32 @@ local function stage_rows(B, out)
       onDragCancel = function() st.sdrag, st.gap = nil, nil; st.sig = nil end,
       { "box", key = "r1", style = "panel/rule", w = 28, h = 1 },
       { "box", key = "r2", style = "panel/rule", w = 28, h = 1 } }
+    local chosen = st.selStage == n
     card[#card + 1] = { "row", key = "h", w = "100%", h = 20, gap = 3, pad = 0, align = "center",
-      { "text", key = "n", style = "panel/cellStrong", w = "grow", h = 20, textValign = "center",
-        text = string.format("STAGE %d%s", n, n == 1 and "  ·  next SPACE" or "") },
+      { "button", key = "n", style = chosen and "panel/rowActive" or "panel/cellStrong", w = "grow", h = 20, textValign = "center",
+        text = string.format("%sSTAGE %d%s", chosen and "▸ " or "", n, n == 1 and "  ·  next SPACE" or ""),
+        tooltip = chosen and "Selected: NEW STAGE adds above it · click again to clear"
+          or "Select this stage: NEW STAGE adds an empty one above it",
+        onClicked = function() st.selStage = (st.selStage ~= n) and n or nil; st.sig = nil end },
       { "button", key = "up", style = "panel/choice", w = 22, h = 18, text = "▲", textAlign = "center", textValign = "center",
         disabled = n == N, tooltip = "Fire this whole stage later",
         onClicked = function() B.cmd("stage", { op = "swap", i = n, j = n + 1 }) end },
       { "button", key = "dn", style = "panel/choice", w = 22, h = 18, text = "▼", textAlign = "center", textValign = "center",
         disabled = n == 1, tooltip = "Fire this whole stage sooner",
         onClicked = function() B.cmd("stage", { op = "swap", i = n, j = n - 1 }) end } }
+    if sg.blank then
+      local hr = card[#card]
+      table.insert(hr, 3, { "button", key = "x", style = "panel/choice", w = 22, h = 18, text = "✕", textAlign = "center",
+        textValign = "center", tooltip = "Remove this empty stage",
+        onClicked = function()
+          if st.selStage == n then st.selStage = nil elseif st.selStage and st.selStage > n then st.selStage = st.selStage - 1 end
+          B.cmd("stage", { op = "unblank", i = n })
+        end })
+    end
+    if sg.blank then
+      card[#card + 1] = { "text", key = "be", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+        text = "empty — drag an event or an engine here (an empty stage fires nothing)" }
+    end
     for i, e in ipairs(sg.items or {}) do
       if e.kind == "engine" then
         card[#card + 1] = engine_row(B, e, n, N, move, #sg.items)
@@ -972,7 +1002,7 @@ local function stage_rows(B, out)
     list[#list + 1] = card
   end
   if N > 0 then list[#list + 1] = gap(0); out[#out + 1] = list end
-  if N > 0 then out[#out + 1] = newzone("nbot", 1, "+ NEW STAGE (fires first)") end
+  if N > 0 then out[#out + 1] = newzone("nbot", 1, "+ NEW STAGE (fires first)", 1) end
   local L = v.launch or {}
   local lcard = { "col", key = "launch", name = "StageLaunch", style = (st.drag and st.dragEngine) and "panel/rowActive" or "panel/row",
     w = "100%", h = "fit", gap = 2, pad = 4, align = "stretch",
@@ -990,6 +1020,75 @@ local function stage_rows(B, out)
       text = "no engine lit at lift-off — drag an engine here" }
   end
   out[#out + 1] = lcard
+  fuel_rows(B, out)
+end
+
+-- THE FUEL GROUPS (B.fuelView, electronics fuelGroups): which tanks feed which
+-- engines. A decoupler walls fuel off unless its crossfeed is on, so each
+-- section between decouplers is a tank group; a fuel line lets the group at
+-- its far end drink its source first. Hover a row to light its parts.
+function fuel_rows(B, out)
+  local rows = B.fuelView and B.fuelView()
+  if not rows or #rows == 0 then return end
+  out[#out + 1] = { "text", key = "fhd", style = "panel/label", w = "100%", h = 20, textValign = "end",
+    text = "FUEL · WHICH TANKS FEED WHICH ENGINES" }
+  for i, r in ipairs(rows) do
+    local key = r.key
+    local head = r.name .. (r.n > 1 and ("  ×" .. r.n) or "")
+    local tk = r.tanks > 0 and string.format("%d tank%s · %d fuel%s", r.tanks, r.tanks == 1 and "" or "s", r.fuel,
+      r.n > 1 and " each" or "") or "no tank"
+    local line = tk .. "  →  " .. ((r.neng or 0) > 0 and r.engines or "no engine")
+    local row = { "button", key = "fr" .. i, style = (st.hover == key) and "panel/rowActive" or "panel/row", w = "100%", h = "fit",
+      dir = "column", gap = 1, pad = 3, align = "stretch",
+      tooltip = "This group's tanks and the engines they feed · click to select its parts",
+      onClicked = function() B.select(r.uids, "set") end,
+      onHoverStart = function() st.hover = key end,
+      onHoverEnd = function() if st.hover == key then st.hover = nil end end,
+      { "row", key = "t", w = "100%", h = 18, gap = 3, pad = 0, align = "center",
+        { "text", key = "k", style = "panel/keys", w = 50, h = 18, text = "FUEL", textValign = "center", maxLines = 1, overflow = "clip" },
+        { "text", key = "n", style = "panel/cell", w = "grow", h = 18, text = head, textValign = "center",
+          maxLines = 1, overflow = "ellipsis" } },
+      { "text", key = "x", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true, text = line } }
+    if #r.from > 0 then
+      row[#row + 1] = { "text", key = "f", style = "panel/cellMuted", w = "100%", h = "fit", wrap = true,
+        text = "drinks first: " .. table.concat(r.from, ", ") }
+    end
+    if r.warn then
+      row[#row + 1] = { "text", key = "w", style = "panel/hintWarn", w = "100%", h = "fit", wrap = true, text = "⚠ " .. r.warn }
+    end
+    out[#out + 1] = row
+  end
+end
+
+-- A DECOUPLER's own settings (2026-11-11), its whole symmetry ring at once:
+-- crossfeed (a radial one walls fuel off by default) and the push it throws
+-- its booster clear with.
+function decoupler_rows(B, uid, out)
+  local c = B.decouplerCfg and B.decouplerCfg(uid)
+  if not c then return end
+  out[#out + 1] = sublabel("dhd", c.n > 1 and string.format("DECOUPLER  ×%d", c.n) or "DECOUPLER")
+  local function op(key, value) if B.cmd then B.cmd("decCfg", { uid = uid, key = key, value = value }) end end
+  out[#out + 1] = { "row", key = "dxf", w = "100%", h = 22, gap = 3, pad = 0, align = "center",
+    { "text", key = "l", style = "panel/cell", w = 64, h = 22, text = "Crossfeed", textValign = "center" },
+    { "button", key = "off", style = "panel/choice", selected = not c.xfeed, w = "grow", h = 22, text = "off",
+      textAlign = "center", textValign = "center", tooltip = "Fuel stops here: each side burns its own tanks (KSP's default)",
+      onClicked = function() op("xfeed", false) end },
+    { "button", key = "on", style = "panel/choice", selected = c.xfeed, w = "grow", h = 22, text = "on",
+      textAlign = "center", textValign = "center", tooltip = "Fuel crosses it: the core drinks the booster's tanks first",
+      onClicked = function() op("xfeed", true) end } }
+  if c.radial then
+    local er = { "row", key = "dej", w = "100%", h = 22, gap = 3, pad = 0, align = "center",
+      { "text", key = "l", style = "panel/cell", w = 64, h = 22, text = "Eject m/s", textValign = "center" } }
+    for i, v in ipairs(B.EJECT_STEPS or { 0, 2, 4.5, 7, 10 }) do
+      er[#er + 1] = { "button", key = "e" .. i, style = "panel/choice",
+        selected = math.abs((c.eject or 0) - v) < 0.01, w = "grow", h = 22, text = (v == 0) and "off" or tostring(v),
+        textAlign = "center", textValign = "center",
+        tooltip = v == 0 and "No charge: the booster just lets go"
+          or string.format("The charge throws the booster out at %s m/s whatever it weighs; the core takes the same push back, which a ring cancels", tostring(v)),
+        onClicked = function() op("eject", v) end }
+    end
+    out[#out + 1] = er
+  end
 end
 
 -- The gap under the pointer: above the first card (top down) whose middle
@@ -1165,7 +1264,7 @@ function update(node, dt)
   end
   local _, g = ghost_spec(B)
   local sig = table.concat({ math.floor(W), math.floor(H), st.tab, tostring(B.craftVersion), table.concat(sel, ","),
-    tostring(focused_name()), tostring(st.hover), tostring(st.drag), tostring(st.sdrag), tostring(st.gap),
+    tostring(focused_name()), tostring(st.hover), tostring(st.drag), tostring(st.sdrag), tostring(st.gap), tostring(st.selStage),
     tostring(held), g and (g.name .. tostring(g.tex)) or "",
     st.tab == "CREW" and tostring(bc and bc.sig and bc.sig()) or "" }, "|")
   if sig == st.sig and st.t < 1.0 then return end
