@@ -696,7 +696,7 @@ local function page_ruin_data(scope, ctx)
   local RU = ref("ruins")
   local s = scope.ruin
   rows[#rows + 1] = { type = "header", label = "DATA" }
-  if s and RU and RU.peekState and RU.pullCore then
+  if s and not s.authored and RU and RU.peekState and RU.pullCore then   -- (F8: an authored ruin's cores are its scenario's)
     local id = s.id
     local function taken() local e = RU.peekState(id); return e and e.core end
     rows[#rows + 1] = { type = "info", label = "Data Core", value = function() return taken() and "taken: the slot is empty" or "in its slot · 6 kg" end }

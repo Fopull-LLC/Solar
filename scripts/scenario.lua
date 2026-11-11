@@ -1018,6 +1018,66 @@ kind("room_unbreathable", { fail = true, req = { "struct" }, eval = function(g, 
   return held >= secs, string.format("unbreathable %d s of %d (%s)", math.floor(held), math.floor(secs), tostring(a.why or "air"))
 end })
 
+-- ── F8 (scenarios2 SC-4): authored ruins and Data Cores ───────────────────
+-- core_read: { id = "<core id>" } (or ids = { … }, count = n): the core has
+-- been read (`sealed = true`: sealed unread instead; `any = true`: either).
+kind("core_read", { eval = function(g, W)
+  local ids = type(g.ids) == "table" and g.ids or { g.id }
+  local want = g.count or #ids
+  local n, last = 0, nil
+  for _, id in ipairs(ids) do
+    local st = W.coreState and W.coreState(id)
+    last = st
+    if (g.sealed and st == "sealed") or (not g.sealed and (st == "read" or (g.any and st == "sealed"))) then n = n + 1 end
+  end
+  if #ids == 1 then return n >= want, last == "read" and "read" or (last == "sealed" and "sealed unread" or "unread") end
+  return n >= want, string.format("%d of %d", n, want)
+end })
+-- ruin: an authored (or any) ruin's state: { struct, claimed = bool,
+-- restored = bool (the whole bill, or `lot`'s), afford = bool (funds cover
+-- `lot`'s price, or the whole bill) }
+kind("ruin", { req = { "struct" }, eval = function(g, W)
+  local sid = sid_of(W, g)
+  local r = sid and W.ruin and W.ruin(sid, g.lot)
+  if not r then return false, "no ruin " .. tostring(g.struct) end
+  local ok, parts = true, {}
+  if g.claimed ~= nil then ok = ok and ((r.claimed == true) == (g.claimed == true)); parts[#parts + 1] = r.claimed and "claimed" or "not claimed" end
+  if g.restored ~= nil then
+    local done = (r.missing or 0) == 0
+    ok = ok and (done == (g.restored == true))
+    parts[#parts + 1] = done and "restored" or string.format("%d piece%s missing", r.missing, r.missing == 1 and "" or "s")
+  end
+  if g.afford ~= nil then
+    local can = (r.funds or 0) >= (r.cost or 0)
+    ok = ok and (can == (g.afford == true))
+    parts[#parts + 1] = string.format("$%d for $%d", math.floor(r.funds or 0), math.floor(r.cost or 0))
+  end
+  return ok, table.concat(parts, " · ")
+end })
+-- A core's page as terminal lines: its text cut at its sentences, no line
+-- longer than `max` characters (a CRT line wraps at three rows).
+function coreLines(text, max)
+  max = max or 150
+  local out, cur = {}, ""
+  for sent in tostring(text or ""):gmatch("[^%.%?%!]+[%.%?%!]*%s*") do
+    if #cur > 0 and #cur + #sent > max then out[#out + 1] = (cur:gsub("%s+$", "")); cur = "" end
+    cur = cur .. sent
+  end
+  if cur:match("%S") then out[#out + 1] = (cur:gsub("%s+$", "")) end
+  return out
+end
+-- May a core be read now? reads = { power (its structure's grid has power),
+-- air (breathable air at it), needs (its `needs` goal reads true), needsWhy }
+-- → ok, why. The author's `why` wins over the default words.
+function coreReadable(c, reads)
+  reads = reads or {}
+  if c.power and not reads.power then return false, c.why or "the core's cell is flat: it reads only on a powered terminal" end
+  if c.air and not reads.air then return false, c.why or (c.air == "sealed" and "the shock case opens only inside a sealed room: the dust would ruin the core"
+    or "the shock case stays shut out of breathable air: the dust would ruin the core") end
+  if c.needs and not reads.needs then return false, c.why or reads.needsWhy or "not yet" end
+  return true
+end
+
 -- ── FW-C: meters and models (PLAN §2 F6: what Graveyard's hooks did, as data)
 -- A METER is a variable that follows a published reading, sampled with the
 -- goals (EVAL_HZ, the agency clock):
@@ -1171,6 +1231,8 @@ function goalLabel(g)
   if k == "has_item" then return string.format("Carry %s", tostring(g.item or g.mat)) end
   if k == "cabin" then return g.sealed and "Stop the leak" or (g.breathable and "Air in the cabin" or "The cabin's air") end
   if k == "craft_pressure" then return string.format("%s's pressure", tostring(g.craft):gsub("^craft:", "")) end
+  if k == "core_read" then return g.sealed and "Seal the Data Core" or "Read the Data Core" end
+  if k == "ruin" then return g.claimed and "Claim the site" or (g.restored and "Restore it" or "The ruin") end
   return k
 end
 
@@ -1371,7 +1433,9 @@ BEATS = { ops = "string", say = "table", caption = "table", camera = "table", wa
           turn = "table", pose = "table", gesture = "table",
           -- S6 (the interaction plan §5.3): a designation, a base-log line, a
           -- container's contents, a keypad, a console opened on a page
-          tag = "table", log = "table", container = "table", lock = "table", terminal = "table" }
+          tag = "table", log = "table", container = "table", lock = "table", terminal = "table",
+          -- F8: a Data Core placed, read or sealed
+          core = "table" }
 GESTURES = { stand_talk = true, point = true, wave = true, lean_console = true, kneel_work = true, sit_idle = true, lie_rest = true }
 POSES = { lie = true, sit = true, stand = true }
 -- FW-C cast fields (the rest is refused, so a typo is caught)
@@ -1438,6 +1502,10 @@ function validate(sc, ctx)
   local structs = {}
   for i, s in ipairs(st.structures or {}) do
     if s.name then structs[s.name] = true end
+  end
+  -- (F8) an authored ruin is a structure by its name too
+  for _, r in ipairs(type(st.ruins) == "table" and st.ruins or {}) do
+    if type(r) == "table" and type(r.name) == "string" then structs[r.name] = true end
   end
   local function check_ref(path, r, allowBare)
     if r == nil then return end
@@ -1579,6 +1647,89 @@ function validate(sc, ctx)
       if l.who ~= nil and type(l.who) ~= "string" then E(p .. ".who", "who wrote it") end
     end
   end
+  -- (F8, scenarios2 SC-4) start.ruins = { { name, bp, at, offset, yaw, age,
+  -- company, decay, gone, knocked, broken, lots, loot, lore } }: a blueprint
+  -- stamped as a decayed ruin (ruins.stampAuthored). A checkpoint's stage may
+  -- name one again with claimed = true / restore = { lot ids } only.
+  local ruin_n = {}
+  if st.ruins ~= nil and st.ruins ~= false and type(st.ruins) ~= "table" then E("start.ruins", "a list of { name, bp, at, … }") end
+  for i, r in ipairs(type(st.ruins) == "table" and st.ruins or {}) do
+    local p = string.format("start.ruins[%d]", i)
+    if type(r) ~= "table" then E(p, "a table { name, bp, at, … }")
+    else
+      if type(r.name) ~= "string" or r.name == "" then E(p .. ".name", "the ruin's name (a struct: ref names it)")
+      elseif ruin_n[r.name] then E(p .. ".name", "two ruins called " .. r.name) end
+      local n = nil
+      if type(r.bp) ~= "string" then E(p .. ".bp", "a file under scenarios/ (a SOLBP1 code)")
+      elseif ctx.readFile then
+        local code = ctx.readFile(DIR .. "/" .. r.bp)
+        if not code then E(p .. ".bp", "no file scenarios/" .. r.bp)
+        elseif ctx.decodeBp then
+          local bp, why = ctx.decodeBp(code)
+          if not bp then E(p .. ".bp", tostring(why))
+          else
+            n = #(bp.pieces or {})
+            if ctx.partExists then
+              for j, pc in ipairs(bp.pieces or {}) do if not ctx.partExists(pc.id) then E(string.format("%s.bp piece %d", p, j), "no part " .. tostring(pc.id)) end end
+            end
+          end
+        end
+      end
+      if type(r.name) == "string" then ruin_n[r.name] = n or true end
+      for _, f in ipairs({ "gone", "knocked", "broken" }) do
+        if r[f] ~= nil and type(r[f]) ~= "table" then E(p .. "." .. f, "a list of piece uids")
+        else
+          for j, u in ipairs(r[f] or {}) do
+            if type(u) ~= "number" or u < 1 or u % 1 ~= 0 or (n and u > n) then E(string.format("%s.%s[%d]", p, f, j), "a piece uid 1.." .. tostring(n or "n")) end
+          end
+        end
+      end
+      if r.decay ~= nil and (type(r.decay) ~= "number" or r.decay < 0 or r.decay > 1) then E(p .. ".decay", "0..1 (the dice's share: rust, grime, toppled props)") end
+      if r.age ~= nil and type(r.age) ~= "number" then E(p .. ".age", "days empty") end
+      if r.flat ~= nil and (type(r.flat) ~= "number" or r.flat <= 0) then E(p .. ".flat", "metres: the radius the ground must be flat over (stage it on the nearest such ground)") end
+      if r.flatSpread ~= nil and type(r.flatSpread) ~= "number" then E(p .. ".flatSpread", "metres of rise allowed over that circle") end
+      local lot_ids = {}
+      for j, l in ipairs(type(r.lots) == "table" and r.lots or {}) do
+        local pl = string.format("%s.lots[%d]", p, j)
+        if type(l.id) ~= "string" then E(pl .. ".id", "a word") elseif lot_ids[l.id] then E(pl .. ".id", "duplicate lot " .. l.id) else lot_ids[l.id] = true end
+        if type(l.name) ~= "string" then E(pl .. ".name", "the job's words (\"Bunk room roof\")") end
+        if type(l.uids) ~= "table" or #l.uids == 0 then E(pl .. ".uids", "the pieces it restores") end
+        if l.price ~= nil and (type(l.price) ~= "number" or l.price < 0) then E(pl .. ".price", "dollars, 0 or more") end
+      end
+      for j, l in ipairs(type(r.loot) == "table" and r.loot or {}) do
+        if type(l.uid) ~= "number" then E(string.format("%s.loot[%d].uid", p, j), "the crate's uid") end
+      end
+      if r.lore ~= nil and type(r.lore) ~= "table" then E(p .. ".lore", "a list of lines (the terminal's LOG page)") end
+      check_ref(p .. ".at", r.at)
+    end
+  end
+  -- (F8) start.cores = { { id, struct, uid | part, pages = { { date, text } },
+  -- who, title, power, air, needs = goal, why, run, open, label } }: authored
+  -- Data Cores in pieces, read with E on the piece, or on a console's CORE
+  -- page when the piece is a console
+  local core_ids = {}
+  local function core_def(p, c, beat)
+    if type(c.id) ~= "string" or not c.id:match("^[%w_]+$") then E(p .. ".id", "a word (letters, digits, _)")
+    elseif core_ids[c.id] and not beat then E(p .. ".id", "duplicate core " .. c.id)
+    else core_ids[c.id] = true end
+    if type(c.struct) ~= "string" then E(p .. ".struct", "the structure (or ruin) holding it")
+    elseif next(structs) and not structs[(c.struct:gsub("^struct:", ""))] then E(p .. ".struct", "no start structure or ruin named " .. c.struct) end
+    if c.uid == nil and c.part == nil then E(p, "uid or part: the piece it sits in") end
+    if c.uid ~= nil and (type(c.uid) ~= "number" or c.uid % 1 ~= 0) then E(p .. ".uid", "a piece uid") end
+    if type(c.pages) ~= "table" or #c.pages == 0 then E(p .. ".pages", "at least one { date, text }") end
+    for j, pg in ipairs(type(c.pages) == "table" and c.pages or {}) do
+      if type(pg) ~= "table" or type(pg.text) ~= "string" then E(string.format("%s.pages[%d].text", p, j), "missing")
+      elseif pg.date ~= nil and type(pg.date) ~= "string" then E(string.format("%s.pages[%d].date", p, j), "the header (\"DAY 3,112 · 06:40\")") end
+    end
+    if c.power ~= nil and type(c.power) ~= "boolean" then E(p .. ".power", "true or false") end
+    if c.air ~= nil and type(c.air) ~= "boolean" and c.air ~= "sealed" then E(p .. ".air", "true (breathable air at it) or \"sealed\" (a sealed room round it)") end
+    if c.needs ~= nil and (type(c.needs) ~= "table" or not KINDS[c.needs.kind]) then E(p .. ".needs.kind", "a goal table (any kind)") end
+    if c.why ~= nil and type(c.why) ~= "string" then E(p .. ".why", "the words when it cannot be read") end
+  end
+  if st.cores ~= nil and type(st.cores) ~= "table" then E("start.cores", "a list of { id, struct, uid, pages }") end
+  for i, c in ipairs(type(st.cores) == "table" and st.cores or {}) do
+    if type(c) ~= "table" then E(string.format("start.cores[%d]", i), "a table") else core_def(string.format("start.cores[%d]", i), c) end
+  end
   for i, c in ipairs(st.craft or {}) do
     local p = string.format("start.craft[%d]", i)
     if type(c.file) ~= "string" then E(p .. ".file", "a craft JSON under scenarios/")
@@ -1596,6 +1747,7 @@ function validate(sc, ctx)
     for _, b in ipairs(type(list) == "table" and list or {}) do
       if type(b) == "table" then
         if type(b.mark) == "table" and type(b.mark.name) == "string" then marks[b.mark.name] = true end
+        if type(b.core) == "table" and type(b.core.id) == "string" and b.core.pages then core_ids[b.core.id] = true end
         if type(b.choice) == "table" then for _, o in ipairs(b.choice.options or {}) do pre(o.beats) end end
         if type(b.branch) == "table" then pre(b.branch.beats); pre(b.branch.elseBeats) end
       end
@@ -1780,6 +1932,16 @@ function validate(sc, ctx)
             check_struct(pk .. ".struct", val.struct)
             if val.page ~= nil and type(val.page) ~= "string" then E(pk .. ".page", "a page id (\"REACTOR\", \"LOG\", \"DATA\")") end
             if val.close ~= nil and type(val.close) ~= "boolean" then E(pk .. ".close", "true: close the console") end
+          elseif key == "core" then
+            -- (F8) { read = id } plays it, { seal = id } seals it unread, or a whole core placed
+            if val.read ~= nil or val.seal ~= nil then
+              local id = val.read or val.seal
+              if not core_ids[id] then E(pk .. (val.read and ".read" or ".seal"), "no core '" .. tostring(id) .. "' (start.cores or a core beat)") end
+              if val.who ~= nil then check_who(pk .. ".who", val.who) end
+            else
+              core_def(pk, val, true)
+              if val.who ~= nil then check_who(pk .. ".who", val.who) end
+            end
           end
         end
       end
@@ -1788,6 +1950,15 @@ function validate(sc, ctx)
     end
   end
   check_beats("on_start", sc.on_start)
+  -- (F8) the cores' voices and sequences
+  for i, c in ipairs(type(st.cores) == "table" and st.cores or {}) do
+    local p = string.format("start.cores[%d]", i)
+    if type(c) == "table" then
+      if c.who ~= nil then check_who(p .. ".who", c.who) end
+      if c.run ~= nil then check_seq(p .. ".run", c.run) end
+      if c.open ~= nil then check_seq(p .. ".open", c.open) end
+    end
+  end
   local function check_goal(path, g, failList)
     if type(g) ~= "table" then E(path, "a table") return end
     local K = KINDS[g.kind]
@@ -1828,6 +1999,11 @@ function validate(sc, ctx)
     if g.kind == "terminal" and g.read ~= nil then
       if type(g.read) ~= "string" then E(path .. ".read", "a log card's name (start.datalogs) or key")
       elseif next(datalogs) ~= nil and not datalogs[g.read] and not g.read:find(":", 1, true) then E(path .. ".read", "no start.datalogs entry named " .. g.read) end
+    end
+    if g.kind == "core_read" then
+      local ids = type(g.ids) == "table" and g.ids or { g.id }
+      if #ids == 0 then E(path .. ".id", "a core id (or ids)") end
+      for _, id in ipairs(ids) do if not core_ids[id] then E(path .. ".id", "no core '" .. tostring(id) .. "'") end end
     end
     for _, f in ipairs({ "who", "at" }) do
       if g[f] ~= nil and type(g[f]) == "string" and g[f]:find(":", 1, true) then check_ref(path .. "." .. f, g[f]) end

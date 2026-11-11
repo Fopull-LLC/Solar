@@ -322,7 +322,7 @@ function onSay(line)
   drop_stale_says()
   local w = type(line.with) == "table" and line.with or nil
   return dialogue({ who = line.name or line.who, role = line.tag, color = line.color, portrait = line.portrait,
-                    text = line.text, src = "say", radio = line.radio, garbled = line.garbled,
+                    text = line.text, src = "say", radio = line.radio, garbled = line.garbled, header = line.header,
                     with = w and { who = w.name or w.who, role = w.tag, portrait = w.portrait, radio = w.radio } or nil },
     function() local r = run_ref(); if r and r.lineDone then pcall(r.lineDone) end end)
 end
@@ -424,6 +424,11 @@ local function dialogue_tree(d, y)
       (b.radio or b.garbled) and { "text", key = "rad", style = "hud/micro", w = "fit", h = "fit", text = b.garbled and "◉ LINK LOST" or "◉ RADIO" } or nil },
     { "text", key = "t", name = "Scenario Dialogue Line", style = "panel/body", w = "100%", h = "fit", wrap = true, text = shown },
   }
+  -- (F8) a Data Core entry's dated header, in the terminal's amber, over the line
+  if b.header then
+    table.insert(kids, 2, { "text", key = "hd", style = "hud/micro", w = "100%", h = "fit", text = string.upper(tostring(b.header)),
+                            textColor = { 1.0, 0.70, 0.25, 1.0 } })
+  end
   local last = d.i == #d.lines
   if d.typed and last and #d.choices > 0 then
     local row = { "col", key = "ch", w = "100%", h = "fit", pad = 0, gap = 4, align = "stretch" }

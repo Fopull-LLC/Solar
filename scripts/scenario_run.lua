@@ -411,6 +411,7 @@ local function show_line(who, text, secs, opts)
   end
   if s.radio and audio and audio.play then pcall(audio.play, "audio/foley/radio_crackle.ogg", { track = "UI", volume = 0.18 }) end
   -- the listener, dimmed on the right of the plate (say.with)
+  s.header = opts and opts.header or nil      -- (F8) a Data Core entry's date, over the line
   if opts and opts.with then
     local w = speaker(opts.with)
     s.with = { who = w.who, name = w.name, tag = w.tag, color = w.color, portrait = w.portrait, radio = w.radio }
@@ -695,7 +696,8 @@ WORLD_BEATS = { reactor = true, knock = true, state = true, power = true, var = 
                 -- graveyard2: where a body faces and how it rests
                 turn = true, pose = true, gesture = true,
                 -- S6: designations, the base log, contents, keypads
-                tag = true, log = true, container = true, lock = true }
+                tag = true, log = true, container = true, lock = true,
+                core = true }      -- (F8: a core read, sealed, placed or finished)
 local stage_one        -- set by the staging section: (kind, entry, out)
 local walks = {}       -- id → { to = ref, offset, t1 }
 
@@ -1310,6 +1312,210 @@ function S6.beat(k, v)
   end
 end
 
+-- ── F8 (scenarios2 SC-4): DATA CORES and authored ruins ─────────────────────
+-- A core (start.cores, or a `core` beat) sits in a piece: { id, struct, uid |
+-- part, pages = { { date, text } }, who (the voice), title, power, air,
+-- needs = goal, why, run (after the first read), open (instead of reading:
+-- a sequence, e.g. a choice whose options read or seal it), label }.
+--   * on a CONSOLE piece it is read on that console's CORE page (a terminal
+--     page: the dated entries in phosphor lines); `run` follows when the
+--     terminal is closed;
+--   * on any other piece E reads it there (terminal.setSpot): its pages
+--     as dialogue plates with the date as the plate's header, then `run`.
+-- Its state is the variable core_<id> = "read" | "sealed" (so a checkpoint
+-- keeps it and a branch or a score row reads it). It is read only when it
+-- can be, for a physical reason: `power` (its structure's grid has power),
+-- `air` (breathable air at it: the shock case is opened only in a room;
+-- room_air.airAt at the piece), `needs` (any goal; `why` the words). The
+-- career Data Core (ruins.pullCore, the lab) is untouched.
+local CORE = { spots = nil, page = false, pend = {}, ver = nil, mem = {}, seen = {}, busy = {} }
+local function core_defs()
+  local out = {}
+  for _, c in ipairs((sc and sc.start and type(sc.start.cores) == "table") and sc.start.cores or {}) do out[#out + 1] = c end
+  for _, c in ipairs(type(sget("scn.coresx")) == "table" and sget("scn.coresx") or {}) do out[#out + 1] = c end
+  return out
+end
+local function core_by(id) for _, c in ipairs(core_defs()) do if c.id == id then return c end end return nil end
+W.coreState = function(id) return var("core_" .. tostring(id)) end
+coreState = W.coreState
+-- the host piece: → sid, uid, part, def
+local function core_host(c)
+  local sid, uid, p = piece_of({ struct = c.struct, part = c.part, uid = c.uid })
+  if not sid then return nil end
+  local pb = ref("parts_base")
+  return sid, uid, p, pb and pb.partInfo and pb.partInfo(p.id) or nil
+end
+local function core_is_console(c)
+  local sid, uid, p, d = core_host(c)
+  local T = ref("terminal")
+  local ST = ref("structures")
+  if not (sid and T and T.consoleKind) then return false end
+  return T.consoleKind(d, p, ST and ST.get(sid)) ~= nil
+end
+-- What the physical rules read for core c now
+local function core_reads(c)
+  local r = {}
+  local sid, uid, p, d = core_host(c)
+  if c.power then
+    local s = sid and W.grid(sid)
+    r.power = s ~= nil and s.powered == true and ((s.supply or 0) > 0 or (s.stored or 0) > 0)
+  end
+  if c.air then
+    local ST, RA = ref("structures"), ref("room_air")
+    local rec = sid and ST and ST.get(sid)
+    if rec and p and ST.partPose and RA and RA.airAt then
+      local px, py, pz = ST.partPose(rec, p, 0)
+      local b = space.body(rec.b)
+      if b and px then
+        local l = math.sqrt(px * px + py * py + pz * pz)
+        local h = (d and d.box and (d.box[3] + d.box[4]) / 2) or 0.5
+        local ok, _, room = RA.airAt(b.x + px + px / l * h, b.y + py + py / l * h, b.z + pz + pz / l * h)
+        -- air = "sealed": a sealed room round it, whatever it holds; true: breathable air
+        if c.air == "sealed" then r.air = room ~= nil and room.sealed == true and not room.leaky
+        else r.air = ok == true end
+      end
+    end
+  end
+  if c.needs then
+    CORE.mem[c.id] = CORE.mem[c.id] or {}
+    local ok, why = rulebook().evalGoal(c.needs, W, CORE.mem[c.id], { now = agency_now() })
+    r.needs, r.needsWhy = ok, why
+  end
+  return r
+end
+function coreReadable(id)
+  local c = type(id) == "table" and id or core_by(id)
+  if not c then return false, "no such core" end
+  return rulebook().coreReadable(c, core_reads(c))
+end
+local function core_refuse(why)
+  local bc = ref("big_caption")
+  if bc and bc.show then pcall(bc.show, "DATA CORE", tostring(why), 4.5) end
+  if audio and audio.play then pcall(audio.play, "audio/foley/key_strike.ogg", { track = "UI", volume = 0.3 }) end
+  say_log("core refused: " .. tostring(why))
+end
+-- its pages as plates (front: inline, from a choice), then the state and `run`
+local function core_play(c, front, cs, who, again)
+  local list = {}
+  for _, pg in ipairs(c.pages or {}) do
+    list[#list + 1] = { say = { who = who or c.who or "ops", text = pg.text, header = pg.date } }
+  end
+  if not again then
+    list[#list + 1] = { var = { ["core_" .. c.id] = "read" } }
+    if c.run then list[#list + 1] = { run = c.run } end
+  end
+  -- (while its entries play, E on it does nothing: never read twice at once)
+  CORE.busy[c.id] = true
+  list[#list + 1] = { core = { done = c.id } }
+  say_log("core " .. tostring(c.id) .. (again and " read again" or " read"))
+  queue_beats(list, "core:" .. c.id, front, cs)
+end
+-- E on the core's piece
+local function core_open(c)
+  if CORE.busy[c.id] then return end
+  local st = W.coreState(c.id)
+  if st == "sealed" then core_refuse("the case is sealed: Hendry's tape across the latch"); return end
+  local ok, why = rulebook().coreReadable(c, core_reads(c))
+  if not ok then core_refuse(why); return end
+  if st ~= "read" and c.open then run_seq(c.open, false); return end
+  core_play(c, false, nil, nil, st == "read")
+end
+-- The CORE page of a console (terminal.registerPage): its own core's entries
+local function core_page(scope)
+  local rows = {}
+  local any = false
+  for _, c in ipairs(core_defs()) do
+    local sid, uid = core_host(c)
+    if sid == scope.sid and uid == scope.uid then
+      any = true
+      rows[#rows + 1] = { type = "header", label = "DATA CORE · " .. tostring(c.title or c.id) }
+      local st = W.coreState(c.id)
+      local ok, why = rulebook().coreReadable(c, core_reads(c))
+      if st == "sealed" then rows[#rows + 1] = { type = "line", text = "SEALED UNREAD", level = 2 }
+      elseif not ok then rows[#rows + 1] = { type = "line", text = string.upper(tostring(why)), level = 2 }
+      else
+        for _, pg in ipairs(c.pages or {}) do
+          if pg.date then rows[#rows + 1] = { type = "line", text = pg.date, level = 1 } end
+          for _, l in ipairs(rulebook().coreLines(pg.text, 96)) do rows[#rows + 1] = { type = "line", text = l } end
+        end
+        -- (read once it has been on screen; the state and the reaction land
+        -- when the terminal is closed, so the story never talks over the CRT)
+        if st ~= "read" and not CORE.seen[c.id] then
+          CORE.seen[c.id] = true
+          say_log("core " .. tostring(c.id) .. " read at a console")
+          CORE.pend[#CORE.pend + 1] = c
+        end
+      end
+    end
+  end
+  if not any then rows[#rows + 1] = { type = "line", text = "NO DATA CORE IN THIS TERMINAL'S SLOT", level = 1 } end
+  return rows
+end
+-- (4 Hz, with the goals) the page and the spots, the reactions held while a terminal is open
+local function cores_tick()
+  local defs = core_defs()
+  if #defs == 0 then return end
+  local T, ST = ref("terminal"), ref("structures")
+  if not T then return end
+  if CORE.page ~= T and T.registerPage then
+    T.registerPage("CORE", core_page, { order = 4, title = "CORE", scopes = { ruin = true, desk = true } })
+    CORE.page = T
+    CORE.spots = nil
+  end
+  if T.setSpot and (CORE.spots ~= T or CORE.ver ~= #defs) then
+    for _, c in ipairs(defs) do
+      local sid, uid = core_host(c)
+      if sid and not core_is_console(c) then
+        local cc = c
+        T.setSpot("core:" .. c.id, { sid = sid, uid = uid,
+          label = function()
+            local st = W.coreState(cc.id)
+            if st == "read" then return cc.againLabel or "Read the Data Core again" end
+            if st == "sealed" then return "The Data Core · sealed" end
+            return cc.label or "Open the Data Core"
+          end,
+          on = function() return not CORE.busy[cc.id] end,
+          act = function() core_open(cc) end })
+      end
+    end
+    CORE.spots, CORE.ver = T, #defs
+  end
+  if #CORE.pend > 0 and not (T.isOpen and T.isOpen()) then
+    local p = CORE.pend
+    CORE.pend = {}
+    for _, c in ipairs(p) do
+      setVar("core_" .. c.id, "read")
+      if c.run then run_seq(c.run, false) end
+    end
+  end
+end
+-- the `core` beat: { read = id [, who] } | { seal = id } | a whole core placed
+local function core_beat(v, e)
+  if v.done then CORE.busy[v.done] = nil; return end
+  if v.read then
+    local c = core_by(v.read)
+    if c then core_play(c, true, e and e.cs, v.who, W.coreState(c.id) == "read") end
+  elseif v.seal then
+    setVar("core_" .. tostring(v.seal), "sealed")
+    say_log("core " .. tostring(v.seal) .. " sealed")
+    local bc = ref("big_caption")
+    if bc and bc.show then pcall(bc.show, "DATA CORE SEALED", "unread · for Hendry Resources' counsel", 4.0) end
+  elseif v.id then
+    local x = type(sget("scn.coresx")) == "table" and sget("scn.coresx") or {}
+    x[#x + 1] = v
+    sset("scn.coresx", x)
+    CORE.ver = nil
+  end
+end
+-- a ruin's state for the `ruin` goal: { claimed, missing, cost, funds }
+W.ruin = function(sid, lot)
+  local ST, RU, co = ref("structures"), ref("ruins"), ref("company")
+  local rec = ST and ST.get(sid)
+  if not (rec and rec.ru and RU and RU.restoreQuote) then return nil end
+  local q = RU.restoreQuote(rec.ru, lot)
+  return { claimed = RU.claimed and RU.claimed(rec.ru) or false, missing = q.n, cost = q.cost, funds = co and co.balance and co.balance() or 0 }
+end
+
 local hooks_api
 local function run_beat(b, e)
   local k, v = next(b)
@@ -1430,6 +1636,7 @@ local function run_beat(b, e)
   elseif k == "wear" then wear_beat(v)
   elseif k == "music" then music_beat(v)
   elseif k == "tag" or k == "log" or k == "container" or k == "lock" or k == "terminal" then S6.beat(k, v)
+  elseif k == "core" then core_beat(v, e)      -- F8
   end
   return nil
 end
@@ -1936,6 +2143,53 @@ local function stage_structures(list, out)
   sset("scn.structs", map)
 end
 
+-- (F8) start.ruins: a blueprint stamped as a decayed ruin (ruins.stampAuthored)
+-- at its mark, found and touched; a ruin of that name already standing (a
+-- checkpoint's stage) is only claimed and restored (`claimed`, `restore`)
+local function stage_ruins(list, out)
+  if type(list) ~= "table" or #list == 0 then return end
+  local ST, BPs, RU = ref("structures"), ref("blueprints"), ref("ruins")
+  if not (ST and BPs and RU and RU.stampAuthored) then out[#out + 1] = "ruins: no ruins script in this scene" return end
+  local map = sget("scn.structs") or {}
+  for _, r in ipairs(list) do
+    local sid = r.name and map[r.name]
+    if sid and not ST.get(sid) then sid = nil end
+    if not sid and r.bp then
+      local code = rulebook().readText(sc._dir .. r.bp)
+      local bp, why = nil, "no file"
+      if code then bp, why = BPs.decode(code) end
+      local g = bp and resolve_stage(r.at or "base", r.offset, r.yaw)
+      -- `flat = radius`: the nearest ground that is flat over that circle
+      -- (the author's mark, or rings out from it: a camp is never half buried)
+      if g and type(r.flat) == "number" and RU.flatSpot then
+        local fx, fy, fz, sp = RU.flatSpot(g.body, g.x, g.y, g.z, r.flat, r.flatSpread or 1.2)
+        local b = space.body(g.body)
+        if fx and b then
+          local g2 = rulebook().offsetPoint({ x = fx, y = fy, z = fz }, nil, ground_of(b), r.yaw)
+          if g2 then g2.body = g.body; g = g2 end
+          out[#out + 1] = string.format("ruin %s: flat ground (%.2f m over %.0f m)", tostring(r.name), sp or -1, r.flat)
+        end
+      end
+      if bp and g then
+        sid, why = RU.stampAuthored(r, bp.pieces, g, agency_now())
+        if sid then map[r.name] = sid; sset("scn.structs", map) end
+      end
+      out[#out + 1] = sid and string.format("ruin %s: structure #%s", tostring(r.name), tostring(sid))
+                      or string.format("ruin %s failed: %s", tostring(r.name), tostring(why or "no ground"))
+      frames(2)
+    end
+    local rec = sid and ST.get(sid)
+    if rec and rec.ru then
+      if r.claimed and not RU.claimed(rec.ru) then RU.claim(rec.ru, nil, true); out[#out + 1] = "ruin " .. tostring(r.name) .. ": claimed" end
+      for _, lot in ipairs(type(r.restore) == "table" and r.restore or {}) do
+        local n = RU.restore(rec.ru, true, lot)
+        out[#out + 1] = string.format("ruin %s: %s restored (%s)", tostring(r.name), tostring(lot), tostring(n))
+      end
+    end
+  end
+  sset("scn.structs", map)
+end
+
 local function stage_crates(list, out)
   local inv, SV = ref("inventory"), ref("salvage")
   if not (inv and SV) then if list and #list > 0 then out[#out + 1] = "crates: no inventory/salvage" end return end
@@ -2146,6 +2400,7 @@ local function stage_table(st, out)
   stage_crew(st.crew, out)
   stage_marks(st.marks, out)
   stage_structures(st.structures, out)
+  stage_ruins(st.ruins, out)      -- F8
   stage_marks(st.marks, out, true)
   stage_posts(st.crew, out)
   stage_lived_in(out)
@@ -3227,6 +3482,7 @@ function update(node, dt)
     if last_eval < 0 or t - last_eval >= 1 / hz or t < last_eval then
       last_eval = t
       evaluate()
+      cores_tick()      -- F8: the CORE page, the spots, reactions after a terminal closes
     end
   end
   if phase ~= "loading" and phase ~= "staging" then

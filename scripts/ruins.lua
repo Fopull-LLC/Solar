@@ -76,6 +76,12 @@
 -- scanner look every SCAN_EVERY s (a mask lookup a site); nothing a frame.
 -- A stamped ruin is static kit pieces (the S11 rule), drawn only near.
 --
+-- AUTHORED (scenarios2 F8): stampAuthored(def, pieces, g, now) stamps a
+--   scenario's blueprint as a ruin (authoredSite, decayAuthored: the
+--   author's gone / knocked / broken pieces, the dice only rust and grime);
+--   it is registered in ruins.x, so claim, crates (`loot`), repair, restore
+--   (`lots`: named jobs at the author's prices) and the LOG (`lore`) work.
+--
 -- Probes: sites(body), site(id), state(id), discover(id, how), stampNow(id),
 -- unstampNow(id), claim(id), pullCore(id, pack), readCores(pack),
 -- restoreQuote(id), restore(id), repairPiece(sid, uid), stats.
@@ -421,6 +427,7 @@ GRAMMAR.mine = function(site)
 end
 
 function blueprintOf(site)
+  if site and site.full then return site.full end      -- (F8) an authored ruin's own blueprint
   local g = GRAMMAR[site and site.kind] or GRAMMAR.camp
   return g(site)
 end
@@ -605,6 +612,7 @@ LORE_C = {
   "Lights out.",
 }
 function lore(site)
+  if site and type(site.lore) == "table" then return site.lore end   -- (F8) an authored ruin's own log
   local r = rng(hash((site and site.seed or 1) .. ":lore"))
   local a = LORE_A[1 + math.floor(r() * #LORE_A)]
   local b = LORE_B[1 + math.floor(r() * #LORE_B)]
@@ -624,6 +632,17 @@ end
 -- A crate's manifest (from the seed): items and ore samples.
 -- ores = the world's ores (materials.bodyOres order) or {}.
 function crateManifest(site, ri, ores)
+  -- (F8) an authored ruin's crate holds what its author packed
+  if site and type(site.loot) == "table" then
+    for _, l in ipairs(site.loot) do
+      if l.uid == ri then
+        local items, mats = {}, {}
+        for k, n in pairs(l.items or {}) do items[k] = n end
+        for k, n in pairs(l.mats or {}) do mats[k] = n end
+        return items, mats
+      end
+    end
+  end
   local r = rng(hash(tostring(site and site.seed or 1) .. ":crate:" .. tostring(ri)))
   local items, mats = {}, {}
   if r() < 0.5 then items.repairkit = 1 end
@@ -639,6 +658,111 @@ function siloFill(site, ores)
   local r = rng(hash(tostring(site and site.seed or 1) .. ":silo"))
   local ore = ores and ores[1] or "regolith"
   return ore, math.floor(200 + r() * 1800)
+end
+
+-- ── pure: AUTHORED RUINS (scenarios2 F8: a scenario's `start.ruins`) ─────────
+-- A scenario stamps a named blueprint as a ruin at a mark. It is not a site
+-- of the seed: it is REGISTERED (saved under ruins.x, rebuilt into the sites
+-- list on load), so every ruin path works on it as on any other: the tower's
+-- claim, the crates, the Repair Kit on a knocked piece, the restore bill,
+-- the terminal's LOG. Its decay is the AUTHOR'S, not the dice's: `gone`
+-- pieces are missing (restored by the bill), `knocked` ones lean (a Repair
+-- Kit once claimed), `broken` windows are open frames; the dice only rust,
+-- grime and topple props (`decay`, 0..1, their share). `lots` split the
+-- restore bill into named jobs at the author's prices ("Bunk room roof"
+-- $1,300), so a scenario can price an order.
+-- def = { name, kind, age (days), company, co, seed, decay, gone = { uid… },
+--   knocked = { uid… }, broken = { uid… }, lots = { { id, name, uids, price } },
+--   loot = { { uid, items, mats } }, lore = { lines } }
+-- pieces = the blueprint's (blueprints.decode: { id, x, y, z, yaw, pitch, roll, paint })
+local ROLE_PROP = { ["drum"] = true, ["chair"] = true, ["cableReel"] = true, ["shieldBlock"] = true }
+function roleOf(id, y, lootSet)
+  local base = tostring(id):match("^([^.]+)") or tostring(id)
+  if base == "tower" then return "tower" end
+  if lootSet and lootSet[id] then return "loot" end
+  if base == "lightFitting" then return "light" end
+  if ROLE_PROP[base] then return "prop" end
+  if base:match("^floor") and (y or 0) > 1.0 then return "roof" end
+  if base:match("[Ww]all$") or base == "porthole" or base == "bulkhead" or base == "openFrame" then return "wall" end
+  if base:match("^slab") then return "slab" end
+  return "fix"
+end
+local function set_of(list) local s = {}; for _, v in ipairs(list or {}) do s[v] = true end return s end
+function authoredSite(def, pieces, body, g)
+  local name = tostring(def.name or "Abandoned Camp")
+  local loot = {}
+  for _, l in ipairs(def.loot or {}) do loot[l.uid] = true end
+  local full = {}
+  for i, p in ipairs(pieces or {}) do
+    full[i] = { id = p.id, x = p.x or 0, y = p.y or 0, z = p.z or 0, yaw = p.yaw or 0, pitch = p.pitch or 0, roll = p.roll or 0,
+                paint = p.paint, rl = loot[i] and "loot" or roleOf(p.id, p.y, nil), fill = p.fill }
+    if p.id == "batteryBank" then full[i].fill = 0 end
+  end
+  local co = def.co
+  if type(def.company) == "string" then co = 0 end
+  local l = g and math.sqrt(g.x * g.x + g.y * g.y + g.z * g.z) or 1
+  return { id = "scn:" .. name, authored = true, body = body, kind = def.kind or "hab", name = name,
+           age = def.age or 1000, seed = def.seed or hash(name), co = co or 1, company = def.company,
+           ux = g and g.x / l or 0, uy = g and g.y / l or 1, uz = g and g.z / l or 0, yaw = 0, num = 1,
+           full = full, gone = def.gone, knocked = def.knocked, broken = def.broken, lots = def.lots,
+           loot = def.loot, lore = def.lore, decay = def.decay or 0.5, lean = def.lean }
+end
+function decayAuthored(full, site)
+  local r = rng((site and site.seed) or 1)
+  local share = clamp(site and site.decay or 0.5, 0, 1)
+  local gone, knocked, broken = set_of(site.gone), set_of(site.knocked), set_of(site.broken)
+  local kept = {}
+  local st = { total = #full, gone = 0, knocked = 0, broken = 0, toppled = 0, rust = 0, grime = 0 }
+  for i, p in ipairs(full) do
+    if gone[i] then st.gone = st.gone + 1
+    else
+      local e = {}
+      for k, v in pairs(p) do e[k] = v end
+      e.ri = i
+      if broken[i] and GLASS[p.id] then e.o_id = p.id; e.id = "openFrame.steel"; st.broken = st.broken + 1 end
+      if knocked[i] then
+        local a = math.rad(8 + 6 * r()) * (r() < 0.5 and -1 or 1)
+        -- (`lean` degrees: a block fallen over, tipped on its face, not leaning)
+        if type(site.lean) == "number" then a = math.rad(site.lean) end
+        if p.rl == "wall" or type(site.lean) == "number" then e.o_p = e.pitch; e.pitch = (e.pitch or 0) + a
+        else e.o_r = e.roll; e.roll = (e.roll or 0) + a end
+        e.wr = 0.5
+        st.knocked = st.knocked + 1
+      elseif TOPPLE[p.id] and p.rl == "prop" and r() < 0.34 * share then
+        e.o_r = e.roll; e.roll = Q; e.wr = 0.5; st.toppled = st.toppled + 1
+      end
+      if p.rl == "wall" and r() < 0.6 * share then e.o_c = p.paint or ""; e.paint = "oxide"; st.rust = st.rust + 1 end
+      kept[#kept + 1] = e
+    end
+  end
+  local n0 = #kept
+  for k = 1, n0 do
+    local e = kept[k]
+    if e.rl == "wall" and (e.pitch or 0) == 0 and not e.o_id and r() < 0.5 * share then
+      local nx, nz = math.sin(e.yaw or 0), math.cos(e.yaw or 0)
+      local off = WT / 2 + 0.006
+      kept[#kept + 1] = { id = GRIME[1 + math.floor(r() * #GRIME)], x = e.x + nx * off, y = e.y + 0.9 + 0.4 * r(), z = e.z + nz * off,
+                          yaw = e.yaw or 0, pitch = Q, roll = 0, rl = "grime", ri = 0 }
+      st.grime = st.grime + 1
+    end
+  end
+  st.kept = n0
+  return kept, st
+end
+-- A lot of the restore bill: its pieces still missing → { { ri, piece } … }
+function lotMissing(site, lot, list)
+  local want = set_of(lot and lot.uids)
+  local out = {}
+  for _, m in ipairs(list or {}) do if want[m.ri] then out[#out + 1] = m end end
+  return out
+end
+-- The pieces no lot names (the rest of the bill)
+function restMissing(site, list)
+  local named = {}
+  for _, lot in ipairs(site and site.lots or {}) do for _, u in ipairs(lot.uids or {}) do named[u] = true end end
+  local out = {}
+  for _, m in ipairs(list or {}) do if not named[m.ri] then out[#out + 1] = m end end
+  return out
 end
 
 -- Ground distance (m) between two body-relative points on a world of radius R.
@@ -738,6 +862,15 @@ local function build_sites()
       local list = sitesFor(b.name, w, b.name == home, b.radius or w.radius)
       SITES[b.name] = list
       for _, s in ipairs(list) do BYID[s.id] = s end
+    end
+  end
+  -- (F8) the authored ruins a scenario stamped
+  local X = save and save.get and save.get("ruins.x")
+  for _, s in ipairs(type(X) == "table" and X or {}) do
+    if type(s) == "table" and s.id and s.body then
+      SITES[s.body] = SITES[s.body] or {}
+      table.insert(SITES[s.body], s)
+      BYID[s.id] = s
     end
   end
 end
@@ -900,6 +1033,61 @@ function siteGround(s, force)
   return nil, why
 end
 
+-- (F8) Flat ground for an authored ruin near a body-relative point: the
+-- point itself, then rings 20 m apart out to 120 m (8 a ring), the first whose
+-- ground rises no more than `spread` m over a circle of `radius` m (12 casts
+-- round it, the field's raycast). → x, y, z (body-relative, on the ground),
+-- spread | nil, why
+function flatSpot(bodyName, px, py, pz, radius, spread)
+  local b = space and space.body and space.body(bodyName)
+  if not b then return nil, "no body" end
+  local w = world(bodyName)
+  local R = b.radius or w.radius or 800
+  local relief = tonumber(w.relief) or 60
+  local l0 = math.sqrt(px * px + py * py + pz * pz)
+  local ux0, uy0, uz0 = px / l0, py / l0, pz / l0
+  local e1x, e1y, e1z, e2x, e2y, e2z = tangent(ux0, uy0, uz0)
+  radius, spread = radius or 14, spread or 1.2
+  local best, bestS = nil, math.huge
+  local function try(ux, uy, uz)
+    local h0 = cast(b, R, relief, ux, uy, uz)
+    if not h0 then return nil end
+    local lo, hi = h0, h0
+    local f1x, f1y, f1z, f2x, f2y, f2z = tangent(ux, uy, uz)
+    for j = 0, 11 do
+      local a = j * math.pi / 6
+      local d = radius / R
+      local vx = ux + (f1x * math.cos(a) + f2x * math.sin(a)) * d
+      local vy = uy + (f1y * math.cos(a) + f2y * math.sin(a)) * d
+      local vz = uz + (f1z * math.cos(a) + f2z * math.sin(a)) * d
+      local l = math.sqrt(vx * vx + vy * vy + vz * vz)
+      local h = cast(b, R, relief, vx / l, vy / l, vz / l)
+      if not h then return nil end
+      lo, hi = math.min(lo, h), math.max(hi, h)
+    end
+    return h0, hi - lo
+  end
+  for ring = 0, 6 do
+    for k = 0, (ring == 0 and 0 or 7) do
+      local ux, uy, uz = ux0, uy0, uz0
+      if ring > 0 then
+        local a = k * math.pi / 4 + ring * 0.4
+        local d = 20 * ring / R
+        ux = ux0 + (e1x * math.cos(a) + e2x * math.sin(a)) * d
+        uy = uy0 + (e1y * math.cos(a) + e2y * math.sin(a)) * d
+        uz = uz0 + (e1z * math.cos(a) + e2z * math.sin(a)) * d
+        local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+        ux, uy, uz = ux / l, uy / l, uz / l
+      end
+      local h, sp = try(ux, uy, uz)
+      if h and sp < bestS then best, bestS = { ux * h, uy * h, uz * h }, sp end
+      if h and sp <= spread then return ux * h, uy * h, uz * h, sp end
+    end
+  end
+  if best then return best[1], best[2], best[3], bestS end
+  return nil, "no ground"
+end
+
 -- ── stamping ────────────────────────────────────────────────────────────────
 local stamp_wait = {}    -- id → first time a stamp waited on the ground
 function stampNow(id, force)
@@ -953,6 +1141,56 @@ function unstampNow(id)
   return true
 end
 local function touch(id) local e = state(id); if not e.tc then e.tc = 1; write() end end
+
+-- (F8) A scenario's ruin: the blueprint `pieces` decayed by its author and
+-- written as a ruin's structure on the ground point g (body-relative, with
+-- its frame: scenario_run's resolve). Found at once (quietly), touched (so
+-- it is never unstamped), registered. → sid, site | nil, why
+function stampAuthored(def, pieces, g, now_)
+  local ST = ref("structures")
+  if not (ST and ST.recordFromPieces) then return nil, "no structures" end
+  if not (g and g.body) then return nil, "no ground" end
+  local s = authoredSite(def, pieces, g.body, g)
+  if not SITES then build_sites() end
+  if BYID[s.id] then
+    local e0 = peek(s.id)
+    if e0 and e0.sid and ST.get(e0.sid) then return e0.sid, BYID[s.id] end
+  end
+  local kept, ds = decayAuthored(s.full, s)
+  local rec = ST.recordFromPieces(kept, g.body, g, s.name, "ruin", { t = (now_ or 0) - (s.age or 0) * 86400 })
+  rec.ru = s.id
+  -- (a piece's uid is its line in the author's blueprint, as for any staged
+  -- structure: the scenario names pieces by it, gaps where the decay took one;
+  -- the grime films after the last line)
+  local extra = #s.full
+  for _, p in ipairs(rec.bp) do
+    if (p.ri or 0) > 0 then p.uid = p.ri else extra = extra + 1; p.uid = extra end
+  end
+  for _, p in ipairs(rec.bp) do if p.rl == "light" then rec.st[tostring(p.uid)] = { off = true } end end
+  local sid = ST.add(rec)
+  local X = save and save.get and save.get("ruins.x")
+  X = type(X) == "table" and X or {}
+  local keep = {}
+  for _, o in ipairs(X) do if type(o) == "table" and o.id ~= s.id then keep[#keep + 1] = o end end
+  keep[#keep + 1] = s
+  if save and save.set then save.set("ruins.x", keep) end
+  SITES[s.body] = SITES[s.body] or {}
+  local found = false
+  for i, o in ipairs(SITES[s.body]) do if o.id == s.id then SITES[s.body][i] = s; found = true end end
+  if not found then table.insert(SITES[s.body], s) end
+  BYID[s.id] = s
+  local e = state(s.id)
+  e.g = { x = g.x, y = g.y, z = g.z, ux = g.ux, uy = g.uy, uz = g.uz, fx = g.fx, fy = g.fy, fz = g.fz }
+  e.sid, e.n, e.tc = sid, #rec.bp, 1
+  e.dsc, e.dt = "scenario", now_ or 0
+  e.core = 1        -- (its log is the author's: no generic Data Core to pull)
+  write()
+  bump()
+  stats.stamps = stats.stamps + 1
+  if log then log(string.format("ruins: authored %s: %d of %d pieces stand (%d gone, %d knocked, %d broken, %d rusted, %d grime) as structure %s",
+    s.name, ds.kept, ds.total, ds.gone, ds.knocked, ds.broken, ds.rust, ds.grime, tostring(sid))) end
+  return sid, s
+end
 
 -- ── the focus (the crew on foot, or what it rides) ──────────────────────────
 local function focus()
@@ -1206,21 +1444,30 @@ local function price_of(pid)
   return d and (d.cost or 0) or 0
 end
 -- → { n, cost, list = { { ri, piece } } }
-function restoreQuote(id)
+-- → { n, cost, list = { { ri, piece } } }. (F8) `lot`: one of an authored
+-- ruin's named jobs (its id), at the author's price; "rest": what no lot names.
+function restoreQuote(id, lot)
   local s, e = site(id), peek(id)
   local ST = ref("structures")
   local r = e and e.sid and ST and ST.get(e.sid)
   if not (s and r) then return { n = 0, cost = 0, list = {} } end
   local list = missing(blueprintOf(s), r.bp)
+  local L = nil
+  if lot == "rest" then list = restMissing(s, list)
+  elseif lot ~= nil then
+    for _, l in ipairs(s.lots or {}) do if l.id == lot then L = l end end
+    list = L and lotMissing(s, L, list) or {}
+  end
   local cost = 0
   for _, m in ipairs(list) do cost = cost + price_of(m.piece.id) end
-  return { n = #list, cost = cost, list = list }
+  if L and L.price and #list > 0 then cost = L.price end
+  return { n = #list, cost = cost, list = list, name = L and L.name or nil }
 end
-function restore(id, free)
-  local q = restoreQuote(id)
+function restore(id, free, lot)
+  local q = restoreQuote(id, lot)
   if q.n == 0 then return 0, "nothing is missing" end
   local co = ref("company")
-  if not free and co and co.spend and not co.spend(q.cost, string.format("restore %d pieces at %s", q.n, site(id).name)) then
+  if not free and co and co.spend and not co.spend(q.cost, string.format("restore %s at %s", q.name or (q.n .. " pieces"), site(id).name)) then
     return 0, string.format("restoring costs $%d", q.cost)
   end
   local e = peek(id)
@@ -1229,7 +1476,7 @@ function restore(id, free)
   for _, m in ipairs(q.list) do
     local p = m.piece
     local uid = ST.addPart(e.sid, { id = p.id, x = p.x, y = p.y, z = p.z, yaw = p.yaw, pitch = p.pitch, roll = p.roll, paint = p.paint,
-                                    ri = m.ri, rl = p.rl, fill = p.fill })
+                                    ri = m.ri, rl = p.rl, fill = p.fill, uid = site(id).authored and m.ri or nil })   -- (F8: back on its own line)
     if uid then n = n + 1 end
   end
   e.n = nil
@@ -1320,6 +1567,25 @@ local function provider(t, ctx)
           if ctx and ctx.toast then ctx.toast(ok and (s.name .. " is your base now") or tostring(why), not ok) end
           return ok
         end }
+    elseif s.lots then
+      -- (F8) an authored ruin's bill in its author's jobs, each at its price
+      local lots = {}
+      for _, l in ipairs(s.lots) do lots[#lots + 1] = l.id end
+      lots[#lots + 1] = "rest"
+      for _, lid in ipairs(lots) do
+        local function q() return restoreQuote(id, lid) end
+        if q().n > 0 then
+          out[#out + 1] = { id = "ru_restore_" .. tostring(lid), type = "action", group = G,
+            label = function() local qq = q(); return qq.n > 0 and ("Restore: " .. (qq.name or string.format("%d other piece%s", qq.n, qq.n == 1 and "" or "s"))) or "Restored" end,
+            hint = function() local qq = q(); return qq.n > 0 and string.format("$%d", qq.cost) or "" end,
+            enabled = function() return q().n > 0 end, why = "it stands as it was built",
+            act = function()
+              local n, why = restore(id, false, lid)
+              if ctx and ctx.toast then ctx.toast(n > 0 and string.format("%d pieces shipped and set back", n) or tostring(why), n == 0) end
+              return n > 0
+            end }
+        end
+      end
     else
       out[#out + 1] = { id = "ru_restore", type = "action", group = G,
         label = function() local q = restoreQuote(id); return q.n > 0 and string.format("Restore %d missing piece%s", q.n, q.n == 1 and "" or "s") or "Nothing is missing" end,

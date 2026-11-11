@@ -73,6 +73,19 @@ return {
     structures = {                             -- SOLBP1 codes in files (the Build Kit's BLUEPRINTS tab, or Shift+F12)
       -- { bp = "my_scenario/shell.bp.txt", name = "Shelter", at = "mark:shelter", offset = { 0, 0, 0 }, yaw = 90 },
     },
+    -- (F8, docs/scenarios.md §5.9) a blueprint stamped as an abandoned ruin, decayed by its author:
+    -- gone / knocked / broken are piece uids (blueprint lines); lots are the restore bill's jobs at your prices
+    ruins = {
+      -- { name = "Old Camp", bp = "my_scenario/camp.bp.txt", at = "mark:shelter", age = 3000, decay = 0.5,
+      --   gone = { 12, 13 }, knocked = { 40 }, broken = { 7 }, lots = { { id = "roof", name = "the roof", uids = { 12, 13 }, price = 900 } },
+      --   lore = { "the terminal's LOG lines" } },
+    },
+    -- (F8) Data Cores in pieces: on a console, its CORE page; elsewhere E on the piece (plates, the date as the header)
+    cores = {
+      -- { id = "c1", struct = "Old Camp", uid = 30, who = "chief", title = "THE CHIEF'S LOG", power = false, air = false,
+      --   needs = { kind = "piece_ok", struct = "Old Camp", uid = 40 }, why = "the words when it cannot be read",
+      --   run = "after_c1", open = nil, pages = { { date = "Day 211 · 06:40", text = "…" } } },
+    },
     crates = {                                 -- a "Supply drop" crate (salvage.lua) with crated parts
       -- { at = "crew:Okafor", offset = { 4, 0, 2 }, parts = { ["wall.steel"] = 6 }, items = { repairkit = 1 } },
     },

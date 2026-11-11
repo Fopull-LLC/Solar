@@ -79,6 +79,8 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 | `flags`, `survey` | A flag planted (deployables), survey layers credited. |
 | `craft = { { file = "<id>/lander.json", name, where = { pad } \| { runway } \| { orbit = { body = "moon", alt, e, inc } } \| { ground = ref, offset }, control = false } }` | VAB launch-format JSON. `orbit` makes a station or a drone; `ground` makes a landed craft. |
 | `plants = { { struct, fuel = { item, n }, power, days, scramFor, standby, hold, protection, turbine, fill = { { uid \| part, kg } } } }` | A reactor plant in a staged structure, with a past: every fuel channel loaded, then `days` at `power` run through the plant's own catch-up (so the xenon, the decay heat and the trend are real), a SCRAM held `scramFor` s, a start-up to `standby` held `hold` s; then the protection and the turbine set, and tanks of its fluid networks filled. Graveyard Shift's plant: twenty days at 60 %, parked at 2 % with the trips bypassed. |
+| `ruins = { { name, bp, at, offset, yaw, flat, age, company, decay, lean, gone, knocked, broken, lots, loot, lore } }` | A blueprint stamped as an abandoned ruin, decayed by its author (§5.9). A struct ref names it. |
+| `cores = { { id, struct, uid \| part, pages = { { date, text } }, who, title, power, air, needs, why, run, open, label } }` | Data Cores with authored entries, sitting in pieces (§5.9). |
 | `wires = { { struct, from = { uid \| part, pin }, to = { uid \| part, pin } } }` | Signal Cables laid between two pins (logic_net), so a base's alarms and interlocks are live from the start: a console's `tripped` to an Alarm Beacon's `IN`. Blueprint pieces keep their order, so a piece's uid is its line in the blueprint. |
 | `tags = { { struct, part \| uid, name = "P-3" } }` | Designations painted on pieces, shown on their menus, on the consoles and in every refusal (part_info). |
 | `datalogs = { name = { title, who, when, lines = { … } \| text, codes = { { struct, part \| uid } }, rp = 0 } }` | Log cards (scripts/loot.lua). A card is the item `datalog:<name>`: put it in a container (below) or give it. Read in the box it was found in, in the pack, or on a terminal's DATA page; `codes` names the keypads whose codes it gives (their codes come from `locks`), so the keypad then offers "Key in 0417". `rp`: research points on the first read (default 0 for a scenario's card). |
@@ -129,6 +131,8 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 | looted | struct, part \| uid, item \| mat, n: that item gone from the container (or `n` of it taken since the step opened); without item, the container emptied |
 | has_item | who, item \| mat, n = 1: their pack holds it (`item = "datalog:<name>"` works) |
 | terminal | struct, page: at the console on that page; `read = "<card name>"`: that log card read anywhere |
+| core_read | id \| ids (+ count): the Data Core has been read; `sealed = true`: sealed unread instead; `any = true`: either (§5.9) |
+| ruin | struct, claimed, restored (the whole bill, or `lot`'s), afford (the funds cover `lot`'s price) |
 | *(fail list)* room_unbreathable | struct, room = largest \| airlock \| n, secs: the room has been unbreathable that long |
 | *(fail list)* crew_dead | who \| any |
 | *(fail list)* suit_air | who, below |
@@ -229,6 +233,7 @@ A beat is a table with one key. Beats run in order from a queue. A line of dialo
 | wear | `{ craft, part \| uid, hp }`: a craft part worn to `hp` (never below 0.05; the damage model breaks things). |
 | music | `"audio/music/<file>.ogg"`: that piece now, the ambient music held off. `false`: silence. |
 | warp | `n`: ask for time warp ×n (warp_chip's rules). |
+| core | `{ read = id, who }` plays a Data Core's entries now (inline, from a choice); `{ seal = id }` seals it unread; or a whole core (a `start.cores` entry) placed mid-run (§5.9). |
 | give | `{ who, item \| part \| mat, n \| kg }` |
 | funds | `±n` |
 | unlock | `"tech"` |
@@ -323,6 +328,25 @@ Ty, 2026-11-10: "captured since every human should be random."
 - `light.ambient = 0.4` dims the world's ambient to that share (an interior, a dark scene) through underground.lua's one multiplier. `false` restores it.
 - `light.fog = 0.6` holds a fog bank (weather.forceMist). `false` lets it go.
 - Freeplay hands the light, fog, weather and music back to the world.
+
+### 5.9 Ruins and Data Cores (F8)
+
+What Hollis Left (`scenarios/hollis/`) is the worked example.
+
+- **`start.ruins`** stamps a SOLBP1 blueprint, as it was built, as a ruin at `at` (ruins.stampAuthored). It is a ruin like any other: found at once, its tower claimed by an Engineer, its knocked pieces repaired with a Repair Kit once claimed, its missing pieces restored at the tower, its terminals' LOG page.
+  - The decay is the author's: `gone` (uids missing; the restore puts them back), `knocked` (uids tipped `lean` degrees, or 8–14°), `broken` (windows as open frames). The dice only rust and grime walls and topple props, `decay` (0..1) their share.
+  - A piece's uid is its line in the blueprint, as for any staged structure; a restored piece comes back on its own line.
+  - `lots = { { id, name, uids, price } }` splits the restore bill into named jobs at the author's prices: the tower's menu shows "Restore: the bunk room roof · $1,300". The `ruin` goal reads a lot (`restored`, `afford`).
+  - `flat = 20` (`flatSpread = 1.4`): stage it on the nearest ground that rises no more than that over a circle of that radius, the mark first, then rings out to 120 m (ruins.flatSpot), so a long camp is never half buried in a slope. Marks on the ruin follow it.
+  - `loot = { { uid, items, mats } }`: what a crate holds. `lore`: the terminal's LOG lines.
+  - A checkpoint's `stage` may name the ruin again with `claimed = true` and `restore = { lot ids }`.
+- **`start.cores`** puts authored Data Cores in pieces. Each one is read in place:
+  - In a console piece (a Desk Monitor, a ruin's terminal): the console's **CORE** page shows the dated entries as phosphor lines. Its `run` sequence follows once the terminal is closed.
+  - In any other piece (a bunk, a fallen block): E on the piece (the terminal's walk-up prompt, `terminal.setSpot`) plays the entries as dialogue plates, each with its date as the plate's amber header, in the voice of `who`. Then `run`.
+  - `open = "seq"` runs a sequence on E instead of reading, e.g. a choice whose options use `{ core = { read = id } }` or `{ core = { seal = id } }`. Reading is never forced, and neither is sealing.
+  - A core reads only when it physically can, otherwise E refuses with `why`. `power`: its structure's grid has power. `air = true`: there is breathable air at it; `air = "sealed"`: a sealed room round it, whatever the room holds (on a thin-air world a sealed room is never breathable without an O2 source). `needs`: any goal (the block lifted off it).
+  - Its state is the variable `core_<id>` = "read" | "sealed": a checkpoint keeps it, and branches and score rows read it. The `core_read` goal reads it.
+  - The career Data Core (pulled at a ruin's terminal and read in the Research Lab) is unchanged.
 
 ## 6. Hooks (shipped scenarios only)
 

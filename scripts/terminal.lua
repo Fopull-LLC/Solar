@@ -196,8 +196,35 @@ local function rebuild_index()
       end
     end
   end
+  -- (scenarios2 F8) the spots scripts put on pieces: E there runs their act
+  for key, sp in pairs(SPOTS) do
+    local rec = ST.get and ST.get(sp.sid)
+    local p = rec and ST.getPart and ST.getPart(sp.sid, sp.uid)
+    if p then
+      local d = defs(p.id)
+      local px, py, pz = nil, nil, nil
+      if ST.partPose then px, py, pz = ST.partPose(rec, p, 0) end
+      local b = d and d.box
+      IDX.list[#IDX.list + 1] = { sid = rec.id, uid = p.uid, kind = "spot", key = key, b = rec.b, px = px, py = py, pz = pz,
+                                  h = sp.h or (b and (b[3] + b[4]) / 2) or 0.6 }
+    end
+  end
   IDX.ver = ST.version
 end
+-- SPOTS (scenarios2 F8, general): any script may put an E action on a piece
+-- that is no console: setSpot(key, { sid, uid, label = "Read the Data Core"
+-- | fn, act = fn(), on = fn() → bool (offered now?), h = metres up }) and
+-- setSpot(key, nil) to take it off. The walk-up prompt and E are the
+-- console's own (reach, facing, what blocks it). A data core in a bunk,
+-- a log under a shield block.
+SPOTS = {}
+function setSpot(key, t)
+  if type(key) ~= "string" then return false end
+  SPOTS[key] = (type(t) == "table" and t.sid ~= nil and t.uid ~= nil) and t or nil
+  IDX.ver = nil
+  return true
+end
+function spots() return SPOTS end
 function consoles() return IDX.list end
 
 -- ── the scope: what a console reaches ───────────────────────────────────────
@@ -684,7 +711,9 @@ local function find_near()
   local cosA = math.cos(math.rad(params.aim_deg or 55))
   local bodies = {}
   for _, c in ipairs(IDX.list) do
-    if c.px and c.b then
+    local sp = c.kind == "spot" and SPOTS[c.key] or nil
+    local off = c.kind == "spot" and (not sp or (sp.on and not sp.on()))
+    if c.px and c.b and not off then
       local bb = bodies[c.b]
       if bb == nil then bb = (space and space.body and space.body(c.b)) or false; bodies[c.b] = bb end
       if bb then
@@ -815,6 +844,19 @@ function update(node, dt)
   end
   if not P.near then hide_prompt() return end
   local c = P.near
+  if c.kind == "spot" then
+    local sp = SPOTS[c.key]
+    if not sp then P.near = nil; hide_prompt() return end
+    local lbl = type(sp.label) == "function" and sp.label() or sp.label or "Use it"
+    show_prompt(string.format("%s   ·   E", tostring(lbl)))
+    if interact_pressed() and sp.act then
+      P.near = nil
+      hide_prompt()
+      local ok, err = pcall(sp.act)
+      if not ok and log then log("terminal: spot " .. tostring(c.key) .. ": " .. tostring(err)) end
+    end
+    return
+  end
   local what = (c.kind == "reactor") and "Run the reactor" or ((c.kind == "screen") and "Read the screen" or ((c.kind == "ruin") and "Search the terminal" or "Use the console"))
   show_prompt(string.format("%s  ·  %s   ·   E", what, label_of(c.sid, c.uid)))
   if interact_pressed() then openAt(c.sid, c.uid) end
