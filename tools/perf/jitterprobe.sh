@@ -3,7 +3,7 @@
 # person while walking": per-frame heights of the crew, the camera and the
 # head, and the head's screen y, standing, walking and sprinting.
 #
-#   jitterprobe.sh <engine> [modes]   modes: jitter medself fpsoak (pictures: $WORK/proj/save/user/jitshots/)
+#   jitterprobe.sh <engine> [modes]   modes: jitter medself fpsoak motionshots (pictures: $WORK/proj/save/user/jitshots/)
 #   env: WORK LOCK SOLAR TAG PATCHES BENCH_PARAMS as bench.sh (TMO defaults to 300 s a mode)
 #
 # It splices jitterprobe_modes.lua into a copy of perfbench.lua (before its
@@ -25,6 +25,7 @@ s = s.replace('    elseif MODE == "plane" then run_plane()',
               '    elseif MODE == "plane" then run_plane()\n'
               '    elseif MODE == "jitter" then run_jitter()\n'
               '    elseif MODE == "medself" then run_medself()\n'
+              '    elseif MODE == "motionshots" then run_motionshots()\n'
               '    elseif MODE == "fpsoak" then run_fpsoak()')
 open(p, 'w').write(s)
 PY

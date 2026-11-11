@@ -878,6 +878,7 @@ end
 local STRIDE = { walk = 1.6, run = 3.312, sprint = 5.58 }
 local phase = 0.0          -- 0 = left heel strike, 0.5 = right
 local gait_amt = 0.0       -- 0 = standing (Base shows), 1 = a gait owns the body
+local gait_land_t = 0.0    -- (walkclips) seconds left of the soft gait return after a landing
 gaitPhase, gaitAmount = 0.0, 0.0   -- published copies of the two above (tool_belt's bob)
 local gait_sent = nil      -- the last `gait` written, so an unchanged one isn't re-sent
 local layer_w = {}         -- last weights written, so unchanged ones aren't re-sent
@@ -939,10 +940,10 @@ local function animate(node, dt, spd, on_ground, jumped, swimming, landed_at)
         anim:crossfade("fall", 0.2, "Base")
       end
     elseif landed_at then
-      -- (builderperf, 11-10: "the landing crouch is very abrupt". The clip folds
-      -- 16-19 cm in its first 0.09 s; a 0.05 s fade from the fall's tuck added
-      -- the tuck's own swing to it. The real fix is the clip's timing:
-      -- tools/gen_astronaut_anims.py "land", absorb at 0.09 s.)
+      -- (builderperf, 11-10: "the landing crouch is very abrupt". A 0.05 s fade
+      -- from the fall's tuck added the tuck's own swing to it. walkclips: the
+      -- clip itself now absorbs 14 cm over 0.20 s, tools/gen_astronaut_anims.py
+      -- "land"; it folded 16 cm in 0.09 s.)
       if st == "fall" or st == "jump" then anim:restart("land", LAND_FADE, "Base") end
     elseif st == "fall" or st == "jump" then
       anim:crossfade("idle", 0.2, "Base")
@@ -953,7 +954,13 @@ local function animate(node, dt, spd, on_ground, jumped, swimming, landed_at)
   -- quickly when it leaves the ground. Swimming is the swim layers' business:
   -- the gait lets go as they come in and takes back over as you climb out.
   local want_amt = ((on_ground or swimming) and not swim_anim and smoothstep(0.15, 0.6, spd)) or 0.0
-  gait_amt = gait_amt + (want_amt - gait_amt) * (1 - math.exp(-(want_amt < gait_amt and 14 or 8) * dt))
+  -- (walkclips: a running landing took the gait back at 8/s from the fall's
+  -- tucked pose, the head 11 cm lower in a run: 9-11 cm in 3 frames. For
+  -- 0.35 s after touching down it comes back at 4/s, under the land clip.)
+  if landed_at then gait_land_t = 0.35 end
+  gait_land_t = math.max(0.0, gait_land_t - dt)
+  local rate_in = gait_land_t > 0 and 4 or 8
+  gait_amt = gait_amt + (want_amt - gait_amt) * (1 - math.exp(-(want_amt < gait_amt and 14 or rate_in) * dt))
   local g = gait_at(spd)
   local stride = g < 1 and STRIDE.walk + (STRIDE.run - STRIDE.walk) * g
     or STRIDE.run + (STRIDE.sprint - STRIDE.run) * (g - 1)
@@ -2691,9 +2698,11 @@ function update(node, dt)
     if fx and fx.playAt then fx.playAt("land", node, math.min(1.0, 0.3 + math.max(0.0, impact) * 0.07)) end
   end
   -- (builderperf: the dip eases DOWN to its depth over a few frames, then springs
-  -- back; it was the whole depth on the landing's frame)
-  land_dip_t = land_dip_t * math.exp(-9 * dt)
-  land_dip = land_dip + (land_dip_t - land_dip) * (1 - math.exp(-30 * dt))
+  -- back; it was the whole depth on the landing's frame. walkclips: softer
+  -- still, 12/s after a target fading at 6/s: the dip peaks at half the target
+  -- 0.12 s in instead of most of it in 3 frames)
+  land_dip_t = land_dip_t * math.exp(-6 * dt)
+  land_dip = land_dip + (land_dip_t - land_dip) * (1 - math.exp(-12 * dt))
   local feet_down = contact or (ground_hit ~= nil and ground_hit.distance < 1.15)
   local climb = 0
   if input.key("space") or (steer_f and steer_climb > 0) then climb = 1 end

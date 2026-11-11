@@ -842,7 +842,16 @@ local function dec_radii(str, R, n)
   return g
 end
 
-local function ground_radii(name, body, grid)
+-- (walkclips, 11-10: the sphere-trace ran every missing sample in ONE call:
+-- 150-165 ms in missions' 1 Hz tick ~1 s after a 2,000-6,000-piece block
+-- landed, the frame the coverage went stale. It now traces under a wall-clock
+-- budget, resuming where it stopped: a call from coverage spends RADII_CALL_MS,
+-- this script's update RADII_TICK_MS a frame until the grid is done, and a pass
+-- that left samples unknown (ground not resident) waits RADII_RETRY s before the
+-- next. Until done the samples use the nominal radius, as before.)
+local RADII_CALL_MS, RADII_TICK_MS, RADII_RETRY = 2.0, 1.0, 10.0
+local function wall_ms() return ((app and app.wallClock) and app.wallClock() or os.clock()) * 1000 end
+local function ground_radii(name, body, grid, budget_ms)
   local g = ground_r[name]
   if g and g.done then return g end
   local w = save.get("world." .. name)
@@ -854,10 +863,14 @@ local function ground_radii(name, body, grid)
     ground_r[name] = g
     if g.done then return g end
   end
+  g.grid, g.next, g.missing = grid, g.next or 1, g.missing or 0
+  if g.wait and now() < g.wait then return g end
   local top = R + ((w and w.relief) or R * 0.05) * 2 + 20
-  local missing = 0
-  for i, u in ipairs(grid) do
+  local t_end = wall_ms() + (budget_ms or RADII_CALL_MS)
+  local i, n = g.next, #grid
+  while i <= n do
     if not g[i] then
+      local u = grid[i]
       local r, found = top, false
       if terrain and terrain.query then
         for _ = 1, 40 do
@@ -868,16 +881,42 @@ local function ground_radii(name, body, grid)
           if r < R * 0.5 then break end
         end
       end
-      if found then g[i] = r else missing = missing + 1 end
+      if found then g[i] = r else g.missing = g.missing + 1 end
+    end
+    i = i + 1
+    if i <= n and wall_ms() >= t_end then break end
+  end
+  g.next = i
+  if i > n then
+    -- a whole pass: done, or start again later for the ground that was not there
+    g.done = g.missing == 0
+    g.next, g.missing = 1, 0
+    if g.done then
+      g.grid, g.wait = nil, nil
+      save.set("comms.ground." .. name, enc_radii(g, R, n))
+    else
+      g.wait = now() + RADII_RETRY
     end
   end
-  g.done = missing == 0
-  if g.done then save.set("comms.ground." .. name, enc_radii(g, R, #grid)) end
   return g
 end
-
 local cover = {}      -- body → { t, version, ground, sky, flags, r }
 local cover_err = false
+
+-- (update) an unfinished grid goes on a slice a frame
+local function radii_tick()
+  for name, g in pairs(ground_r) do
+    if not g.done and g.grid and not (g.wait and now() < g.wait) then
+      local b = space.body(name)
+      if b then
+        ground_radii(name, b, g.grid, RADII_TICK_MS)
+        -- finished: the coverage is worked out again with the real ground
+        if g.done and cover[name] then cover[name].t = -1e9 end
+      end
+      return   -- one world a frame
+    end
+  end
+end
 
 local function compute_cover(name)
   local E = ref("electronics")
@@ -1228,4 +1267,5 @@ function update(node, dt)
     solve()
   end
   sustain_update()
+  radii_tick()
 end

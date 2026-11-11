@@ -76,6 +76,49 @@ function ZF.stamp(ST, pieces, g, name)
   return sid
 end
 
+-- Graveyard's station layout (structure-local) from its pieces and the
+-- scenario's marks. A Door/Airlock Wall's opening is the 0.92 m hole at its
+-- own x -0.92..0 (tools/gen_kit_parts.py; the mirrored Door Wall's at 0..0.92),
+-- its middle turned with the piece's yaw as the structure's frame turns it.
+local function opening_x(p) return p.x + (p.id:match("^doorWallM%.") and 0.46 or -0.46) * math.cos(p.yaw or 0) end
+function ZF.gy_layout(bp)
+  local L = { src = "pieces" }
+  local steps, locks, doors = nil, {}, {}
+  for _, p in ipairs(bp.pieces) do
+    if p.id == "steps.steel" then steps = p end
+    if p.id == "airlockWall.steel" then locks[#locks + 1] = p end
+    if p.id:match("^doorWallM?%.") then doors[#doors + 1] = p end
+  end
+  table.sort(locks, function(a, b) return a.z < b.z end)
+  L.lockOut, L.lockIn = locks[1] and locks[1].z or -3, locks[#locks] and locks[#locks].z or -1
+  L.lane = steps and steps.x or (locks[1] and opening_x(locks[1])) or -3.54
+  -- the marks, as the scenario has them (offsets in the station's frame)
+  local marks = {}
+  local R = findScript("scenario")
+  if not R and loadfile and setfenv then   -- (the rulebook as scenario_run reads it with no node)
+    local f = loadfile("scripts/scenario.lua")
+    if f then local e = setmetatable({}, { __index = _G }); setfenv(f, e); if pcall(f) then R = e end end
+  end
+  local sc = R and R.load and R.load("graveyard_shift")
+  if sc and sc.start and sc.start.marks then marks = sc.start.marks end
+  local function mk(n)
+    local m = marks[n]
+    return m and m.offset and { x = m.offset[1], z = m.offset[3] } or nil
+  end
+  local dm, bm = mk("bunkdoor"), mk("bunk")
+  if dm and bm then L.src = "pieces + scenario marks" end
+  -- the Door Wall at the bunkdoor mark (or, with no marks, the one furthest north)
+  local best, bd = nil, 1e9
+  for _, p in ipairs(doors) do
+    local d = dm and ((p.x - dm.x) ^ 2 + (p.z - dm.z) ^ 2) or -p.z
+    if d < bd then best, bd = p, d end
+  end
+  L.door = best and { x = best.x, z = best.z } or dm or { x = -4, z = 5 }
+  L.doorX = best and opening_x(best) or L.door.x
+  L.bunk = bm or { x = L.doorX - 1.0, z = L.door.z + 2.5 }
+  return L
+end
+
 function ZF.run()
   BK.tag = "zfight"
   wait_ready(120)
@@ -90,17 +133,16 @@ function ZF.run()
   local code = assets.readText("scenarios/graveyard_shift/station.bp.txt")
   local bp = code and BPs.decode(code)
   if not BK.check("station", bp ~= nil, "the station's blueprint decodes (%s pieces)", bp and bp.n or "-") then BK.result() return end
-  -- (the entrance steps as work/zfight2/graveyard.patch proposes: top tread flush with the sill)
-  -- (and the log desk 1.3 m south, out of the bunk room's doorway)
-  for _, p in ipairs(bp.pieces) do
-    if params.zf_gy_fix ~= 0 then
-      if p.id == "steps.steel" then p.x, p.y, p.z = -3.54, -0.6, -3.5 end
-      if math.abs(p.z - 3.9) < 0.01 and (p.id == "table.steel" or p.id == "monitor.steel" or (p.id == "chair.steel" and math.abs(p.x + 5.5) < 0.01)) then p.z = 2.6 end
-      if p.id == "coffee.steel" and math.abs(p.z - 3.2) < 0.01 then p.z = 1.9 end
-      -- (the battery row stood across the steps' foot: 2.3 m apart from x -17.5)
-      if p.id == "batteryBank" then p.x = -17.5 + 2.3 * math.floor((p.x + 15) / 2.4 + 0.5) end
-    end
-  end
+  -- (walkclips) The station is walked from its own pieces and the scenario's
+  -- marks, not numbers copied from one version of it (a9a1394 grew the hab
+  -- and moved the bunk room, and the old coordinates walked into a wall):
+  -- the entrance lane is the Steps' x, the airlock the two Airlock Walls, the
+  -- bunk room's door the Door Wall at the `bunkdoor` mark, and the bunk the
+  -- `bunk` mark. (zfight2's fixes, the steps flush with the sill, the desk and
+  -- the battery row moved, are in the station's generator since a9a1394.)
+  local GY = ZF.gy_layout(bp)
+  P("ZF graveyard layout: lane x %.2f, airlock z %.2f..%.2f, bunk door (%.2f, %.2f) opening x %.2f, bunk (%.2f, %.2f) [%s]",
+    GY.lane, GY.lockOut, GY.lockIn, GY.door.x, GY.door.z, GY.doorX, GY.bunk.x, GY.bunk.z, GY.src)
   local g1 = zf_g(spot, 0)
   local sidG = ZF.stamp(ST, bp.pieces, g1, "Kerne Station (probe)")
   -- ── a Hab Block ruin's full build, 40 m along ──
@@ -117,7 +159,7 @@ function ZF.run()
   ZF.burst("ctl_slide", recG, { -6.4, Y + 1.65, 4.4 }, { -2.0, Y + 1.0, -0.6 }, 3, 0.01)
   ZF.burst("ctl_back", recG, { -2.0, Y + 1.6, -0.3 }, { -6.5, Y + 0.9, 4.5 }, 3)
   ZF.burst("hall_still", recG, { 1.0, Y + 1.7, 7.5 }, { 8.0, Y + 1.0, -4.0 }, 3)
-  ZF.burst("bunk_still", recG, { -3.6, Y + 1.6, 6.6 }, { -6.6, Y + 0.6, 5.6 }, 3)
+  ZF.burst("bunk_still", recG, { GY.doorX + 1.6, Y + 1.6, GY.door.z + 1.4 }, { GY.bunk.x - 1.0, Y + 0.6, GY.bunk.z + 0.6 }, 3)
   -- close-ups (the station's own pieces)
   KIT.view("zf_gy_airtank", recG, { -4.8, Y + 1.9, 3.3 }, { -4.8, Y + 1.55, 4.6 })
   KIT.view("zf_gy_airtank_side", recG, { -3.9, Y + 1.8, 3.6 }, { -4.6, Y + 1.6, 4.6 })
@@ -125,7 +167,7 @@ function ZF.run()
   KIT.view("zf_gy_airlock_out", recG, { -3.5, 1.7, -6.0 }, { -3.6, 0.8, -3.0 })
   KIT.view("zf_gy_airlock_steps", recG, { -1.8, 1.0, -5.2 }, { -3.6, 0.3, -3.4 })
   KIT.view("zf_gy_corner_in", recG, { -4.5, Y + 1.5, 2.5 }, { -6.9, Y + 1.2, 4.9 })
-  KIT.view("zf_gy_bunkdoor", recG, { -6.0, Y + 1.6, 2.6 }, { -6.4, Y + 1.0, 5.0 })
+  KIT.view("zf_gy_bunkdoor", recG, { GY.doorX + 0.4, Y + 1.6, GY.door.z - 2.4 }, { GY.doorX, Y + 1.0, GY.door.z })
   KIT.view("zf_gy_hall_plant", recG, { 3.0, Y + 1.8, 0.0 }, { 6.5, Y + 0.8, -4.0 })
   -- the ruin
   KIT.view("zf_ru_front", recR, { 2.5, 1.7, 6.0 }, { -0.3, 0.6, 1.0 })
@@ -158,12 +200,18 @@ function ZF.run()
   KL.forceDoors = true
   wait(3)
   -- the station: from 4 m out, up the steps and through both airlock doors into the control room
-  KIT.tp(recG, -3.54, -8.5)
-  local okA = ZF.walk("gy_steps_airlock", recG, -3.54, -2.0, 14)
-  local okB = ZF.walk("gy_into_control", recG, -3.54, 1.0, 8)
-  local okC = ZF.walk("gy_bunk_door", recG, -6.4, 6.0, 12)
+  KIT.tp(recG, GY.lane, GY.lockOut - 5.5)
+  local okA = ZF.walk("gy_steps_airlock", recG, GY.lane, (GY.lockOut + GY.lockIn) / 2, 14)
+  local okB = ZF.walk("gy_into_control", recG, GY.lane, GY.lockIn + 2.0, 8)
+  -- the bunk room: square on to its door from 1.2 m inside the control room,
+  -- through the opening, then to the bunk's side
+  local okC0 = ZF.walk("gy_bunk_approach", recG, GY.doorX, GY.door.z - 1.2, 12)
+  local okC1, _, _ = ZF.walk("gy_bunk_door", recG, GY.doorX, GY.door.z + 1.0, 8)
+  local _, _, cz = KIT.at(recG)
+  local okC2 = ZF.walk("gy_bunk_side", recG, GY.bunk.x, GY.bunk.z, 10)
   BK.check("gy_walk", okA and okB, "the station's steps and airlock walked without crouching")
-  BK.check("gy_bunk", okC, "into the bunk room through its Door Wall")
+  BK.check("gy_bunk", okC0 and okC1 and okC2 and (cz or -1e9) > GY.door.z,
+    "into the bunk room through its Door Wall (z %.2f past the door's %.2f) and to the bunk", cz or -1, GY.door.z)
   -- the ruin: up its steps, through both airlock doors, round to the ladder and up it
   KIT.tp(recR, -0.46, 4.0)
   local r1 = ZF.walk("ru_steps", recR, -0.46, 0.0, 12)

@@ -253,6 +253,65 @@ local function run_medself()
   wait_for(function() return C.treating() == nil end, 8, "the self-treat")
 end
 
+-- ── motionshots (walkclips): the gait and land clips in motion ──────────────
+-- Third person from the side while walking and sprinting (a picture
+-- at four phases of the stride each), a running jump's landing (touchdown,
+-- 0.1 and 0.2 s after), and first person walking (four phases): the hips should
+-- ride a smooth curve, the feet on the ground, the absorb visibly soft.
+local function run_motionshots()
+  wait_ready(90)
+  wait(2)
+  clear_weather()
+  local A = astro()
+  local b = home()
+  local pc = findScript("planet_camera")
+  local pw = findScript("planet_walker")
+  pc.firstPerson = false
+  local u0 = unit(sub({ x = A.x, y = A.y, z = A.z }, { x = b.x, y = b.y, z = b.z }))
+  local bu = base_frame()
+  local away = sub(u0, scl(bu, dot(u0, bu)))
+  if len(away.x, away.y, away.z) < 1e-4 then away = cross(u0, { x = 0, y = 0, z = 1 }) end
+  away = unit(away)
+  local side = unit(cross(u0, away))
+  local function phase_shots(tag, n)
+    for k = 1, n do
+      local want = (k - 1) / n
+      wait_for(function() local p = pw.gaitPhase or 0; return math.abs(((p - want + 0.5) % 1) - 0.5) < 0.03 end, 3, tag)
+      jshot(string.format("%s_ph%02d", tag, math.floor(want * 100 + 0.5)))
+    end
+  end
+  pc.face(away.x, away.y, away.z, -0.2)
+  wait(0.5)
+  -- side-on: the camera looks along -side while the crew walks along `away`
+  pw.steer(1, 0, false)
+  wait(1.5)
+  pc.face(-side.x, -side.y, -side.z, -0.1)
+  wait(1.0)
+  phase_shots("ms_walk", 4)
+  pw.steer(1, 0, true)
+  wait(1.5)
+  phase_shots("ms_sprint", 4)
+  pw.steer(1, 0, true, true)
+  wait_for(function() return not pw.vertState.contact end, 1.0, "airborne")
+  pw.steer(1, 0, true)
+  wait_for(function() return pw.vertState.contact end, 3, "touchdown")
+  pw.steer(1, 0, true)
+  jshot("ms_land_t0")
+  wait(0.1); jshot("ms_land_t1")
+  wait(0.1); jshot("ms_land_t2")
+  pw.steer(nil)
+  wait(1.0)
+  pc.firstPerson = true
+  pc.face(away.x, away.y, away.z, -0.35)
+  wait(0.5)
+  pw.steer(-1, 0, false)
+  wait(1.5)
+  phase_shots("ms_fpwalk", 4)
+  pw.steer(nil)
+  pc.firstPerson = false
+  J("RESULT motionshots done")
+end
+
 -- ── fpsoak: first-person jitter over a long session (playtest 2026-11-09) ──
 -- "first person models jitter, worse the longer you play, and push the player
 -- around slightly." First person, the Medkit in hand (a view model on the

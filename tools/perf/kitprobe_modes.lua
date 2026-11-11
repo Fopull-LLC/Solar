@@ -606,6 +606,10 @@ function KIT.run_perf()
   for _, case in ipairs({ { 13, 0, "kit_500" }, { 13, 30, "kit_500_live30" }, { 26, 0, "kit_2000" }, { 45, 0, "kit_6000" } }) do
     local rec = KIT.block(ST, spot, case[1], case[2])
     local t0 = W()
+    -- (walkclips) ksample=1: the script sampler on from the block's add to the
+    -- case's end, so the bench's worst-hitch lines name the hot lines (it slows
+    -- tight loops: not for the table)
+    if (params.ksample or 0) > 0 and perf.sampleScripts then perf.sampleScripts(true) end
     local id = ST.add(rec)
     ST.spawnNow(id)
     wait_for(function() return spawnPending() == 0 and #(ST.nodesOf(id) or {}) >= #rec.bp - case[2] - 2 end, 240, "the block's pieces")
@@ -621,6 +625,7 @@ function KIT.run_perf()
     sc_begin(case[3])
     wait(5)
     sc_end(case[3])
+    if (params.ksample or 0) > 0 and perf.sampleScripts then perf.sampleScripts(false) end
     local c = perf.counts()
     local ub = {}
     for k2, v in pairs(c.unbatchedBy or {}) do ub[#ub + 1] = k2 .. "=" .. tostring(v) end

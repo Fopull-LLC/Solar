@@ -325,20 +325,21 @@ def to_local(W, P):
 
 # ── gaits ───────────────────────────────────────────────────────────────────
 # speed: the ground speed the clip is authored at (m/s); period: seconds per
-# full cycle (two steps); duty: the share of the cycle each foot is down.
+# full cycle (two steps); duty: the share of the cycle each foot is down;
+# smooth: the window (s) the hips' reach drop is smoothed over (gait_drop).
 GAITS = {
     "walk": dict(speed=1.6, period=1.0, duty=0.60, lift=0.13, heel=D(16), toe=D(28),
                  drop=0.035, bob=0.022, sway=0.025, lean=D(4), twist=D(6), roll=D(4),
                  arm=D(20), arm_fwd=D(6), elbow=D(18), elbow_sw=D(10), lower=D(79),
-                 narrow=0.06, kick=0.0, head_nod=D(1.5), curl=0.55),
+                 narrow=0.06, kick=0.0, head_nod=D(1.5), curl=0.55, smooth=0.07),
     "run": dict(speed=4.6, period=0.72, duty=0.32, lift=0.34, heel=D(10), toe=D(34),
                 drop=0.05, bob=0.03, sway=0.012, lean=D(8), twist=D(9), roll=D(3),
                 arm=D(44), arm_fwd=D(4), elbow=D(80), elbow_sw=D(14), lower=D(76),
-                narrow=0.09, kick=0.10, head_nod=D(2.0), curl=0.7),
+                narrow=0.09, kick=0.10, head_nod=D(2.0), curl=0.7, smooth=0.08),
     "sprint": dict(speed=9.0, period=0.62, duty=0.20, lift=0.52, heel=D(6), toe=D(38),
                    drop=0.075, bob=0.04, sway=0.008, lean=D(16), twist=D(11), roll=D(2),
                    arm=D(58), arm_fwd=D(8), elbow=D(88), elbow_sw=D(18), lower=D(74),
-                   narrow=0.10, kick=0.18, head_nod=D(2.5), curl=0.85),
+                   narrow=0.10, kick=0.18, head_nod=D(2.5), curl=0.85, smooth=0.08),
 }
 
 def leg_path(g, ph, side):
@@ -421,6 +422,43 @@ def pelvis_reach_fix(p):
     o = p.pelvis_off
     p.pelvis_off = (o[0], o[1] + lo, o[2])
     return p
+
+# The gaits' hips: pelvis_reach_fix per key KINKED the hip height at every heel
+# strike (the drop a key needs is zero most of the cycle and peaks sharply when
+# both legs are splayed): 4-7 cm between two neighbouring keys of 24, the
+# 18-22 mm zigzag of the skeleton in third person and of the first-person body
+# (walkclips, 11-10). Instead the drop is worked out densely over the cycle and
+# replaced by a smooth curve that is never shallower than it: a running maximum
+# over +-`smooth` seconds, then a raised-cosine mean over the same window (each
+# term of the mean is >= the need at the centre, so every foot still reaches).
+# The ankles, their timing and the stride are untouched; only the hips ride a
+# little lower round each contact (walk 11 mm, run ~5 cm on average).
+GAIT_KEYS = 48             # keys a cycle (was 24): the curve, not a polyline of it
+GAIT_SAMPLES = 960         # the dense pass (a multiple of GAIT_KEYS)
+def gait_drop(g):
+    n = GAIT_SAMPLES
+    need = []
+    for i in range(n):
+        p = gait_pose(g, i / n); y0 = p.pelvis_off[1]
+        pelvis_reach_fix(p)
+        need.append(y0 - p.pelvis_off[1])
+    r = max(1, int(round(g["smooth"] / g["period"] * n)))
+    run_max = [max(need[(i + s) % n] for s in range(-r, r + 1)) for i in range(n)]
+    w = [0.5 + 0.5 * math.cos(math.pi * s / (r + 1)) for s in range(-r, r + 1)]
+    W = sum(w)
+    return [sum(w[k] * run_max[(i + k - r) % n] for k in range(2 * r + 1)) / W for i in range(n)]
+
+def gait_cycle(name, g):
+    drop = gait_drop(g)
+    keys = []
+    for i in range(GAIT_KEYS + 1):
+        j = (i % GAIT_KEYS) * (GAIT_SAMPLES // GAIT_KEYS)
+        p = gait_pose(g, j / GAIT_SAMPLES)
+        o = p.pelvis_off
+        p.pelvis_off = (o[0], o[1] - drop[j], o[2])
+        pelvis_reach_fix(p)            # a no-op: the curve is at or below the need
+        keys.append((g["period"] * i / GAIT_KEYS, solve(p)))
+    write_clip(name, keys, True)
 
 # ── the other clips ─────────────────────────────────────────────────────────
 def stand_pose(t=0.0, period=4.0):
@@ -942,7 +980,7 @@ POSE_FNS = {"sit_idle": sit_pose, "lie_rest": lie_pose, "kneel_work": kneel_pose
 def main():
     os.makedirs(os.path.join(ROOT, OUT), exist_ok=True)
     for name, g in GAITS.items():
-        cycle(name, lambda ph, g=g: gait_pose(g, ph), g["period"], 24)
+        gait_cycle(name, g)
     cycle("idle", lambda ph: stand_pose(ph * 4.0), 4.0, 16)
 
     # Jump: the push-off (legs long, toes pointed, arms thrown up) folding
@@ -965,11 +1003,26 @@ def main():
     write_clip("fall", keys, True)
 
     # Land: reach for the ground, absorb (knees, lean, arms forward), stand.
+    # (walkclips, 11-10: "the landing crouch is very abrupt". It was four keys,
+    # the 16 cm absorb at 0.09 s: the head fell 16-19 cm in three frames.) The
+    # absorb is now a profile keyed every 0.04 s: a smoothstep in over 0.22 s
+    # to 14 cm, out by 0.64 s, the lean and arms riding the same curve (in a
+    # running landing the run's own lower hips come in on top of it); the last
+    # key is the idle's first, as before.
     reach = hanging(stand_pose(0.0)); reach = blend(reach, air_pose(0.25, 0.4), 0.5)
-    absorb = crouch_pose(0.16, D(20), D(18))
-    settle = crouch_pose(0.035, D(6), D(6))
-    keys = [(0.0, solve(reach)), (0.09, solve(pelvis_reach_fix(absorb))),
-            (0.30, solve(pelvis_reach_fix(settle))), (0.55, solve(pelvis_reach_fix(stand_pose(0.0))))]
+    absorb = crouch_pose(0.14, D(18), D(16))
+    stand = stand_pose(0.0)
+    LAND_IN, LAND_END, LAND_DT = 0.22, 0.64, 0.04
+    def land_amount(t):
+        if t <= LAND_IN:
+            return smooth(t / LAND_IN)
+        return 1.0 - smoother((t - LAND_IN) / (LAND_END - LAND_IN))
+    keys = [(0.0, solve(reach))]
+    t = LAND_DT
+    while t < LAND_END - 1e-6:
+        keys.append((t, solve(pelvis_reach_fix(blend(stand, absorb, land_amount(t))))))
+        t += LAND_DT
+    keys.append((LAND_END, solve(pelvis_reach_fix(stand_pose(0.0)))))
     # The first key is airborne; key the others' legs by IK from the ground.
     write_clip("land", keys, False)
 
