@@ -994,7 +994,10 @@ local function set_ambient(k)
 end
 -- per frame only while an ease runs (a `light` beat with secs); else with the goals
 local function light_tick(every_frame)
-  local t = now()
+  -- (scn_dust) once the run is over an ease lands at once: the debrief holds
+  -- the clock, so an ease begun in the closing cutscene never reached its end
+  -- and re-placed the sun every frame of the stood-down runner (0.05 ms)
+  local t = (phase == "running") and now() or math.huge
   if LT.elE then
     local v, fin = ease_val(LT.elE, t)
     apply_time(v)
@@ -1566,7 +1569,8 @@ local function run_beat(b, e)
   elseif k == "run" then run_seq(v, true, e and e.cs)
   elseif k == "caption" then
     local bc = ref("big_caption")
-    if bc and bc.show then bc.show(v.title or v[1] or "", v.sub or v[2] or "", v.secs or v[3] or 4.0, "story") end
+    -- (scn_dust) `kind`: big_caption's alarm | story | result | info | quiet (default story)
+    if bc and bc.show then bc.show(v.title or v[1] or "", v.sub or v[2] or "", v.secs or v[3] or 4.0, v.kind or "story") end
   elseif k == "camera" or k == "shot" then
     if not in_cut and not camera_quiet() then return "later" end
     if camera_start(v) and v.wait ~= false then beat_busy = { kind = "shot", t1 = cam.t1 } end

@@ -1927,6 +1927,11 @@ function validate(sc, ctx)
             if val.ambient ~= nil and val.ambient ~= false and type(val.ambient) ~= "number" then E(pk .. ".ambient", "a share of the world's ambient (0..2), or false") end
             if val.fog ~= nil and val.fog ~= false and type(val.fog) ~= "number" then E(pk .. ".fog", "a fog bank 0..1, or false") end
             if val.time ~= nil and val.time ~= false and not elevationOf(val.time) then E(pk .. ".time", "night, dusk, dawn, morning, noon, afternoon, evening, degrees, or false") end
+          elseif key == "caption" then
+            -- (scn_dust) big_caption's kinds
+            if val.kind ~= nil and not ({ alarm = 1, story = 1, result = 1, info = 1, quiet = 1 })[tostring(val.kind)] then
+              E(pk .. ".kind", "alarm, story, result, info or quiet")
+            end
           elseif key == "weather" then
             if val.kind ~= false and not WEATHERS[tostring(val.kind)] then E(pk .. ".kind", "clear, overcast, rain, storm, thunderstorm, hail, snow, blizzard, dust, duststorm, ash, ashstorm, or false (the world's own)") end
             if val.secs ~= nil and type(val.secs) ~= "number" then E(pk .. ".secs", "seconds") end

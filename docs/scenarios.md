@@ -212,7 +212,7 @@ A beat is a table with one key. Beats run in order from a queue. A line of dialo
 | run | `"sequence"`: runs a named sequence inline. |
 | cutscene | `true`: the first beat of a sequence makes the sequence a cutscene. |
 | shot | `{ orbit = ref, dist, height, turn, secs }`, or a dolly `{ from = ref, to = ref, look = ref, offset, secs }`, or `{ look = ref, secs }`. `wait = false` runs on while the shot plays. |
-| caption | `{ title, sub, secs }` |
+| caption | `{ title, sub, secs, kind }`: `kind` is big_caption's alarm \| story \| result \| info \| quiet (default story) |
 | wait | `secs` |
 | var | `{ name = v }` |
 | add | `{ name = n }` |

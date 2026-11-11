@@ -203,6 +203,12 @@ do
   local ok, errs = R.validate(sc, {})
   local msg = table.concat(errs or {}, " | ")
   check(not ok and msg:find("start.cables[1].to.struct", 1, true) and msg:find("start.cables[1].ty", 1, true), "start.cables validated: " .. msg:sub(1, 160))
+  -- a caption's kind (big_caption's alarm | story | result | info | quiet)
+  local sc2 = { id = "x", title = "x", on_start = { { caption = { "A", "b", 3, kind = "loud" } }, { caption = { "A", "b", 3, kind = "alarm" } } },
+                steps = { { id = "s", text = "t", goals = { { kind = "var", name = "v", is = true } } } } }
+  local ok2, errs2 = R.validate(sc2, {})
+  local m2 = table.concat(errs2 or {}, " | ")
+  check(not ok2 and m2:find("kind", 1, true) and not m2:find("on_start[2]", 1, true), "caption kind validated: " .. m2:sub(1, 120))
 end
 
 print(string.format("smoke_dust_season: %d passed, %d failed", passed, #failures))
