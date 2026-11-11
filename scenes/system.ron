@@ -821,6 +821,13 @@
                     enabled: true,
                     params: [],
                 ),
+                // the eight cave kinds: walls, formations, air, sound and
+                // hazards (scripts/cave_kinds.lua, worlds W4)
+                (
+                    kind: "cave_kinds",
+                    enabled: true,
+                    params: [],
+                ),
                 (
                     kind: "system_generator",
                     enabled: true,
@@ -3121,6 +3128,19 @@
                 ),
                 (
                     kind: "underground",
+                    enabled: true,
+                    params: [],
+                ),
+                // which kind of cave you are in, its formations and wall
+                // marks, its air and hazards (scripts/cave_field.lua, worlds W4)
+                (
+                    kind: "cave_field",
+                    enabled: true,
+                    params: [],
+                ),
+                // G throws a red road flare (scripts/cave_flares.lua, items.lua `flare`)
+                (
+                    kind: "cave_flares",
                     enabled: true,
                     params: [],
                 ),

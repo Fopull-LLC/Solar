@@ -2,7 +2,7 @@
 
 The plan behind this is `work/worlds/PLAN.md` (the worlds planner, 2026-11-10). This doc holds
 what has shipped. Section 1 is the geology provinces (slice W2), section 2 the ores and crystals
-(slice W3). Cave kinds (W4) and their hooks will get their own sections when they land.
+(slice W3), section 3 the cave kinds and their dressing (slice W4).
 
 ## 1. Geology provinces (material generation 3)
 
@@ -249,3 +249,137 @@ ones) as a 12 m seam on a 260 m ring round the base, painted as `mineral_field` 
 its outcrops and float. It shoots each one from 5 m and 20 m at eye height and from 60 m at 4 m
 (`veinlook_<ore>_{5m,20m,60m}.png`). It then walks out to a real uranite vein and reads the
 dosimeter over it, 15 m off and 40 m off.
+
+## 3. Cave kinds and their dressing (material generation 5)
+
+Ty (2026-11-10): "I dig and find cool caves but they're all made of the same few rocks and
+formations so it gets boring fast... make more scary feeling and unique caves." Generator 4 cuts
+every cave with one recipe. Until generator 5 (engine card 0676) gives each kind its own shape,
+a cave's **kind** is what Solar makes of it: its walls, what hangs from its roof and stands on
+its floor, its marks, its darkness, haze and sound, its air and hazards.
+
+### 3.1 The eight kinds (`scripts/cave_kinds.lua`, pure)
+
+| Kind | Walls (principal) | Formations | Feel | Bed | Hazard | Air |
+|---|---|---|---|---|---|---|
+| lava tube | pahoehoe, soot, basalt | lavacicles, ropy pahoehoe slabs, breakdown | red-black, heat haze, dead (900 Hz) | the ground's rumble | rockfall 0.35, +12 K | CO2 |
+| ice cave | clear, banded, dirty ice, frost | ice curtains with icicles, hoarfrost | cold blue glow, breath mist | ice cracking in the walls (3D) | cold 248 K, slippery, drops | world's |
+| karst | cave wall, dripstone, flowstone | stalactites, soda straws, stalagmites, flowstone drapes | pitch black (2 %), long drips on any world | none (drips) | sumps, flooding | CO2 0.025 bar |
+| geode | quartz druzy, tuff | quartz point clusters, selenite | close, glassy (3.5 kHz) | none | enclosed | CO2 |
+| salt | halite, chalk | selenite blades, hopper-cube crusts, salt straws | white throw-back (12 %), dust, dead (1.6 kHz) | none, bone dry | brittle 0.25, dust | world's |
+| vent | sulfur crust, soot, sinter | sulfur needles, crusts | yellow murk (near fog 38 m), steam | steam and spitting mud | SO2/H2S, +35 K | SO2 40 µbar, H2S |
+| collapse | the world's (no principal) | breakdown, stalactites | grey daylight-ish, dust | wind | rockfall 0.5, 20 m drops | world's |
+| chasm | the formation's strata | breakdown, stalactites | cold blue-grey | water far below | 30 m drops | world's |
+
+Each kind also lists decals, a depth band (vents and tubes deep, collapses shallow), rewards
+(ores, first-entry RP) and three real speleology facts for the codex (W6).
+
+- `kindsFor(formation, depth, type)` gives the kinds a world's caves may be: per W2 formation
+  (`FORMATION_KINDS`, all 45), else per type (worlds rolled before formations), else per family.
+  Collapse is always possible. Weights fall off outside each kind's depth band.
+- `principalOf(formation, type, u)` is the world's main kind (never collapse), chosen among kinds
+  within 25 % of the heaviest by a draw the generator already made.
+- `regionOf(seed, x, y, z, R, caveDepth, formation, type)` is the kind of the 120 m region (about
+  one chamber system) a body-local point lies in. The hash is integer arithmetic in doubles with a
+  non-linear step (a linear one striped the map), the same under luajit and the engine.
+
+### 3.2 Version 5
+
+`MAT_GEN = 5` rolls exactly what version 4 rolls (no new rng draws: checked for every type, and
+shapes equal over 30 seeds). Each world gets `g.caveKind` from its formation and the deep-hue
+draw, and `deep` (the cave zone's paint) becomes the kind's wall rock when the formation's own
+cave rock is not one of the kind's (`wallFor`, using the weathering draw). Chasm and collapse keep
+the formation's. A geode world's pockets are quartz druzy hollows, more of them (threshold −0.05,
+from 4 m). The world record gains `bio.caves = { depth, principal }` and `bio.palette.cave`. Over
+30 systems: 177 worlds, 152 in their kind's wall rock, 29 with new rock; the new wall layers cost
+about 0.3 more look-alike fallbacks per system (4.9 → 5.2). A save made before keeps version 4
+and its cave rock; `cave_field` dresses its caves by kind all the same.
+
+### 3.3 The cave field (`scripts/cave_field.lua`, on the Weather node)
+
+- **Probe**, twice a second: the enclosure (underground.lua's rays, not cast twice), a ray up and
+  one down from the eye (`height`), one down from 600 m above the ground to the first rock
+  (`depth`), one down from 2.5 m ahead (`hazard.drop`). In a cave when a roof is within 30 m
+  with 7 m of rock over it, or underground's enclosure is past 0.55 (out at 5 m / 0.35). The
+  kind is `regionOf` the eye.
+- **Hooks** (`findScript("cave_field")`): `caveKind` (PLAN §5.3's `cave.kind`; a script handle's
+  `kind` is the engine's own and cannot be shadowed), `label`, `enclosure`, `height`, `depth`,
+  `roofDepth`, `air` (bar the cave adds), `hazard`, `cells()`, `kindAt(x, y, z)`,
+  `airAt(x, y, z)` (W5 wires atmo to it), `worldInfo(name)`, `stats`, `reset()` (probes).
+- **Formations**: in a cave, the 10 m cells round the eye are dressed once each: nine candidate
+  points per cell (a point in the cave's air, a ray up to the roof and down to the floor, a ray
+  out to a wall), two a frame. A placement is a model, a body-local base, its up and facing, a
+  scale and its kind; hanging ones keep 2.2 m of headroom. The cells are saved
+  (`cave.cells.<body>`, at most 700, farthest dropped first), so a cave keeps its stalactites.
+  Nodes are children of the planet's node (positions-and-frames rule 1): the nearest 48 within
+  70 m, LOD 0 under 25 m (±10 % hysteresis), four made a pass. A formation whose rock is dug
+  away goes and is saved gone. Tint per kind (`KINDS.tint/tints`; collapse and chasm take the
+  world's cave rock); a crystal world's geode points glow faintly (the declared fiction).
+- **Marks**: up to three per cell on roofs and walls, none within 6 m of an ore vein; the nearest
+  40 within 40 m are laid (`decals.add`), the rest lifted.
+- **No paint**: nothing here paints terrain (`fieldEdited` is flat while walking a cave).
+
+### 3.4 Ambience by kind (`scripts/underground.lua`)
+
+underground.lua reads `cave_field.caveKind` and eases every knob to the kind's `amb` over about
+2.5 s: the ambient's floor and colour, the haze over atmosphere.lua's (colour, volumetric density
+or the flat ramp's reach; deferred through planet_camera so it lands after atmosphere writes;
+nothing in vacuum), the motes' colour and amount, the room tone's level and low-pass, the drips
+(karst drips on any world; lava, salt and vents are dry), how often the rock creaks and the share
+of groans, the ice cave's own cracks, and a recorded bed faded in with the enclosure (only the
+rumble reaches you in vacuum, muffled). A deep cave whose tipped sky rays run off along passages
+is still dark: `cave_field.roofDepth` firms up the enclosure. New recordings (all CC0, real):
+`cave_vent`, `cave_rumble`, `cave_water_far`, `cave_ice_crack_1..3` (`audio/SOURCES.md`,
+`tools/build_cave_audio.py`).
+
+### 3.5 Formations as models (`tools/gen_cave_props.py`)
+
+Thirteen props and the flare, two LODs each (`models/cave/`, 50–2700 triangles): stalactite
+clusters with drapery rings and a flowstone boss, candle-stack stalagmites, soda straws, flowstone
+drapes, ice curtains with icicles, hoarfrost plates, lavacicles, ropy pahoehoe slabs, breakdown
+blocks, quartz geode clusters, selenite blades, hopper-cube halite crusts, sulfur needles. Five
+neutral PBR sets (`textures/cave/`: calcite, ice, crystal, basalt, sulfur; picture, normal map,
+metal-roughness map, mean 0.77 so a tint can reach yellow) and ambient occlusion in the vertex
+colour. Seven RGBA decals (`textures/vfx/decal/cave_*.png`).
+
+**No sky in a cave.** A physical model reflects the sky's picture, and underground that sheen
+was all a prop showed past the lamp: pale blue-grey whatever its tint (W3's open finding).
+cave_field sets `reflectivity = 0` on each prop a beat after its model lands. Without that sheen
+a model's only fill is the scene's ambient, of which it takes a darker share than the terrain, so
+each prop's tint also lifts its ambient ×3 (as dim as its wall, never a black cut-out), and the
+clear ones (selenite, ice, hoarfrost, quartz, halite, straws) carry a faint pale rim, the glassy
+edge a lamp finds on a crystal. The same fix for W3's surface outcrops: `mineral_field`
+outcrop_look gives rock reflectivity 0.15 and metal ores 0.6.
+
+**The least light.** Each kind has `amb.dim`, an absolute ambient floor (× its tint) that
+underground.lua keeps whatever the sky: 0.008 in karst to 0.022 in salt. Enough to sense a
+chamber's shape, never its detail.
+
+### 3.6 Rationed light
+
+- **Lamp Cell** (`items.cell`, $15, 0.15 kg): a flat torch takes one from the pack when L is
+  pressed (`flashlight.swapCell`): 4 more hours. Nothing swaps by itself.
+- **Flare** (`items.flare`, $6): G on foot throws one (`scripts/cave_flares.lua`): it arcs under
+  the world's gravity, lands where the rock stops it and burns 90 s as a flickering red point
+  light with a glowing end and smoke; at most six burn at once (the oldest goes out).
+- **One lamp cell for both lamps** (`flashlight.cellLevel`): the torch's battery when a torch is
+  in the pack, else the suit's own lamp cell (save `crew.lampcell.<pack>`). The helmet lamps
+  draw on it at `HELMET_DRAW` (0.4) of the torch's rate, so a cell is 4 h of torch or 10 h of
+  helmet lamps. Under 10 % they brown out and flicker; flat, they fall to an **emergency glow**
+  (suit.lua: 14 % intensity, 5 m, sputtering), never darkness. L swaps a spare cell into
+  whichever lamp feeds it. Both charge aboard or at the base.
+- **The Lamp chip** (status_hud): in a cave, on foot: which lamp draws ("Torch", "Helmet
+  lamps"), its minutes left at that draw, the cells and flares in the pack; caution under
+  30 min; "Emergency glow" in warning red when the cell is flat.
+
+### 3.7 Probes and tests
+
+- `tests/smoke_cave_kinds.lua`: the tables complete and on disk, coverage of every formation and
+  type, determinism and no striping of regions; cave_field in a stub cave (kind, depth, height,
+  dressing within caps, headroom, saved and re-read, dug away); underground's ambience per kind;
+  spare cells.
+- `tests/smoke_geology.lua`: the version-5 block.
+- `tools/perf/caveprobe.sh <engine> <seed…>` (`caveprobe_modes.lua`): finds a natural cave under
+  a fresh save's home world, stands in it, logs `CV STATE` (kind, air, hazards, nodes, marks),
+  `CV COST` (cave_field, underground, rays, field edits), and shoots the lamps, the torch, flares
+  and the HUD; `sweep=1` dresses the same cave as each kind, `tintlab=1` the tint A/B.

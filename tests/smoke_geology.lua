@@ -493,7 +493,7 @@ local w2 = {}
 do
   local G = env.geoLib()
   check(G ~= nil, "geology.lua loads beside the generator")
-  check(env.MAT_GEN == 4, "a fresh save rolls material generation 4 (worlds W3: ores)")
+  check(env.MAT_GEN == 5, "a fresh save rolls material generation 5 (worlds W4: cave kinds)")
   -- Every type has 2–3 formations; every layer one names is a library layer
   -- with its picture and maps on disk.
   local nform, nlayers, seenL = 0, 0, {}
@@ -776,6 +776,72 @@ do
     check(G.oreClaims(b, { sulfur = true }).obsidian == nil, "…and only for the ores asked for")
   end
   w2.w3 = w3
+
+  -- ── MATERIAL GENERATION 5 (worlds W4): cave kinds ────────────────────────
+  -- Version 5 rolls version 4's shapes and rng; every geology world gets a
+  -- principal cave kind (never collapse) and its cave zone is painted in that
+  -- kind's wall rock (or the formation's own, for chasms); a version-4 world
+  -- names no principal and keeps its cave rock.
+  local CK = env.caveLib()
+  check(CK ~= nil and CK.KINDS ~= nil, "cave_kinds.lua loads beside the generator")
+  local w4 = { same = 0, n = 0, kinds = {}, worlds = 0, walls = 0, changed = 0 }
+  for seed = 1, 30 do
+    env.MAT_GEN_FORCE = 4
+    local st4 = roll(seed * 13 + 1)
+    local a = shapeOf(st4)
+    local cave4 = {}
+    for k, w in pairs(st4) do
+      if k:match("^world%.") and w.bio then
+        check(w.bio.caves == nil or w.bio.caves.principal == nil, "a version-4 world names no principal cave kind")
+        cave4[k] = w.bio.mats and w.bio.mats.cave
+      end
+    end
+    env.MAT_GEN_FORCE = 5
+    local st5 = roll(seed * 13 + 1)
+    if shapeOf(st5) == a then w4.same = w4.same + 1 end
+    w4.n = w4.n + 1
+    for k, w in pairs(st5) do
+      if k:match("^world%.") and w.bio and w.bio.formation then
+        local c = w.bio.caves or {}
+        w4.worlds = w4.worlds + 1
+        check(c.principal and CK.KINDS[c.principal] and c.principal ~= "collapse",
+          k .. ": a version-5 world has a principal cave kind (" .. tostring(c.principal) .. ")")
+        check(c.depth and c.depth > 0, k .. ": the record carries the cave zone's depth")
+        if c.principal then w4.kinds[c.principal] = (w4.kinds[c.principal] or 0) + 1 end
+        local K = CK.KINDS[c.principal or ""]
+        local L = w.bio.formation.layers.cave
+        if K and K.walls then
+          local ok = false
+          for _, nm in ipairs(K.walls) do if G.LAYER[nm] == L then ok = true end end
+          check(ok, k .. ": the cave rock is one of the " .. c.principal .. "'s walls (" .. tostring(G.nameOf(L)) .. ")")
+          if ok then w4.walls = w4.walls + 1 end
+        end
+        if cave4[k] and w.bio.mats.cave ~= cave4[k] then w4.changed = w4.changed + 1 end
+        check(w.bio.mats.cave == w.bio.mats.deep, k .. ": the cave slot is the deep paint")
+      end
+    end
+  end
+  env.MAT_GEN_FORCE = nil
+  check(w4.same == w4.n, string.format("versions 4 and 5 roll the same shapes: %d of %d", w4.same, w4.n))
+  -- the rng: version 5 leaves the stream where version 4 did, every type
+  for _, t in ipairs(env.GEO_ORDER) do
+    for seed = 1, 4 do
+      local nextv = {}
+      for _, v in ipairs({ 4, 5 }) do
+        env.MAT_GEN_FORCE = v
+        env.ASSIGN = G.newAssign()
+        local r = rng(seed * 59 + 3)
+        env.rollGeology(r, { type = t, Tk = env.GEO_TYPES[t].T[1] + 20, air = env.GEO_TYPES[t].air ~= false })
+        nextv[v] = r:next()
+      end
+      check(nextv[4] == nextv[5], string.format("%s seed %d: version 5's roll leaves the rng where version 4's did", t, seed))
+    end
+  end
+  env.MAT_GEN_FORCE = nil
+  local nk = 0
+  for _ in pairs(w4.kinds) do nk = nk + 1 end
+  check(nk >= 5, "the principal kinds over 30 systems cover at least five kinds (" .. nk .. ")")
+  w2.w4 = w4
 end
 
 if #failures == 0 then
@@ -790,6 +856,12 @@ if #failures == 0 then
   local w3 = w2.w3
   print(string.format("  ORES (matGen 4): shapes equal to matGen 3 on %d/%d seeds; pitchblende held in %d/%d systems; free wildcards gave galena %d, native sulfur %d, obsidian %d",
     w3.same, w3.n, w3.pitch, w3.n, w3.extra.galena, w3.extra.sulfur, w3.extra.obsidian))
+  local w4 = w2.w4
+  local kl = {}
+  for k, v in pairs(w4.kinds) do kl[#kl + 1] = k .. " " .. v end
+  table.sort(kl)
+  print(string.format("  CAVES (matGen 5): shapes equal to matGen 4 on %d/%d seeds; %d worlds, %d in their kind's wall rock, %d changed rock; principal kinds: %s",
+    w4.same, w4.n, w4.worlds, w4.walls, w4.changed, table.concat(kl, ", ")))
   os.exit(0)
 else
   print("GEOLOGY SMOKE FAILURES:")

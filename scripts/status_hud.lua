@@ -93,6 +93,36 @@ local function readouts()
                       value = string.format(d < 10 and "%.2f µSv/h%s" or "%.0f µSv/h%s", d, mf.doseRising and " ▲" or ""),
                       warn = d >= 2.5 }
   end
+  -- LAMP (worlds W4): under ground the light is rationed, so its minutes are
+  -- in front of you: the lamp cell (the torch's battery, else the suit's own)
+  -- as time at what draws on it now (the torch, or the helmet lamps at a
+  -- share of its rate), the spare cells and flares in the pack. Shown only in
+  -- a cave (underground.lua's flag), on foot. Caution under 30 minutes; flat
+  -- is the emergency glow, in warning red.
+  local ug = ref("underground")
+  if ug and ug.cave and crew_afoot() then
+    local fl = ref("flashlight")
+    local su = ref("suit")
+    local mins = fl and fl.minutesLeft and fl.minutesLeft() or nil
+    local lvl = fl and fl.cellLevel and fl.cellLevel() or nil
+    local cells = fl and fl.cellsLeft and fl.cellsLeft() or 0
+    local fla = ref("cave_flares")
+    local flares = fla and fla.count and fla.count() or 0
+    local extra = {}
+    if cells > 0 then extra[#extra + 1] = string.format("%d cell%s", cells, cells == 1 and "" or "s") end
+    if flares > 0 then extra[#extra + 1] = string.format("%d flare%s", flares, flares == 1 and "" or "s") end
+    local tail = #extra > 0 and ("  ·  " .. table.concat(extra, " · ")) or ""
+    if su and su.beamEmergency or (lvl and lvl <= 0.05) then
+      out[#out + 1] = { key = "lamp", label = "Emergency glow",
+                        value = (cells > 0 and "L: spare cell" or "cell flat") .. tail, warn = true, frac = 0, gauge = "air" }
+    elseif mins then
+      local v = mins >= 60 and string.format("%d h %02d min", math.floor(mins / 60), math.floor(mins % 60)) or string.format("%d min", math.floor(mins + 0.5))
+      local who = (fl.on and "Torch") or ((su and (su.beamLit or 0) > 0) and "Helmet lamps") or "Lamps off"
+      out[#out + 1] = { key = "lamp", label = who, value = v .. tail,
+                        frac = math.max(0, math.min(1, (lvl or 0) / 100)),
+                        warn = false, heavy = mins < 30, gauge = "air" }
+    end
+  end
   if co and co.money then
     out[#out + 1] = { key = "funds", label = "Funds", value = co.money(co.balance()) }
     out[#out + 1] = { key = "rep", label = "Rep", value = (co.isSandbox and co.isSandbox()) and "MAX" or string.format("%+d", co.rep()) }
@@ -134,6 +164,7 @@ local function text_of(rs)
   for _, r in ipairs(rs) do
     if r.key == "o2" then parts[#parts + 1] = "air " .. r.value
     elseif r.key == "dose" then parts[#parts + 1] = "dose " .. r.value
+    elseif r.key == "lamp" then parts[#parts + 1] = "lamp " .. r.value
     elseif r.key == "rep" then parts[#parts + 1] = "rep " .. r.value
     elseif r.key == "rp" then parts[#parts + 1] = "research " .. r.value
     elseif r.warn then parts[#parts + 1] = "PACK FULL  " .. r.value

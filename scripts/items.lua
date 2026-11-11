@@ -161,6 +161,21 @@ ITEMS.spentRod = { name = "Spent Rod", kind = "consumable", kg = 40.0, L = 14, c
                    hold = { prefab = "ItemSpentRod", grip = "shoulder" }, body = "SpentRodBody",
                    about = "a burnt-out fuel rod, hot with fission products: don't carry it in a pack for long. The Materials Intake takes it back" }
 
+-- LIGHT UNDERGROUND (worlds W4, docs/worlds-and-caves.md §3.6): rationed
+-- light is the cheapest dread there is. Neither goes in the hand.
+--   THE LAMP CELL: a charged spare battery for the helmet flashlight. When the
+--   torch's battery is flat, L swaps a cell in (flashlight.lua): 4 more hours.
+--   Light and cheap, but the pack's count is what you have down there.
+--   THE FLARE: a red road flare, struck and thrown with G on foot
+--   (scripts/cave_flares.lua): it lands where it falls and burns for 90 s, a
+--   flickering red point light, six at most alight at once.
+ITEMS.cell = { name = "Lamp Cell", kind = "device", kg = 0.15, L = 0.3, cost = 15, shop = true, show = "ItemLampCell",
+               cell = { hours = 4.0 },
+               about = "a charged spare battery for the helmet flashlight: when its light dies, L swaps it in (4 h more)" }
+ITEMS.flare = { name = "Flare", kind = "device", kg = 0.2, L = 0.4, cost = 6, shop = true, show = "ItemFlare",
+                flare = { secs = 90, range = 14, intensity = 2.6, color = { 1.0, 0.28, 0.12 } },
+                about = "a red road flare: G strikes and throws it; it burns for 90 s where it lands. Mark your way back" }
+
 -- THE DATA CORE (expansion X8; scripts/ruins.lua): the solid-state log of an
 -- abandoned base, pulled from its terminal. Not sold, not held: carried in a
 -- pack (or a locker) back to the home Research Lab, where it is read (RP, the

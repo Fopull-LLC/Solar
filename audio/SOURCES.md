@@ -15,6 +15,7 @@
 | `foley/` | `laser_hiss`, `laser_crackle`, `laser_rumble` (seamless loops): the Terrain Laser's bite | real recordings, cut and levelled by `tools/build_grit_audio.py` (table below) | CC0 (freesound.org) |
 | `ambience/` | `cave_tone` (seamless loop), `cave_drip_1..6`: underground.lua | real recordings in caves, cut and levelled by `tools/build_cave_audio.py` (table below) | CC0 (freesound.org) |
 | `ambience/` | `cave_creak_1..3`, `cave_groan_1..2` (mono: 3D sources on the rock): underground.lua | real recordings, `tools/build_grit_audio.py` (table below) | CC0 (freesound.org) |
+| `ambience/` | `cave_vent`, `cave_rumble`, `cave_water_far` (seamless loops), `cave_ice_crack_1..3` (mono): the cave kinds, underground.lua | real recordings, `tools/build_cave_audio.py` (the kinds' table below) | CC0 (freesound.org) |
 | `sfx/` | `breath_calm`, `breath_heavy`, `suit_hum` (seamless loops): the suit, soundscape.lua | real recordings, `tools/build_grit_audio.py` (table below) | CC0 (freesound.org) |
 
 Levels (from `python3 tools/gen_soundscape_audio.py --stats`, confirmed with ffmpeg's
@@ -87,6 +88,27 @@ drop's level and the engine's distance falloff does the rest); `cave_tone` −35
 in a big cave" (nomadas, #609161, CC0) — real, but its drops sit 15 dB over a busy floor, too
 close together to cut one clean; "Water Dripping in Cave" (#177958) and "Water Dripping (Large
 Echo)" (#162116) are effected or made in a DAW.
+
+### The cave kinds (worlds W4, 2026-11-10)
+
+Ty: "make more scary feeling and unique caves." Each kind (scripts/cave_kinds.lua) has its own
+bed or one-shots, all real recordings, CC0 1.0 (the licence was read on each sound's page,
+2026-11-10). Same tool, same HQ previews (curl lines in its docstring). A rebuild rewrites the
+older files' bytes too (Vorbis stamps a random stream serial), with the same sound.
+
+| file(s) | source | licence | processing | used by |
+|---|---|---|---|---|
+| `cave_vent` (13 s loop) | "Bubbling Mud with Steam" by ProductionNow, https://freesound.org/people/ProductionNow/sounds/352904/ — the Artist Paintpots, Yellowstone: steam hissing from the ground and spitting mud holes, 0–14.5 s | CC0 1.0 | 60 Hz–9 kHz, 1.5 s crossfade, −30.9 LUFS, peak −6.8 dBFS | sulfur vents |
+| `cave_rumble` (28 s loop) | "Rocket Launch Rumble (Geofon recording)" by felix.blume, https://freesound.org/people/felix.blume/sounds/613617/ — the ground through a geophone, 70–100 s (laser_rumble uses 14–27 s) | CC0 1.0 | 20–160 Hz, 2 s crossfade, −32 LUFS | lava tubes |
+| `cave_water_far` (18 s loop) | "Water Flowing into Underground Sinkhole" by hinchinbrook, https://freesound.org/people/hinchinbrook/sounds/552485/ — a stream running into a sinkhole, with the chamber's bass, 2–22 s | CC0 1.0 | 40 Hz–6 kHz, 2 s crossfade, −33 LUFS | deep chasms |
+| `cave_ice_crack_1..2` (mono) | "Ice cracking_northern87" by northern87, https://freesound.org/people/northern87/sounds/369982/ — cracks at 9.18 and 32.81 s (Oktava MK-012) | CC0 1.0 | above 150 Hz, peak −3.8 dBFS | ice caves (3D, in the walls) |
+| `cave_ice_crack_3` (mono) | "ice_cracking_01.flac" by Mooe, https://freesound.org/people/Mooe/sounds/169897/ — a run of cracks at 8.30 s (Zoom H2N) | CC0 1.0 | above 150 Hz, peak −3.0 dBFS | ice caves |
+
+The collapse sink's wind is `wind_low` (above). Seen and not used: "Hot Bubbling Mud" (Breviceps
+#456806, CC0: mud alone, no steam), "Mud Volcano Field - Salton Sea" (RTB45 #415608, CC0: good,
+but 4 minutes for a 13 s bed), "Small cave river flow" (Duasun #462661, CC0: too near and bright
+for "far below"); the lava-tube recordings found (Thurston, Ape Cave, Golden Dome) are CC BY or
+BY-NC, and the ice-cave walk (#530747) is CC BY with tourists in it.
 
 ## The laser, the cave's creaks and groans, the suit, the weather and the sea, from real recordings
 

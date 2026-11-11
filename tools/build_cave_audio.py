@@ -21,6 +21,24 @@ freesound login; the previews are the same recordings, 48 kHz):
     curl -L -o fs_402929.mp3 https://cdn.freesound.org/previews/402/402929_270868-hq.mp3
     curl -L -o fs_164785.mp3 https://cdn.freesound.org/previews/164/164785_2104797-hq.mp3
 
+The cave KINDS (worlds W4, scripts/cave_kinds.lua; Ty 2026-11-10: "make more
+scary feeling and unique caves") each add a real recording, all CC0:
+
+    fs_352904.mp3   "Bubbling Mud with Steam" by ProductionNow: the Artist
+                    Paintpots, Yellowstone (steam hiss, spitting mud). #352904
+    fs_613617.mp3   "Rocket Launch Rumble (Geofon recording)" by felix.blume:
+                    the ground itself through a geophone, 20 km out. #613617
+    fs_552485.mp3   "Water Flowing into Underground Sinkhole" by hinchinbrook:
+                    a stream gurgling down into a cave, the chamber's bass. #552485
+    fs_369982.mp3   "Ice cracking_northern87" (Oktava MK-012). #369982
+    fs_169897.mp3   "ice_cracking_01.flac" by Mooe (Zoom H2N). #169897
+
+    curl -L -o fs_352904.mp3 https://cdn.freesound.org/previews/352/352904_3646900-hq.mp3
+    curl -L -o fs_613617.mp3 https://cdn.freesound.org/previews/613/613617_1661766-hq.mp3
+    curl -L -o fs_552485.mp3 https://cdn.freesound.org/previews/552/552485_9847211-hq.mp3
+    curl -L -o fs_369982.mp3 https://cdn.freesound.org/previews/369/369982_1196518-hq.mp3
+    curl -L -o fs_169897.mp3 https://cdn.freesound.org/previews/169/169897_27124-hq.mp3
+
 Outputs (mono 44.1 kHz Ogg Vorbis, audio/ambience/):
   * cave_drip_1..6: single drops that land in the cave's own pool, each with the
     real cave's short tail and nothing of the next drop. MONO, because
@@ -31,6 +49,14 @@ Outputs (mono 44.1 kHz Ogg Vorbis, audio/ambience/):
     head). The recording's sub-30 Hz handling rumble and its preamp hiss
     above 7 kHz are filtered off; levelled to about -33 LUFS integrated, as the
     synthesised tone was, peak under -12 dBFS.
+  * cave_vent (13 s loop): a sulfur vent's bed, steam hissing and mud spitting
+    (the vent kind); 60 Hz-9 kHz, -30 LUFS.
+  * cave_rumble (28 s loop): the ground's own rumble through a geophone, the
+    lava tube's (and the deep magma's); 20-160 Hz, -32 LUFS.
+  * cave_water_far (18 s loop): water somewhere below, gurgling into rock,
+    with the chamber's bass (the chasm); 40 Hz-6 kHz, -33 LUFS.
+  * cave_ice_crack_1..3: single cracks of ice under stress, MONO one-shots
+    played as 3D sources in the ice cave's walls; peak -3.8 dBFS.
 
 --stats prints each output's length, peak, RMS and integrated loudness (ffmpeg
 ebur128). Check by numbers, never by playing them through speakers.
@@ -57,6 +83,19 @@ DRIPS = [
     ("fs_402929.mp3", 110.67, 0.64),
 ]
 TONE = ("fs_164785.mp3", 40.0, 32.0, 2.0)   # source, start s, length s, crossfade s
+# the kinds' beds: (name, source, start s, length s, crossfade s, hp, lp, LUFS, peak cap dBFS)
+BEDS = [
+    ("cave_vent", "fs_352904.mp3", 0.0, 13.0, 1.5, 60, 9000, -30.0, -6.0),
+    ("cave_rumble", "fs_613617.mp3", 70.0, 28.0, 2.0, 20, 160, -32.0, -6.0),
+    ("cave_water_far", "fs_552485.mp3", 2.0, 18.0, 2.0, 40, 6000, -33.0, -10.0),
+]
+# single ice cracks (onsets found on the 400 Hz high-passed track, nothing
+# within 18 dB of them in the half second before): (source, onset s, length s)
+CRACKS = [
+    ("fs_369982.mp3", 9.18, 1.30),
+    ("fs_369982.mp3", 32.81, 1.20),
+    ("fs_169897.mp3", 8.30, 1.50),
+]
 
 
 def load(path):
@@ -142,16 +181,36 @@ def build(src):
     g = 10 ** ((-33.0 - lufs(p)) / 20)
     g = min(g, 10 ** (-12.8 / 20) / (np.max(np.abs(y)) + 1e-12))
     save("cave_tone", y * g)
+    for name, srcf, t, secs, xf, hp, lp, target, cap in BEDS:
+        x = get(srcf)
+        a = int(t * SR)
+        y = x[a:a + int((secs + xf) * SR)]
+        y = fft_filter(y, hp=hp, lp=lp, slope=18)
+        y = loopify(y - np.mean(y), xf)
+        p = save(name, y)
+        g = 10 ** ((target - lufs(p)) / 20)
+        g = min(g, 10 ** ((cap - 0.8) / 20) / (np.max(np.abs(y)) + 1e-12))
+        save(name, y * g)
+    for i, (srcf, t, secs) in enumerate(CRACKS, 1):
+        x = get(srcf)
+        a = int((t - 0.03) * SR)
+        y = x[a:a + int(secs * SR)]
+        y = fft_filter(y, hp=150)
+        y = y - np.mean(y)
+        y = fades(y, 0.004, min(0.3, secs * 0.3))
+        y *= 10 ** (-3.8 / 20) / (np.max(np.abs(y)) + 1e-12)
+        save("cave_ice_crack_%d" % i, y)
 
 
 def stats():
-    for n in ["cave_drip_%d" % i for i in range(1, len(DRIPS) + 1)] + ["cave_tone"]:
+    for n in ["cave_drip_%d" % i for i in range(1, len(DRIPS) + 1)] + ["cave_tone"] + [b[0] for b in BEDS] \
+            + ["cave_ice_crack_%d" % i for i in range(1, len(CRACKS) + 1)]:
         p = os.path.join(OUT, n + ".ogg")
         x = load(p)
         pk = 20 * np.log10(np.max(np.abs(x)) + 1e-12)
         rms = 20 * np.log10(np.sqrt(np.mean(x ** 2)) + 1e-12)
         seam = ""
-        if n == "cave_tone":
+        if n == "cave_tone" or n in [b[0] for b in BEDS]:
             seam = "  seam step %.4f (median step %.4f)" % (abs(x[0] - x[-1]), np.median(np.abs(np.diff(x))))
         print("%-12s %6.2f s  peak %6.1f dBFS  rms %6.1f dBFS  I %6.1f LUFS%s" % (n, len(x) / SR, pk, rms, lufs(p), seam))
 

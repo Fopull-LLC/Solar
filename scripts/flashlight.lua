@@ -15,7 +15,10 @@
 -- battery is the item's FILL (inventory's per-piece levels, shown as %): it
 -- drains while lit (`hours` of light from full), the beam browns out and
 -- flickers under 10 %, and it goes dark at 0. It charges aboard a craft or
--- near the base (`recharge` %/s), as the rifle's cell does.
+-- near the base (`recharge` %/s), as the rifle's cell does. Underground the
+-- light is rationed (worlds W4): a flat torch takes a spare Lamp Cell from the
+-- pack when L is pressed (swapCell; items.lua `cell`), and the status chips
+-- show its minutes left while you are in a cave (status_hud.lua).
 --
 -- Rides the ItemsLib node. Published for probes: `on`, `lit` (the light's
 -- intensity this frame), `level` (0..100), `lensX/Y/Z`, `dirX/Y/Z`;
@@ -146,12 +149,88 @@ end
 
 local function persist() if save and save.set then save.set("crew.torch", on and 1 or 0) end end
 
+-- SPARE CELLS (worlds W4, items.lua `cell`): rationed light. A flat torch
+-- takes a charged cell from the pack when L is pressed (the flat one is left
+-- behind, as a caver pockets a dead battery); nothing swaps by itself, so a
+-- dying lamp in a cave is a choice you make in the dark.
+function cellsLeft()
+  local inv = ref("inventory")
+  if not (inv and inv.itemCount) then return 0 end
+  local ok, n = pcall(inv.itemCount, pack(), "cell")
+  return ok and (n or 0) or 0
+end
+-- THE LAMP CELL is one store of light for both lamps (worlds W4, 2026-11-10):
+-- the torch's battery when a torch is in the pack, else the suit's own lamp
+-- cell (save `crew.lampcell.<pack>`, %, charged where the torch charges). The
+-- helmet lamps draw on it at HELMET_DRAW of the torch's rate; flat, they fall
+-- to a dim, flickering emergency glow (suit.lua), never to nothing.
+HELMET_DRAW = 0.4
+local function suit_cell_key() return "crew.lampcell." .. pack() end
+function cellLevel()
+  if carried() then return (battery()) end
+  local v = save and save.get and save.get(suit_cell_key())
+  return tonumber(v) or 100
+end
+local function suit_cell_add(amount)
+  if not (save and save.set) then return end
+  local v = math.max(0, math.min(100, cellLevel() + amount))
+  save.set(suit_cell_key(), v)
+end
+function cellAdd(amount)
+  if carried() then battery_add(amount) else suit_cell_add(amount) end
+end
+-- What draws on the cell now: the torch (1), the helmet lamps (HELMET_DRAW),
+-- or nothing (0). suit.lua publishes beamLit (its draw ignores the glow).
+function drawNow()
+  if on and lit > 0 then return 1 end
+  local su = ref("suit")
+  if su and (su.beamLit or 0) > 0 and not su.beamEmergency then return HELMET_DRAW end
+  return 0
+end
+-- Minutes of light left at the draw now (the torch's, else the helmet
+-- lamps'); nil without a lamp at all.
+function minutesLeft()
+  local b = cellLevel()
+  if not b then return nil end
+  local d = drawNow()
+  if d <= 0 then d = on and 1 or HELMET_DRAW end
+  return b / 100 * P("hours") * 60 / d
+end
+function swapCell()
+  local inv = ref("inventory")
+  if not (inv and inv.removeItem and save) then return false end
+  if cellsLeft() <= 0 then return false end
+  local took = inv.removeItem(pack(), "cell", 1)
+  if (took or 0) < 1 then return false end
+  local cid = pack()
+  local list = inv.fills(cid, ID)
+  if #list == 0 then
+    -- no torch: the cell goes in the suit's lamp housing
+    save.set(suit_cell_key(), 100)
+  else
+    local bi = 1
+    for i, f in ipairs(list) do if f < list[bi] then bi = i end end
+    list[bi] = 100
+    local t = save.get("inv.fill." .. cid)
+    t = type(t) == "table" and t or {}
+    t[ID] = list
+    save.set("inv.fill." .. cid, t)
+  end
+  if audio and audio.play then pcall(audio.play, "audio/foley/toggle_off.ogg", { track = "SFX", volume = 0.22, pitch = 0.7 }) end
+  local n = cellsLeft()
+  say(string.format("spare cell in: %d h of light (%d cell%s left)", math.floor(P("hours") + 0.5), n, n == 1 and "" or "s"))
+  return true
+end
+
 function setOn(want)
   want = want and true or false
   if want and not carried() then return false, "no flashlight in the pack" end
   if want then
     local b = battery()
-    if b and b <= 0.05 then say("the flashlight's battery is flat (it charges aboard or at the base)") return false, "flat" end
+    if b and b <= 0.05 then
+      if swapCell() then b = battery() end
+    end
+    if b and b <= 0.05 then say("the flashlight's battery is flat (it charges aboard or at the base; the depot sells spare cells)") return false, "flat" end
   end
   if want ~= on then on = want; click(on); persist() end
   return true
@@ -276,6 +355,11 @@ function update(node, dt)
   if sim and sim.pressed then sim.pressed = nil; press = true end
   if not press and input and input.pressed and input.pressed("l") and free_hands() then press = true end
   if press then
+    if not carried() and cellLevel() <= 0.05 and swapCell() then
+      press = false
+    end
+  end
+  if press then
     local ok, why = toggle()
     if not ok and why == "no flashlight in the pack" then say("no flashlight in the pack (the depot sells one)") end
   end
@@ -284,11 +368,20 @@ function update(node, dt)
   if R.save_t >= 1.0 then
     local step = R.save_t
     R.save_t = 0
+    -- the helmet lamps' draw, from whichever cell feeds them
+    local d = drawNow()
+    if d > 0 and d < 1 then cellAdd(-step * d * 100 / (P("hours") * 3600)) end
+    if not carried() and charging() then suit_cell_add(step * P("recharge")) end
     if carried() then
       if on and lit > 0 then battery_add(-step * 100 / (P("hours") * 3600)) end
       if charging() then battery_add(step * P("recharge")) end
       local b = battery()
-      if on and b and b <= 0.05 then on = false; persist(); click(false); say("the flashlight's battery is flat") end
+      if on and b and b <= 0.05 then
+        on = false; persist(); click(false)
+        local n = cellsLeft()
+        say(n > 0 and string.format("the flashlight's battery is flat: L swaps in a spare cell (%d left)", n)
+          or "the flashlight's battery is flat, and there is no spare cell")
+      end
     end
   end
   level = (battery())

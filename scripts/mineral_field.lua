@@ -1487,7 +1487,11 @@ local function outcrop_look(n, ore, w)
   -- wait a pass: in the pass a node is made a model, setMaterial lands before
   -- the model does and would give it a whole Material of its own, dropping
   -- the rock's textures (flora_field tint_whole). veins_tick lays it.
-  return { tint = t, mat = (L.metallic or L.rough) and { shading = "physical", metallic = L.metallic or 0, roughness = L.rough or 0.8 } or nil }
+  -- (worlds W4) the sky's reflection washed every tint to a pale blue-grey
+  -- (caveprobe tintlab): a rock reflects little of it; a metal ore keeps more
+  local refl = (L.metallic or 0) > 0.5 and 0.6 or 0.15
+  return { tint = t, mat = (L.metallic or L.rough) and { shading = "physical", metallic = L.metallic or 0, roughness = L.rough or 0.8, reflectivity = refl }
+    or { reflectivity = refl } }
 end
 
 -- Make a vein's outcrops (the ones not broken yet).

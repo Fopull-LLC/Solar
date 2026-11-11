@@ -41,6 +41,23 @@
 --               the boots. (The suit's breathing and fans rise as the world
 --               goes quiet: soundscape.lua.)
 --
+--   KINDS       (worlds W4) the cave's KIND (cave_field.kind; scripts/
+--               cave_kinds.lua KINDS[*].amb) sets all of the above per kind,
+--               eased over a few seconds as you pass from one to the next:
+--               how dark it is and the ambient's colour (a karst gallery is
+--               pitch black, a salt cavern throws the lamp back white, an ice
+--               cave glows a cold blue, a lava tube is red-black), the haze's
+--               colour, thickness and reach (a sulfur vent's yellow murk, salt
+--               dust, heat haze; laid over atmosphere.lua's after it writes,
+--               planet_camera.deferLate; none in vacuum), the motes' colour,
+--               the room tone's level and how dead it sounds (a low-pass), the
+--               drips (a karst cave drips on any world, lava and salt are bone
+--               dry), how often the rock creaks and how often it groans, the
+--               ice's own cracks in its walls (real recordings, 3D), and a
+--               recorded bed under it all: steam and spitting mud in a vent,
+--               the ground's rumble in a lava tube, water far below in a
+--               chasm, the wind at a collapse.
+--
 -- Cost: two terrain rays a frame, an ambient write, a spawnEffect every
 -- second or two while underground; nothing at all on the surface but the rays.
 --
@@ -78,6 +95,12 @@ defaults = {
   dripNear = 1.5,
   --- Drip on any world (probes): otherwise only where the air is damp.
   dripsAlways = false,
+  --- The cave kinds' ambience (cave_field.kind): 0 = every cave alike.
+  --@range 0 1
+  kinds = 1.0,
+  --- A kind's recorded bed (vent steam, lava rumble, far water, wind).
+  --@range 0 1
+  bedGain = 1.0,
   debug = false,
 }
 
@@ -140,6 +163,53 @@ local fx_t = { motes = -10, mist = -10 }
 local snd = { tone = nil, tone_v = 0, next_creak = nil }
 local dbg_t = -10
 
+-- ── the cave's kind (worlds W4) ─────────────────────────────────────────────
+-- Every knob the kinds move, eased together (a few seconds) toward the kind
+-- the crew is in (cave_field.kind) or, out of any kind, the plain cave this
+-- script always made. Published as `ambK` for probes; `kindNow` the kind.
+kindNow = nil
+ambK = { floor = nil, tr = 1, tg = 1, tb = 1, fogW = 0, fr = 0, fg = 0, fb = 0, fogD = 1, fogF = 1,
+        mr = 1, mg = 1, mb = 1, ma = 1, tone = 1, lp = 20000, drips = 1, creak = 1, groan = 0.4, always = 0 }
+local bed = {}           -- clip → { h, v }
+local function kind_amb()
+  if (params.kinds or 1) <= 0 then return nil, nil end
+  local cf = ref("cave_field")
+  local k = cf and cf.caveKind
+  if not k then return nil, nil end
+  local ck = ref("cave_kinds")
+  local a = ck and ck.ambienceOf and ck.ambienceOf(k)
+  return k, a
+end
+local function ease_amb(dt)
+  local k, A = kind_amb()
+  kindNow = k
+  local f0 = params.ambientFloor or 0.07
+  local w = clamp01(params.kinds or 1)
+  local function tgt(v, base) if v == nil then return base end return base + (v - base) * w end
+  local t = {
+    floor = tgt(A and A.floor, f0), dim = (A and A.dim or 0) * w,
+    tr = tgt(A and A.tint and A.tint[1], 1), tg = tgt(A and A.tint and A.tint[2], 1), tb = tgt(A and A.tint and A.tint[3], 1),
+    fogW = (A and A.fog) and w or 0,
+    fogD = tgt(A and A.fog and A.fog[4], 1), fogF = tgt(A and A.fog and A.fog[5], 1),
+    mr = tgt(A and A.motes and A.motes[1], 1), mg = tgt(A and A.motes and A.motes[2], 1), mb = tgt(A and A.motes and A.motes[3], 1),
+    ma = tgt(A and A.motes and A.motes[4], 1),
+    tone = tgt(A and A.tone, 1), lp = tgt(A and A.toneLp, 20000), drips = tgt(A and A.drips, 1),
+    creak = tgt(A and A.creak, 1), groan = tgt(A and A.groan, 0.4), always = (A and A.dripsAlways) and w or 0,
+  }
+  local e = 1 - math.exp(-(dt or 0) / 2.5)
+  if not ambK.floor then e = 1 end
+  for key, v in pairs(t) do ambK[key] = (ambK[key] or v) + (v - (ambK[key] or v)) * e end
+  -- the haze's colour only moves while a kind gives one (it fades out by fogW)
+  if A and A.fog then
+    local ef = (ambK.fogW < 0.02) and 1 or e
+    ambK.fr = ambK.fr + (A.fog[1] - ambK.fr) * ef
+    ambK.fg = ambK.fg + (A.fog[2] - ambK.fg) * ef
+    ambK.fb = ambK.fb + (A.fog[3] - ambK.fb) * ef
+  end
+  ambK.bed = A and A.loop or nil
+  ambK.creaks = A and A.creaks or nil
+end
+
 local function crew_eye()
   local a = find and find("Astronaut")
   if not (a and a.valid ~= false) then return nil end
@@ -182,19 +252,22 @@ local function light()
   return ln and ln:getcomponent("Light") or nil
 end
 local function near(a, b) return a and b and math.abs(a - b) <= 1e-5 + 1e-4 * math.abs(b) end
-local function darken(k)
+local function darken(k, tr, tg, tb, dim)
+  tr, tg, tb = tr or 1, tg or 1, tb or 1
   local l = light()
   if not l then return end
   local r, g, b = l.ambientR or 0, l.ambientG or 0, l.ambientB or 0
   local w = amb.wrote
   if not (w and near(r, w[1]) and near(g, w[2]) and near(b, w[3])) then amb.base = { r, g, b } end
   if not amb.base then return end
-  if math.abs(k - 1) <= 1e-4 then
+  if math.abs(k - 1) <= 1e-4 and math.abs(tr - 1) + math.abs(tg - 1) + math.abs(tb - 1) <= 1e-4 then
     if w then l.ambientR, l.ambientG, l.ambientB = amb.base[1], amb.base[2], amb.base[3] end
     amb.wrote = nil
     return
   end
-  local nr, ng, nb = amb.base[1] * k, amb.base[2] * k, amb.base[3] * k
+  local nr, ng, nb = amb.base[1] * k * tr, amb.base[2] * k * tg, amb.base[3] * k * tb
+  -- (worlds W4) the kind's least light: the shape of a chamber, never its detail
+  if dim and dim > 0 then nr, ng, nb = math.max(nr, dim * tr), math.max(ng, dim * tg), math.max(nb, dim * tb) end
   l.ambientR, l.ambientG, l.ambientB = nr, ng, nb
   amb.wrote = { l.ambientR or nr, l.ambientG or ng, l.ambientB or nb }
 end
@@ -228,16 +301,21 @@ local function effects(ex, ey, ez, ux, uy, uz, name, b, air, w)
   local nx, ny, nz = away_from_star(ex, ey, ez, ux, uy, uz)
   local vac = air < 0.03
   -- motes, a little ahead of the eye
-  if time - fx_t.motes > (vac and 3.0 or 1.5) then
+  -- (the kind's motes: their colour, and more of them in a dusty or steamy one)
+  local ma = ambK.ma or 1
+  if time - fx_t.motes > (vac and 3.0 or 1.5) / math.max(0.5, ma) then
     fx_t.motes = time
     pcall(spawnEffect, "CaveMotes", vec3(ex + fx * 2.4, ey + fy * 2.4, ez + fz * 2.4),
-      { normal = vec3(nx, ny, nz), intensity = vac and 0.6 or 1.0 })
+      { normal = vec3(nx, ny, nz), intensity = (vac and 0.6 or 1.0) * math.min(1.4, ma),
+        tint = { ambK.mr or 1, ambK.mg or 1, ambK.mb or 1 } })
   end
   local dm = damp(w)
+  -- a vent steams and an ice cave breathes whatever the world's air
+  if kindNow == "vent" or kindNow == "ice" then dm = math.max(dm, 0.5) end
   if not vac and dm > 0.3 and time - fx_t.mist > 3.2 then
     fx_t.mist = time
     pcall(spawnEffect, "CaveMist", vec3(ex - ux * 1.45 + fx * 2.5, ey - uy * 1.45 + fy * 2.5, ez - uz * 1.45 + fz * 2.5),
-      { normal = vec3(nx, ny, nz), intensity = 0.6 + 0.6 * dm })
+      { normal = vec3(nx, ny, nz), intensity = 0.6 + 0.6 * dm, tint = { ambK.mr or 1, ambK.mg or 1, ambK.mb or 1 } })
   end
 end
 
@@ -253,23 +331,64 @@ local DRIPS = { "audio/ambience/cave_drip_1.ogg", "audio/ambience/cave_drip_2.og
                 "audio/ambience/cave_drip_4.ogg", "audio/ambience/cave_drip_5.ogg", "audio/ambience/cave_drip_6.ogg" }
 local CREAKS = { "audio/ambience/cave_creak_1.ogg", "audio/ambience/cave_creak_2.ogg", "audio/ambience/cave_creak_3.ogg" }
 local GROANS = { "audio/ambience/cave_groan_1.ogg", "audio/ambience/cave_groan_2.ogg" }
+-- (worlds W4) the cave kinds' recordings: ice cracking in an ice cave's walls,
+-- and the beds cave_kinds names (steam and mud, the ground's rumble, far water)
+local ICE_CRACKS = { "audio/ambience/cave_ice_crack_1.ogg", "audio/ambience/cave_ice_crack_2.ogg", "audio/ambience/cave_ice_crack_3.ogg" }
+local BEDS = { "audio/ambience/cave_vent.ogg", "audio/ambience/cave_rumble.ogg", "audio/ambience/cave_water_far.ogg",
+               "audio/ambience/wind_low.ogg" }
 local function play(clip, a, b, c, d)
   if audio and audio.play then local ok, h = pcall(audio.play, clip, a, b, c, d); return ok and h or nil end
 end
 local function sounds(dt, air)
   if params.sound == false then return end
   local vac = air < 0.03
-  local want = (params.toneGain or 0.32) * smooth(0.25, 0.9, enclosed) * (vac and 0.25 or 1.0)
+  local want = (params.toneGain or 0.32) * (ambK.tone or 1) * smooth(0.25, 0.9, enclosed) * (vac and 0.25 or 1.0)
   snd.tone_v = snd.tone_v + (want - snd.tone_v) * min(1, dt * 0.8)
   if snd.tone_v > 0.004 then
     if not snd.tone then snd.tone = play(TONE, { track = "Ambient", loop = true, volume = 0, mode = "Flat" }); snd.tone_lp = 0 end
     if snd.tone then
       snd.tone:setVolume(snd.tone_v)
-      local lp = vac and 300 or 0
+      -- dead rock (salt, a lava tube) swallows the highs: the kind's low-pass,
+      -- in steps of 100 Hz so it is not re-set every frame
+      local klp = (ambK.lp or 20000) < 15000 and math.floor((ambK.lp or 20000) / 100 + 0.5) * 100 or 0
+      local lp = vac and 300 or klp
       if lp ~= snd.tone_lp then snd.tone_lp = lp; snd.tone:setLowpass(lp) end
     end
   elseif snd.tone then
     snd.tone:stop(); snd.tone = nil
+  end
+  beds(dt, vac)
+end
+
+-- The kind's recorded bed (cave_kinds amb.loop): faded in with the
+-- enclosure, out (and stopped) when you leave the kind or the cave. In
+-- vacuum only the ground's rumble comes through, felt through the boots.
+bedLog = {}
+function beds(dt, vac)
+  local want = ambK.bed
+  local g = (params.bedGain or 1) * smooth(0.3, 0.9, enclosed)
+  local seen = {}
+  if want and params.sound ~= false then
+    local is_rumble = want.clip:find("rumble") ~= nil
+    local v = (want.gain or 0.4) * g * ((vac and not is_rumble) and 0 or (vac and 0.5 or 1))
+    local b = bed[want.clip]
+    if not b and v > 0.004 then
+      b = { h = play(want.clip, { track = "Ambient", loop = true, volume = 0, mode = "Flat" }), v = 0 }
+      if b.h and vac then pcall(b.h.setLowpass, b.h, 260) end
+      bed[want.clip] = b
+    end
+    if b then b.want = v; seen[want.clip] = true end
+  end
+  bedLog = {}
+  for clip, b in pairs(bed) do
+    if not seen[clip] then b.want = 0 end
+    b.v = b.v + ((b.want or 0) - b.v) * min(1, (dt or 0) * 0.5)
+    if b.h then pcall(b.h.setVolume, b.h, b.v) end
+    bedLog[#bedLog + 1] = { clip = clip, v = b.v, handle = b.h ~= nil }
+    if (b.want or 0) <= 0 and b.v < 0.003 then
+      if b.h then pcall(b.h.stop, b.h) end
+      bed[clip] = nil
+    end
   end
 end
 
@@ -436,11 +555,14 @@ end
 
 local function creaks(ex, ey, ez, ux, uy, uz, name, b, vac)
   if params.sound == false or not (cave and ex) then snd.next_creak = nil; return end
-  if not snd.next_creak then snd.next_creak = time + 8 + math.random() * 14 end
+  local rate = math.max(0.2, ambK.creak or 1)
+  if not snd.next_creak then snd.next_creak = time + (8 + math.random() * 14) / rate end
   if time < snd.next_creak then return end
-  snd.next_creak = time + 18 + math.random() * 32
-  local groan = vac or math.random() < 0.4
+  snd.next_creak = time + (18 + math.random() * 32) / rate
+  local groan = vac or math.random() < (ambK.groan or 0.4)
   local list = groan and GROANS or CREAKS
+  -- an ice cave cracks (real ice under stress) and groans like lake ice
+  if ambK.creaks == "ice" then list = groan and { GROANS[1] } or ICE_CRACKS end
   local clip = list[math.random(1, #list)]
   local gain = params.creakGain or 0.5
   local h, d
@@ -468,7 +590,7 @@ end
 function start(node)
   if audio and audio.preload then
     local list = { TONE }
-    for _, l in ipairs({ DRIPS, CREAKS, GROANS }) do for _, c in ipairs(l) do list[#list + 1] = c end end
+    for _, l in ipairs({ DRIPS, CREAKS, GROANS, ICE_CRACKS, BEDS }) do for _, c in ipairs(l) do list[#list + 1] = c end end
     pcall(audio.preload, list)
   end
 end
@@ -489,6 +611,13 @@ function update(node, dt)
       if hits[i] then if i <= SKY_N then sh = sh + 1 else wh = wh + 1 end end
     end
     target, sky, walls = enclosure(sh, SKY_N, wh, #DIRS - SKY_N)
+    -- (worlds W4) a roof over the eye and metres of rock over it is a cave
+    -- however tall the chamber: its tipped sky rays can run off 45 m along a
+    -- passage and read as sky (cave_field.roofDepth: the rock from the ground
+    -- above down to the eye, while a roof is within 30 m)
+    local cf = ref("cave_field")
+    local rd = cf and cf.roofDepth
+    if rd then target = max(target, smooth(6, 20, rd) * (0.8 + 0.2 * walls)) end
   else
     hits = {}
   end
@@ -497,6 +626,7 @@ function update(node, dt)
   enclosed = enclosed + (target - enclosed) * k
   if enclosed < 1e-3 and target == 0 then enclosed = 0 end
   cave = caveFlag(cave, enclosed)
+  ease_amb(dt)
   local air = 0
   if name then
     local vx = ref("vfx")
@@ -505,7 +635,10 @@ function update(node, dt)
   local w = name and world_of(name)
   if cave and ex then effects(ex, ey, ez, ux, uy, uz, name, b, air, w) end
   sounds(dt, air)
-  drips(ex, ey, ez, ux, uy, uz, name, b, air < 0.03, params.dripsAlways and 1.0 or damp(w))
+  -- the kind's drips: karst drips on any world, lava and salt are dry
+  local dm = params.dripsAlways and 1.0 or damp(w)
+  dm = math.max(dm * (ambK.drips or 1), 0.6 * (ambK.always or 0) * math.min(1, ambK.drips or 1))
+  drips(ex, ey, ez, ux, uy, uz, name, b, air < 0.03, dm)
   creaks(ex, ey, ez, ux, uy, uz, name, b, air < 0.03)
   if params.debug and time - dbg_t > 1 then
     dbg_t = time
@@ -520,13 +653,46 @@ scriptAmbient = nil
 
 -- After the weather has written this frame's ambient (its update).
 function lateUpdate(node, dt)
-  local k = params.on == false and 1 or ambientScale(enclosed, params.ambientFloor)
+  local k = params.on == false and 1 or ambientScale(enclosed, ambK.floor or params.ambientFloor)
+  local e = params.on == false and 0 or clamp01(enclosed)
+  local tr, tg, tb = 1 + ((ambK.tr or 1) - 1) * e, 1 + ((ambK.tg or 1) - 1) * e, 1 + ((ambK.tb or 1) - 1) * e
   if scriptAmbient then k = k * scriptAmbient elseif params.on == false then return end
-  darken(k)
+  darken(k, tr, tg, tb, (ambK.dim or 0) * e)
+  if (ambK.fogW or 0) > 0.01 and e > 0.02 then
+    local pc = ref("planet_camera")
+    if pc and pc.deferLate then pc.deferLate(node, dt, cave_haze) else cave_haze(node, dt) end
+  end
+end
+
+-- The kind's haze over what atmosphere.lua wrote this frame (it runs from
+-- planet_camera's lateUpdate, before the deferred ones): its colour, how thick
+-- (volumetric) and how near the flat ramp closes. Only where there is air
+-- (atmosphere turned the fog off in vacuum: an airless cave is clear and
+-- black). A cave's base haze: CAVE_DENS per metre, CAVE_FAR m.
+CAVE_DENS, CAVE_FAR = 0.004, 110.0
+hazeLog = nil
+function cave_haze()
+  local l = light()
+  if not (l and l.fog) then return end
+  local w = clamp01((ambK.fogW or 0) * enclosed)
+  if w <= 0.01 then return end
+  local r, g, b = l.fogColorR or 0, l.fogColorG or 0, l.fogColorB or 0
+  l.fogColorR, l.fogColorG, l.fogColorB = r + ((ambK.fr or 0) - r) * w, g + ((ambK.fg or 0) - g) * w, b + ((ambK.fb or 0) - b) * w
+  local far = CAVE_FAR * (ambK.fogF or 1)
+  local fe = l.fogEnd or far
+  if not l.fogVolumetric then
+    l.fogEnd = fe + (math.min(fe, far) - fe) * w
+    l.fogStart = math.min(l.fogStart or 0, l.fogEnd * 0.05)
+  else
+    local d = l.fogDensity or 0
+    l.fogDensity = d + (math.max(d, CAVE_DENS * (ambK.fogD or 1)) - d) * w
+  end
+  hazeLog = { w = w, r = l.fogColorR, g = l.fogColorG, b = l.fogColorB, dens = l.fogDensity, far = l.fogEnd, vol = l.fogVolumetric }
 end
 
 function onDestroy(node)
   if snd.tone then snd.tone:stop() end
+  for _, b in pairs(bed) do if b.h then pcall(b.h.stop, b.h) end end
   for _, d in ipairs(ringing) do if d.h and d.h.stop then pcall(d.h.stop, d.h) end end
   darken(1.0)
 end

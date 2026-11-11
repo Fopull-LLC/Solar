@@ -493,10 +493,16 @@ end
 -- it with the helmet as drawn). It is lit only while it can matter: the
 -- lamps on, the helmet on, on foot, the star low (`lamp_dark`), and the
 -- flashlight not lit (then the torch is the one light). Otherwise its
--- intensity is 0, which takes no light slot and no shadow map.
-beamLit = 0                      -- (probes) the beam's intensity this frame
+-- intensity is 0, which takes no light slot and no shadow map. The lamps are
+-- RATIONED (worlds W4): they run on the lamp cell (flashlight.lua cellLevel)
+-- and fall to an emergency glow when it is flat (beam_update).
+beamLit = 0                     -- (probes) the beam's intensity this frame
 beamX, beamY, beamZ, beamDX, beamDY, beamDZ = nil, nil, nil, nil, nil, nil   -- (probes) where and which way
 local beam = { node = nil, making = false, aimed = false }
+beamEmergency = false            -- (probes, HUD) the lamp cell is flat: only the emergency glow
+EMERGENCY, EMERGENCY_RANGE = 0.14, 5.0
+local emerg = { t = 0, k = 1 }
+local dt_now = 0.016
 
 -- The light is a CHILD of the Helmet Lamps node at a fixed local offset, so
 -- the engine carries it with the helmet as drawn: a world point written on a
@@ -534,6 +540,7 @@ local function beam_set(I)
     pcall(function() l.spotSoftness = P.lamp_soft end)
     pcall(function() l.shadows = (P.lamp_shadows or 1) > 0 and 1 or 0 end)
     pcall(function() l.range = P.lamp_range end)
+    beam.range = P.lamp_range
     beam.aimed = true
     beam.sh = nil
   end
@@ -566,7 +573,39 @@ local function beam_update()
   if k <= 0 then
     if beam.node and beam.node.valid then beam_set(0) end
     beamLit = 0
+    beamEmergency = false
     return
+  end
+  -- RATIONED (worlds W4): the lamps run on the lamp cell (flashlight.lua
+  -- cellLevel: the torch's battery, else the suit's own), at a share of the
+  -- torch's draw. A low cell browns them out and flickers them; a flat one
+  -- leaves an emergency glow of a few metres, sputtering, never darkness.
+  local fl = ref("flashlight")
+  local lvl = fl and fl.cellLevel and fl.cellLevel() or nil
+  local range = P.lamp_range
+  beamEmergency = false
+  if lvl then
+    if lvl <= 0.05 then
+      beamEmergency = true
+      emerg.t = emerg.t - (dt_now or 0.016)
+      if emerg.t <= 0 then
+        emerg.k = (math.random() < 0.3) and (0.25 + 0.5 * math.random()) or 1.0
+        emerg.t = 0.05 + 0.4 * math.random()
+      end
+      k = k * EMERGENCY * emerg.k
+      range = EMERGENCY_RANGE
+    elseif lvl < 10 then
+      emerg.t = emerg.t - (dt_now or 0.016)
+      if emerg.t <= 0 then
+        emerg.k = (math.random() < 0.2) and (0.3 + 0.5 * math.random()) or 1.0
+        emerg.t = 0.05 + 0.3 * math.random()
+      end
+      k = k * (0.35 + 0.65 * lvl / 10) * emerg.k
+    end
+  end
+  if beam.range ~= range and beam.node and beam.node.valid then
+    local l = beam.node.getcomponent and beam.node:getcomponent("PointLight")
+    if l then pcall(function() l.range = range end); beam.range = range end
   end
   local L = nodes.lamps
   local n = beam_node(L)
@@ -586,6 +625,7 @@ local function beam_update()
 end
 
 function lateUpdate(node, dt)
+  dt_now = dt or 0.016
   if busy then hands(dt or 0) end
   if probeArm then probe_arm() end
   show()

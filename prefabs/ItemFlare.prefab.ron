@@ -1,0 +1,17 @@
+// FLARE — a red road flare (scripts/items.lua flare, scripts/cave_flares.lua):
+// the depot card's model. The thrown one is made by cave_flares from the same model.
+[
+    (
+        name: "ItemFlare",
+        tags: ["item"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/cave/flare_l0.gltf",
+        ),
+        scripts: [],
+    ),
+]

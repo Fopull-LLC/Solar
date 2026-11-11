@@ -540,7 +540,19 @@ GEO_SLOT.soil, GEO_SLOT.flagstone, GEO_SLOT.gravelregolith, GEO_SLOT.bandedice =
 -- geology.oreClaims); each world's ores follow its formation and galena
 -- joins them (materials.bodyOres). A save made before keeps version 3, its
 -- slot 6 paying uranite and its veins where they were.
-MAT_GEN = 4
+--
+-- Version 5 (2026-11-10, worlds plan W4: cave kinds) rolls exactly what
+-- version 4 rolls, and then gives each world a PRINCIPAL CAVE KIND
+-- (scripts/cave_kinds.lua: lava tube, ice, karst, geode, salt, vent, chasm)
+-- from its formation and a draw version 2 already made (no new rng calls),
+-- and paints the cave zone (`deep`) in that kind's wall rock: a karst
+-- world's caves are cave-wall limestone and dripstone, a lava tube's soot
+-- and pahoehoe, a vent's sulfur crust, a salt world's halite. A geode world's
+-- pockets are quartz druzy hollows, more of them. The record gains
+-- `bio.caves.principal`. A save made before keeps version 4 and its cave
+-- rock; cave_field dresses its caves by kind all the same (the dressing is
+-- not terrain).
+MAT_GEN = 5
 -- Probes and tests may pin the version (nil = the save's).
 MAT_GEN_FORCE = nil
 -- The version the roll in progress runs (set by rollGeology).
@@ -562,6 +574,24 @@ function geoLib()
     end
   end
   GEO = h
+  return h
+end
+
+-- cave_kinds.lua, found the same way (nil: no cave kinds; version 5 then
+-- rolls version 4's caves).
+function caveLib()
+  if CAVES then return CAVES end
+  local h = findScript and findScript("cave_kinds", { quiet = true }) or nil
+  if h and h.valid == false then h = nil end
+  if not h and loadfile and setfenv then
+    local f = loadfile("solar/scripts/cave_kinds.lua") or loadfile("scripts/cave_kinds.lua")
+    if f then
+      local e = setmetatable({}, { __index = _G })
+      setfenv(f, e)
+      if pcall(f) then h = e end
+    end
+  end
+  CAVES = h
   return h
 end
 
@@ -731,6 +761,18 @@ local function rollFormation(r, g)
   g.basement = paint3(st.deep, jDeep)
   -- generator 4 paints `deep` below half the cave zone: the caves' rock
   g.deep = paint3(st.cave, jDeep)
+  -- version 5: the principal cave kind's walls (cave_kinds.lua), from the
+  -- draws already made (the deep hue and the weathering), in the cave rock's
+  -- own tint
+  local CK = matGen >= 5 and caveLib() or nil
+  if CK and st.cave then
+    g.caveKind = CK.principalOf(st.id, g.type, dDeepH, g.family)
+    local wall = CK.wallFor(g.caveKind, st.cave.name, dWeather)
+    if wall and wall ~= st.cave.name and GEO.LAYER[wall] then
+      st.cave = { name = wall, h = st.cave.h, s = st.cave.s, v = st.cave.v }
+      g.deep = paint3(st.cave, jDeep)
+    end
+  end
   g.cliffRock = paint3(st.cliff, jStr)
   g.bandRock = paint3(st.band, jSub)
   if st.pocket then
@@ -1828,6 +1870,14 @@ function geoOpts3(g, radius, caveScale, sc, seed, reach)
     if v3 and g.seamRock then
       o.seam.slot, o.seam.lib, o.seam.color = nil, g.seamRock.lib, g.seamRock.color
     end
+    -- version 5: a geode world's pockets are quartz-lined hollows, and more
+    -- of them (the threshold is on the pocket noise: lower is more)
+    if v3 and g.caveKind == "geode" and GEO.LAYER.quartzdruzy then
+      o.pockets.slot, o.pockets.lib = nil, GEO.LAYER.quartzdruzy
+      o.pockets.color = o.pockets.color or hsv(0.62, 0.08, 0.86)
+      o.pockets.threshold = (o.pockets.threshold or g.pocketThr) - 0.05
+      o.pockets.minDepth = 4
+    end
   end
   -- The voxel follows the radius: memory and a dug save go as (radius/voxel)²
   -- (see SCALES[3]).
@@ -2690,6 +2740,10 @@ local function bioOf(g, starClass, o)
         cliff = n(f.cliff), band = n(f.band), pocket = n(f.pocket), seam = n(f.seam) } }
     out.palette.cliff = g.cliffRock and col(g.cliffRock) or nil
   end
+  -- the caves (worlds W4): the cave zone's depth, and from version 5 the
+  -- principal kind (cave_field.lua works the regions out from these)
+  out.caves = { depth = o and o.caveDepth or nil, principal = g.caveKind }
+  out.palette.cave = g.deep and col(g.deep) or nil
   return out
 end
 

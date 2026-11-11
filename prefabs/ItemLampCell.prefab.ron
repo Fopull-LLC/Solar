@@ -1,0 +1,17 @@
+// LAMP CELL — a spare flashlight battery (scripts/items.lua cell): the depot
+// card's model (tools/gen_cave_props.py lamp_cell).
+[
+    (
+        name: "ItemLampCell",
+        tags: ["item"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/cave/lamp_cell_l0.gltf",
+        ),
+        scripts: [],
+    ),
+]
