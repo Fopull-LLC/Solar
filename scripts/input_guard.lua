@@ -27,10 +27,33 @@
 -- (scenes/builder.ron); installed once per `input` table (the flag rides on
 -- it), so a scene reload or a second node changes nothing.
 --
--- Probes / tests: typing(), PASS_KEYS, PASS_ACTIONS, install(tbl).
+-- A PANEL MAY HOLD THE KEYBOARD the same way (a console's terminal: the crew
+-- stands at the desk and its 1–9, Tab and arrows are the screen's, not the
+-- belt's or the walker's): hold(owner, true) while it is up, hold(owner,
+-- false) when it closes. While anything holds it the game hears no keys but
+-- Escape and Enter, exactly as for a focused field; the holder reads its own
+-- keys with input.rawKey / rawPressed and a pad with input.padButton.
+--
+-- Probes / tests: typing(), held(), hold(owner, on), PASS_KEYS, PASS_ACTIONS, install(tbl).
 
 PASS_KEYS = { escape = true, enter = true }
 PASS_ACTIONS = { Pause = true, Look = true, LookEnable = true, LookFree = true, Zoom = true, Fire = true }
+
+-- owner → true: the panels holding the keyboard. Kept ON the shared input
+-- table (like the install flag), so the wrappers a previous scene installed
+-- and this script's hold() always mean the same set.
+local function holds(tbl)
+  tbl = tbl or input
+  if type(tbl) ~= "table" then return {} end
+  local h = rawget(tbl, "__hold")
+  if not h then h = {}; rawset(tbl, "__hold", h) end
+  return h
+end
+function hold(owner, on, tbl)
+  if owner == nil then return end
+  holds(tbl)[owner] = on and true or nil
+end
+function held(tbl) return next(holds(tbl)) ~= nil end
 
 local seen_t, seen = nil, false
 -- Is a text field focused now? (once a frame)
@@ -58,17 +81,18 @@ function forget() seen_t = nil end
 function install(tbl)
   tbl = tbl or input
   if type(tbl) ~= "table" or rawget(tbl, "__guarded") then return false end
+  local H = holds(tbl)
   local function key_wrap(f)
     if type(f) ~= "function" then return f end
     return function(k, ...)
-      if typing() and not PASS_KEYS[k] then return false end
+      if (typing() or next(H) ~= nil) and not PASS_KEYS[k] then return false end
       return f(k, ...)
     end
   end
   local function act_wrap(f, none)
     if type(f) ~= "function" then return f end
     return function(n, ...)
-      if typing() and not PASS_ACTIONS[n] then return none() end
+      if (typing() or next(H) ~= nil) and not PASS_ACTIONS[n] then return none() end
       return f(n, ...)
     end
   end
@@ -109,4 +133,7 @@ end
 
 function start(node)
   install(input)
+  -- (a new scene: nothing holds the keyboard any more)
+  local h = holds(input)
+  for k in pairs(h) do h[k] = nil end
 end

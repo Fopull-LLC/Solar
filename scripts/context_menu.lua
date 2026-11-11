@@ -687,6 +687,8 @@ local function blocked_why()
   if ob and ob.isOpen and ob.isOpen() then return "ops_board" end
   local ip = ref("inventory_panel")
   if ip and ip.open then return "inventory_panel" end
+  local tm = ref("terminal")
+  if tm and tm.isOpen and tm.isOpen() then return "terminal" end
   -- (the map's own menus — a world or a craft right-clicked on it, opened by
   -- scripts/targeting.lua, `target.map` — are the one kind that stays up there)
   local om = ref("orbit_map")

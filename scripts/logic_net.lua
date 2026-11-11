@@ -648,7 +648,7 @@ local function apply(c)
     local k, e = plant_key(sid, uid)
     if RP and k then
       if c.pin == "scram" and on then
-        if RP.scram(k) then say("SCRAM by logic: the protection on the " .. tostring(m.def.label)) end
+        if RP.scram(k, "logic") then say("SCRAM by logic: the protection on the " .. tostring(m.def.label)) end
       elseif c.pin == "setback" then
         if on then
           SETBACK[c.key] = SETBACK[c.key] or (e and e.S and e.S.set) or 0.5

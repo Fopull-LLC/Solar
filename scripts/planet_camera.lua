@@ -493,6 +493,9 @@ local function panel_open()
   -- …and a scenario's dialogue plate (scenario_stage.lua: choices are clicked)
   local sg = script_ref("scenario_stage")
   if sg and sg.isOpen and sg.isOpen() then return true end
+  -- …and a console's terminal (terminal.lua: its keys are clicked)
+  local tm = script_ref("terminal")
+  if tm and tm.isOpen and tm.isOpen() then return true end
   return false
 end
 

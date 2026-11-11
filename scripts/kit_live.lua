@@ -99,6 +99,10 @@ function spawned(rec, part, node)
     e.lamp = def.kit and ((def.lens and child(node, "Lens")) or child(node, "Mesh")) or nil
   end
   if def.screen then e.screen = child(node, "Screen") end
+  if def.door then
+    local st = ST and ST.partState and ST.partState(rec.id, part.uid)
+    e.hold = st and st.dh or nil
+  end
   -- (S4) a sign's face (its words drawn on spawn, again when they or the
   -- base's name change) and the agency emblem's
   if def.sign or def.emblem then e.face = child(node, "Face"); e.sign_t = -10 end
@@ -225,6 +229,58 @@ end
 
 -- ── doors ───────────────────────────────────────────────────────────────────
 function doorOpen(sid, uid) local e = E[key(sid, uid)]; return e and e.open or nil end
+-- (the interaction plan §2.2, a console's DOORS page) A door's hand command:
+-- "lock" (its bolt: shut whoever walks up, whatever a signal says), "open"
+-- (held open: an airlock's chamber still rules its own doors, a pressure
+-- difference still holds it shut) or nil (it answers the crew). Part state
+-- `dh`, mirrored on the live entry so the step reads no state.
+function doorHold(sid, uid)
+  local e = E[key(sid, uid)]
+  if e then return e.hold end
+  local ST = ref("structures")
+  local st = ST and ST.partState and ST.partState(sid, uid)
+  return st and st.dh or nil
+end
+-- Would a hand be refused making the door `mode`? Only for a physical reason. → nil | why
+function doorWhyNot(sid, uid, mode)
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  if not p then return "that door is gone" end
+  local d = partsDef(p.id)
+  if not (d and d.door) then return "that piece is not a door" end
+  if p.wr and mode == "open" then return "the door is knocked askew: its track is jammed (a Repair Kit)" end
+  return nil
+end
+function setDoorHold(sid, uid, mode, by)
+  if mode ~= "lock" and mode ~= "open" then mode = nil end
+  if by == "hand" then local w = doorWhyNot(sid, uid, mode); if w then return false, w end end
+  local ST = ref("structures")
+  if not (ST and ST.partState and ST.setPartState) then return false, "no structures" end
+  local st = ST.partState(sid, uid) or {}
+  local t = {}
+  for k, v in pairs(st) do t[k] = v end
+  local was = t.dh
+  t.dh = mode
+  if not ST.setPartState(sid, uid, next(t) and t or nil) then return false, "that door is gone" end
+  local e = E[key(sid, uid)]
+  if e then e.hold = mode end
+  scan_t = -10
+  local warn = nil
+  if mode == "lock" then warn = "locked: nobody walks through it until it is unlocked"
+  elseif mode == "open" then
+    local RA = ref("room_air")
+    local s = RA and RA.state and RA.state(sid)
+    local dp = s and RA.door_dp and RA.door_dp(s, uid)
+    if dp and dp > 0.05 then warn = string.format("%.2f atm across it: it stays held shut until the sides are equalised (or it is forced)", dp) end
+  end
+  if was ~= mode then
+    local BL = ref("base_log")
+    local PI = ref("part_info")
+    local nm = (PI and PI.designate) and PI.designate(sid, uid) or "a door"
+    if BL and BL.add then pcall(BL.add, sid, "door", string.format("%s %s", nm, mode == "lock" and "locked" or (mode == "open" and "held open" or (was == "lock" and "unlocked" or "released")))) end
+  end
+  return true, warn
+end
 local SND = { open = "audio/foley/servo_short.ogg", heavy = "audio/foley/servo_run.ogg", seal = "audio/foley/hiss_seal.ogg" }
 -- (graveyard2) a crew member WALKING (crew_body's steer: a scenario walk, a
 -- step aside) opens doors too: their walking point, body-relative, placed
@@ -258,7 +314,8 @@ end
 local function step_door(e, dt, pts)
   local D = e.def.door
   local want = forceDoors and 1 or 0
-  if want == 0 then
+  local hold = e.hold
+  if want == 0 and hold ~= "lock" then
     for _, a in ipairs(pts) do
       for _, d in ipairs(e.doors) do
         if valid(d.node) then
@@ -292,6 +349,8 @@ local function step_door(e, dt, pts)
       end
     end
   end
+  -- (a console's hand command, kit_live.setDoorHold) held open: as if crew stood in it
+  if hold == "open" and not forceDoors then want = 1 end
   -- (S8) a signal on the door's terminals: `open` holds it open, `lock`
   -- keeps it shut whoever walks up (logic_net); the interlock below still rules
   if not forceDoors then
@@ -309,6 +368,8 @@ local function step_door(e, dt, pts)
     end
     if not (c and c.lock) then e.lock_said = nil end
   end
+  -- (the bolt: a door locked by hand stays shut, a signal or not)
+  if hold == "lock" and not forceDoors then want = 0 end
   -- (S3) an airlock's doors are interlocked: room_air says which may open
   if not forceDoors then
     local RA = ref("room_air")
@@ -746,7 +807,7 @@ function update(node, dt)
           local LN = ref("logic_net")
           held = LN ~= nil and LN.holding ~= nil and LN.holding(e.sid, e.uid)
         end
-        if (#e.doors > 0) and (d < REACH or e.open > 0 or held) then near[#near + 1] = e end
+        if (#e.doors > 0) and (d < REACH or e.open > 0 or held or e.hold == "open") then near[#near + 1] = e end
         if e.screen and d < SCREEN_R and t - (e.scr_t or -10) >= SCREEN_EVERY then e.scr_t = t; paint_screen(e) end
         -- (S4) a sign showing the base's name follows a rename; the emblem a new one
         if e.face and d < SCREEN_R and t - (e.sign_t or -10) >= NAME_EVERY then

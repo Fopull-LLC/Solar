@@ -881,6 +881,25 @@ kind("piece_state", { req = { "struct" }, eval = function(g, W)
   end
   return ok, table.concat(parts, " · ")
 end })
+-- terminal: a console's terminal is open (scripts/terminal.lua; the
+-- interaction plan §5.3): { struct? (the console's structure), page? ("REACTOR",
+-- "LOG", …) }. Read from W.terminal() when the runner gives it, else from the
+-- terminal script itself (→ { sid, page } | nil).
+kind("terminal", { eval = function(g, W)
+  local st = nil
+  if W.terminal then st = W.terminal()
+  elseif findScript then
+    local T = findScript("terminal", { quiet = true })
+    st = T and T.state and T.state() or nil
+  end
+  if not st then return false, "not at a console" end
+  if g.struct then
+    local sid = sid_of(W, g)
+    if sid ~= st.sid then return false, "at another console" end
+  end
+  if g.page and st.page ~= g.page then return false, "on " .. tostring(st.page) end
+  return true, "at the console" .. (st.page and (" · " .. tostring(st.page)) or "")
+end })
 -- (a fail) a room has been unbreathable for `secs`: { struct, room =
 -- largest | airlock | n, secs = 60 }
 kind("room_unbreathable", { fail = true, req = { "struct" }, eval = function(g, W, mem, ctx)
@@ -1039,6 +1058,7 @@ function goalLabel(g)
   if k == "power_read" then return g.breaker and "The breaker" or "The power" end
   if k == "part_hp" then return string.format("%s on %s", tostring(g.part or g.uid or "part"), tostring(g.craft):gsub("^craft:", "")) end
   if k == "piece_state" then return tostring(g.part or g.uid or "the piece") end
+  if k == "terminal" then return g.page and ("The console's " .. tostring(g.page) .. " page") or "Use the console (E)" end
   return k
 end
 

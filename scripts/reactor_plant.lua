@@ -28,8 +28,10 @@
 -- channels' rods (by uid). An old save has none: no plant, nothing stepped.
 --
 -- Probes: plants(), plant(key), keyOf(sid, uid), stepNow(), loadRods(sid,
--- uid, item, n), setPump(sid, uid, on), startUp(key, set), scram(key),
--- resetTrip(key), consoleText(sid, uid), overlay, drawn, PROF.
+-- uid, item, n), setPump(sid, uid, on), startUp(key, set, by), scram(key, by),
+-- resetTrip(key, by), consoleText(sid, uid), overlay, drawn, PROF. (`by` =
+-- "hand" — a menu row, a console's key — writes the base log; nil, a
+-- scenario's staging, does not; "logic" logs as the control signal's.)
 
 defaults = {
   --@range 0.05 1 --@units s
@@ -59,6 +61,8 @@ end
 local function wall() return (app and app.wallClock) and app.wallClock() or nil end
 local function defs(id) local pb = ref("parts_base"); return pb and pb.partInfo(id) or nil end
 local function say(s) if caption then pcall(caption, s) end if log then log("reactor: " .. s) end end
+-- the base log (scripts/base_log.lua): what the plant did and who did it
+local function blog(sid, k, txt, who) local BL = ref("base_log"); if BL and BL.add then pcall(BL.add, sid, k, txt, who) end end
 function keyOf(sid, uid) return tostring(sid) .. ":" .. tostring(uid) end
 
 local PL = {}            -- key → plant entry
@@ -394,6 +398,7 @@ local function tick(e, tnow)
   end
   for _, ev in ipairs(rep.events) do
     say(ev.text)
+    blog(e.sid, ev.kind == "trip" and "trip" or "reactor", tostring(ev.text), ev.cause == "hand" and nil or "protection")
     e.dirty_save = true
     lastEvents[#lastEvents + 1] = { key = e.key, t = ev.t, text = ev.text, kind = ev.kind, cause = ev.cause }
     while #lastEvents > 20 do table.remove(lastEvents, 1) end
@@ -417,22 +422,24 @@ local function entry(key) return PL[key] end
 function plants() return PL end
 function plant(key) return PL[key] end
 local function touch(e) e.dirty_save = true; e.touched = now(); e.next_t = 0; stepNow() end
-function startUp(key, set)
+function startUp(key, set, by)
   local e, R = entry(key), RX()
   if not (e and R and e.M) then return false, "no plant" end
   local why = R.startWhyNot(e.M, e.S, e.o or {})
   if why then return false, why end
   R.startUp(e.S, set or 0.5)
   touch(e)
+  if by == "hand" then blog(e.sid, "reactor", string.format("reactor start-up on the automatic controller to %d %%", math.floor((set or 0.5) * 100 + 0.5))) end
   say(string.format("Reactor: start-up on the automatic controller to %d %%", math.floor((set or 0.5) * 100 + 0.5)))
   return true
 end
-function setPoint(key, set)
+function setPoint(key, set, by)
   local e, R = entry(key), RX()
   if not (e and R) then return false end
   e.S.set = math.max(0.02, math.min(1.1, set))
   if e.S.mode ~= "auto" and not e.S.scram then e.S.mode = "auto" end
   touch(e)
+  if by == "hand" then blog(e.sid, "reactor", string.format("reactor setpoint %d %%", math.floor(e.S.set * 100 + 0.5))) end
   return true
 end
 function manualRods(key, dx)
@@ -445,26 +452,52 @@ function manualRods(key, dx)
   touch(e)
   return true
 end
-function scram(key)
+function scram(key, by)
   local e, R = entry(key), RX()
   if not (e and R) then return false end
   local ok = R.scram(e.S, e.t)
-  if ok then say("SCRAM: the rods are dropping") end
+  if ok then
+    say("SCRAM: the rods are dropping")
+    if by == "hand" then blog(e.sid, "scram", string.format("SCRAM by hand at %.1f %% power", 100 * ((e.o and e.o.P) or 0)))
+    elseif by == "logic" then blog(e.sid, "scram", string.format("SCRAM by its control signal at %.1f %% power", 100 * ((e.o and e.o.P) or 0)), "logic") end
+  end
   touch(e)
   return ok
 end
-function resetTrip(key)
+function resetTrip(key, by)
   local e, R = entry(key), RX()
   if not (e and R) then return false end
   local why = R.resetWhyNot(e.M, e.S, e.o or {})
   if why then return false, why end
   R.resetTrip(e.S)
   touch(e)
+  if by == "hand" then blog(e.sid, "reactor", "reactor trip reset") end
   return true
 end
-function setProtection(key, on) local e = entry(key); if e then e.S.prot = on and true or false; touch(e) end end
-function setCooldown(key, on) local e = entry(key); if e then e.S.cooldown = on and true or nil; touch(e) end end
-function setTurbine(key, on) local e = entry(key); if e then e.turbOn = on and true or false; rebuild_model(e, "turbine"); touch(e) end end
+function setProtection(key, on, by)
+  local e = entry(key)
+  if not e then return end
+  local was = e.S.prot ~= false
+  e.S.prot = on and true or false
+  touch(e)
+  if by == "hand" and was ~= (on and true or false) then
+    blog(e.sid, on and "reactor" or "warn", on and "reactor protection restored: automatic trips armed" or "reactor protection BYPASSED: nothing will trip the reactor")
+  end
+end
+function setCooldown(key, on, by)
+  local e = entry(key)
+  if not e then return end
+  local was = e.S.cooldown == true
+  e.S.cooldown = on and true or nil; touch(e)
+  if by == "hand" and was ~= (on and true or false) then blog(e.sid, "reactor", on and "steam dump open: cooling down" or "steam dump shut") end
+end
+function setTurbine(key, on, by)
+  local e = entry(key)
+  if not e then return end
+  local was = e.turbOn ~= false
+  e.turbOn = on and true or false; rebuild_model(e, "turbine"); touch(e)
+  if by == "hand" and was ~= e.turbOn then blog(e.sid, "reactor", on and "turbine on line" or "turbine off line") end
+end
 -- ── WHY NOT (the interaction plan §3): would a hand on piece (sid, uid)'s
 -- switch be refused making it `want`? Only for a PHYSICAL reason (Ty
 -- 2026-11-10: "if turning a valve would make the reactor explode we
@@ -602,6 +635,9 @@ function setPump(sid, uid, on, by)
       local found = false
       for _, L in ipairs({ e.pl.pri, e.pl.sec }) do for _, pu in ipairs(L.pumps or {}) do if pu.uid == uid then found = true end end end
       if found then
+        if by == "hand" and (e.pumpsOn[uid] ~= false) ~= (on and true or false) then
+          blog(sid, wn and "warn" or "reactor", string.format("%s %s%s", tostring(called(sid, uid, nil)):gsub("^the ", ""), on and "started" or "stopped", wn and (": " .. wn) or ""))
+        end
         e.pumpsOn[uid] = on and true or false
         rebuild_model(e, "pump")
         publish(e)
@@ -950,20 +986,20 @@ local function provider(t, ctx)
       out[#out + 1] = { id = "rx_reset", type = "action", label = "Reset the trip", group = "Reactor",
         enabled = function() return R.resetWhyNot(e.M, e.S, e.o or {}) == nil end,
         why = function() return R.resetWhyNot(e.M, e.S, e.o or {}) end,
-        act = function() return resetTrip(key) end }
+        act = function() return resetTrip(key, "hand") end }
     else
       out[#out + 1] = { id = "rx_scram", type = "action", label = "SCRAM", group = "Reactor", hint = "rods in",
-        act = function() return scram(key) end }
+        act = function() return scram(key, "hand") end }
       if e.S.mode ~= "auto" then
         out[#out + 1] = { id = "rx_start", type = "action", label = "Start up (automatic, 50 %)", group = "Reactor",
           enabled = function() return R.startWhyNot(e.M, e.S, e.o or {}) == nil end,
           why = function() return R.startWhyNot(e.M, e.S, e.o or {}) end,
-          act = function() return startUp(key, 0.5) end }
+          act = function() return startUp(key, 0.5, "hand") end }
       end
       out[#out + 1] = { id = "rx_up", type = "action", label = "Setpoint +10 %", group = "Reactor", keep = true,
-        act = function() return setPoint(key, (e.S.set or 0.5) + 0.1) end }
+        act = function() return setPoint(key, (e.S.set or 0.5) + 0.1, "hand") end }
       out[#out + 1] = { id = "rx_dn", type = "action", label = "Setpoint −10 %", group = "Reactor", keep = true,
-        act = function() return setPoint(key, (e.S.set or 0.5) - 0.1) end }
+        act = function() return setPoint(key, (e.S.set or 0.5) - 0.1, "hand") end }
       out[#out + 1] = { id = "rx_out", type = "action", label = "Rods out 2 % (manual)", group = "Reactor", keep = true,
         act = function() return manualRods(key, -0.02) end }
       out[#out + 1] = { id = "rx_in", type = "action", label = "Rods in 5 % (manual)", group = "Reactor", keep = true,
@@ -975,15 +1011,15 @@ local function provider(t, ctx)
         act = function() local k = consolePage(sid, uid) or 1; consolePage(sid, uid, k % #PAGE_NAMES + 1); return true end }
     end
     out[#out + 1] = { id = "rx_prot", type = "toggle", label = "Protection (automatic trips)", group = "Reactor", keep = true,
-      on = function() return e.S.prot ~= false end, act = function(want) setProtection(key, want); return true, protectionWarn(key, want) end }
+      on = function() return e.S.prot ~= false end, act = function(want) setProtection(key, want, "hand"); return true, protectionWarn(key, want) end }
     out[#out + 1] = { id = "rx_protw", type = "info", label = "Protection", group = "Reactor",
       warn = function() return e.S.prot == false end,
       value = function() return e.S.prot == false and "BYPASSED: nothing will stop a meltdown" or "armed: trips on power, fuel, subcooling, flow" end }
     out[#out + 1] = { id = "rx_cool", type = "toggle", label = "Cool down (steam dump open)", group = "Reactor", keep = true,
-      on = function() return e.S.cooldown == true end, act = function(want) setCooldown(key, want) end }
+      on = function() return e.S.cooldown == true end, act = function(want) setCooldown(key, want, "hand") end }
     if e.M and e.M.turb then
       out[#out + 1] = { id = "rx_turb", type = "toggle", label = "Turbine online", group = "Reactor", keep = true,
-        on = function() return e.turbOn ~= false end, act = function(want) setTurbine(key, want) end }
+        on = function() return e.turbOn ~= false end, act = function(want) setTurbine(key, want, "hand") end }
     end
   end
   if d.pump then

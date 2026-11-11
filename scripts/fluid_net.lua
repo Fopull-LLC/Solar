@@ -462,9 +462,16 @@ function setOn(sid, uid, on, by)
     if w then return false, w end
   end
   local wn = warnOf(sid, uid, on)
+  local was = isOn(sid, uid)
   touch(sid)
   if d.fl.kind == "pump" then set_part_state(sid, uid, "off", (not on) or nil)
   elseif d.fl.kind == "valve" then set_part_state(sid, uid, "shut", (not on) or nil) end
+  -- (the base log: a hand on a pump or a valve, and what it did)
+  if by == "hand" and was ~= (on and true or false) then
+    local BL = ref("base_log")
+    local verb = (d.fl.kind == "pump") and (on and "started" or "stopped") or (on and "opened" or "shut")
+    if BL and BL.add then pcall(BL.add, sid, wn and "warn" or "fluid", called(sid, uid, d):gsub("^the ", "") .. " " .. verb .. (wn and (": " .. wn) or "")) end
+  end
   local BG = ref("base_grid")
   if BG and BG.markDirty then BG.markDirty() end
   if audio and audio.play then pcall(audio.play, "audio/foley/switch_2.ogg", { track = "UI", volume = 0.4 }) end

@@ -1,0 +1,32 @@
+[
+    (
+        // The walk-up prompt of a terminal ("Use the console · E"):
+        // scripts/terminal.lua keeps it under the Ship HUD while a console is
+        // within reach and in front of the crew.
+        name: "Terminal Prompt",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        ui: Some((
+            place: Pin(
+                anchor: Bottom,
+                offset: (0.0, -132.0),
+            ),
+            size: (Fit, Fixed(36.0)),
+            stack: Some((
+                dir: Row,
+                gap: 0.0,
+                pad: 0.0,
+                align: Center,
+                justify: Start,
+            )),
+            visible: false,
+            opacity: 1.0,
+            order: 11,
+        )),
+    ),
+]

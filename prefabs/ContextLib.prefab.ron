@@ -37,6 +37,25 @@
                 enabled: true,
                 params: [],
             ),
+            // the consoles: E at a desk monitor, a wall screen, the reactor's
+            // desk, a PLC, a ruin's terminal opens its CRT pages
+            // (scripts/terminal.lua, the pages in terminal_pages.lua) and the
+            // base's event log they read (scripts/base_log.lua)
+            (
+                kind: "base_log",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "terminal",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "terminal_pages",
+                enabled: true,
+                params: [],
+            ),
         ],
     ),
 ]

@@ -193,6 +193,9 @@ local function something_else_is_up()
   -- Talking to a scientist (lab_talk.lua): Esc backs out of the close-up, then the talk.
   local lt = ref("lab_talk")
   if lt and lt.isOpen and (lt.isOpen() or lt.escTakenAt == time) then return true end
+  -- A console's terminal (terminal.lua): Esc backs out of a sub-page, then leaves the desk.
+  local tm = ref("terminal")
+  if tm and tm.isOpen and (tm.isOpen() or tm.escTakenAt == time) then return true end
   -- The Build Kit (field_builder.lua): Esc drops the part in hand, then closes the kit.
   local fb = ref("field_builder")
   if fb and fb.isOpen and (fb.isOpen() or fb.escTakenAt == time) then return true end

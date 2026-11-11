@@ -1082,6 +1082,10 @@ function setMachine(sid, uid, on, by)
   end
   local s = S[sid]
   if s then advance_struct(sid, s, agency_now()) end
+  if by == "hand" and machineOn(sid, uid) ~= (on and true or false) then
+    local BL = ref("base_log")
+    if BL and BL.add then pcall(BL.add, sid, wn and "warn" or "air", string.format("%s %s%s", tostring(called(sid, uid)):gsub("^the ", ""), on and "started" or "stopped", wn and (": " .. wn) or "")) end
+  end
   set_part_state(sid, uid, "off", (not on) or nil)
   if s then
     for _, L in ipairs(s.life) do if L.uid == uid then L.off = (not on) or nil end end
@@ -1905,6 +1909,8 @@ function forceDoor(sid, uid)
   s.netsDirty = true
   lastForce = { sid = sid, uid = uid, dp = dp, seal = dmg, t = now() }
   if log then log(string.format("room_air: forced door %s of structure %s against %.2f atm · seal %.0f %%", tostring(uid), tostring(sid), dp, dmg * 100)) end
+  local BL = ref("base_log")
+  if BL and BL.add then pcall(BL.add, sid, "forced", string.format("%s FORCED against %.2f atm · seal %.0f %%", tostring(called(sid, uid)):gsub("^the ", ""), dp, dmg * 100)) end
   return true, dmg
 end
 -- How long forcing door uid takes now (s): longer the more pressure it holds

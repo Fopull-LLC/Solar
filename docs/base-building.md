@@ -4119,3 +4119,67 @@ steps flush with the sill. (Graveyard's own steps: a patch for its scenario.)
 budgeted job; no per-frame work.
 
 Probe: `tools/perf/kitprobe.sh <engine> zfight` (`zfprobe_modes.lua`).
+
+## 31. Consoles that do things: the base terminals (interaction slices S3, S4)
+
+Ty, 2026-11-10: "the computers don't really let me do anything". Every console
+piece is now a terminal you walk up to: a **Desk Monitor**, a **Wall Screen**,
+the **Reactor Control Console**, a **Ladder Controller**'s desk, a **Fire
+Control Console**, and any of them in a ruin. Within 1.9 m and facing it,
+"Use the console · E" comes up; **E** opens a CRT screen over the running
+world (`scripts/terminal.lua`, on the ContextLib prefab).
+
+- **Keys:** 1–0 and TAB pick a page (a pad's bumpers); ↑ ↓ ENTER (the d-pad
+  and A) walk and press the rows; the mouse clicks them; ESC backs out of a
+  sub-page, then leaves (a pad's B). While it is open the keyboard is the
+  terminal's (`input_guard.hold`: the crew stands at the desk) and the pointer
+  is free (`planet_camera.panel_open`); the pause menu's Esc ladder, the belt,
+  the context menu and the laser's E all stand down.
+- **Pages are data:** `terminal.registerPage(id, fn, { order, title, scopes,
+  orderFor })`, `fn(scope, ctx) → rows` in the right-click menus' entry
+  contract (plus `line` and `image` rows). The game's pages live in
+  `scripts/terminal_pages.lua`: STATUS, POWER (grids, breakers: open, close,
+  trip test, reset; the lights per structure as load shedding), FLUIDS (every
+  network, tanks, pumps, valves, regulators, the reactor's coolant pumps),
+  DOORS (lock and unlock, hold open, cycle an airlock to a door), AIR (rooms,
+  scrubbers, O2 generators, equalise valves), LOGIC (a PLC's RUN, levers,
+  buttons, readings; a cable-driven device's Local control), CREW, LOG; on the
+  reactor's desk REACTOR and ALARMS first; on a ruin's terminal its recovered
+  LOG (the site's lore) and DATA (its Data Core; `terminal_pages.lootRows` is
+  the hook for loot).
+- **Every key is the piece's own switch:** a press goes through
+  `context_registry.press` with the system's `whyNot` / `warnOf`, exactly as
+  the part's menu. Refused only for a physical reason (not plumbed, knocked
+  askew, a Signal Cable has it until Local control, a tripped breaker must be
+  reset, the console is dark: no base grid at all); a dangerous choice is
+  done and its consequence toasted ("protection bypassed: nothing will stop a
+  meltdown").
+- **Reach:** a console acts on its own structure and every structure on its
+  base grid (wired), never further. The reactor's desk is hardwired to its
+  plant (never dark).
+- **REACTOR (S4):** power, period, rods, primary flow and temperature (margin
+  to boiling), fuel and steam, the pressuriser, the protection (BYPASSED in
+  red), what limits it; a trend picture painted in place at 2 Hz (power,
+  primary temperature, flow over the last minute; the 24 h power under it);
+  the keys SCRAM, reset, start-up, setpoint − / +, rods in / out, every
+  coolant pump, the makeup pumps and valves that feed the primary, protection
+  armed / bypassed, cool-down, turbine.
+- **The base log** (`scripts/base_log.lua`): 200 events per structure, saved
+  as `log.<sid>` every 30 s: breaker trips and switching (the
+  `base_power.onBreaker` hook), SCRAMs and trips, start-ups, protection,
+  pumps and valves worked by hand, doors locked, held, forced and cycled,
+  life machines, air alarms, a player's own notes; each with the agency
+  clock, who did it and at which console. A scenario's staging (no `by`) is
+  not logged.
+- **Doors** (`kit_live.setDoorHold(sid, uid, "lock" | "open" | nil, by)`,
+  part state `dh`): a lock holds a door shut whatever walks up or signals;
+  held open, an airlock's chamber and a pressure difference still rule it.
+- **Scenarios:** the goal kind `terminal = { struct?, page? }` completes
+  while that console is open (on that page).
+- **Cost:** closed, a prompt check at 8 Hz over an index of console pieces
+  (rebuilt when the structures change); open, the page's rows are kept for a
+  second (their numbers are live) and the plate described at 4 Hz.
+- Tests: `tests/smoke_terminal.lua`; `tools/perf/termprobe.sh <engine> scn`
+  (Graveyard Shift staged: the prompt, E, every page pictured, a breaker
+  trip-tested and reset, MU-1, SCRAM, the airlock, a door, the log, Esc, the
+  desk monitor, the cost).

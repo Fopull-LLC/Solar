@@ -1,0 +1,35 @@
+[
+    (
+        // A BASE TERMINAL (the interaction plan S3): scripts/terminal.lua spawns
+        // this under the Ship HUD when E is pressed at a console, a desk
+        // monitor, a wall screen or a ruin's terminal, draws its pages with
+        // ui.make while it is open and destroys it on Esc.
+        name: "Terminal Panel",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        ui: Some((
+            // on the bottom of the screen: its top clear of the objectives
+            // card and the HUD's chips along the top
+            place: Pin(
+                anchor: Bottom,
+                offset: (0.0, -64.0),
+            ),
+            size: (Fixed(1120.0), Fit),
+            stack: Some((
+                dir: Column,
+                gap: 0.0,
+                pad: 0.0,
+                align: Start,
+                justify: Start,
+            )),
+            visible: true,
+            opacity: 1.0,
+            order: 60,
+        )),
+    ),
+]

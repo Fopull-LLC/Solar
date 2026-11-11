@@ -1223,6 +1223,117 @@
         transition: ( duration: 0.05, ease: OutQuad ),
     ),
 
+    // ── TERMINALS (scripts/terminal.lua) ───────────────────────────────────
+    // A base console's screen: the CRT lines of the device console with a
+    // focus rim (the keys and the pad walk the rows), a red line for the
+    // one switch that stops things (SCRAM, a trip), and a dim legend.
+    // a line you can press: dim phosphor, a faint ruled box
+    "term/row": (
+        base: (
+            fill: (0.035, 0.050, 0.040, 0.90),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.64, 0.93, 0.56, 0.16),
+            text_color: "phosDim",
+            text_size: "caption",
+            font: "mono",
+        ),
+        hover:   ( fill: (0.06, 0.09, 0.065, 0.95) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        focus:   ( border_color: "accent" ),
+        transition: ( duration: 0.05, ease: OutQuad ),
+    ),
+    // on: lit phosphor
+    "term/rowOn": (
+        base: (
+            fill: (0.10, 0.20, 0.10, 0.94),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.64, 0.93, 0.56, 0.55),
+            text_color: "phos",
+            text_size: "caption",
+            font: "mono",
+        ),
+        hover:   ( fill: (0.13, 0.25, 0.12, 0.96) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        focus:   ( border_color: "accent" ),
+        transition: ( duration: 0.05, ease: OutQuad ),
+    ),
+    // caution: tripped, shut against flow, bypassed
+    "term/rowWarn": (
+        base: (
+            fill: (0.22, 0.17, 0.05, 0.94),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (1.0, 0.80, 0.28, 0.55),
+            text_color: "warn",
+            text_size: "caption",
+            font: "mono",
+        ),
+        hover:   ( fill: (0.26, 0.20, 0.06, 0.96) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        focus:   ( border_color: "accent" ),
+        transition: ( duration: 0.05, ease: OutQuad ),
+    ),
+    // the red key: SCRAM, trip
+    "term/rowDanger": (
+        base: (
+            fill: (0.26, 0.06, 0.04, 0.95),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.97, 0.34, 0.25, 0.75),
+            text_color: "danger",
+            text_size: "caption",
+            font: "mono",
+        ),
+        hover:   ( fill: (0.34, 0.08, 0.05, 0.97) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        focus:   ( border_color: "accent" ),
+        transition: ( duration: 0.05, ease: OutQuad ),
+    ),
+    // can't be used now (the reason is its tooltip)
+    "term/rowDim": (
+        base: (
+            fill: (0.03, 0.04, 0.035, 0.75),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.64, 0.93, 0.56, 0.08),
+            text_color: (0.38, 0.56, 0.34, 0.55),
+            text_size: "caption",
+            font: "mono",
+        ),
+        hover:   ( fill: (0.03, 0.04, 0.035, 0.80) ),
+        pressed: ( scale: (0.995, 0.96) ),
+        focus:   ( border_color: "accent" ),
+        transition: ( duration: 0.05, ease: OutQuad ),
+    ),
+    // The words on the red key, and why a key is dimmed (under it, amber).
+    "term/danger": (
+        base: ( text_color: (1.0, 0.56, 0.48, 1.0), text_size: "caption", font: "mono", tracking: 1.5 ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "term/why": (
+        base: ( text_color: (1.0, 0.80, 0.28, 0.85), text_size: 10.5, font: "mono" ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    // A page key on the rail beside the screen: a phosphor tab, lit when shown.
+    "term/tab": (
+        base: (
+            fill: (0.030, 0.042, 0.034, 0.92),
+            radius: 1.0,
+            border: 1.0,
+            border_color: (0.64, 0.93, 0.56, 0.14),
+            text_color: "phosDim",
+            text_size: "caption",
+            font: "mono",
+            tracking: 1.0,
+        ),
+        hover:    ( fill: (0.05, 0.08, 0.06, 0.96), text_color: "phos" ),
+        focus:    ( border_color: "accent" ),
+        selected: ( fill: (0.10, 0.20, 0.10, 0.96), border_color: (0.64, 0.93, 0.56, 0.6), text_color: "phos" ),
+        transition: ( duration: 0.05, ease: OutQuad ),
+    ),
+
     // ── SCENARIOS (scripts/menu_scenarios.lua, scenario_ui.lua) ──────────────
     // A medal is a struck disc (●) in its metal's colour; the word beside it
     // is printed ink. The three metals are enamel paints, warm and matt, not
