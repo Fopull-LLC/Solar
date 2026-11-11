@@ -567,3 +567,75 @@ function chainRange(f, L, lo, hi, step)
   while b + step <= hi + 1e-9 and ok(b + step) do b = b + step end
   return a, b
 end
+
+-- ── 7. A CREW MEMBER AT THE WHEEL (SC-5, scenarios/thirty_km) ───────────────
+-- The stick a seated crew member gives a rover nobody is flying: follow
+-- another craft at a gap, or drive to a point and stop. vessel_controller
+-- (npcCmd) hands it this tick's vectors, all from TICK poses of one read
+-- (docs/positions-and-frames.md rule 2) and the body-relative velocity
+-- (rule 4); nothing here is kept but the stuck clock in `mem`.
+--   s = { fwd, up (units), d (to the target, metres), v (velocity), speed
+--         (the most it may do, m/s), gap (follow: the distance it keeps) |
+--         r (to: the arrival radius), lead (the leader's speed, follow),
+--         dt, mem = {} }
+--   → drive (−1…1, W/S), steer (−1…1, +1 = A = to the left), info
+--   { dist, err (rad, + = the target is to the left), vstar, vf, stuck, arrived }
+-- A TURN slows it (a quarter of its speed at a right angle); a target behind
+-- it is turned toward at a crawl, never reversed into; under a walking pace
+-- with no speed wanted the stick is let go (the wheel brakes park it). STUCK:
+-- the stick held on for FOLLOW_STUCK s under 0.3 m/s backs it off for
+-- FOLLOW_BACK s with the wheels the other way, then tries again.
+FOLLOW_K = 0.45        -- 1/s: the speed wanted per metre past the gap
+FOLLOW_STEER = 1.8     -- stick per radian of heading error
+FOLLOW_GAIN = 0.55     -- stick per m/s of speed error
+FOLLOW_STUCK = 5.0
+FOLLOW_BACK = 2.0
+FOLLOW_SIGN = 1        -- the stick's steer for a target on the left (+1: A)
+function followLaw(s)
+  local f, u, d, v = s.fwd, s.up, s.d, s.v or { x = 0, y = 0, z = 0 }
+  local mem = s.mem or {}
+  local dt = s.dt or (1 / 60)
+  -- onto the ground's plane
+  local fu = f.x * u.x + f.y * u.y + f.z * u.z
+  local fx, fy, fz = f.x - u.x * fu, f.y - u.y * fu, f.z - u.z * fu
+  local fl = math.sqrt(fx * fx + fy * fy + fz * fz)
+  if fl < 1e-6 then return 0, 0, { dist = 0, err = 0, vstar = 0, vf = 0 } end
+  fx, fy, fz = fx / fl, fy / fl, fz / fl
+  local du = d.x * u.x + d.y * u.y + d.z * u.z
+  local dx, dy, dz = d.x - u.x * du, d.y - u.y * du, d.z - u.z * du
+  local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+  local vf = v.x * fx + v.y * fy + v.z * fz
+  -- heading error: + when the target is counter-clockwise (left) about up
+  local cx, cy, cz = fy * dz - fz * dy, fz * dx - fx * dz, fx * dy - fy * dx
+  local err = math.atan2(cx * u.x + cy * u.y + cz * u.z, fx * dx + fy * dy + fz * dz)
+  local vmax = math.max(0, s.speed or 5)
+  local vstar, arrived
+  if s.gap then
+    vstar = math.max(0, math.min(vmax, (dist - s.gap) * FOLLOW_K + math.max(0, s.lead or 0) * 0.5))
+    if dist < s.gap * 0.7 then vstar = 0 end
+  else
+    local r = s.r or 6
+    arrived = dist <= r
+    vstar = arrived and 0 or math.max(0, math.min(vmax, (dist - r) * FOLLOW_K + 0.8))
+  end
+  local ae = math.abs(err)
+  vstar = vstar * math.max(0.25, 1 - ae / 2.1)
+  if ae > 2.0 and vstar > 0 then vstar = math.min(vstar, 1.2) end
+  local steer = math.max(-1, math.min(1, err * FOLLOW_STEER)) * FOLLOW_SIGN
+  local drive = math.max(-1, math.min(1, (vstar - vf) * FOLLOW_GAIN))
+  if vstar < 0.3 and math.abs(vf) < 0.8 then drive = 0 end          -- park
+  if drive < 0 and vf < 0.3 then drive = 0 end                      -- never reverse into it
+  if vstar == 0 and vf < 0.8 then steer = 0 end
+  -- stuck: pushing and not moving
+  local stuck = false
+  if (mem.back or 0) > 0 then
+    mem.back = mem.back - dt
+    drive, steer, stuck = -0.6, -steer, true
+  elseif drive > 0.4 and math.abs(vf) < 0.3 then
+    mem.held = (mem.held or 0) + dt
+    if mem.held > FOLLOW_STUCK then mem.held, mem.back = 0, FOLLOW_BACK end
+  else
+    mem.held = 0
+  end
+  return drive, steer, { dist = dist, err = err, vstar = vstar, vf = vf, stuck = stuck, arrived = arrived }
+end

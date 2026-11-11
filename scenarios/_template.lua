@@ -100,6 +100,7 @@ return {
     craft = {
       -- { file = "my_scenario/lander.json", name = "Kestrel", where = { pad = true } }
       -- where: pad | runway | orbit = { body = "moon", alt = 12000, e = 0, inc = 0 }
+      --        | ground = ref, offset, face = ref, charge = 0..1 (far from the pad: rebuilt the right way up there)
     },
   },
 
@@ -110,6 +111,9 @@ return {
   -- breaker = { struct, part, closed }, wear = { craft, part, hp }, music = "audio/music/x.ogg" | false
   -- S6: tag = { struct, part, name }, log = { struct, text, who }, container = { struct, part, items, mats, clear },
   -- lock = { struct, part, code = "1234" | false, open }, terminal = { struct, page = "LOG" | close = true }
+  -- SC-5: drive = { craft, follow = "craft:<name>", speed, gap } | { craft, to = ref, speed, r } | { craft, stop = true }
+  -- (a crew member seated aboard drives it), board = { who, craft, seat = uid } | { who, craft = false },
+  -- place = { craft | who, at = ref } (a checkpoint's stage), charge = { craft, frac }, give = { craft, item, n }
 
   steps = {
     { id = "walk", text = "Walk to the marker.",

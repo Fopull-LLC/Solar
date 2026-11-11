@@ -11981,7 +11981,8 @@ function r2Contacts()
 end
 
 local function wheels_wanted(node, info)
-  if #R2.wheels == 0 or destroyed or not piloting then return false, "unpiloted" end
+  -- (SC-5: a crew member at the wheel drives it too: npcDrive below)
+  if #R2.wheels == 0 or destroyed or not (piloting or NPCD ~= nil) then return false, "unpiloted" end
   if info.anchored then return false, "clamped" end
   -- (on the ground they stay out through a warp: the engine counts the craft
   -- grounded through them, floptle/0483; in the air a warp coasts the chassis
@@ -12477,6 +12478,11 @@ local function drive_tick(node, info, dt)
   local scmd = ctl and ((input.key("a") and 1 or 0) - (input.key("d") and 1 or 0)) or 0
   -- A headless run cannot press keys: a probe drives through R2.cmd.
   if ctl and R2.cmd then dcmd, scmd = R2.cmd.drive or 0, R2.cmd.steer or 0 end
+  -- (SC-5) nobody flying it, a crew member at the wheel: their stick (npcCmd)
+  if not piloting and NPCD then
+    ctl = npcCtl()
+    if ctl then dcmd, scmd = npcCmd(node, info, dt) else dcmd, scmd = 0, 0 end
+  end
   -- AN AIRCRAFT'S WHEELS (landing gear or not): W/S are the elevators, not a
   -- drive; the jets push it. The nose wheel steers with the rudder (A/D), and
   -- the parking brake lets go the moment the throttle opens. A ROCKET'S roll
@@ -15214,7 +15220,7 @@ DORM_STRUCT = 6.0     -- (S2) a structure vessel: the crew this near one of its 
 -- Should this craft be dormant now? → yes, the camera's distance.
 function dormWanted(node)
   if piloting or crewAboard or boarding or not info_seen or integ.push or dock.pending
-    or dock.lock or dock.evaGuard or dock.evaPending then return false, 0 end
+    or dock.lock or dock.evaGuard or dock.evaPending or NPCD ~= nil then return false, 0 end
   local now = time or 0
   if now < (integ.handoff_t or 0) or now - (DORM.born or now) < 5.0 then return false, 0 end
   local nx, ny, nz = node.x, node.y, node.z
@@ -15306,6 +15312,104 @@ function dormRouse()
   local n = dock.node
   if DORM.far and n and n.valid and script and script.wake then pcall(script.wake, n, "vessel_controller") end
   if dormant and n and n.valid then dormWake(n) end
+end
+
+-- ── A CREW MEMBER AT THE WHEEL (SC-5, scenarios/thirty_km; scenario_run's
+-- `drive` beat) ──────────────────────────────────────────────────────────────
+-- Nobody flies this craft, but someone sits aboard: they drive it. The
+-- command is a target, never a stick: follow another craft (its node id) at a
+-- gap, or drive to a point (body-relative, docs/positions-and-frames.md rule
+-- 1) and stop there. Every tick drive_tick asks npcCmd for the stick, built
+-- from TICK poses of this one read (rule 2: assembly.info of both craft, the
+-- body's centre now) by auto_drive.followLaw. While a command stands the
+-- tyres stay out (wheels_wanted) and the craft never goes dormant
+-- (dormWanted). It needs a member seated and power; the player taking the
+-- controls ends it. Globals (the main chunk is at its local ceiling).
+--   npcDrive({ follow = nodeId | to = { body, x, y, z }, speed, gap, r }) → ok, why
+--   npcDrive(nil)  stop (the stick let go: the brakes park it)
+--   npcState()     { active, dist, err, vstar, vf, stuck, arrived, why } | nil
+NPCD = nil
+NPCS = nil
+function npcDrive(cmd)
+  if cmd == nil then
+    NPCD = nil
+    if NPCS then NPCS.active = false end
+    return true
+  end
+  if destroyed then return false, "the craft is wrecked" end
+  if (crewCount() or 0) <= 0 then return false, "nobody aboard to drive" end
+  NPCD = { follow = cmd.follow, to = cmd.to, speed = tonumber(cmd.speed) or 5, gap = cmd.gap, r = cmd.r,
+           mem = {}, fh = nil, ft = -1e9 }
+  NPCS = { active = true }
+  dormRouse()
+  return true
+end
+function npcState() return NPCS end
+-- The power picture in numbers (scenario meters, probes): EC/s made and
+-- drawn, the store, and how many lamps are lit.
+function elecReadout()
+  local E = elib()
+  local lit = 0
+  if E then
+    for u, d in pairs(bp_by_uid) do
+      if aboard(u) and type(d.st) == "table" and d.st.lit and E.modOf(d, "light") then lit = lit + 1 end
+    end
+  end
+  return { supply = elec.supply or 0, demand = elec.demand or 0, net = elec.net or 0, charge = elec.charge or 0,
+           cap = elec.cap or 0, lit = lit }
+end
+-- may they drive now? (a member seated, the stick not the player's, power)
+function npcCtl()
+  if not NPCD or destroyed or piloting then
+    if piloting and NPCD then NPCD = nil; if NPCS then NPCS.active, NPCS.why = false, "taken over" end end
+    return false
+  end
+  if (crewCount() or 0) <= 0 then if NPCS then NPCS.why = "nobody aboard" end return false end
+  if (elec.charge or 0) <= 0.05 and (elec.cap or 0) > 0 then if NPCS then NPCS.why = "flat battery" end return false end
+  return true
+end
+function npcCmd(node, info, dt)
+  local N = NPCD
+  local L = autoLib()
+  if not (N and L and L.followLaw and info) then return 0, 0 end
+  local o = info.origin
+  local name = space.dominant(o.x, o.y, o.z)
+  local b = name and space.body(name)
+  if not b then return 0, 0 end
+  local tx, ty, tz, lead
+  if N.follow then
+    -- the leader's controller, looked up again every half second
+    local now = time or 0
+    if not (N.fh and N.fh.node and N.fh.node.valid) or now - N.ft > 0.5 then
+      N.fh, N.ft = nil, now
+      for _, v in ipairs(vcList()) do
+        if v.node and v.node.valid and v.node.id == N.follow then N.fh = v end
+      end
+    end
+    local ti = N.fh and N.fh.node and N.fh.node.valid and assembly.info(N.fh.node)
+    if not ti then return 0, 0 end
+    tx, ty, tz = ti.origin.x, ti.origin.y, ti.origin.z
+    local lv = ti.vel
+    lead = lv and math.sqrt(lv.x * lv.x + lv.y * lv.y + lv.z * lv.z) or 0
+  elseif N.to then
+    local tb = space.body(N.to.body or name)
+    if not tb then return 0, 0 end
+    tx, ty, tz = tb.x + N.to.x, tb.y + N.to.y, tb.z + N.to.z
+  else
+    return 0, 0
+  end
+  local ux, uy, uz = o.x - b.x, o.y - b.y, o.z - b.z
+  local ul = math.sqrt(ux * ux + uy * uy + uz * uz)
+  if ul < 1e-6 then return 0, 0 end
+  local rxv, _, rzv = basis(node)
+  local F = R2.fwd or { x = 1, z = 0 }
+  local f = { x = rxv.x * F.x + rzv.x * F.z, y = rxv.y * F.x + rzv.y * F.z, z = rxv.z * F.x + rzv.z * F.z }
+  local d, s, I = L.followLaw({ fwd = f, up = { x = ux / ul, y = uy / ul, z = uz / ul },
+    d = { x = tx - o.x, y = ty - o.y, z = tz - o.z }, v = info.vel, speed = N.speed, gap = N.gap, r = N.r,
+    lead = lead, dt = dt, mem = N.mem })
+  NPCS = { active = true, dist = I.dist, err = I.err, vstar = I.vstar, vf = I.vf, stuck = I.stuck, arrived = I.arrived,
+           drive = d, steer = s }
+  return d, s
 end
 
 -- Where the camera is, as the last check found it: near (inside the live

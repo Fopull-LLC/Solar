@@ -1137,7 +1137,8 @@ end
 --   { var, start, active = goal, when = goal, rate, accel = 0, base = 0,
 --     rest, tau, min, max, round = 0.1, at = { { value, beats = {…} | run =
 --     "seq", down = true (crossing downward) } } }
-METER_READS = { reactor = true, grid = true, dose = true, suit = true, room = true, part = true, var = true, piece = true, cabin = true }   -- (scn_vacuum) cabin.p|o2|co2|reserve|res (share) on a craft's module
+METER_READS = { reactor = true, grid = true, dose = true, suit = true, room = true, part = true, var = true, piece = true, cabin = true,
+                craft = true }   -- (SC-5) craft.<field>: CRAFT_FIELDS · (scn_vacuum) cabin.p|o2|co2|reserve|res (share) on a craft's module
 METER_MODES = { sample = true, integrate = true, peak = true, min = true }
 local function round_to(v, q) if not q or q <= 0 then return v end return math.floor(v / q + 0.5) * q end
 -- → the meter's new value (cur: its value now; r: the reading; first: the
@@ -1463,6 +1464,72 @@ function slotSummary(get)
   return { id = id, title = sc and sc.title or id, step = math.min(d + 1, n), steps = n, outcome = get("scn.outcome") }
 end
 
+-- ── SC-5 (scenarios/thirty_km): rovers driven by their crew, the crew put
+-- aboard, a craft's batteries, and marks along a route ──────────────────────
+-- A point `frac` of the way along the great circle from body-relative p to q
+-- (the same body), lifted to the ground, then offset { right, up, front } in
+-- the ROUTE's frame there: front along the way to q, right to its right. →
+-- the offsetPoint record (x, y, z, ux.., fx..) | nil
+function alongPoint(p, q, frac, off, ground)
+  local ax, ay, az = norm(p.x, p.y, p.z)
+  local bx, by, bz = norm(q.x, q.y, q.z)
+  local d = math.max(-1, math.min(1, ax * bx + ay * by + az * bz))
+  local th = math.acos(d)
+  local tx, ty, tz = bx - ax * d, by - ay * d, bz - az * d
+  local _, _, _, tl = norm(tx, ty, tz)
+  if tl < 1e-9 then tx, ty, tz = 0, 0, 0 else tx, ty, tz = tx / tl, ty / tl, tz / tl end
+  local a = th * (frac or 0)
+  local ux, uy, uz = ax * math.cos(a) + tx * math.sin(a), ay * math.cos(a) + ty * math.sin(a), az * math.cos(a) + tz * math.sin(a)
+  -- the route's heading there: the circle's tangent
+  local hx, hy, hz = -ax * math.sin(a) + tx * math.cos(a), -ay * math.sin(a) + ty * math.cos(a), -az * math.sin(a) + tz * math.cos(a)
+  local R = (ground and ground({ x = ux, y = uy, z = uz })) or math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z)
+  -- (right as groundFrame has it, u × front: every offset means the same side)
+  local rx, ry, rz = cross(ux, uy, uz, hx, hy, hz)
+  off = off or {}
+  local r_, u_, f_ = off[1] or off.right or 0, off[2] or off.up or 0, off[3] or off.front or 0
+  local x, y, z = ux * R + rx * r_ + hx * f_, uy * R + ry * r_ + hy * f_, uz * R + rz * r_ + hz * f_
+  local nx, ny, nz, l = norm(x, y, z)
+  if ground and (r_ ~= 0 or f_ ~= 0) then l = ground({ x = nx, y = ny, z = nz }) or l end
+  return { x = nx * (l + u_), y = ny * (l + u_), z = nz * (l + u_), ux = nx, uy = ny, uz = nz, fx = hx, fy = hy, fz = hz }
+end
+local function sc5_craft(val, pk, E, check_ref)
+  if type(val.craft) ~= "string" then E(pk .. ".craft", "a craft's name") return end
+  check_ref(pk .. ".craft", val.craft:find(":", 1, true) and val.craft or ("craft:" .. val.craft))
+end
+SC5_BEATS = {
+  -- { craft, follow = ref | to = ref, speed = m/s, gap = m (follow), r = m (to) } | { craft, stop = true }
+  drive = function(val, pk, E, check_ref)
+    sc5_craft(val, pk, E, check_ref)
+    if val.stop then return end
+    if (val.follow == nil) == (val.to == nil) then E(pk, "follow = ref or to = ref (or stop = true)") end
+    if val.follow ~= nil then check_ref(pk .. ".follow", val.follow) end
+    if val.to ~= nil then check_ref(pk .. ".to", val.to) end
+    if val.speed ~= nil and (type(val.speed) ~= "number" or val.speed <= 0) then E(pk .. ".speed", "m/s, more than 0") end
+    if val.gap ~= nil and type(val.gap) ~= "number" then E(pk .. ".gap", "metres") end
+    if val.r ~= nil and type(val.r) ~= "number" then E(pk .. ".r", "metres") end
+  end,
+  -- { who, craft } puts a member in a free seat; { who, craft = false } out of it
+  board = function(val, pk, E, check_ref, check_who)
+    check_who(pk .. ".who", val.who)
+    if val.who == nil then E(pk .. ".who", "missing") end
+    if val.craft ~= false then sc5_craft(val, pk, E, check_ref) end
+  end,
+  -- { craft | who, at = ref, offset, yaw }: set down there (a checkpoint's stage)
+  place = function(val, pk, E, check_ref, check_who)
+    if (val.craft == nil) == (val.who == nil) then E(pk, "craft or who") end
+    if val.craft ~= nil then sc5_craft(val, pk, E, check_ref) else check_who(pk .. ".who", val.who) end
+    if val.at == nil then E(pk .. ".at", "missing") else check_ref(pk .. ".at", val.at) end
+    if val.offset ~= nil and type(val.offset) ~= "table" then E(pk .. ".offset", "{ right, up, front }") end
+  end,
+  -- { craft, frac = 0..1 } the batteries' charge as a share of what they hold
+  charge = function(val, pk, E, check_ref)
+    sc5_craft(val, pk, E, check_ref)
+    if type(val.frac) ~= "number" or val.frac < 0 or val.frac > 1 then E(pk .. ".frac", "0..1") end
+  end,
+}
+-- A craft's state for a hook (copies, never handles): the hooks' api.craft
+CRAFT_FIELDS = { charge = true, cap = true, speed = true, link = true, crew = true, control = true, lit = true, supply = true, demand = true }
+
 -- ── validation ──────────────────────────────────────────────────────────────
 BEATS = { ops = "string", say = "table", caption = "table", camera = "table", wait = "number", warp = "number",
           give = "table", funds = "number", unlock = "string", mark = "table", fail = "string", done = "boolean",
@@ -1480,7 +1547,10 @@ BEATS = { ops = "string", say = "table", caption = "table", camera = "table", wa
           -- container's contents, a keypad, a console opened on a page
           tag = "table", log = "table", container = "table", lock = "table", terminal = "table",
           -- F8: a Data Core placed, read or sealed
-          core = "table" }
+          core = "table",
+          -- SC-5 (scenarios/thirty_km): a crew member driving a craft, boarding or
+          -- leaving one, a craft or a member put at a place, a craft's batteries
+          drive = "table", board = "table", place = "table", charge = "table" }
 GESTURES = { stand_talk = true, point = true, wave = true, lean_console = true, kneel_work = true, sit_idle = true, lie_rest = true }
 POSES = { lie = true, sit = true, stand = true }
 -- FW-C cast fields (the rest is refused, so a typo is caught)
@@ -1838,7 +1908,19 @@ function validate(sc, ctx)
       if e.slot ~= nil and (type(e.slot) ~= "number" or e.slot < 1) then E(pe .. ".slot", "a seat number, 1 or more") end
     end
   end
-  for k, m in pairs(st.marks or {}) do check_ref("start.marks." .. k .. ".at", m.at) end
+  -- (SC-5) relay beacons planted at stage time
+  for i, bc in ipairs(type(st.beacons) == "table" and st.beacons or {}) do
+    local pb = string.format("start.beacons[%d]", i)
+    if type(bc) ~= "table" or bc.at == nil then E(pb .. ".at", "a ref (a mark on the route)") else check_ref(pb .. ".at", bc.at) end
+  end
+  for k, m in pairs(st.marks or {}) do
+    -- (SC-5) a mark ALONG the ground between two refs: { along = { a, b }, frac }
+    if m.along ~= nil then
+      if type(m.along) ~= "table" or #m.along ~= 2 then E("start.marks." .. k .. ".along", "two refs: { \"base\", \"crew:Kit\" }")
+      else check_ref("start.marks." .. k .. ".along[1]", m.along[1]); check_ref("start.marks." .. k .. ".along[2]", m.along[2]) end
+      if type(m.frac) ~= "number" or m.frac < 0 or m.frac > 1 then E("start.marks." .. k .. ".frac", "0..1 of the way from the first to the second") end
+    else check_ref("start.marks." .. k .. ".at", m.at) end
+  end
   -- (every mark a beat makes, first: a beat may name one made later)
   local function pre(list)
     for _, b in ipairs(type(list) == "table" and list or {}) do
@@ -1940,6 +2022,10 @@ function validate(sc, ctx)
             check_struct(pk .. ".struct", val.struct)
             if not (val.part or val.uid) then E(pk, "part (an id prefix) or uid") end
             if val.closed == nil and not val.trip then E(pk .. ".closed", "true, false, or trip = true") end
+          elseif key == "give" and val.craft ~= nil then
+            check_ref(pk .. ".craft", (type(val.craft) == "string" and not val.craft:find(":", 1, true)) and ("craft:" .. val.craft) or val.craft)
+            if val.who ~= nil then E(pk .. ".who", "who or craft, not both") end
+            if not val.item then E(pk .. ".item", "a craft's locker takes items") end
           elseif key == "wear" then
             check_ref(pk .. ".craft", (type(val.craft) == "string" and not val.craft:find(":", 1, true)) and ("craft:" .. val.craft) or val.craft)
             if val.craft == nil then E(pk .. ".craft", "missing") end
@@ -1961,6 +2047,8 @@ function validate(sc, ctx)
             if not (path:match("^sequences%.") and j == 1) then E(pk, "only as the first beat of a sequence") end
           elseif key == "branch" then
             if type(val.var) ~= "string" then E(pk .. ".var", "missing") end
+            -- (SC-5) `is` tests true/false only: a string there was always false
+            if val.is ~= nil and type(val.is) ~= "boolean" then E(pk .. ".is", "true or false (eq = \"" .. tostring(val.is) .. "\" compares a value)") end
             if val.run then check_seq(pk .. ".run", val.run) end
             if val["else"] then check_seq(pk .. ".else", val["else"]) end
             check_beats(pk .. ".beats", val.beats); check_beats(pk .. ".elseBeats", val.elseBeats)
@@ -2052,6 +2140,8 @@ function validate(sc, ctx)
               core_def(pk, val, true)
               if val.who ~= nil then check_who(pk .. ".who", val.who) end
             end
+          elseif SC5_BEATS[key] then
+            SC5_BEATS[key](val, pk, E, check_ref, check_who)
           end
         end
       end
@@ -2208,7 +2298,8 @@ function validate(sc, ctx)
       if not (src and METER_READS[src]) then E(p .. ".read", "reactor.<field>, grid.supply|need|stored|battery, dose.msv, suit.o2, room.p|o2|co2, part.hp, cabin.p|o2|co2|reserve|res, piece.<field> or var.<name>")
       elseif (src == "reactor" or src == "grid" or src == "room" or src == "piece") and m.struct == nil then E(p .. ".struct", "the structure it reads")
       elseif (src == "dose" or src == "suit") and m.who == nil then E(p .. ".who", "the crew member it reads")
-      elseif (src == "part" or src == "cabin") and m.craft == nil then E(p .. ".craft", "the craft it reads") end
+      elseif (src == "part" or src == "cabin" or src == "craft") and m.craft == nil then E(p .. ".craft", "the craft it reads")
+      elseif src == "craft" and not CRAFT_FIELDS[fld] then E(p .. ".read", "craft.charge|cap|speed|link|crew|control|lit|supply|demand") end
       if m.struct then check_struct(p .. ".struct", m.struct) end
       if m.mode ~= nil and not METER_MODES[m.mode] then E(p .. ".mode", "sample, integrate, peak or min") end
       if m.when ~= nil then

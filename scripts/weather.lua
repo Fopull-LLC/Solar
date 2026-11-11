@@ -627,6 +627,9 @@ local function clouds_all(here, here_sky)
 end
 
 -- ── the light: shadows, ambient, the sun, exposure ──────────────────────────
+-- (SC-5) stops another script holds on the picture (a scenario's held night:
+-- scenario_run apply_time), added to the weather's own; nil = none
+exposureBias = nil
 local lit, post, base_shadow, base_exposure, base_amb
 local function light_and_post()
   if not lit then
@@ -1133,7 +1136,7 @@ function update(node, dt)
   end
   star_light(1 - (1 - s.sun) * air)
   if pp and base_exposure then
-    pp.exposure = base_exposure + ((params.gloom or 1.0) * s.stops + 1.0 * s.flash) * air
+    pp.exposure = base_exposure + ((params.gloom or 1.0) * s.stops + 1.0 * s.flash) * air + (exposureBias or 0)
   end
 
   -- Precipitation. A roof overhead (a ray straight up, a few times a

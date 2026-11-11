@@ -611,6 +611,16 @@ local function give(t)
   if not inv then return end
   local id = member_id(t.who)
   local cid = id and ("crew:" .. tostring(id)) or "astro"
+  -- (SC-5) into a craft's locker (`uid`, else its first); a negative n takes back
+  if t.craft and SC5R then
+    local vc = SC5R.vc(t.craft)
+    cid = nil
+    for _, d in ipairs((vc and vc.fleetParts and (vc.fleetParts() or {}).parts) or {}) do
+      if not cid and (not t.uid or d.uid == t.uid) and vc.lockerOf then cid = vc.lockerOf(d.uid) end
+    end
+    if not cid then say_log("give: no locker aboard " .. tostring(t.craft)); return end
+  end
+  if t.item and (t.n or 1) < 0 then inv.removeItem(cid, t.item, -(t.n or 1)); return end
   if t.item then inv.addItem(cid, t.item, t.n or 1, { force = true }) end
   if t.part then inv.addItem(cid, "part:" .. t.part, t.n or 1, { force = true }) end
   if t.mat then
@@ -690,7 +700,9 @@ WORLD_BEATS = { reactor = true, knock = true, state = true, power = true, var = 
                 turn = true, pose = true, gesture = true,
                 -- S6: designations, the base log, contents, keypads
                 tag = true, log = true, container = true, lock = true,
-                core = true }      -- (F8: a core read, sealed, placed or finished)
+                core = true,      -- (F8: a core read, sealed, placed or finished)
+                -- SC-5: who drives, who sits where, where a craft stands, its charge
+                drive = true, board = true, place = true, charge = true }
 local stage_one        -- set by the staging section: (kind, entry, out)
 local walks = {}       -- id → { to = ref, offset, t1 }
 
@@ -973,6 +985,11 @@ local function apply_time(el)
   l.intensity = k * fade * (params and params.hold_gain or 1)
   local AT = ref("atmosphere")
   if AT then AT.sunUpOverride = math.sin(math.rad(el)) end
+  -- (SC-5) a held night is dark: the sky dome and its bounce stay lit by the
+  -- engine with the key light out, so the picture comes down with the sun,
+  -- up to NIGHT_STOPS at 23 deg under the horizon (weather adds its own)
+  local WXS = ref("weather")
+  if WXS then WXS.exposureBias = (el < -3) and -(params and params.night_stops or 2.6) * math.min(1, (-3 - el) / 20) or nil end
   LT.el = el
 end
 local function release_time()
@@ -986,6 +1003,8 @@ local function release_time()
   LT.saved, LT.el, LT.hold, LT.elE = nil, nil, false, nil
   local AT = ref("atmosphere")
   if AT then AT.sunUpOverride = nil end
+  local WXS = ref("weather")
+  if WXS then WXS.exposureBias = nil end
 end
 local function set_ambient(k)
   local UG = ref("underground")
@@ -1671,6 +1690,11 @@ local function run_beat(b, e)
   elseif k == "music" then music_beat(v)
   elseif k == "tag" or k == "log" or k == "container" or k == "lock" or k == "terminal" then S6.beat(k, v)
   elseif k == "core" then core_beat(v, e)      -- F8
+  -- SC-5
+  elseif k == "drive" then SC5R.drive(v)
+  elseif k == "board" then SC5R.board(v)
+  elseif k == "place" then SC5R.place(v)
+  elseif k == "charge" then SC5R.charge(v)
   end
   return nil
 end
@@ -2059,7 +2083,23 @@ local function stage_marks(t, out, last)
   local m = sget("scn.marks") or {}
   for name, e in pairs(t or {}) do
     if not m[name] then
-      local g = resolve_stage(e.at, e.offset)
+      local g
+      if e.along then
+        -- (SC-5) along the ground between two refs (scenario.alongPoint)
+        -- (a crew ref at stage time reads the staged spot)
+        local function rp(r)
+          local k, nm = rulebook().parseRef(r)
+          local s = k == "crew" and (sget("scn.spots") or {})[nm]
+          if s then return { body = s.b, x = s.x, y = s.y, z = s.z } end
+          return pos_of(r)
+        end
+        local p, q = rp(e.along[1]), rp(e.along[2])
+        local b = p and q and p.body == q.body and space.body(p.body)
+        if b then
+          g = rulebook().alongPoint(p, q, e.frac or 0.5, e.offset, ground_of(b))
+          g.body = p.body
+        end
+      else g = resolve_stage(e.at, e.offset) end
       if g then m[name] = { b = g.body, x = g.x, y = g.y, z = g.z, show = e.show == true }
         out[#out + 1] = "mark " .. name
       elseif last then out[#out + 1] = "mark " .. name .. " failed" end
@@ -2282,6 +2322,9 @@ local function stage_craft(list, out)
     local bp = v and (v.bp or v)
     local wh = c.where or {}
     if not (bp and bp.parts) then out[#out + 1] = string.format("craft %d: unreadable %s", i, tostring(c.file))
+    -- (SC-5) a landed craft: written to the fleet the right way up where it
+    -- stands and rebuilt there by flight_ops, no pad, no rollout
+    elseif wh.ground and SC5R then SC5R.stageGround(i, c, bp, wh, out)
     elseif not (VS and VS.launchNow) then out[#out + 1] = "craft: no vessel spawner"
     else
       -- (scn_vacuum) crew = { { who, part | uid, slot } }: the seat plan
@@ -2556,6 +2599,7 @@ local function stage_table(st, out)
   stage_structures(st.structures, out)
   stage_ruins(st.ruins, out)      -- F8
   stage_marks(st.marks, out, true)
+  if st.beacons and SC5R then SC5R.stageBeacons(st.beacons, out) end
   stage_posts(st.crew, out)
   stage_lived_in(out)
   stage_plants(st.plants, out)
@@ -2593,6 +2637,333 @@ local function jobs_tick()
     if not ok then say_log("spawn error " .. tostring(err)) end
     if coroutine.status(jobs[i]) == "dead" then table.remove(jobs, i) else i = i + 1 end
   end
+end
+
+-- ── SC-5 (scenarios/thirty_km): rovers their crew drive, crew put aboard,
+-- craft set down far away standing on their wheels, a craft's batteries ────
+-- Globals in one table (the main chunk is near its local ceiling).
+SC5R = {}
+-- a craft's controller by name (or "craft:<name>")
+function SC5R.vc(name)
+  local n = tostring(name or ""):gsub("^craft:", "")
+  for _, v in ipairs(vessels()) do
+    if v.craftName == n and not (v.isLost and v.isLost()) and v.node and v.node.valid ~= false then return v end
+  end
+  return nil
+end
+function SC5R.eul(X, Y, Z)
+  local pitch = math.asin(math.max(-1, math.min(1, -Z[2])))
+  if math.abs(Z[2]) > 1 - 1e-10 then return math.atan2(-X[3], X[1]), pitch, 0 end
+  return math.atan2(Z[1], Z[3]), pitch, math.atan2(X[2], Y[2])
+end
+-- (flight_ops basis_of: the node's YXZ angles → its X, Y, Z in the world)
+function SC5R.basis(pitch, yaw, roll)
+  local cy, sy = math.cos(yaw), math.sin(yaw)
+  local cx, sx = math.cos(pitch), math.sin(pitch)
+  local cz, sz = math.cos(roll), math.sin(roll)
+  return { cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz },
+         { -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz },
+         { sy * cx, -sx, cy * cx }
+end
+-- A rolled-out craft set down FAR from the pad, the right way up there: the
+-- rollout's record (vessel_controller.fleetParts, as flight_ops writes it)
+-- moved to the ground point and turned from the pad's ground frame into that
+-- point's (its front along `heading`, a unit tangent there), written to the
+-- fleet as a new record and rebuilt by flight_ops (fleetRescan: "a record
+-- written from outside the flight"). A plain teleport keeps the pad's
+-- orientation: 1.8 km round an 885 m world that is a rover on its roof.
+-- → true when the record is written (the rebuild follows once its ground is
+-- under a body: flight_ops waits for that)
+function SC5R.placeFar(vc, name, g, heading, charge, out)
+  local FO, E = ref("flight_ops"), ref("electronics")
+  local n = vc and vc.node
+  local info = n and n.valid and assembly.info(n)
+  local fp = vc and vc.fleetParts and vc.fleetParts()
+  if not (FO and FO.fleetRescan and info and fp and fp.parts) then return false end
+  local o = info.origin
+  local pn = space.dominant(o.x, o.y, o.z)
+  local pb = pn and space.body(pn)
+  if not (pb and space.body(g.body)) then return false end
+  -- the pad's ground frame, and the craft's axes in it
+  local PF = rulebook().groundFrame(o.x - pb.x, o.y - pb.y, o.z - pb.z)
+  local X, Y, Z = SC5R.basis(n.pitch or 0, n.yaw or 0, n.roll or 0)
+  local function loc(a) return { r = a[1] * PF.rx + a[2] * PF.ry + a[3] * PF.rz, u = a[1] * PF.ux + a[2] * PF.uy + a[3] * PF.uz,
+                                 f = a[1] * PF.fx + a[2] * PF.fy + a[3] * PF.fz } end
+  -- its front: the rover body's +X (else the craft's), in the world
+  local front = { 1, 0, 0 }
+  for _, d in ipairs(fp.parts) do
+    if d.id == "roverBody" then front = SC5R.basis(d.pitch or 0, d.yaw or 0, d.roll or 0); break end
+  end
+  local fw = { X[1] * front[1] + Y[1] * front[2] + Z[1] * front[3], X[2] * front[1] + Y[2] * front[2] + Z[2] * front[3],
+               X[3] * front[1] + Y[3] * front[2] + Z[3] * front[3] }
+  local fl = loc(fw)
+  local th_pad = math.atan2(fl.r, fl.f)
+  -- the target's frame, and the heading wanted there
+  local TF = rulebook().groundFrame(g.ux, g.uy, g.uz)
+  local th_t = 0
+  if heading then
+    th_t = math.atan2(heading.x * TF.rx + heading.y * TF.ry + heading.z * TF.rz, heading.x * TF.fx + heading.y * TF.fy + heading.z * TF.fz)
+  end
+  local ps = th_t - th_pad
+  local cp, sp = math.cos(ps), math.sin(ps)
+  local function move(a)
+    local l = loc(a)
+    local r2, f2 = l.r * cp + l.f * sp, l.f * cp - l.r * sp
+    return { TF.rx * r2 + TF.ux * l.u + TF.fx * f2, TF.ry * r2 + TF.uy * l.u + TF.fy * f2, TF.rz * r2 + TF.uz * l.u + TF.fz * f2 }
+  end
+  local yaw, pitch, roll = SC5R.eul(move(X), move(Y), move(Z))
+  -- how high its origin rides over what it stands on, measured on the pad
+  local hit = raycast(o.x + PF.ux * 0.2, o.y + PF.uy * 0.2, o.z + PF.uz * 0.2, -PF.ux, -PF.uy, -PF.uz, 6.0, n)
+  local clear = hit and ((o.x - hit.x) * PF.ux + (o.y - hit.y) * PF.uy + (o.z - hit.z) * PF.uz) or 1.0
+  local recs = {}
+  for i, d in ipairs(fp.parts) do recs[i] = (E and E.packRecord) and E.packRecord(d) or d end
+  local nx = (tonumber(save.get("fleet.next")) or 0) + 1
+  save.set("fleet.next", nx)
+  local fid = "c" .. tostring(nx)
+  local up = clear + 0.15
+  local rec = { name = name, body = g.body, x = g.x + g.ux * up, y = g.y + g.uy * up, z = g.z + g.uz * up, vx = 0, vy = 0, vz = 0,
+                pitch = pitch, yaw = yaw, roll = roll, landed = true, fuel = fp.fuel or 0, charge = charge or fp.charge or 0,
+                groups = fp.groups, controls = fp.controls, probe = fp.probe == true, crew = false, station = fp.station,
+                flown = true, from = fp.from, stime = space.time and space.time() or 0, at = agency_now(), parts = recs, t = time }
+  -- the rollout goes, and its own record (if flight_ops wrote one) with it
+  if vc.piloting and vc.releaseControl then pcall(vc.releaseControl) end
+  -- (the new record first: forgetNodes then writes the fleet through
+  -- flight_ops' own copy, which the rescan reads, with it in)
+  local f = save.get("fleet.craft")
+  f = type(f) == "table" and f or {}
+  f[fid] = rec
+  save.set("fleet.craft", f)
+  if FO.forgetNodes then FO.forgetNodes({ n.id }) end
+  destroy(n)
+  FO.fleetRescan()
+  -- (flight_ops reads its own copy of the fleet for half a second: the
+  -- rescan is asked again once that copy has gone)
+  if after then pcall(after, 0.7, function() local F2 = ref("flight_ops"); if F2 and F2.fleetRescan then F2.fleetRescan() end end) end
+  out[#out + 1] = string.format("craft %s set down far: %s (clear %.2f m, turned %.2f rad)", tostring(name), fid, clear, ps)
+  return true
+end
+
+-- A craft staged LANDED (start.craft where.ground): its launch-format record
+-- written straight to the fleet, standing on its wheels at the ground point
+-- (its craft frame's y = 0 is its lowest point), its front (+X) along
+-- `face` (a ref) or `yaw` from the ground frame's front, its batteries at
+-- `charge`; flight_ops rebuilds it (fleetRescan) once the ground under it is
+-- solid (a body near it), and staging waits up to `wait` s for that.
+function SC5R.stageGround(i, c, bp, wh, out)
+  local FO, E = ref("flight_ops"), ref("electronics")
+  local g = resolve_stage(wh.ground, wh.offset, wh.yaw)
+  if not (FO and FO.fleetRescan and g) then out[#out + 1] = string.format("craft %d: no ground at %s", i, tostring(wh.ground)); return end
+  local hx, hy, hz = g.fx, g.fy, g.fz
+  local fq = wh.face and pos_of(wh.face)
+  if fq and fq.body == g.body then
+    local dx, dy, dz = fq.x - g.x, fq.y - g.y, fq.z - g.z
+    local du = dx * g.ux + dy * g.uy + dz * g.uz
+    dx, dy, dz = dx - g.ux * du, dy - g.uy * du, dz - g.uz * du
+    local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if l > 1e-6 then hx, hy, hz = dx / l, dy / l, dz / l end
+  end
+  local X = { hx, hy, hz }
+  local Y = { g.ux, g.uy, g.uz }
+  local Z = { X[2] * Y[3] - X[3] * Y[2], X[3] * Y[1] - X[1] * Y[3], X[1] * Y[2] - X[2] * Y[1] }
+  local yaw, pitch, roll = SC5R.eul(X, Y, Z)
+  local recs, cap = {}, 0
+  for k, d in ipairs(bp.parts) do
+    local cp = {}
+    for kk, vv in pairs(d) do cp[kk] = vv end
+    if E and E.modsOf then for _, m in ipairs(E.modsOf(cp)) do if m.type == "battery" then cap = cap + (m.ec or 0) end end end
+    recs[k] = (E and E.packRecord) and E.packRecord(cp) or cp
+  end
+  local nx = (tonumber(save.get("fleet.next")) or 0) + 1
+  save.set("fleet.next", nx)
+  local fid = "c" .. tostring(nx)
+  local lift = wh.lift or 0.25
+  local rec = { name = c.name or bp.name or "Rover", body = g.body, x = g.x + g.ux * lift, y = g.y + g.uy * lift, z = g.z + g.uz * lift,
+                vx = 0, vy = 0, vz = 0, pitch = pitch, yaw = yaw, roll = roll, landed = true, fuel = 0,
+                charge = cap * (wh.charge or 1), groups = bp.groups, controls = bp.controls, probe = true, crew = false,
+                flown = true, stime = space.time and space.time() or 0, at = agency_now(), parts = recs, t = time }
+  local f = save.get("fleet.craft")
+  f = type(f) == "table" and f or {}
+  f[fid] = rec
+  save.set("fleet.craft", f)
+  FO.fleetRescan()
+  local t1 = now() + (wh.wait or 30)
+  while now() < t1 and not SC5R.vc(rec.name) do coroutine.yield() end
+  out[#out + 1] = string.format("craft %d (%s) set down landed as %s: %s (%.0f EC)", i, tostring(rec.name), fid, SC5R.vc(rec.name) and "rebuilt" or "waiting for its ground", cap * (wh.charge or 1))
+end
+
+-- DRIVE: { craft, follow = ref | to = ref, speed, gap, r } | { craft, stop = true }.
+-- Kept in the save (scn.drives) and handed to the craft again whenever it
+-- has no command (a reload, a member not seated yet, a setback's restage).
+function SC5R.cmd(v)
+  local cmd = { speed = v.speed or 5, gap = v.follow and (v.gap or 12) or nil, r = v.to and (v.r or 6) or nil }
+  if v.follow then
+    local k, n = rulebook().parseRef(v.follow)
+    if k == "craft" then
+      local t = SC5R.vc(n)
+      if not (t and t.node) then return nil, "no craft " .. tostring(n) end
+      cmd.follow = t.node.id
+    else
+      local p = pos_of(v.follow)
+      if not p then return nil, "no " .. tostring(v.follow) end
+      cmd.to, cmd.r, cmd.gap = { body = p.body, x = p.x, y = p.y, z = p.z }, v.gap or 12, nil
+    end
+  else
+    local p = pos_of(v.to)
+    if not p then return nil, "no " .. tostring(v.to) end
+    cmd.to = { body = p.body, x = p.x, y = p.y, z = p.z }
+  end
+  return cmd
+end
+function SC5R.drive(v)
+  local name = tostring(v.craft or ""):gsub("^craft:", "")
+  local d = sget("scn.drives")
+  d = type(d) == "table" and d or {}
+  if v.stop then
+    d[name] = nil
+    sset("scn.drives", d)
+    local vc = SC5R.vc(name)
+    if vc and vc.npcDrive then vc.npcDrive(nil) end
+    return
+  end
+  d[name] = { follow = v.follow, to = v.to, speed = v.speed, gap = v.gap, r = v.r }
+  sset("scn.drives", d)
+  SC5R.t = -1e9      -- (handed over at the next tick)
+end
+-- 4 Hz with the goals: every standing drive handed to its craft when it has
+-- none (once a second), and a `to` that moves (a crew member) re-read
+function SC5R.tick(t)
+  local d = sget("scn.drives")
+  if type(d) ~= "table" or next(d) == nil then return end
+  local again = t - (SC5R.t or -1e9) >= 1.0
+  if again then SC5R.t = t end
+  for name, v in pairs(d) do
+    local vc = SC5R.vc(name)
+    if vc and vc.npcDrive and not vc.piloting then
+      local st = vc.npcState and vc.npcState()
+      local moving = (v.to and rulebook().parseRef(v.to) == "crew") or (v.follow and rulebook().parseRef(v.follow) == "crew")
+      if (again and not (st and st.active)) or moving then
+        local cmd, why = SC5R.cmd(v)
+        if cmd then
+          local ok, w2 = vc.npcDrive(cmd)
+          if not ok and again then say_log("drive " .. name .. ": " .. tostring(w2)) end
+        elseif again then say_log("drive " .. name .. ": " .. tostring(why)) end
+      end
+    end
+  end
+end
+
+-- BOARD: { who, craft } a free seat; { who, craft = false } out at the seat
+function SC5R.board(v)
+  local C = ref("crew")
+  local id = who_id(v.who)
+  if not (C and id) then say_log("board: no " .. tostring(v.who)); return end
+  if v.craft == false then
+    if C.craftOf and C.craftOf(id) and C.eva then
+      local ok, why = C.eva(id, { stay = true, confirmed = true })
+      if not ok then say_log("board: " .. tostring(v.who) .. " out: " .. tostring(why)) end
+    end
+    return
+  end
+  local vc = SC5R.vc(v.craft)
+  if not vc then say_log("board: no craft " .. tostring(v.craft)); return end
+  local cur = C.craftOf and C.craftOf(id)
+  if cur and cur.node and vc.node and cur.node.id == vc.node.id then return end
+  -- (`seat`: that seat part's slot, when it is free)
+  local su, sk = nil, nil
+  if v.seat and vc.seatsOf then
+    for _, s in ipairs(vc.seatsOf() or {}) do if s.uid == v.seat and not s.taken and not su then su, sk = s.uid, s.slot end end
+  end
+  local ok, why = C.board(id, vc, su, sk)
+  if not ok and vc.freeSeat and vc.seatMember then
+    -- (no body in reach: the record is seated straight away)
+    local u, k = su, sk
+    if not u then u, k = vc.freeSeat(nil) end
+    if u then
+      if cur and cur.unseatMember then cur.unseatMember(id) end
+      ok, why = vc.seatMember(u, k, id)
+      if ok then C.patch(id, { status = "aboard", craft = vc.craftName or false, body = false, x = false, y = false, z = false, pose = false }) end
+    else why = "no free seat" end
+  end
+  if not ok then say_log("board: " .. tostring(v.who) .. " → " .. tostring(v.craft) .. ": " .. tostring(why)) end
+end
+
+-- PLACE: { craft | who, at, offset, yaw }: set down at a ref now (a
+-- checkpoint's stage: the rovers back where the act begins). A craft near
+-- where it stands is moved (assembly.teleport), one far away rebuilt the
+-- right way up (placeFar); a member is set down (crew.setDown, or the
+-- player's body).
+function SC5R.place(v)
+  local g = resolve_at(v.at, v.offset, v.yaw)
+  local b = g and space.body(g.body)
+  if not b then say_log("place: no " .. tostring(v.at)); return end
+  if v.craft then
+    local vc = SC5R.vc(v.craft)
+    if not vc then say_log("place: no craft " .. tostring(v.craft)); return end
+    local p = node_rel(vc.node)
+    local far = not p or p.body ~= g.body or math.sqrt((p.x - g.x) ^ 2 + (p.y - g.y) ^ 2 + (p.z - g.z) ^ 2) > 60
+    local out = {}
+    if far then SC5R.placeFar(vc, vc.craftName, g, { x = g.fx, y = g.fy, z = g.fz }, nil, out)
+    else
+      local info = assembly.info(vc.node)
+      if info then
+        assembly.teleport(vc.node, vec3(b.x + g.x + g.ux * 1.2 + (info.origin.x - info.com.x), b.y + g.y + g.uy * 1.2 + (info.origin.y - info.com.y),
+          b.z + g.z + g.uz * 1.2 + (info.origin.z - info.com.z)))
+        if info.vel then assembly.impulseAt(vc.node, vec3(-info.vel.x * info.mass, -info.vel.y * info.mass, -info.vel.z * info.mass), info.com) end
+      end
+    end
+    for _, l in ipairs(out) do say_log("place: " .. l) end
+    return
+  end
+  local C = ref("crew")
+  local id = who_id(v.who)
+  if not (C and id) then return end
+  local l = math.sqrt(g.x * g.x + g.y * g.y + g.z * g.z)
+  local k = (l + 1.0) / l
+  if id == (C.activeId and C.activeId()) then
+    local a = find("Astronaut")
+    if a then a.x, a.y, a.z = b.x + g.x * k, b.y + g.y * k, b.z + g.z * k; a.vx, a.vy, a.vz = 0, 0, 0 end
+  elseif C.setDown then C.setDown(id, b.x + g.x * k, b.y + g.y * k, b.z + g.z * k) end
+end
+
+-- BEACONS (start.beacons = { { at = ref, offset } }): relay beacons planted
+-- on the ground there (comms.placeBeacon), as the crew plants them: a base's
+-- beacon line out to the ridge
+function SC5R.stageBeacons(list, out)
+  local CM = ref("comms")
+  if not (CM and CM.placeBeacon) then out[#out + 1] = "beacons: no comms"; return end
+  for i, e in ipairs(list or {}) do
+    local g = resolve_stage(e.at, e.offset)
+    local b = g and space.body(g.body)
+    if b then
+      local id = CM.placeBeacon(g.body, b.x + g.x, b.y + g.y, b.z + g.z)
+      out[#out + 1] = string.format("beacon %d: %s", i, tostring(id))
+    else out[#out + 1] = string.format("beacon %d: no %s", i, tostring(e.at)) end
+  end
+end
+
+-- CHARGE: { craft, frac }: its batteries at that share of what they hold
+function SC5R.charge(v)
+  local vc = SC5R.vc(v.craft)
+  if not (vc and vc.elecSetCharge and vc.controlState) then say_log("charge: no craft " .. tostring(v.craft)); return end
+  local cs = vc.controlState()
+  vc.elecSetCharge((cs.cap or 0) * math.max(0, math.min(1, v.frac or 0)))
+end
+
+-- a craft's state for the hooks and the meters (copies)
+function SC5R.read(name)
+  local vc = SC5R.vc(name)
+  if not vc then return nil end
+  local cs = vc.controlState and vc.controlState() or {}
+  local info = vc.node and vc.node.valid and assembly.info(vc.node)
+  local sp = 0
+  if info and info.vel then sp = math.sqrt(info.vel.x ^ 2 + info.vel.y ^ 2 + info.vel.z ^ 2) end
+  local out = { charge = cs.charge or 0, cap = cs.cap or 0, speed = sp, link = link_up("craft:" .. tostring(vc.craftName)) and 1 or 0,
+                crew = (vc.crewCount and vc.crewCount()) or 0, control = cs.can and 1 or 0 }
+  local el = vc.elecReadout and vc.elecReadout() or nil
+  if el then out.supply, out.demand, out.lit = el.supply, el.demand, el.lit end
+  local ns = vc.npcState and vc.npcState()
+  if ns then out.npc = { active = ns.active, dist = ns.dist, vstar = ns.vstar, stuck = ns.stuck, why = ns.why } end
+  return out
 end
 
 local function stage_all()
@@ -2711,6 +3082,17 @@ hooks_api = function()
     end,
     now = function() return agency_now() end,
     log = function(s) say_log("[hook] " .. tostring(s)) end,
+    -- (SC-5) a craft's state (copies): charge, cap, speed, link, crew, control,
+    -- supply, demand, lit, npc = { active, dist, vstar, stuck, why }
+    craft = function(name) return SC5R.read(name) end,
+    -- (SC-5) a craft part's health, 1 whole … 0 broken (nil: not aboard)
+    partHp = function(craft, part) return W.partHp({ craft = craft, part = type(part) == "string" and part or nil, uid = type(part) == "number" and part or nil }) end,
+    -- (SC-5) what member `who` carries: a count of item id
+    has = function(who, item)
+      local inv, id = ref("inventory"), who_id(who)
+      local cid = id and ("crew:" .. tostring(id)) or "astro"
+      return inv and inv.itemCount and (inv.itemCount(cid, item) or 0) or 0
+    end,
     -- (S6) what a container holds (a copy), the newest base-log lines of a structure
     container = function(struct, part)
       local sid, uid = piece_of({ struct = struct, part = type(part) == "string" and part or nil, uid = type(part) == "number" and part or nil })
@@ -2915,6 +3297,9 @@ local function meter_read(m, i)
     local r = sid and rulebook().pickRoom(W.rooms(sid), m.room or "largest")
     local a = r and W.roomAir(sid, r.id)
     return a and tonumber(a[fld]) or nil
+  elseif src == "craft" then
+    local c = SC5R.read(m.craft)
+    return c and tonumber(c[fld]) or nil
   elseif src == "part" then
     mem["mpart:" .. i] = mem["mpart:" .. i] or {}
     return W.partHp(m, mem["mpart:" .. i])
@@ -3014,6 +3399,7 @@ local function evaluate()
     if s.hint2 and hint_shown[s.id] == 1 and t - (progress_t[s.id] or t) >= R_.HINT2_SECS then hint_shown[s.id] = 2; bump() end
   end
   call_hook("tick", t)
+  SC5R.tick(t)
   meters_models(t, ctx)
   weather_tick()
   light_tick(false)

@@ -176,6 +176,13 @@ ITEMS.flare = { name = "Flare", kind = "device", kg = 0.2, L = 0.4, cost = 6, sh
                 flare = { secs = 90, range = 14, intensity = 2.6, color = { 1.0, 0.28, 0.12 } },
                 about = "a red road flare: G strikes and throws it; it burns for 90 s where it lands. Mark your way back" }
 
+-- THE TRACTION CELL (SC-5, scenarios/thirty_km): a rover battery module in a
+-- sealed case, charged at the base. A stranded rover's cooked cell comes out
+-- and this goes in (the cradle mended with a Repair Kit first). 16 kg: one
+-- rides in a pack, not two.
+ITEMS.tractionCell = { name = "Traction Cell", kind = "device", kg = 16.0, L = 9, cost = 180,
+                       about = "a charged rover battery module in a sealed case: the field swap for a flat or cooked traction cell" }
+
 -- THE DATA CORE (expansion X8; scripts/ruins.lua): the solid-state log of an
 -- abandoned base, pulled from its terminal. Not sold, not held: carried in a
 -- pack (or a locker) back to the home Research Lab, where it is read (RP, the
