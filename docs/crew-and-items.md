@@ -1213,6 +1213,48 @@ end, { id = "held.repair", order = 15 })
 Item defs name their provider (`use.provider`), so later tools (welder, sampler) add
 verbs the same way, with no menu code changes.
 
+### 6.5 What else the kit mends (2026-11-11)
+
+Ty: "repair kits can't fix much, like if a part gets detached but it's still visibly on it, it
+looks like something I can repair but I just can't." The kit now also works on what came off and
+on kit pieces. Both are right-click rows from `item_hand.lua` (`KIT`, provider `kit_repair` on
+"prop"), timed jobs of the menu, one kit each, with the kit in the pack. The rules are pure, in
+`damage.lua` (`pieceFaults`, `kitJob`, `reattachSecs`, `kitWhyNot`). A row is refused only for a
+physical reason, and it says which: no kit, too far ("walk up to it (7 m away)"), not on foot, the
+part gone.
+
+- **Reattach** (craft). A part lost to damage (broken by `break_part`, or torn off with what hung
+  from it by `shedSet`) leaves as a wreck of its own. `vessel_controller` keeps each wreck's node
+  (`integ.junk`, through `junkNote`). While the wreck lies within `REATTACH_REACH` (3 m) of its
+  mount, "Reattach the Locker (2 parts)" takes 10 s a part (30 s at most; an Engineer's pace
+  applies). The wreck goes, and the same parts go back on at their blueprint poses through the
+  refit (`refitParts(uids, done, { keep = true, hp })`). They keep their own state (tank and cell
+  contents). A torn-off part keeps its health; a part that broke comes back at 35 %.
+  - Refused, with the reason, when: it lies too far ("bring it back", for example with the gravity
+    gun); its mount is gone too; the craft is moving (over 0.6 m/s); it is docked; or a refit is
+    under way (`reattachVerdict`).
+  - Distance is measured between drawn poses read in one pass: the wreck's node, and the craft's
+    root through a fresh handle (`drawnRoot`), as docs/positions-and-frames.md rules 2 and 6 ask.
+  - Wrecks are tracked for the session only. After a reload, a lost part is the Repair Bay's
+    refit.
+- **Repair** (kit piece). On any structure that is not a ruin, the kit fixes a piece that is:
+  - knocked askew (`p.wr`): it is put square again with `ruins.repairPiece`. In a running scenario
+    the scenario's own row does this instead.
+  - worn (part state `hp` under 1, which a beam or blast leaves through lasers.lua): its strength
+    is made whole.
+
+  It takes 8 s for a knock, plus 4–20 s for wear depending on how worn the piece is.
+- **Not the kit's.** A primary pipe broken open needs a weld (an Engineer, 30 s; reactor_plant). A
+  door's seal is re-seated from the door's own row. A burnt cable is spliced from the cable's row.
+  `pieceFaults` lists the pipe break with its reason.
+- **What's wrong is shown** in part_info's Condition row: "KNOCKED askew · WORN to 40 %" on a
+  piece; "WORN to 42 % · a Repair Kit mends it" on a worn craft part; and "TORN OFF Kestrel 2 ·
+  1.2 m from its mount · a Repair Kit puts it back on" (or why it can't) on a wreck. Each is
+  worked out once, when the menu opens.
+- **Probes:** `tests/smoke_damage.lua` §7, `tests/smoke_interact.lua`, `tests/smoke_reattach.lua`,
+  and `tools/perf/reattachshots.sh`. The last drops a rover hard, then reattaches its torn locker
+  and broken tank through the menu, and repairs a knocked, worn wall.
+
 ## 7. Flags (F)
 
 - **The texture** is the **agency's own** (§2.5), built at runtime by `emblem.lua`:

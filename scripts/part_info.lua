@@ -23,6 +23,12 @@
 --   Name this piece…   the designation the player gives it (part state `tag`)
 --   CABIN      (a craft's closed crew part or a port on one, G1) the module,
 --              its air, its reserve, a leak: cabin_air.infoRows
+--   CRAFT PART (2026-11-11) its wear, when it has any: "WORN to 40 % · a
+--              Repair Kit mends it" (craftCondition)
+--   A WRECK    (2026-11-11) a craft part torn or broken off, lying about:
+--              "TORN OFF <craft> · 1.2 m from its mount · a Repair Kit puts
+--              it back on", or why it can't (wreckCondition). Both worked out
+--              once when the menu opens.
 --
 -- DESIGNATIONS: `designate(sid, uid)` → "P-3" (the part state's `tag`, else a
 -- running scenario's `start.tags` entry) or the label; `called(sid, uid)` →
@@ -99,6 +105,8 @@ function conditionOf(p, st, def, dust)
     if lean > math.rad(1) then bits[#bits + 1] = string.format("tilted %.0f°", math.deg(lean)) end
   end
   if p and p.o_c ~= nil then bits[#bits + 1] = "rusted" end
+  local hp = st and tonumber(st.hp)
+  if hp and hp > 0 and hp < 0.999 then bits[#bits + 1] = string.format("WORN to %d %%", math.floor(hp * 100 + 0.5)); warn = true end
   local brk = st and tonumber(st.brk) or 0
   if brk > 0 then bits[#bits + 1] = string.format("BROKEN: %.0f %% of its bore open", brk * 100); warn = true end
   if st and st.blown then bits[#bits + 1] = "seal BLOWN"; warn = true end
@@ -252,6 +260,8 @@ function whyOf(sid, uid)
     if rec and rec.ru and not (e and e.cl) then list[#list + 1] = "knocked askew: claim the site, then a Repair Kit puts it back"
     else list[#list + 1] = "knocked askew: a Repair Kit puts it back" end
   end
+  local hpw = st and tonumber(st.hp)
+  if hpw and hpw > 0 and hpw < 0.999 then list[#list + 1] = string.format("worn to %d %%: a Repair Kit makes it whole", math.floor(hpw * 100 + 0.5)) end
   if st and (tonumber(st.brk) or 0) > 0 then list[#list + 1] = "the pipe is broken open: an Engineer welds it (30 s)" end
   local LN = ref("logic_net")
   if LN and LN.drivenBy and not (LN.localControl and LN.localControl(sid, uid)) then
@@ -422,6 +432,67 @@ local function craft_cabin(t, ctx)
 end
 cabinFn = craft_cabin
 
+-- (2026-11-11, the Repair Kit) CONDITION rows on a CRAFT part and on a
+-- craft part's WRECK, worked out once when the menu opens (kept on the
+-- target the menu holds while it stays open: no scan at the refresh):
+--   a craft part   "worn to 40 % · a Repair Kit mends it" (or "sound")
+--   a wreck        "TORN OFF Kestrel 2 · 1.2 m from its mount · a Repair
+--                  Kit puts it back on" (or the physical reason it can't:
+--                  too far, its mount gone, the craft moving)
+-- The reattach itself is item_hand's row (KIT.reattachRows).
+function craftCondition(hp)
+  if not hp then return nil, false end
+  if hp <= 0 then return "BROKEN", true end
+  if hp < 0.999 then return string.format("WORN to %d %% · a Repair Kit mends it", math.floor(hp * 100 + 0.5)), true end
+  return "sound", false
+end
+function wreckCondition(craft, plan, why, dist)
+  local head = "TORN OFF " .. tostring(craft or "its craft")
+  if plan then
+    return string.format("%s · %.1f m from its mount · a Repair Kit puts it back on%s", head, plan.dist or dist or 0,
+      plan.broke and " (it broke: it goes back worn)" or "")
+  end
+  return head .. (dist and string.format(" · %.1f m from its mount", dist) or "") .. " · " .. tostring(why or "it can't go back on")
+end
+local function craft_cond(t, ctx)
+  if not (t and t.vessel and t.uid and t.vessel.partHp) then return {} end
+  local c = t._pi_cond
+  if c == nil then
+    local ok, hp = pcall(t.vessel.partHp, t.uid)
+    local txt, warn = craftCondition(ok and hp or nil)
+    c = (txt and warn) and { txt, warn } or false   -- (a sound part: no row, the menu stays short)
+    t._pi_cond = c
+  end
+  if not c then return {} end
+  return { { id = "pi_ccond", type = "info", label = "Condition", group = "Piece", value = c[1], warn = c[2] } }
+end
+craftCondFn = craft_cond
+local function wreck_cond(t, ctx)
+  if not (t and t.node) then return {} end
+  local c = t._pi_wreck
+  if c == nil then
+    c = false
+    for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+      if v.lostOfNode then
+        local ok, uid = pcall(v.lostOfNode, t.node)
+        if ok and uid then
+          local okp, plan, why = pcall(v.reattachPlan, uid)
+          local dist = v.reattachDist and select(1, v.reattachDist(uid)) or nil
+          if not okp then plan, why = nil, tostring(plan) end
+          local lost = v.lostRec and v.lostRec(uid)
+          c = { wreckCondition(v.craftName, plan, why, dist), plan == nil, plan and plan.label or (lost and lost.label) }
+          break
+        end
+      end
+    end
+    t._pi_wreck = c
+  end
+  if not c then return {} end
+  return { { id = "pi_wreck", type = "info", label = "Condition", group = "Piece", value = c[1], warn = true } },
+    c[3] and tostring(c[3]) or nil, c[3] and "a craft part, off its craft" or nil
+end
+wreckCondFn = wreck_cond
+
 local reg_on, reg_t = false, -10
 function update(node, dt)
   if reg_on or now() - reg_t < 1.0 then return end
@@ -432,6 +503,8 @@ function update(node, dt)
     -- (a VAB part placed live is a part of its structure's vessel)
     reg.register("part", provider, { id = "part_info_live", order = 1 })
     reg.register("part", craft_cabin, { id = "part_info_cabin", order = 12 })
+    reg.register("part", craft_cond, { id = "part_info_craft", order = 2 })
+    reg.register("prop", wreck_cond, { id = "part_info_wreck", order = 2 })
     reg_on = true
   end
 end

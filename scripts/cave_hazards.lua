@@ -25,12 +25,17 @@
 --              roof; the pocket is burnt out for good (saved).
 --   ROCKFALL   "unstable" cells (UNSTABLE_CELL m) by the kind's chance; the
 --              roof TICKS while you are in one. A dig with the laser under
---              it, or walking through it, can set it off: a crack (a real
---              recording) at the roof over you, 1.5 s of dust and pattering
---              grit, then 1–3 slabs from that roof point: loose rock bodies
---              (mineral_field.adoptBody: they stay, you can haul them off). A
---              slab that hits you hurts by its size and speed. Each cell
---              falls once (saved).
+--              it, or walking through it, can set it off, ON you, or AHEAD
+--              of you or BEHIND you in the passage (rockfallSpot): a crack (a
+--              real recording) at the roof, 1.5 s of dust and pattering
+--              grit, then 1–3 slabs sized to the passage (slabScale) from
+--              inside it. A slab that hits you hurts by its size and speed.
+--              What comes down stays as a PILE OF RUBBLE (rubblePile):
+--              terrain raised on the floor and painted the roof's rock,
+--              sized to the passage, so a tunnel is choked or closed and the
+--              laser digs through it like rock. Slabs in the pile are buried
+--              in it; the rest stay as loose rock (mineral_field.adoptBody).
+--              No caption: it is heard and seen. Each cell falls once (saved).
 --   COLD/HEAT  an ice cave is the kind's cold, a vent and a lava tube run
 --              hot: thermal.suitThermal. The suit's heater draws on the lamp
 --              cell (a cold cave eats your light); bare-headed the air hurts.
@@ -50,14 +55,16 @@
 --
 -- COST: nothing a frame. The work runs once per cave_field probe (2 Hz;
 -- cave_field publishes probeN and its points) and uses no rays of its own
--- but one per rockfall; a rockfall's sounds and slabs are followed for a few
+-- but up to seven per rockfall (the passage measured once); a rockfall's sounds and slabs are followed for a few
 -- seconds only while one is under way.
 --
 -- PURE (tests/smoke_cave_hazards.lua): AIR, airCellOf, airAtLocal, readout,
--- flammable, unstableAt, rockfallPlan, slabHurt, caveTempK, seamShare,
+-- flammable, unstableAt, rockfallPlan, slabHurt, rockfallSpot, slabScale,
+-- rubblePile, pileBuries, caveTempK, seamShare,
 -- doseRate, dropHint, firstEntry, compGain, HAZARDS.
 --
--- Probes: state, stats, last (the last event of each kind), forceRockfall(),
+-- Probes: state, stats, last (the last event of each kind; last.pile),
+-- forceRockfall(kind, dir), fallState(),
 -- forceIgnite(), fellCount(), reset().
 
 defaults = {
@@ -286,6 +293,88 @@ end
 function slabHurt(s, speed)
   if (speed or 0) < 2.5 then return 0 end
   return clamp(0.10 * (s or 1) ^ 3 * speed / 5, 0.06, 0.75)
+end
+-- (Ty 2026-11-11: "cave-in rocks get stuck in tunnels so easily … they're
+-- trivial to avoid; you also can't break the rocks that fell".) A fall comes
+-- down ON the crew, or AHEAD of them or BEHIND them in the passage, and what
+-- comes down stays as a PILE OF RUBBLE: terrain (a union of balls painted the
+-- roof's rock), sized to the passage, so a tunnel is partly or wholly blocked
+-- and the Terrain Laser digs through it as it digs rock. The slabs are the
+-- fall itself (they hurt); those that come to rest in the pile are buried in
+-- it, the rest stay as loose rock.
+SPOT_ALONG = { 3.0, 5.0 }  -- m: a fall ahead or behind lands this far along the passage
+LB_HALF = 0.64             -- m: LooseBoulder's largest half-extent at scale 1
+RUBBLE_MIN = 1.5           -- m: the smallest pile (one planet voxel is 1.5 m: a smaller ball is not drawn)
+RUBBLE_MAX = 5.0           -- m: a big gallery gets a heap (10 m across), not a wall
+PILE_CLEAR = 0.6           -- m: a pile waits while the crew stands inside it (never buried alive)
+PILE_WAIT = 60.0           -- s: …for this long at most; then only the slabs stay
+-- Where a fall comes down: `why` "step" | "dig" | "ignite" | "probe", draws
+-- u1, u2 → kind "on" | "ahead" | "behind" | "face", along (m, signed along
+-- the walking or digging direction; 0 = at the point).
+function rockfallSpot(why, u1, u2)
+  u1, u2 = u1 or 0.5, u2 or 0.5
+  local d = SPOT_ALONG[1] + (SPOT_ALONG[2] - SPOT_ALONG[1]) * clamp(u2, 0, 1)
+  if why == "dig" then
+    -- at the face you are cutting, or the way you came in
+    if u1 < 0.5 then return "face", 0 end
+    return "behind", -d
+  end
+  if why == "step" then
+    if u1 < 0.4 then return "on", 0 end
+    if u1 < 0.7 then return "ahead", d end
+    return "behind", -d
+  end
+  return "on", 0
+end
+-- The scale of a slab for a passage `H` m from floor to roof and `W` m across
+-- at its narrowest, from draw `u`: 0.7–1.4 as before where there is room,
+-- never more than 30 % of the passage (it falls clear, it does not wedge).
+function slabScale(H, W, u)
+  local room = min(H or 8, W or 8)
+  local cap = 0.30 * room / LB_HALF
+  return clamp(min(0.7 + 0.7 * clamp(u or 0.5, 0, 1), cap), 0.35, 1.4)
+end
+-- The pile a fall leaves in a passage `H` m high and `W` m across, from draw
+-- `u`: → { r (m, the main ball, centred on the floor under the fall), need
+-- (m, the radius that closes the passage), blocks (bool), balls = { { a
+-- (m along the passage), r } … } }. A ball centred on the floor of a round
+-- passage reaches its whole section at r = H; an arched or square one wants
+-- a little more for the corners (√(H² + 0.1 W²)). f = r / need runs 0.6 to
+-- 1.15: a little under half the falls close the passage, the rest choke it
+-- to a crawl over the top or a squeeze at a wall.
+function rubblePile(H, W, u)
+  H, W = max(0.5, H or 3), max(0.5, W or 3)
+  local need = sqrt(H * H + 0.1 * W * W)
+  local f = 0.6 + 0.55 * clamp(u or 0.5, 0, 1)
+  local r = clamp(f * need, RUBBLE_MIN, RUBBLE_MAX)
+  local out = { r = r, need = need, blocks = r >= need * 0.98, balls = { { a = 0, r = r } } }
+  -- a talus either side along the passage: the heap is longer than it is high
+  local r2 = max(RUBBLE_MIN, 0.7 * r)
+  out.balls[2] = { a = 0.6 * r, r = r2 }
+  out.balls[3] = { a = -0.6 * r, r = r2 }
+  return out
+end
+-- Where along the passage a ball of the heap goes for a fall ahead of or
+-- behind the crew: planned at `a` (m along the passage from the fall), radius
+-- r, the crew's feet at `ac` along it. Slid away from the crew until its
+-- near edge is PILE_CLEAR + 0.4 m short of them; never toward them.
+function pileAlong(a, r, ac)
+  local s = (ac <= 0) and 1 or -1         -- away from the crew
+  local gap = (a - ac) * s                -- how far past the crew it sits
+  local want = r + PILE_CLEAR + 0.4
+  if gap < want then return a + s * (want - gap) end
+  return a
+end
+-- Would a ball (body-local centre c, radius r) bury the crew standing from
+-- foot point f to head point h (body-local)? The segment's distance to the
+-- centre under r + PILE_CLEAR.
+function pileBuries(c, r, f, h)
+  local sx, sy, sz = h[1] - f[1], h[2] - f[2], h[3] - f[3]
+  local ss = sx * sx + sy * sy + sz * sz
+  local t = 0
+  if ss > 1e-9 then t = clamp(((c[1] - f[1]) * sx + (c[2] - f[2]) * sy + (c[3] - f[3]) * sz) / ss, 0, 1) end
+  local px, py, pz = f[1] + sx * t, f[2] + sy * t, f[3] + sz * t
+  return len(c[1] - px, c[2] - py, c[3] - pz) < r + PILE_CLEAR
 end
 
 -- ── COLD AND HEAT ───────────────────────────────────────────────────────────
@@ -574,7 +663,12 @@ function airAtWorld(x, y, z)
 end
 
 -- ── rockfall ────────────────────────────────────────────────────────────────
-local fall = nil          -- the fall under way: { body, lx, ly, lz (roof), t0, ux, uy, uz, stage, slabs, mat }
+-- A fall under way: { body, lx, ly, lz (the roof point), ux, uy, uz (up), t0,
+-- stage (0 dust, 1 slabs falling, 2 the pile), slabs, mat, slot, kind, H, W,
+-- fx, fy, fz (the floor point), ax, ay, az (the passage's long axis), pile,
+-- balls = { { x, y, z (body-local), r, done } } }. Everything is body-local
+-- (the planet moves metres a tick: docs/positions-and-frames.md rule 1).
+local fall = nil
 local fall_t = -1e9
 local function cell_key(x, y, z, size)
   return floor(x / size) .. "," .. floor(y / size) .. "," .. floor(z / size)
@@ -588,37 +682,105 @@ local function rock_at(bname, lx, ly, lz, ux, uy, uz)
   end
   return "regolith"
 end
--- Set a fall off at the roof over body-local point (px, py, pz). `why`
--- "step" | "dig" | "ignite" | "probe".
-function startRockfall(bname, px, py, pz, why, key)
+-- the roof rock's palette slot (the pile is painted with it, so the laser
+-- cuts it as that rock and pays it as that rock)
+local function slot_at(bname, lx, ly, lz, ux, uy, uz)
+  local b = space.body(bname)
+  if not (b and terrain and terrain.slotAt) then return nil end
+  local ok, s = pcall(terrain.slotAt, b.x + lx + ux * 0.5, b.y + ly + uy * 0.5, b.z + lz + uz * 0.5)
+  if ok and type(s) == "number" and s > 0 and s ~= 255 then return s end
+  return nil
+end
+-- One terrain ray from body-local (ox, oy, oz) along unit (dx, dy, dz): → the
+-- distance to rock, or `far` when none is that close.
+local function ray(b, ox, oy, oz, dx, dy, dz, far)
+  local ok, h = pcall(terrain.raycast, vec3(b.x + ox, b.y + oy, b.z + oz), vec3(dx, dy, dz), far)
+  if ok and h and h.distance then return h.distance, h end
+  return far, nil
+end
+-- Set a fall off over body-local point (px, py, pz). `why` "step" | "dig" |
+-- "ignite" | "probe". opts = { dir = { x, y, z } (body frame: the way the
+-- crew walks or digs), kind = "on" | "ahead" | "behind" | "face" (else
+-- drawn by rockfallSpot), eye = { x, y, z } (where a ray along the passage
+-- starts) }. Rays: one along the passage for a fall ahead or behind, one up,
+-- one down, four across: a few a fall, none between.
+function startRockfall(bname, px, py, pz, why, key, opts)
   if fall then return false end
   local b = space.body(bname)
   if not b then return false end
+  opts = opts or {}
   local l = len(px, py, pz)
   local ux, uy, uz = px / l, py / l, pz / l
-  -- the roof over the point (one ray)
-  local ok, h = pcall(terrain.raycast, vec3(b.x + px + ux * 0.3, b.y + py + uy * 0.3, b.z + pz + uz * 0.3), vec3(ux, uy, uz), 30)
-  if not (ok and h and h.pos) then return false end
-  local rx, ry, rz = h.pos.x - b.x, h.pos.y - b.y, h.pos.z - b.z
+  -- the passage's direction, flat to the local up
+  local dx, dy, dz = 0, 0, 0
+  if type(opts.dir) == "table" then dx, dy, dz = opts.dir[1] or opts.dir.x or 0, opts.dir[2] or opts.dir.y or 0, opts.dir[3] or opts.dir.z or 0 end
+  local du = dx * ux + dy * uy + dz * uz
+  dx, dy, dz = dx - ux * du, dy - uy * du, dz - uz * du
+  local dl = len(dx, dy, dz)
+  if dl < 1e-3 then
+    local ax, ay, az = 0, 1, 0
+    if math.abs(uy) > 0.9 then ax, ay, az = 1, 0, 0 end
+    dx, dy, dz = ay * uz - az * uy, az * ux - ax * uz, ax * uy - ay * ux
+    dl = len(dx, dy, dz)
+  end
+  dx, dy, dz = dx / dl, dy / dl, dz / dl
+  local kind, along = opts.kind, 0
+  if not kind then kind, along = rockfallSpot(why, math.random(), math.random())
+  elseif kind == "ahead" or kind == "behind" then
+    along = (SPOT_ALONG[1] + SPOT_ALONG[2]) * 0.5 * (kind == "behind" and -1 or 1)
+  end
+  -- ahead or behind: along the passage from where the crew is, short of rock
+  if along ~= 0 then
+    local e = opts.eye or { px, py, pz }
+    local sg = along > 0 and 1 or -1
+    local d = ray(b, e[1], e[2], e[3], dx * sg, dy * sg, dz * sg, math.abs(along) + 1.0)
+    local go = math.max(0, math.min(math.abs(along), d - 1.0))
+    px, py, pz = e[1] + dx * sg * go, e[2] + dy * sg * go, e[3] + dz * sg * go
+    along = sg * go
+  end
+  -- the roof over the point and the floor under it
+  local roof, h = ray(b, px + ux * 0.3, py + uy * 0.3, pz + uz * 0.3, ux, uy, uz, 30)
+  if not h then return false end
+  roof = roof + 0.3
+  local down = ray(b, px, py, pz, -ux, -uy, -uz, 30)
+  local rx, ry, rz = px + ux * roof, py + uy * roof, pz + uz * roof
+  local fx, fy, fz = px - ux * down, py - uy * down, pz - uz * down
+  local H = roof + down
+  -- across, at half height: the passage's width each way (along dir and across it)
+  local sx, sy, sz = uy * dz - uz * dy, uz * dx - ux * dz, ux * dy - uy * dx
+  local mx, my, mz = fx + ux * H * 0.5, fy + uy * H * 0.5, fz + uz * H * 0.5
+  local cap = 12
+  local ca1 = ray(b, mx, my, mz, dx, dy, dz, cap)
+  local ca2 = ray(b, mx, my, mz, -dx, -dy, -dz, cap)
+  local cs1 = ray(b, mx, my, mz, sx, sy, sz, cap)
+  local cs2 = ray(b, mx, my, mz, -sx, -sy, -sz, cap)
+  -- the long axis is the more open one (a tunnel runs that way)
+  local ax, ay, az, ta, tn, na = dx, dy, dz, { ca1, ca2 }, { cs1, cs2 }, { sx, sy, sz }, nil
+  if cs1 + cs2 > ca1 + ca2 then ax, ay, az, ta, tn, na = sx, sy, sz, { cs1, cs2 }, { ca1, ca2 }, { dx, dy, dz } end
+  local W = math.min(ta[1] + ta[2], tn[1] + tn[2])
   fall = { body = bname, lx = rx, ly = ry, lz = rz, ux = ux, uy = uy, uz = uz, t0 = now(), stage = 0, slabs = {},
-           why = why, roof = h.distance, mat = rock_at(bname, rx, ry, rz, ux, uy, uz) }
+           why = why, kind = kind, along = along, roof = roof, H = H, W = W,
+           fx = fx, fy = fy, fz = fz, ax = ax, ay = ay, az = az, nx = na[1], ny = na[2], nz = na[3],
+           ca = ta, cn = tn, mat = rock_at(bname, rx, ry, rz, ux, uy, uz), slot = slot_at(bname, rx, ry, rz, ux, uy, uz) }
   fall_t = now()
   if key then cur.fell[key] = true; save_set("cave.fell.", cur.fell) end
   stats.rockfalls = stats.rockfalls + 1
-  -- the crack, at the roof
+  -- the crack, at the roof (no caption: you hear it, you see the dust)
   play_at(CLIPS.crack, bname, rx - ux * 0.3, ry - uy * 0.3, rz - uz * 0.3, { volume = 1.0, pitch = 0.78 + 0.1 * math.random(), min = 8, max = 90, secs = 3 })
   play_at(CLIPS.trickle, bname, rx - ux * 0.5, ry - uy * 0.5, rz - uz * 0.5, { volume = 0.9, min = 4, max = 40, secs = 4 })
-  -- (after a firedamp blast its own caption stands: the crack is heard)
-  if why ~= "ignite" then say("rockfall", "THE ROOF CRACKS", tell("rockfall", "Get clear: it is coming down."), 3.0, 4) end
-  last.rockfall = { t = now(), why = why, roof = h.distance, mat = fall.mat, body = bname }
+  if log then log(string.format("cave_hazards: rockfall (%s, %s %.1f m) roof %.1f m, passage %.1f m high %.1f m across, %s",
+    tostring(why), kind, along, roof, H, W, fall.mat)) end
+  last.rockfall = { t = now(), why = why, kind = kind, along = along, roof = roof, H = H, W = W, mat = fall.mat, slot = fall.slot, body = bname,
+                    floor = { fx, fy, fz } }
   return true
 end
-function forceRockfall()
+-- (probes) a fall over the crew's eye, or `kind` ("ahead" | "behind") along `dir`
+function forceRockfall(kind, dir)
   local cf = ref("cave_field")
   local e = cf and cf.eyeLocal
   if not (e and cf.probeBody) then return false end
   fall = nil
-  return startRockfall(cf.probeBody, e[1], e[2], e[3], "probe")
+  return startRockfall(cf.probeBody, e[1], e[2], e[3], "probe", nil, { kind = kind, dir = dir, eye = e })
 end
 
 local function dust(bname, lx, ly, lz, ux, uy, uz, k)
@@ -639,34 +801,45 @@ local seq = 0
 local function drop_slabs()
   local f = fall
   local u = {}
-  for i = 1, 11 do u[i] = math.random() end
+  for i = 1, 14 do u[i] = math.random() end
   local plan = rockfallPlan(u)
   local b = space.body(f.body)
   if not (b and spawn) then return end
-  -- tangents at the roof point
-  local ax, ay, az = 0, 1, 0
-  if math.abs(f.uy) > 0.9 then ax, ay, az = 1, 0, 0 end
-  local tx, ty, tz = ay * f.uz - az * f.uy, az * f.ux - ax * f.uz, ax * f.uy - ay * f.ux
-  local tl = len(tx, ty, tz); tx, ty, tz = tx / tl, ty / tl, tz / tl
-  local sx, sy, sz = f.uy * tz - f.uz * ty, f.uz * tx - f.ux * tz, f.ux * ty - f.uy * tx
   for i, s in ipairs(plan) do
-    local drop = 0.5 + 0.45 * s.s
-    local lx = f.lx - f.ux * drop + tx * s.dx + sx * s.dz
-    local ly = f.ly - f.uy * drop + ty * s.dx + sy * s.dz
-    local lz = f.lz - f.uz * drop + tz * s.dx + sz * s.dz
+    -- sized to the passage, and inside it: never in the roof or a wall
+    local sc = slabScale(f.H, f.W, u[7 + i])
+    local hs = LB_HALF * sc
+    local a = clamp(s.dx, -(f.ca[2] - hs - 0.1), f.ca[1] - hs - 0.1)
+    local c = clamp(s.dz, -(f.cn[2] - hs - 0.1), f.cn[1] - hs - 0.1)
+    if f.ca[1] + f.ca[2] < 2 * hs + 0.2 then a = 0 end
+    if f.cn[1] + f.cn[2] < 2 * hs + 0.2 then c = 0 end
+    local drop = math.min(hs + 0.25, math.max(hs, f.H - hs - 0.05))
+    local lx = f.lx - f.ux * drop + f.ax * a + f.nx * c
+    local ly = f.ly - f.uy * drop + f.ay * a + f.ny * c
+    local lz = f.lz - f.uz * drop + f.az * a + f.nz * c
     seq = seq + 1
     local nm = string.format("CaveSlab %d", seq)
-    local rec = { name = nm, s = s.s, lx = lx, ly = ly, lz = lz, hit = false, t0 = now(), landed = false }
+    local rec = { name = nm, s = sc, lx = lx, ly = ly, lz = lz, hit = false, t0 = now(), landed = false }
     f.slabs[#f.slabs + 1] = rec
     local w = space.body(f.body)
     spawn("LooseBoulder", vec3(w.x + lx, w.y + ly, w.z + lz), function(n)
       n.name = nm
       rec.n = n
-      pcall(function() n.scale = s.s end)
+      pcall(function() n.scale = sc end)
       pcall(n.setAngles, n, math.random() * 6.28, math.random() * 6.28, math.random() * 6.28)
       local mf = ref("mineral_field")
-      if mf and mf.adoptBody then pcall(mf.adoptBody, n, "LooseBoulder", f.mat, floor(3 * s.s ^ 3 + 0.5) + 1, s.s) end
-      if assembly and assembly.rebuild then pcall(assembly.rebuild, n) end
+      if mf and mf.adoptBody then pcall(mf.adoptBody, n, "LooseBoulder", f.mat, floor(3 * sc ^ 3 + 0.5) + 1, sc) end
+      -- it FALLS: started downward (planet-relative, as node.vel is), which
+      -- also wakes it (a body spawned still was seen hanging in the air,
+      -- 2026-11-11 hazardprobe before-shots)
+      local function go()
+        if n.valid == false then return end
+        pcall(function() n.asleep = false; n.vel = vec3(-f.ux * 2.0, -f.uy * 2.0, -f.uz * 2.0) end)
+      end
+      if assembly and assembly.rebuild then
+        local okr = pcall(assembly.rebuild, n, go)
+        if not okr then go() end
+      else go() end
       -- no sky in a cave (W4's finding): the rock's own colour, no sky sheen
       rec.look_t = now()
       stats.slabs = stats.slabs + 1
@@ -678,7 +851,88 @@ local function drop_slabs()
   last.rockfall.slabs = #plan
 end
 
--- Follow the fall: dust while it hangs, the slabs, their hits on the crew.
+-- The crew's feet and head, body-local, this frame (nil off foot).
+local function crew_seg(b)
+  local wk = ref("planet_walker")
+  local a = (wk and wk.node) or (find and find("Astronaut"))
+  if not (a and a.valid ~= false and b) then return nil end
+  local ax, ay, az = a.x - b.x, a.y - b.y, a.z - b.z
+  local al = math.max(1e-6, len(ax, ay, az))
+  local ux, uy, uz = ax / al, ay / al, az / al
+  return { ax - ux * 0.9, ay - uy * 0.9, az - uz * 0.9 }, { ax + ux * 0.9, ay + uy * 0.9, az + uz * 0.9 }
+end
+-- The pile's balls, body-local, on the floor under the fall along the passage.
+local function plan_pile(f)
+  local p = rubblePile(f.H, f.W, math.random())
+  f.pile = p
+  f.balls = {}
+  -- a fall ahead of or behind the crew heaps up away from them (the passage
+  -- closes between them and the far side, not on their boots): each ball
+  -- slid along the passage until it clears them (pileAlong)
+  local ac = nil
+  if f.kind ~= "on" then
+    local b = space.body(f.body)
+    local feet = b and crew_seg(b)
+    if feet then ac = (feet[1] - f.fx) * f.ax + (feet[2] - f.fy) * f.ay + (feet[3] - f.fz) * f.az end
+  end
+  for _, q in ipairs(p.balls) do
+    local a = ac and pileAlong(q.a, q.r, ac) or q.a
+    f.balls[#f.balls + 1] = { x = f.fx + f.ax * a, y = f.fy + f.ay * a, z = f.fz + f.az * a, r = q.r, done = false }
+  end
+  last.rockfall.pile = { r = p.r, need = p.need, blocks = p.blocks, n = #f.balls }
+end
+-- Land what can land of the pile: each ball that would not bury the crew.
+-- → true once every ball is down.
+local function land_pile(f)
+  local b = space.body(f.body)
+  if not (b and terrain and terrain.sculpt) then return true end
+  local feet, head = crew_seg(b)
+  local left, landed = 0, 0
+  for _, q in ipairs(f.balls) do
+    if not q.done then
+      if feet and pileBuries({ q.x, q.y, q.z }, q.r, feet, head) and now() - f.t0 < DUST_S + PILE_WAIT then
+        left = left + 1
+      else
+        q.done = true
+        landed = landed + 1
+        local wx, wy, wz = b.x + q.x, b.y + q.y, b.z + q.z
+        pcall(terrain.sculpt, wx, wy, wz, q.r, 1.0, "raise", { hardness = 0.55, falloff = "smooth" })
+        if f.slot and terrain.paintTexture then pcall(terrain.paintTexture, wx, wy, wz, q.r + 0.25, f.slot) end
+        -- the slabs it covers go into it (buried rubble), the rest stay loose
+        -- (over the heap's footprint, anywhere up to the roof: a slab
+        -- caught on a ledge above it comes down with it)
+        for _, s in ipairs(f.slabs) do
+          local n = s.n
+          if n and n.valid ~= false and not s.buried then
+            local ox, oy, oz = n.x - wx, n.y - wy, n.z - wz
+            local hu = ox * f.ux + oy * f.uy + oz * f.uz
+            local d = len(ox - f.ux * hu, oy - f.uy * hu, oz - f.uz * hu)
+            if d < q.r + 0.2 and hu > -q.r and hu < f.H + 0.5 then
+              s.buried = true
+              pcall(function() n:destroy() end)
+            end
+          end
+        end
+        stats.pileBalls = (stats.pileBalls or 0) + 1
+      end
+    end
+  end
+  if landed > 0 then
+    -- the heap settling: its dust and a last knock of rock
+    dust(f.body, f.fx + f.ux * 1.2, f.fy + f.uy * 1.2, f.fz + f.uz * 1.2, f.ux, f.uy, f.uz, 1.4)
+    play_at(CLIPS.hits[math.random(1, #CLIPS.hits)], f.body, f.fx + f.ux * 0.8, f.fy + f.uy * 0.8, f.fz + f.uz * 0.8,
+      { volume = 0.9, min = 4, max = 60, secs = 3 })
+    last.pile = { t = now(), r = f.pile.r, blocks = f.pile.blocks, landed = landed, left = left, body = f.body,
+                  x = f.fx, y = f.fy, z = f.fz, ax = f.ax, ay = f.ay, az = f.az, H = f.H, W = f.W }
+    if log then log(string.format("cave_hazards: rubble pile r %.1f m in a %.1f m passage (%s), %d ball(s) down, %d waiting",
+      f.pile.r, f.H, f.pile.blocks and "closes it" or "chokes it", landed, left)) end
+  end
+  if left == 0 then stats.piles = (stats.piles or 0) + 1 end
+  return left == 0
+end
+
+-- Follow the fall: dust while it hangs, the slabs, their hits on the crew,
+-- then the pile they leave.
 local function fall_update()
   local f = fall
   local t = now() - f.t0
@@ -686,7 +940,11 @@ local function fall_update()
     -- dust sifting down while it hangs (three puffs over DUST_S)
     local want = floor(t / 0.5)
     if want > (f.puffs or -1) and t < DUST_S then f.puffs = want; dust(f.body, f.lx, f.ly, f.lz, f.ux, f.uy, f.uz, 0.5 + 0.2 * want) end
-    if t >= DUST_S then f.stage = 1; drop_slabs() end
+    if t >= DUST_S then f.stage = 1; drop_slabs(); plan_pile(f) end
+    return
+  end
+  if f.stage == 2 then
+    if land_pile(f) then fall = nil end
     return
   end
   -- the slabs' look, a beat after their models land: the cave's rock, no sky reflection
@@ -704,10 +962,49 @@ local function fall_update()
       end
     end
   end
+  -- THE FALL HELD TO GRAVITY. In a cave the engine let a loose body drift
+  -- (2026-11-11 hazardprobe only=slabdiag: wake "unsupported", its speed
+  -- along up wandering ±3 m/s, 2.5 m down in 3 s; the same prefab on the
+  -- surface falls and settles; engine card draft in the slice's notes). A
+  -- slab still over the floor and falling slower than gravity would have it
+  -- is given that speed (planet-relative, as node.vel is); the engine still
+  -- owns its collisions and its rest.
+  do
+    local b = space.body(f.body)
+    local tf = t - DUST_S
+    if b and tf > 0 and tf < 3.0 then
+      if not f.g then
+        local g = 6
+        if space.gravity then
+          local ok, gx, gy, gz = pcall(space.gravity, b.x + f.fx, b.y + f.fy, b.z + f.fz)
+          if ok and gx then g = len(gx, gy, gz) end
+        end
+        f.g = g
+      end
+      for _, s in ipairs(f.slabs) do
+        local n = s.n
+        if n and n.valid ~= false and not s.landed and not s.buried then
+          local hgt = (n.x - b.x - f.fx) * f.ux + (n.y - b.y - f.fy) * f.uy + (n.z - b.z - f.fz) * f.uz
+          local hs = LB_HALF * (s.s or 1)
+          s.hgt = hgt - hs
+          local okv, v = pcall(function() return n.vel end)
+          if okv and v and hgt > hs + 0.25 then
+            local vu = v.x * f.ux + v.y * f.uy + v.z * f.uz
+            local want = -math.min(f.g * tf + 2.0, sqrt(2 * f.g * math.max(0.1, f.H)) + 2.0)
+            if vu > want + 0.5 then
+              local d = want - vu
+              pcall(function() n.vel = vec3(v.x + f.ux * d, v.y + f.uy * d, v.z + f.uz * d) end)
+            end
+          end
+        end
+      end
+    end
+  end
   -- hits: a slab within reach of the crew's chest while it still moves fast
   local wk = ref("planet_walker")
   local a = (wk and wk.node) or (find and find("Astronaut"))
   local C = ref("crew")
+  local all_down = #f.slabs > 0
   if a and a.valid ~= false then
     local b = space.body(f.body)
     for _, s in ipairs(f.slabs) do
@@ -732,15 +1029,27 @@ local function fall_update()
           stats.hits = stats.hits + 1
           last.hit = { t = now(), amount = amt, speed = v, s = s.s }
           play_at(CLIPS.hits[math.random(1, #CLIPS.hits)], f.body, n.x - b.x, n.y - b.y, n.z - b.z, { volume = 0.9, min = 3, max = 40, secs = 3 })
-          say("hit", "HIT BY A FALLING SLAB", string.format("%.0f %% of your health.", amt * 100), 3.0, 2)
-        elseif not s.landed and t > DUST_S + 0.6 and v < 1.0 then
+          if log then log(string.format("cave_hazards: hit by a falling slab, %.0f %% of health", amt * 100)) end
+        elseif not s.landed and t > DUST_S + 0.6 and v < 1.0 and (s.hgt or 0) < 0.5 then
           s.landed = true
           play_at(CLIPS.hits[math.random(1, #CLIPS.hits)], f.body, n.x - b.x, n.y - b.y, n.z - b.z, { volume = 0.7 * s.s, min = 4, max = 50, secs = 3 })
         end
       end
+      if not s.landed and not s.hit then all_down = false end
     end
   end
-  if t > DUST_S + 5 then fall = nil end
+  -- the slabs are down (or 3 s have passed): what came down becomes the heap
+  if (all_down and t > DUST_S + 0.9) or t > DUST_S + 3.0 then
+    f.stage = 2
+    if land_pile(f) then fall = nil end
+  end
+end
+-- (probes) the fall under way: its stage and pile, or nil
+function fallState()
+  if not fall then return nil end
+  local waiting = 0
+  for _, q in ipairs(fall.balls or {}) do if not q.done then waiting = waiting + 1 end end
+  return { stage = fall.stage, kind = fall.kind, H = fall.H, W = fall.W, pile = fall.pile, waiting = waiting, slabs = #fall.slabs }
 end
 
 -- ── methane ignition ────────────────────────────────────────────────────────
@@ -900,16 +1209,22 @@ local function step_probe(cf, name, gdt, rdt)
   state.speed = speed
   if not fall and now() - fall_t > FALL_COOLDOWN then
     if here and speed > 0.6 and speed < 12 and math.random() < STEP_P then
-      startRockfall(name, e[1], e[2], e[3], "step", hkey)
+      -- (on the crew, or ahead or behind them along the way they walk)
+      local wd = { e[1] - prev.eye[1], e[2] - prev.eye[2], e[3] - prev.eye[3] }
+      startRockfall(name, e[1], e[2], e[3], "step", hkey, { dir = wd, eye = e })
     elseif laser_firing() then
       local lx, ly, lz = aim_local(name)
       if lx then
-        -- (half a metre back toward the crew: out of the rock the beam bites)
+        -- (back toward the crew: out of the rock the beam bites, under the
+        -- roof of the cut; or the way they came in)
         local dx, dy, dz = e[1] - lx, e[2] - ly, e[3] - lz
         local dl = max(1e-6, len(dx, dy, dz))
-        lx, ly, lz = lx + dx / dl * 0.5, ly + dy / dl * 0.5, lz + dz / dl * 0.5
+        local bk = math.min(1.2, dl * 0.5)
+        lx, ly, lz = lx + dx / dl * bk, ly + dy / dl * bk, lz + dz / dl * bk
         local dig_here, dkey = unstable_cell(lx, ly, lz)
-        if dig_here and math.random() < DIG_P then startRockfall(name, lx, ly, lz, "dig", dkey) end
+        if dig_here and math.random() < DIG_P then
+          startRockfall(name, lx, ly, lz, "dig", dkey, { dir = { -dx, -dy, -dz }, eye = e })
+        end
       end
     end
   end

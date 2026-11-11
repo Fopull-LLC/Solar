@@ -112,6 +112,27 @@ do
   check(near(D.crewHurt(1e5, 1), 1), "crew: F / 1e5 a second")
 end
 
+-- ── 7. what a Repair Kit mends (2026-11-11) ────────────────────────────────
+do
+  local f = D.pieceFaults({ wr = true, wrl = "bearing seized", wrs = 12 }, { hp = 0.4, brk = 0.1 })
+  check(#f == 3 and f[1].id == "knock" and f[1].secs == 12 and f[1].text == "knocked askew: bearing seized", "a knock, with the scenario's words and seconds")
+  check(f[2].id == "wear" and f[2].kit and f[2].text == "worn: 40 % of its strength" and near(f[2].secs, 4 + 16 * 0.6), "wear: the kit, longer the worse")
+  check(f[3].id == "brk" and not f[3].kit and f[3].why:find("Engineer", 1, true), "a primary pipe broken open: not the kit's, and why (a weld)")
+  local s, list, what = D.kitJob(f, 0.5)
+  check(#list == 2 and near(s, (12 + 4 + 16 * 0.6) * 0.5) and what == "knocked askew: bearing seized · worn: 40 % of its strength", "the kit's job: knock and wear, at an Engineer's pace")
+  check(#D.pieceFaults({ wr = true }, nil, { skipKnock = true }) == 0, "a knock another row mends is not listed twice")
+  check(#D.pieceFaults({}, { hp = 1 }) == 0 and #D.pieceFaults({}, { hp = 0.9995 }) == 0, "a sound piece: nothing to mend")
+  check(#D.pieceFaults(nil, nil) == 0, "no piece: nothing")
+  check(D.reattachSecs(1) == 10 and D.reattachSecs(2) == 20 and D.reattachSecs(9) == 30 and D.reattachSecs(1, 0.5) == 5, "reattach: 10 s a part, 30 s at most, at the worker's pace")
+  local ok_o = { kits = 1, onFoot = true, near = true }
+  check(D.kitWhyNot(ok_o) == nil, "kit, on foot, near: it can")
+  check(D.kitWhyNot({ kits = 0, onFoot = true, near = true }):find("Repair Kit", 1, true), "no kit: said")
+  check(D.kitWhyNot({ kits = 1, onFoot = false, near = true }):find("on foot", 1, true), "from the seat: said")
+  check(D.kitWhyNot({ kits = 1, onFoot = true, near = false, dist = 7.4 }) == "walk up to it (7 m away)", "too far: how far")
+  check(D.kitWhyNot({ kits = 1, onFoot = true, near = true, gone = "the part is gone" }) == "the part is gone", "the part gone: first")
+  check(D.kitWhyNot({ kits = 1, onFoot = true, near = true, why = "the craft is moving: stop it first" }) == "the craft is moving: stop it first", "…the craft's own physical reason")
+end
+
 if #failures > 0 then
   for _, f in ipairs(failures) do print("FAIL " .. f) end
   print(string.format("smoke_damage: %d passed, %d failed", passed, #failures))

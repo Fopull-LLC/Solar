@@ -145,3 +145,63 @@ function holeArea(hp)
   local s = clamp((0.5 - hp) / 0.45, 0.02, 1)
   return A_HOLE * s * s
 end
+
+-- ── WHAT A REPAIR KIT MENDS (Ty 2026-11-11: "repair kits can't fix much") ──
+-- On a KIT PIECE: knocked askew (`p.wr`, a scenario's or a forced lock's;
+-- a ruin's own row is ruins.lua's) and WORN (the part state's `hp` under 1:
+-- a beam or a blast took it down, lasers.lua). A primary pipe broken open
+-- (`st.brk`) is listed but not the kit's: at 15.5 MPa it wants a weld (an
+-- Engineer, 30 s, reactor_plant's row). On a CRAFT: wear (vessel_controller
+-- repairPart, the kit's old job), a hole's patch (cabin_air), and a part
+-- torn or broken off that still lies by its mount (vessel_controller
+-- reattach). Every refusal is a physical one: no kit, too far, the part gone.
+KIT_KNOCK_S = 8.0          -- s: a knocked piece levered back and re-bolted
+KIT_WEAR_S = { 4.0, 20.0 } -- s: a scuff … a piece worn to nothing
+KIT_REATTACH_S = 10.0      -- s a part put back on (each part of a wreck)
+KIT_REATTACH_MAX = 30.0
+-- The faults on a kit piece (bp record p, part state st): → { { id, text,
+-- secs, kit (bool), why (when not the kit's) } … } in the order mended.
+-- opts.skipKnock: another row mends the knock (a ruin's, a scenario's).
+function pieceFaults(p, st, opts)
+  local out = {}
+  opts = opts or {}
+  if p and p.wr and not opts.skipKnock then
+    out[#out + 1] = { id = "knock", text = "knocked askew" .. (p.wrl and (": " .. tostring(p.wrl)) or ""),
+                      secs = tonumber(p.wrs) or KIT_KNOCK_S, kit = true }
+  end
+  local hp = st and tonumber(st.hp)
+  if hp and hp > 0 and hp < 0.999 then
+    out[#out + 1] = { id = "wear", text = string.format("worn: %d %% of its strength", math.floor(hp * 100 + 0.5)),
+                      secs = KIT_WEAR_S[1] + (KIT_WEAR_S[2] - KIT_WEAR_S[1]) * (1 - hp), kit = true, hp = hp }
+  end
+  local brk = st and tonumber(st.brk) or 0
+  if brk > 0 then
+    out[#out + 1] = { id = "brk", text = string.format("broken open (%.0f %% of its bore)", brk * 100), kit = false,
+                      why = "a pipe at primary pressure wants a weld, not a kit: an Engineer, 30 s" }
+  end
+  return out
+end
+-- The kit's share of those: → seconds (at the worker's pace `mult`), the
+-- faults it mends, a one-line "what" ("knocked askew · worn: 40 %").
+function kitJob(faults, mult)
+  local s, list, words = 0, {}, {}
+  for _, f in ipairs(faults or {}) do
+    if f.kit then s = s + (f.secs or 0); list[#list + 1] = f; words[#words + 1] = f.text end
+  end
+  return s * (mult or 1), list, table.concat(words, " · ")
+end
+-- How long putting a wreck of `n` parts back on takes, at pace `mult`.
+function reattachSecs(n, mult)
+  return clamp(KIT_REATTACH_S * math.max(1, n or 1), KIT_REATTACH_S, KIT_REATTACH_MAX) * (mult or 1)
+end
+-- The kit's refusal, physical reasons only, in the order a player meets
+-- them: o = { kits, onFoot, near, dist, gone, why } → nil (it can) or why.
+function kitWhyNot(o)
+  o = o or {}
+  if o.gone then return o.gone end
+  if not o.onFoot then return "only on foot or on EVA: no repairs from the seat" end
+  if (o.kits or 0) < 1 then return "needs a Repair Kit in the pack (lockers, or the VAB)" end
+  if o.near == false then return o.dist and string.format("walk up to it (%.0f m away)", o.dist) or "walk up to it" end
+  if o.why then return o.why end
+  return nil
+end

@@ -324,6 +324,7 @@ local destroyed = false -- the POD is gone: the vessel is lost
 local integ = {
   gone = {},        -- uid → true once that part has left this craft (staged, shed, broken off)
   lost = {},        -- uid → record: the parts LOST TO DAMAGE (broken, torn or shed off), for the repair bay's refit
+  junk = {},        -- uid → { n = the wreck's root node, nodes = { uid → part node }, set = { uid … }, t } while that wreck lies about (the Repair Kit's reattach)
   gen = 0,          -- bumped whenever the craft's part set changes (invalidates the caches)
   seated = false,   -- THIS controller made the crew kinematic (and must hand them back)
   seat_t = -10.0,   -- last time the seat's kinematic flag was re-asserted
@@ -5575,10 +5576,18 @@ function refitFinish(node, job)
   for _, d in ipairs(fp.parts) do parts[#parts + 1] = d end
   local E = elib()
   for _, d in ipairs(job.list) do
-    d.st = {}
-    if E and E.stateOf then
-      local st = E.stateOf(d)
-      if st.charge then st.charge = 0 end
+    if job.keep then
+      -- (REATTACH) the same part put back: its own state (what its tanks and
+      -- cells held), its health the kit's
+      d.st = type(d.st) == "table" and d.st or {}
+      local h = job.hp and job.hp[d.uid]
+      if h then d.st.hp = (h < 0.999) and math.floor(h * 1000 + 0.5) / 1000 or nil end
+    else
+      d.st = {}
+      if E and E.stateOf then
+        local st = E.stateOf(d)
+        if st.charge then st.charge = 0 end
+      end
     end
     parts[#parts + 1] = d
     back[d.uid] = true
@@ -5599,7 +5608,7 @@ end
 
 -- Build lost parts `uids` (nil = every one that can go back on) again on the
 -- craft. Asynchronous: `done(n)` runs once they are aboard. → ok, why
-function refitParts(uids, done)
+function refitParts(uids, done, opts)
   local node = dock.node
   if destroyed or not (node and node.valid) then return false, "the craft is gone" end
   if integ.refit then return false, "a refit is already under way" end
@@ -5614,6 +5623,7 @@ function refitParts(uids, done)
   if #list == 0 then return false, "nothing to refit" end
   dormRouse()
   local job = { list = list, got = 0, done = done }
+  if type(opts) == "table" then job.keep, job.hp = opts.keep == true, opts.hp end
   integ.refit = job
   local P = findScript("builder_proc")
   for _, d in ipairs(list) do
@@ -5632,6 +5642,154 @@ function refitParts(uids, done)
     end, node)
   end
   return true, string.format("%d part(s) going back on", #list)
+end
+
+-- ── REATTACH (the Repair Kit; Ty 2026-11-11: "if a part gets detached but
+-- it's still visibly on it, it looks like something I can repair but I just
+-- can't") ─────────────────────────────────────────────────────────────────
+-- A part LOST TO DAMAGE leaves as a wreck of its own (break_part, shedSet:
+-- assembly.split). While that wreck still lies where the part belongs, the
+-- Repair Kit re-seats it: the wreck goes, and the same part (its own state,
+-- the health the kit gives it) goes back on its mount through the refit
+-- (refitParts with keep). Refused only for physical reasons: the wreck is
+-- gone, it lies too far from its mount, its mount is gone too, the craft is
+-- moving, docked or already being refitted.
+REATTACH_REACH = 3.0     -- m: from where the part lies to where it belongs
+REATTACH_HP = 0.35       -- the health a part that BROKE (hp 0) comes back at; a torn-off part keeps its own
+REATTACH_SPEED = 0.6     -- m/s: the craft must be about still
+function junkNote(junk, set_l, by_u, hp_u)
+  if not (junk and set_l) then return end
+  local e = { n = junk, nodes = by_u or {}, set = set_l, hp = hp_u or {}, t = time or 0 }
+  for _, u in ipairs(set_l) do integ.junk[u] = e end
+end
+function junkLive(e)
+  return e and e.n and e.n.valid ~= false
+end
+function junkLen(x, y, z) return math.sqrt(x * x + y * y + z * z) end
+-- The lost part a node (a wreck's root, one of its parts, or a child of one)
+-- is, with its wreck: → uid, entry; nil when it is none of ours.
+function lostOfNode(n)
+  if not (n and n.valid ~= false) or not next(integ.junk) then return nil end
+  local ids = {}
+  local m = n
+  for _ = 0, 4 do
+    if not m then break end
+    local ok, id = pcall(function() return m.id end)
+    if ok and id then ids[id] = true end
+    local okp, par = pcall(function() return m.parent end)
+    m = okp and par or nil
+  end
+  for u, e in pairs(integ.junk) do
+    if not junkLive(e) or aboard(u) then
+      integ.junk[u] = nil
+    else
+      local pn = e.nodes[u]
+      if (pn and pn.valid ~= false and ids[pn.id]) then return u, e end
+    end
+  end
+  -- (the wreck's root: name its top part, the one whose mount stays aboard)
+  for u, e in pairs(integ.junk) do
+    if ids[e.n.id] then
+      local d = integ.lost[u]
+      if d and aboard(d.parent or 0) then return u, e end
+    end
+  end
+  for u, e in pairs(integ.junk) do if ids[e.n.id] then return u, e end end
+  return nil
+end
+-- Where lost part `uid` lies and where it belongs, both DRAWN this frame
+-- (the wreck's node and the craft's node:toWorld, read in one pass: rule 2).
+-- → distance (m), or nil and why.
+function reattachDist(uid)
+  local e, d = integ.junk[uid], integ.lost[uid]
+  local node = dock.node
+  if not (d and e and junkLive(e)) then return nil, "the part is gone" end
+  if destroyed or not (node and node.valid) then return nil, "the craft is gone" end
+  local pn = e.nodes[uid]
+  if not (pn and pn.valid ~= false) then pn = e.n end
+  -- (the root through a fresh handle: this script's own is a hook behind
+  -- when read from another script's call, rule 6)
+  local rh = drawnRoot() or node
+  local w = pn.worldPos
+  local s = rh:toWorld(vec3(d.x or 0, d.y or 0, d.z or 0))
+  if not (w and s) then return nil, "the part is gone" end
+  return junkLen(w.x - s.x, w.y - s.y, w.z - s.z)
+end
+-- What a reattach of the wreck holding `uid` would put back, and whether it
+-- can now. → { uid, uids, label, n, dist, hp (what it comes back at), broke }
+-- and nil, or nil and why (a physical reason).
+function reattachPlan(uid)
+  local e, d = integ.junk[uid], integ.lost[uid]
+  if not (d and e and junkLive(e)) then return nil, "the part is gone" end
+  if aboard(uid) then return nil, "it is already on" end
+  local plan = { uid = uid, label = d.label or d.id or "part", uids = {}, hp = {} }
+  -- the whole wreck goes back (what came off together goes on together),
+  -- the top part first
+  for _, u in ipairs(e.set) do
+    if integ.lost[u] and not aboard(u) then
+      plan.uids[#plan.uids + 1] = u
+      local h = e.hp[u] or part_hp[u]   -- (its health as it left; 0 = it broke)
+      plan.hp[u] = (h and h > 0) and math.min(1, h) or REATTACH_HP
+      if not (h and h > 0) then plan.broke = true end
+    end
+  end
+  plan.n = #plan.uids
+  local dist, why = reattachDist(uid)
+  plan.dist = dist
+  if not dist then return nil, why end
+  local can = {}
+  for _, q in ipairs((lostParts())) do can[q.uid] = true end
+  local mounted = false
+  for _, u in ipairs(plan.uids) do if can[u] then mounted = true break end end
+  local info = dock.node and dock.node.valid and assembly.info(dock.node)
+  local why2 = reattachVerdict({ destroyed = destroyed, refit = integ.refit ~= nil, docked = (dock.latched or 0) > 0 or dock.pending ~= nil and dock.pending ~= false,
+    mounted = mounted, dist = dist, speed = (info and info.vel) and junkLen(info.vel.x, info.vel.y, info.vel.z) or 0 })
+  if why2 then return nil, why2 end
+  return plan
+end
+-- (pure) Can a wreck go back on? o = { destroyed, refit, docked, mounted
+-- (its mount, or a part of it, still aboard), dist (m from its mount),
+-- speed (the craft's, m/s) } → nil, or the physical reason it can't.
+function reattachVerdict(o)
+  if o.destroyed then return "the craft is gone" end
+  if o.refit then return "parts are already going back on" end
+  if o.docked then return "it is docked: undock it first" end
+  if not o.mounted then return "what it was mounted on is gone too: put that back first" end
+  if (o.dist or 0) > REATTACH_REACH then return string.format("it lies %.1f m from its mount: bring it back (within %.0f m)", o.dist, REATTACH_REACH) end
+  if (o.speed or 0) > REATTACH_SPEED then return "the craft is moving: stop it first" end
+  return nil
+end
+-- Put the wreck holding `uid` back on. `done(n)` once it is aboard. → ok, why
+function reattach(uid, done)
+  local plan, why = reattachPlan(uid)
+  if not plan then return false, why end
+  local e = integ.junk[uid]
+  local ok, w = refitParts(plan.uids, function(n)
+    for _, u in ipairs(plan.uids) do integ.junk[u] = nil end
+    log(string.format("reattach: %s back on %s (%d part(s))", plan.label, craftName, n))
+    if done then pcall(done, n) end
+  end, { keep = true, hp = plan.hp })
+  if not ok then return false, w end
+  -- the wreck goes the moment its parts are spawned again in its place
+  for _, u in ipairs(plan.uids) do integ.junk[u] = nil end
+  if e and junkLive(e) then pcall(function() e.n:destroy() end) end
+  lastReattach = { uid = uid, uids = plan.uids, label = plan.label, dist = plan.dist, hp = plan.hp, t = time or 0 }
+  return true, string.format("%s going back on", plan.label)
+end
+-- The record of a part lost to damage (nil when it is aboard or unknown).
+function lostRec(uid) return integ.lost[uid] end
+-- (probes) the wrecks lying about: { { uid, label, dist } }
+function lostWrecks()
+  local out, seen = {}, {}
+  for u, e in pairs(integ.junk) do
+    if junkLive(e) and not aboard(u) and not seen[e] then
+      seen[e] = true
+      local d = integ.lost[u]
+      out[#out + 1] = { uid = u, label = d and (d.label or d.id) or "part", dist = (reattachDist(u)), n = e.n, set = e.set }
+    end
+  end
+  table.sort(out, function(a, b) return a.uid < b.uid end)
+  return out
 end
 
 -- ── PART FRAMES, NOW (the crew's repair lock, docs/crew-and-items.md §6.3) ─
@@ -6665,6 +6823,7 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
     quench({ c })
     assembly.split(node, { c }, function(junk)
       debris_kick(junk, hx, hy, hz, is_explosive and 3.0 or 0.0, away, node)
+      junkNote(junk, { uid }, { [uid] = c }, { [uid] = 0 })
     end)
     -- What hung off the part that broke has nothing holding it any more: every
     -- piece of the attachment tree the break cut off from the pod comes away as
@@ -7695,11 +7854,12 @@ function shedSet(node, set, why, sev, blast, at_uid)
   if destroyed or not node or not node.valid then return false end
   if pod_uid and set[pod_uid] then return false end
   local nodes, n_set = {}, 0
+  local by_u, set_l, hp_u = {}, {}, {}   -- (the wreck's parts and their health as they left: drop_set clears it)
   for u in pairs(set) do
     if not integ.gone[u] then
       n_set = n_set + 1
       local c = child_of_uid(node, u)
-      if c and c.valid then nodes[#nodes + 1] = c end
+      if c and c.valid then nodes[#nodes + 1] = c; by_u[u] = c; set_l[#set_l + 1] = u; hp_u[u] = part_hp[u] or 1.0 end
     end
   end
   if #nodes == 0 then return false end
@@ -7787,6 +7947,7 @@ function shedSet(node, set, why, sev, blast, at_uid)
   assembly.split(node, nodes, function(junk)
     -- Clear of the hull, at the velocity it had: no impulse from overlap.
     releasePiece(junk, node, wx, wy, wz, gap)
+    junkNote(junk, set_l, by_u, hp_u)
     local ji = assembly.info(junk)
     if ji and ji.origin then
       if blast and ji.com then

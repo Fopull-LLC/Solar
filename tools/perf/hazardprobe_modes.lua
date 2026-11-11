@@ -11,6 +11,10 @@
 --              rock (tool_belt.sim): the ignition, its harm, burnt out
 --     ROCKFALL a fall 5 m ahead, photographed through the crack, the dust and
 --              the slabs; then one over the crew: the hit
+--     RUBBLE   a laser-sized tunnel cut from the cave wall; a fall ahead in it
+--              leaves a heap that blocks it (a ray at chest height), no slab
+--              hangs in the roof, the laser digs through it; a fall on the
+--              crew waits while they stand in it and lands once they back off
 --     DOSE     a real uranite seam (mineral_field.veinsNear) dug to and stood
 --              beside if one is near, else forceDoseOre: the crew's dose
 --     VENT     the cave dressed as a sulfur vent, its gas on the chip
@@ -270,7 +274,9 @@ function HZ.rockfall(cv)
       if d < 12 then seen = seen + 1; P("HZ FALL slab %s: %.1f m from the point, adopted as %s ×%s", e.name, d, tostring(e.mat), tostring(e.qty)) end
     end
   end
-  HZ.check("…the slabs are loose bodies on the cave floor (adopted)", seen >= 1, "%d near", seen)
+  local pl = ch.last.pile
+  HZ.check("…the slabs are loose rock on the floor, or buried in the heap they leave", seen >= 1 or pl ~= nil, "%d loose near, heap %s", seen,
+    pl and string.format("r %.1f m (%s)", pl.r or 0, pl.blocks and "closes the passage" or "chokes it") or "none")
   -- one over the crew
   wait(4)
   HZ.heal()
@@ -284,6 +290,223 @@ function HZ.rockfall(cv)
   HZ.check("…one over the crew: a slab that hits hurts", (ch.stats.hits > h0 and hp1 < hp0) or ch.stats.hits == h0,
     "hits %d, hp %.3f → %.3f", ch.stats.hits - h0, hp0, hp1)
   HZ.heal()
+end
+
+-- RUBBLE (2026-11-11): a fall in a laser-sized tunnel blocks it, and the
+-- laser digs through what came down. A tunnel is cut from the cave's wall
+-- along cv.t (balls of the laser's own size), the crew stands 5 m in, a fall
+-- AHEAD is forced; the passage ahead is measured by one ray at chest height
+-- before, after the heap lands and after the laser has cut at it for 10 s.
+-- Then a fall ON the crew: the heap waits while they stand in it and lands
+-- once they back off. Everything kept body-local (rule 1).
+function HZ.rubble(cv)
+  local ch = findScript("cave_hazards")
+  local tb = findScript("tool_belt")
+  local pc = findScript("planet_camera")
+  CV.stand(cv)
+  wait(1)
+  local b = home()
+  local a = astro()
+  local up = unit(sub(a, b))
+  local t = cv.t
+  local fl = cv.floor
+  -- a tunnel the laser's size in solid rock 7 m under the cave floor (one
+  -- ball of the laser's own bite, 2.4 x 0.85, every metre for 18 m), so the
+  -- passage is a dug one, not the gallery around it
+  local o = { x = fl.x - up.x * 7, y = fl.y - up.y * 7, z = fl.z - up.z * 7 }
+  P("HZ RUBBLE cutting a tunnel 7 m under the cave floor")
+  for i = 0, 18 do
+    local c = { x = o.x + t.x * i, y = o.y + t.y * i, z = o.z + t.z * i }
+    b = home()
+    terrain.dig(b.x + c.x, b.y + c.y, b.z + c.z, 2.4, 0.85)
+  end
+  wait_for(function() return not (terrain.pending and terrain.pending() > 0) end, 30, "the tunnel")
+  wait(1.0)
+  -- the tunnel's floor at `d` m along it (body-local)
+  local function floor_at(d)
+    local s0 = { x = o.x + t.x * d, y = o.y + t.y * d, z = o.z + t.z * d }
+    local bb = home()
+    local hd = terrain.raycast(vec3(bb.x + s0.x, bb.y + s0.y, bb.z + s0.z), vec3(-up.x, -up.y, -up.z), 10)
+    local hu = terrain.raycast(vec3(bb.x + s0.x, bb.y + s0.y, bb.z + s0.z), vec3(up.x, up.y, up.z), 10)
+    local f = hd and { x = hd.pos.x - bb.x, y = hd.pos.y - bb.y, z = hd.pos.z - bb.z } or s0
+    return f, (hd and hd.distance or 0) + (hu and hu.distance or 0)
+  end
+  local function stand_at(p)
+    local bb, aa = home(), astro()
+    aa.x, aa.y, aa.z = bb.x + p.x + up.x * 1.1, bb.y + p.y + up.y * 1.1, bb.z + p.z + up.z * 1.1
+    aa.vx, aa.vy, aa.vz = 0, 0, 0
+  end
+  -- the passage along `s` (+1 ahead, -1 back), from 1.4 m over the floor at p
+  local function clear(p, s)
+    local bb = home()
+    local q = { x = p.x + up.x * 1.4, y = p.y + up.y * 1.4, z = p.z + up.z * 1.4 }
+    local h = terrain.raycast(vec3(bb.x + q.x, bb.y + q.y, bb.z + q.z), vec3(t.x * s, t.y * s, t.z * s), 30)
+    return h and h.distance or 30
+  end
+  local mf = findScript("mineral_field")
+  local function hanging(p)
+    local bb, n = home(), 0
+    for _, e in ipairs(mf and mf.looseBodies and mf.looseBodies() or {}) do
+      if e.n and e.n.valid and tostring(e.name):find("CaveSlab", 1, true) then
+        local q = sub({ x = e.n.x - bb.x, y = e.n.y - bb.y, z = e.n.z - bb.z }, p)
+        local hgt = dot(q, up)
+        if len(q.x, q.y, q.z) < 12 and hgt > 1.6 then n = n + 1; P("HZ RUBBLE slab %s %.1f m up", e.name, hgt) end
+      end
+    end
+    return n
+  end
+  CV.torch(true)
+  -- 1. a fall ON the crew 4 m in: the heap waits while they stand in it,
+  -- and lands behind them once they walk on
+  local f4, h4 = floor_at(4)
+  P("HZ RUBBLE tunnel cut: %.1f m floor to roof 4 m in", h4)
+  stand_at(f4)
+  pc.face(t.x, t.y, t.z, 0.1)
+  wait(2.0)
+  CV.shot("rubble_0_tunnel", false)
+  HZ.heal()
+  local hp0 = HZ.hp()
+  local p1 = ch.stats.piles or 0
+  local h0 = ch.stats.hits
+  ch.forceRockfall("on")
+  local lr = ch.last.rockfall or {}
+  P("HZ RUBBLE fall on the crew: roof %.1f, passage %.1f m high %.1f m across, rock %s slot %s",
+    lr.roof or 0, lr.H or 0, lr.W or 0, tostring(lr.mat), tostring(lr.slot))
+  pc.face(t.x, t.y, t.z, 0.45)
+  wait(0.9); CV.shot("rubble_1_dust", false)
+  wait(0.9); CV.shot("rubble_2_falling", false)
+  wait(2.9)
+  local fs = ch.fallState()
+  local hp1 = HZ.hp()
+  P("HZ RUBBLE on the crew: hits %d hp %.3f → %.3f, fall %s waiting %s", ch.stats.hits - h0, hp0, hp1, fs and tostring(fs.stage) or "over", fs and tostring(fs.waiting) or "-")
+  pc.face(t.x, t.y, t.z, -0.35)
+  wait(0.3); CV.shot("rubble_3_slabs_down", false)
+  HZ.check("a fall on the crew: the heap waits while they stand in it", fs ~= nil and fs.stage == 2 and fs.waiting > 0, "stage %s waiting %s", fs and tostring(fs.stage) or "-", fs and tostring(fs.waiting) or "-")
+  local f11 = floor_at(11)
+  local back0 = clear(f11, -1)
+  stand_at(f11)
+  wait_for(function() return (ch.stats.piles or 0) > p1 end, 5, "the waiting heap")
+  wait(1.5)
+  wait_for(function() return not (terrain.pending and terrain.pending() > 0) end, 10, "the heap's edits")
+  local back1 = clear(f11, -1)
+  local pl = ch.last.pile or {}
+  -- look back at it
+  pc.face(-t.x, -t.y, -t.z, -0.05)
+  wait(0.6); CV.shot("rubble_4_heap_behind", false)
+  pc.face(-t.x, -t.y, -t.z, -0.35)
+  wait(0.4); CV.shot("rubble_4_heap_behind_low", false)
+  -- (once the heap is down: a slab may rest on the crew while they stand under it)
+  HZ.check("…no slab left hanging in the roof", hanging(f4) == 0)
+  P("HZ RUBBLE heap r %.1f m (%s); the way back from 11 m: %.1f m → %.1f m", pl.r or 0, pl.blocks and "closes it" or "chokes it", back0, back1)
+  HZ.check("…walked on, it lands: the way back is blocked at chest height", (ch.stats.piles or 0) > p1 and back1 < back0 - 1.0 and back1 < 8.5,
+    "piles %d → %d, %.1f → %.1f m", p1, ch.stats.piles or 0, back0, back1)
+  -- 2. a fall AHEAD of them in the tunnel: it blocks it, and the laser digs through
+  wait(2)
+  local d0 = clear(f11, 1)
+  local p2 = ch.stats.piles or 0
+  ch.forceRockfall("ahead", { t.x, t.y, t.z })
+  pc.face(t.x, t.y, t.z, 0.1)
+  lr = ch.last.rockfall or {}
+  P("HZ RUBBLE fall ahead %.1f m along: roof %.1f, passage %.1f m high %.1f m across", lr.along or 0, lr.roof or 0, lr.H or 0, lr.W or 0)
+  wait(2.0); CV.shot("rubble_5_ahead_falling", false)
+  wait_for(function() return (ch.stats.piles or 0) > p2 end, 8, "the heap ahead")
+  wait(1.5)
+  wait_for(function() return not (terrain.pending and terrain.pending() > 0) end, 10, "the heap's edits")
+  local d1 = clear(f11, 1)
+  pl = ch.last.pile or {}
+  pc.face(t.x, t.y, t.z, -0.1)
+  wait(0.4); CV.shot("rubble_6_heap_ahead", false)
+  P("HZ RUBBLE heap r %.1f m (%s); the way ahead: %.1f m → %.1f m", pl.r or 0, pl.blocks and "closes it" or "chokes it", d0, d1)
+  HZ.check("a fall ahead: a heap that blocks the tunnel ahead (the crew not under it)", (ch.stats.piles or 0) > p2 and d1 < d0 - 1.0,
+    "piles %d → %d, %.1f → %.1f m", p2, ch.stats.piles or 0, d0, d1)
+  HZ.check("…no slab left hanging in the roof", hanging(f11) == 0)
+  local inv = findScript("inventory")
+  if inv and inv.gearCount and inv.gearCount("astro", "laser") < 1 then inv.addGear("astro", "laser", 1) end
+  pcall(tb.hold, "laser")
+  wait(0.8)
+  local tdig = time
+  while time - tdig < 14 do
+    tb.sim = { btn = { [0] = true }, aim = function()
+      local aa, bb = astro(), home()
+      local e = { x = aa.x + up.x * 0.6, y = aa.y + up.y * 0.6, z = aa.z + up.z * 0.6 }
+      -- (origin, then a DIRECTION: tool_belt aim_ray) along the tunnel, a little down
+      return e.x, e.y, e.z, t.x - up.x * 0.08, t.y - up.y * 0.08, t.z - up.z * 0.08
+    end }
+    yield()
+    if time - tdig > 4 and clear(f11, 1) > d1 + 2.5 then break end
+  end
+  tb.sim = { btn = { [0] = false } }
+  wait(1.0)
+  local d2 = clear(f11, 1)
+  CV.shot("rubble_7_dug", false)
+  P("HZ RUBBLE dug %.1f s: the way ahead %.1f → %.1f m", time - tdig, d1, d2)
+  HZ.check("…and the laser digs through it like rock", d2 > d1 + 1.5, "%.1f → %.1f m", d1, d2)
+  pcall(tb.hold, "gravgun")
+  HZ.heal()
+end
+
+-- (diagnosis) a LooseBoulder spawned in the cave's air: does it fall?
+function HZ.slabdiag(cv)
+  CV.stand(cv)
+  wait(1)
+  local b, a = home(), astro()
+  local up = unit(sub(a, b))
+  local t = cv.t
+  local rel = { x = a.x - b.x + t.x * 3 + up.x * 3, y = a.y - b.y + t.y * 3 + up.y * 3, z = a.z - b.z + t.z * 3 + up.z * 3 }
+  local nodes = {}
+  do
+    local wp = { x = b.x + rel.x, y = b.y + rel.y, z = b.z + rel.z }
+    local okw, wa = pcall(function() return water and water.at and water.at(wp.x, wp.y, wp.z) end)
+    local gx, gy, gz = 0, 0, 0
+    if space.gravity then gx, gy, gz = space.gravity(wp.x, wp.y, wp.z) end
+    local oc = findScript("ocean")
+    local cl = findScript("climate")
+    P("HZ DIAG at the cave point: water.at %s depth %s density %s | space.gravity %.2f (up %.2f) | ocean.caveDry %s | sea radius %s | r %.1f",
+      tostring(okw), okw and wa and tostring(wa.depth) or "-", okw and wa and tostring(wa.density) or "-",
+      len(gx, gy, gz), (gx * up.x + gy * up.y + gz * up.z), tostring(oc and oc.caveDry), tostring(cl and cl.seaRadius and cl.seaRadius(b.name)),
+      len(rel.x, rel.y, rel.z))
+  end
+  -- one on the surface above the cave, for comparison (3 m over the ground)
+  do
+    local top = cv.top
+    if top then
+      local tu = unit(top)
+      local hs = terrain.raycast(vec3(b.x + top.x + tu.x * 40, b.y + top.y + tu.y * 40, b.z + top.z + tu.z * 40), vec3(-tu.x, -tu.y, -tu.z), 200)
+      if hs then
+        local p = { x = hs.pos.x - b.x + tu.x * 3, y = hs.pos.y - b.y + tu.y * 3, z = hs.pos.z - b.z + tu.z * 3 }
+        spawn("LooseBoulder", vec3(b.x + p.x, b.y + p.y, b.z + p.z), function(n) nodes[4] = { n = n, how = "surface", up = tu, rel = p } end)
+      end
+    end
+  end
+  for i, how in ipairs({ "plain", "rebuild", "vel" }) do
+    b = home()
+    local p = { x = rel.x + t.x * i * 1.5, y = rel.y + t.y * i * 1.5, z = rel.z + t.z * i * 1.5 }
+    spawn("LooseBoulder", vec3(b.x + p.x, b.y + p.y, b.z + p.z), function(n)
+      nodes[i] = { n = n, how = how }
+      if how ~= "plain" then pcall(assembly.rebuild, n) end
+      if how == "vel" then pcall(function() n.asleep = false; n.vel = vec3(-up.x * 2, -up.y * 2, -up.z * 2) end) end
+      local rb = n.getcomponent and n:getcomponent("RigidBody")
+      P("HZ DIAG spawned %s: rb %s mode %s gravity %s kinematic %s parent %s", how, tostring(rb ~= nil), rb and tostring(rb.mode) or "-",
+        rb and tostring(rb.gravity) or "-", rb and tostring(rb.kinematic) or "-", n.parent and tostring(n.parent.name) or "none")
+    end)
+  end
+  for k = 1, 6 do
+    wait(0.5)
+    b = home()
+    for i, e in pairs(nodes) do
+      local n = e.n
+      if n.valid then
+        local q = { x = n.x - b.x, y = n.y - b.y, z = n.z - b.z }
+        local inf = assembly.info(n)
+        local uu, rr = e.up or up, e.rel or rel
+        local iv = inf and inf.vel
+        P("HZ DIAG t%.1f %s: height %.2f vel %s info.vel %s asleep %s wake %s", k * 0.5, e.how, dot(q, uu) - dot(rr, uu),
+          n.vel and string.format("%.2f", dot(n.vel, uu)) or "-", iv and string.format("%.2f", dot(iv, uu)) or "-",
+          tostring(inf and inf.asleep), tostring(inf and inf.wake))
+      end
+    end
+  end
+  for _, e in pairs(nodes) do if e.n.valid then e.n:destroy() end end
 end
 
 function HZ.dose(cv)
@@ -474,7 +697,10 @@ function HZ.run()
   if (params.only or "") == "" or params.only == "ch4" then HZ.methane(cv) end
   cf.params.forceKind = ""
   CV.stand(cv); wait(1)
+  if params.only == "slabdiag" then HZ.slabdiag(cv) end
   if (params.only or "") == "" or params.only == "fall" then HZ.rockfall(cv) end
+  CV.stand(cv); wait(1)
+  if (params.only or "") == "" or params.only == "fall" or params.only == "rubble" then HZ.rubble(cv) end
   if (params.only or "") == "" or params.only == "dose" then HZ.dose(cv) end
   if (params.only or "") == "" or params.only == "vent" then HZ.vent(cv) end
   if (params.only or "") == "" or params.only == "ruins" then HZ.ruins() end

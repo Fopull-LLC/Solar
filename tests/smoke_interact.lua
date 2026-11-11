@@ -378,6 +378,16 @@ do
   c, w = PI.conditionOf({ o_p = 0, pitch = math.rad(7), o_c = "" }, { brk = 0.15 }, {}, 0.4)
   check(c == "leaning 7° · rusted · BROKEN: 15 % of its bore open · dust 40 %" and w == true, "a ruin's piece: " .. c)
   check(PI.conditionOf({}, nil, {}, 0) == "sound", "a piece in order is sound")
+  -- (2026-11-11) wear on a piece, a craft part's wear, a wreck by its craft
+  c, w = PI.conditionOf({ wr = true }, { hp = 0.4 }, {}, 0)
+  check(c == "KNOCKED askew · WORN to 40 %" and w == true, "knocked and worn, both said: " .. c)
+  check(PI.craftCondition(0.42) == "WORN to 42 % · a Repair Kit mends it" and select(2, PI.craftCondition(0.42)) == true, "a worn craft part: what and the cure")
+  check(PI.craftCondition(1) == "sound" and PI.craftCondition(0) == "BROKEN" and PI.craftCondition(nil) == nil, "…sound, broken, none")
+  local wc = PI.wreckCondition("Kestrel 2", { dist = 1.24 }, nil, 1.24)
+  check(wc == "TORN OFF Kestrel 2 · 1.2 m from its mount · a Repair Kit puts it back on", "a wreck by its craft: " .. wc)
+  wc = PI.wreckCondition("Kestrel 2", nil, "it lies 6.0 m from its mount: bring it back (within 3 m)", 6.0)
+  check(wc:find("TORN OFF Kestrel 2 · 6.0 m from its mount · it lies", 1, true) ~= nil, "…too far: and why: " .. wc)
+  check(PI.wreckCondition("K", { dist = 0.5, broke = true }):find("it broke: it goes back worn", 1, true) ~= nil, "…a broken one goes back worn")
   check(PI.subtitleWith("Kerne Station", 109, 148, "Steel", nil) == "Kerne Station · piece 109 of 148 · Steel", "the subtitle of your own piece")
   check(PI.subtitleWith("Kerne Station", 1, 2, nil, { name = "Ashfall Camp", kind = "survey camp", age = 212 }) == "Ashfall Camp · Abandoned · survey camp · 212 days",
     "a ruin's piece: the site's name is the subtitle")

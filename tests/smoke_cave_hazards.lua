@@ -20,7 +20,9 @@
 --   * the scene half over stubs (a cave_field that probes, the crew, the
 --     survey): first entry credits once; bad air shows and hurts bare-
 --     headed; the laser lights a methane pocket and burns it out; a rockfall
---     cracks, dusts, drops 1–3 adopted slabs and a slab on the crew hurts;
+--     cracks, dusts (no caption), drops 1–3 adopted slabs and a slab on the
+--     crew hurts; it leaves a rubble pile (raised, painted the roof's rock)
+--     that waits while the crew stands in it; a fall behind the crew;
 --     the ice cave's heater draws on the lamp cell; the seam doses; the drop
 --     captions with the rope; nothing runs between probes
 --
@@ -235,6 +237,48 @@ do
   ok(H.slabHurt(1.4, 1.0) == 0, "a slab barely moving does nothing")
   ok(H.slabHurt(1.0, 6) > 0.1 and H.slabHurt(1.4, 9) > 0.4 and H.slabHurt(1.4, 30) == 0.75, "a falling slab hurts, capped at 75 %")
   ok(H.slabHurt(0.7, 3) >= 0.06, "even a small one bruises")
+  -- (2026-11-11) where a fall comes down, the slabs sized to the passage, the pile it leaves
+  do
+    local seen = {}
+    for i = 0, 99 do
+      local k, a = H.rockfallSpot("step", i / 100, 0.5)
+      seen[k] = (seen[k] or 0) + 1
+      if k == "ahead" then ok(a >= 3 and a <= 5, "a fall ahead lands 3–5 m along (" .. a .. ")") end
+      if k == "behind" then ok(a <= -3 and a >= -5, "a fall behind lands 3–5 m back (" .. a .. ")") end
+      if k == "on" then ok(a == 0, "a fall on the crew is at the crew") end
+    end
+    ok(seen.on == 40 and seen.ahead == 30 and seen.behind == 30, "walking: on the crew 40 %, ahead 30 %, behind 30 %")
+    local dk = {}
+    for i = 0, 99 do local k = H.rockfallSpot("dig", i / 100, 0.2); dk[k] = (dk[k] or 0) + 1 end
+    ok(dk.face == 50 and dk.behind == 50, "digging: at the face or the way you came, half and half")
+    ok(H.rockfallSpot("probe", 0.9, 0.9) == "on", "a probe's fall is on the point")
+    ok(math.abs(H.slabScale(8, 8, 1) - 1.4) < 1e-9 and math.abs(H.slabScale(8, 8, 0) - 0.7) < 1e-9, "room to fall: slabs 0.7–1.4 as before")
+    for _, hw in ipairs({ { 2.0, 2.4 }, { 3.0, 3.0 }, { 1.6, 4 } }) do
+      local s = H.slabScale(hw[1], hw[2], 1)
+      ok(2 * H.LB_HALF * s <= 0.6 * math.min(hw[1], hw[2]) + 1e-9, string.format("a %.1f × %.1f m tunnel: a slab is at most 60 %% of it across (%.2f m), it cannot wedge", hw[1], hw[2], 2 * H.LB_HALF * s))
+    end
+    local nb, nc = 0, 0
+    for i = 0, 99 do
+      local p = H.rubblePile(4.0, 4.0, i / 99)
+      if p.blocks then nb = nb + 1 end
+      ok(p.r >= H.RUBBLE_MIN and p.r <= H.RUBBLE_MAX, "a pile is between the smallest drawn and a heap")
+      ok(p.r >= 0.6 * p.need - 1e-9, "…and at least chokes the passage (r ≥ 0.6 of what closes it)")
+      ok(#p.balls == 3 and p.balls[1].a == 0 and p.balls[2].a > 0 and p.balls[3].a < 0, "…a heap with a talus each way along the passage")
+      if p.r >= p.need * 0.98 then nc = nc + 1 end
+    end
+    ok(nb == nc and nb > 20 and nb < 60, "in a 4 m laser tunnel some falls close it, most choke it (" .. nb .. " of 100 close)")
+    local big = H.rubblePile(20, 20, 1)
+    ok(big.r == H.RUBBLE_MAX and not big.blocks, "a big gallery gets a heap, not a wall")
+    local tiny = H.rubblePile(1.2, 1.2, 0)
+    ok(tiny.r == H.RUBBLE_MIN and tiny.blocks, "a crawlway is closed by the smallest pile")
+    ok(H.pileAlong(0, 2, -4) >= 0 and H.pileAlong(0, 2, -4) - 2 - H.PILE_CLEAR >= -4 + 0.39, "a heap ahead slides off the crew's boots, away from them")
+    ok(H.pileAlong(0, 2, 4) <= 0 and 4 - (H.pileAlong(0, 2, 4) + 2) >= H.PILE_CLEAR + 0.39, "…and one behind, the other way")
+    ok(H.pileAlong(5, 1.5, -4) == 5, "…a ball already clear stays put")
+    local f, h = { 0, 0, 0 }, { 0, 1.8, 0 }
+    ok(H.pileBuries({ 0, 0, 0 }, 1.5, f, h), "a pile on the crew's feet would bury them")
+    ok(H.pileBuries({ 1.5, 1.0, 0 }, 1.5, f, h), "…beside them, within reach")
+    ok(not H.pileBuries({ 3.0, 0, 0 }, 1.5, f, h), "…clear of them, it lands")
+  end
   ok(H.caveTempK(280, "ice", CK.hazardsOf("ice")) == 248, "an ice cave on a mild world: −25 °C")
   ok(H.caveTempK(230, "ice", CK.hazardsOf("ice")) == 230, "…on a colder one, colder")
   ok(H.caveTempK(290, "vent", CK.hazardsOf("vent"), 1) == 325, "a deep vent runs 35 K over the world")
@@ -354,6 +398,7 @@ do
   local T = { t = 0, g = 0 }
   local BODY = { name = "Draethos", x = 1000, y = -500, z = 300, radius = R }
   local caps, hurts, doses, credits, rp, cells, spawned, adopted, plays = {}, {}, {}, {}, {}, {}, {}, {}, 0
+  local sculpts, paints = {}, {}
   local surveyRec = { L = { comp = 0.3 } }
   local SCRIPTS = {}
   local worldK = 288
@@ -398,13 +443,17 @@ do
     save = { get = function(k) return saved[k] end, set = function(k, v) saved[k] = v end },
     space = { body = function() return BODY end, dominant = function() return "Draethos" end, time = function() return T.g end },
     terrain = { raycast = function(o, d, far)
-      -- a roof 4 m over anything
+      -- a roof 4 m over anything (and a floor and walls 4 m off)
       return { pos = vec3(o.x + d.x * 4, o.y + d.y * 4, o.z + d.z * 4), distance = 4 }
-    end },
+    end,
+      sculpt = function(x, y, z, r, s, mode, o) sculpts[#sculpts + 1] = { x = x, y = y, z = z, r = r, mode = mode } return #sculpts end,
+      paintTexture = function(x, y, z, r, slot) paints[#paints + 1] = { r = r, slot = slot } return #paints end,
+      slotAt = function() return 6 end },
     audio = { play = function() plays = plays + 1; return { setPosition = function() end } end },
     spawn = function(pf, pos, cb)
       local n = { valid = true, name = pf, x = pos.x, y = pos.y, z = pos.z, vel = vec3(0, -8, 0) }
       n.setAngles = function() end
+      n.destroy = function(self) self.valid = false end
       spawned[#spawned + 1] = n
       cb(n)
     end,
@@ -471,15 +520,18 @@ do
   tb.inUse, tb.charge = false, 0
   step(7, 1)   -- (the ignition's own rockfall, if the cell was unstable, runs out)
   -- 4. a rockfall: crack, dust, slabs, a hit
-  hurts, spawned, adopted = {}, {}, {}
+  hurts, spawned, adopted, sculpts, paints = {}, {}, {}, {}, {}
   probe(eye)
   step(0.5)
   local n0 = CH.stats.rockfalls
+  sculpts, paints = {}, {}   -- (the firedamp's own fall may have just landed its heap)
   ok(CH.forceRockfall(), "a rockfall starts")
   ok(CH.stats.rockfalls == n0 + 1 and CH.last.rockfall and CH.last.rockfall.mat == "limestone", "…cracking a limestone roof")
   local cracked = false
-  for _, c in ipairs(caps) do if c:find("THE ROOF CRACKS", 1, true) then cracked = true end end
-  ok(cracked, "…telegraphed: THE ROOF CRACKS")
+  for _, c in ipairs(caps) do if c:find("ROOF", 1, true) or c:find("ROCK", 1, true) then cracked = true end end
+  ok(not cracked, "…telegraphed by its sounds and dust only: no caption")
+  ok(plays >= 2, "…the crack and the grit are heard")
+  ok(CH.last.rockfall.kind == "on" and CH.last.rockfall.H > 8 and CH.last.rockfall.W > 7, "…over the crew, the passage measured (" .. string.format("%.1f × %.1f m", CH.last.rockfall.H, CH.last.rockfall.W) .. ")")
   step(0.5, 2)
   ok(#spawned == 0, "…nothing falls during the dust")
   step(0.6)
@@ -496,8 +548,32 @@ do
   ok(#hurts == 1 and hurts[1].cause == "crushed" and hurts[1].a > 0, "a slab on the crew: hurt")
   step(0.016)
   ok(#hurts == 1, "…once per slab")
+  for _, c in ipairs(caps) do ok(not c:find("SLAB", 1, true), "…and no caption for the hit either") end
   step(6)
   ok(CH.stats.rockfalls == n0 + 1, "one fall at a time")
+  -- the pile: it waits while the crew stands in it, then lands as painted rock
+  local fs = CH.fallState()
+  ok(fs and fs.stage == 2 and fs.waiting == 3 and #sculpts == 0, "the crew stands where the heap goes: it waits (never buried alive)")
+  astro.x, astro.y, astro.z = astro.x + 12, astro.y, astro.z
+  step(0.016)
+  ok(#sculpts == 3 and sculpts[1].mode == "raise" and math.abs(sculpts[1].r - CH.last.rockfall.pile.r) < 1e-9, "…stepped clear: the heap is raised, three balls")
+  ok(#paints == 3 and paints[1].slot == 6, "…painted the roof's rock (its slot), so the laser cuts it as that rock")
+  local fl = CH.last.rockfall.floor
+  local s1l = math.sqrt((sculpts[1].x - BODY.x - fl[1]) ^ 2 + (sculpts[1].y - BODY.y - fl[2]) ^ 2 + (sculpts[1].z - BODY.z - fl[3]) ^ 2)
+  ok(s1l < 1e-6, "…on the floor under the fall")
+  local buried = 0
+  for _, n in ipairs(spawned) do if n.valid == false then buried = buried + 1 end end
+  ok(buried >= 1, "…the slabs in it are buried in it (" .. buried .. ")")
+  ok(CH.fallState() == nil and (CH.stats.piles or 0) >= 1, "…and the fall is over")
+  -- a fall behind the crew: along the passage, 3–5 m back
+  T.t = T.t + 40
+  sculpts = {}
+  ok(CH.forceRockfall("behind", { 1, 0, 0 }), "a fall behind the crew starts")
+  local lr = CH.last.rockfall
+  ok(lr.kind == "behind" and lr.along < -2.5 and lr.along > -5.01, "…along the passage, back the way they came (" .. lr.along .. " m)")
+  step(0.5, 4)
+  step(0.5, 8)
+  ok(#sculpts == 3, "…the heap lands at once: the crew is not under it")
   -- the roof ticks in an unstable cell; walking through one can set it off
   CH.params.forceUnstable = true
   local plays0 = plays

@@ -1424,6 +1424,7 @@ local function treating()
 end
 
 function update(node, dt)
+  if not KIT.reg then KIT.register() end
   prompt = ""
   carrying = on_foot()
   if treating() then
@@ -1481,6 +1482,182 @@ end
 
 function fixedUpdate(node, dt)
   run_job(dt)
+end
+
+-- ── THE KIT ON WHAT IS KNOCKED, WORN OR TORN OFF (Ty 2026-11-11: "repair
+-- kits can't fix much, like if a part gets detached but it's still visibly
+-- on it, it looks like something I can repair but I just can't") ──────────
+-- Two right-click rows, timed jobs of the menu (as a ruin's Repair):
+--   REATTACH   a craft part torn or broken off whose wreck still lies by its
+--              mount (vessel_controller.reattachPlan / reattach): the wreck
+--              goes, the same part goes back on its mount. One kit.
+--   REPAIR     a kit piece of any structure knocked askew (where no ruin's or
+--              running scenario's own row mends it) or worn (its part state
+--              `hp`): put back square and its strength whole. One kit.
+-- The rules are damage.lua's (pieceFaults, kitJob, reattachSecs, kitWhyNot):
+-- refused only for physical reasons, and the reason is said.
+KIT = { reg = false }
+function KIT.pace()
+  local CT = ref("crew_task")
+  return (CT and CT.repairMult and CT.repairMult()) or 1
+end
+function KIT.near(ctx, t)
+  local CP = ref("context_providers")
+  if not (CP and CP.actorReach) then return true, nil end
+  local where, d = CP.actorReach(ctx, t, 1.0)
+  return where ~= nil, d
+end
+function KIT.kits(ctx)
+  local V = inv()
+  local pack = (ctx and ctx.actor and ctx.actor.pack) or PACK
+  return V and V.itemCount(pack, "repairkit") or 0, V, pack
+end
+function KIT.onFoot(ctx)
+  return ctx and ctx.actor and ctx.actor.kind == "crew" and not ctx.actor.aboard or false
+end
+-- the craft whose lost part this node is: → v, uid
+function KIT.wreckOf(n)
+  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+    if v.lostOfNode then
+      local ok, uid = pcall(v.lostOfNode, n)
+      if ok and uid then return v, uid end
+    end
+  end
+  return nil
+end
+function KIT.reattachRows(t, ctx)
+  local v, uid = KIT.wreckOf(t.node)
+  if not v then return {} end
+  local DM = ref("damage")
+  local plan, pwhy = v.reattachPlan(uid)
+  local label = (plan and plan.label) or "part"
+  local n = plan and plan.n or 1
+  local secs = DM and DM.reattachSecs(n, KIT.pace()) or 10
+  local function why_now()
+    local p, w = v.reattachPlan(uid)
+    local near, d = KIT.near(ctx, t)
+    return DM.kitWhyNot({ gone = (not p and w == "the part is gone") and w or nil, onFoot = KIT.onFoot(ctx),
+      kits = (KIT.kits(ctx)), near = near, dist = d, why = (not p) and w or nil })
+  end
+  local name = (v.craftName or "its craft")
+  return { { id = "kit_reattach", type = "action", group = "REPAIR", hint = string.format("Repair Kit · %.0f s", secs),
+    label = n > 1 and string.format("Reattach the %s (%d parts)", label, n) or ("Reattach the " .. label),
+    enabled = function() return why_now() == nil end,
+    why = function() return why_now() or pwhy end,
+    job = { secs = secs, label = "Reattaching the " .. label .. " to " .. name,
+      check = function() local w = why_now(); return w == nil, w end,
+      tick = function(_, f)
+        if math.random() < 0.06 then play(SFX.ratchet .. tostring(math.random(1, 5)) .. ".ogg", { track = "SFX", volume = 0.45 }) end
+      end,
+      done = function()
+        local k, V, pack = KIT.kits(ctx)
+        if k < 1 then return false, "needs a Repair Kit in the pack" end
+        local ok, w = v.reattach(uid)
+        if not ok then return false, w end
+        V.removeItem(pack, "repairkit", 1)
+        play(SFX.done, { track = "UI", volume = 0.6 })
+        lastRepair = { uid = uid, reattach = true, t = now(), craft = name }
+        say(string.format("%s back on %s", label, name))
+        return true
+      end } } }
+end
+function KIT.pieceRows(t, ctx)
+  local ST = ref("structures")
+  if not (ST and ST.partOfNode) then return {} end
+  local FB = ref("field_builder")
+  local rec, part
+  if FB and FB.pickTarget then rec, part = FB.pickTarget(t) else rec, part = ST.partOfNode(t.node) end
+  if not (rec and part) or rec.ru then return {} end   -- (a ruin's piece: ruins.lua's own rows)
+  local DM = ref("damage")
+  if not DM then return {} end
+  local SR = ref("scenario_run")
+  local scn = SR and SR.isActive and SR.isActive() or false
+  local sid, uid = rec.id, part.uid
+  local function faults()
+    local p = ST.getPart(sid, uid)
+    if not p then return nil end
+    return DM.pieceFaults(p, ST.partState and ST.partState(sid, uid), { skipKnock = scn })
+  end
+  local secs, list, what = DM.kitJob(faults() or {}, KIT.pace())
+  if #list == 0 then return {} end
+  local pb = ref("parts_base")
+  local d = pb and pb.partInfo and pb.partInfo(part.id)
+  local label = (d and d.label) or tostring(part.id)
+  local function why_now()
+    local fl = faults()
+    local _, l2 = DM.kitJob(fl or {}, 1)
+    local near, dd = KIT.near(ctx, t)
+    return DM.kitWhyNot({ gone = (not fl) and "that piece is gone" or ((#l2 == 0) and "nothing left to mend" or nil),
+      onFoot = KIT.onFoot(ctx), kits = (KIT.kits(ctx)), near = near, dist = dd })
+  end
+  return { { id = "kit_piece", type = "action", group = "REPAIR", label = "Repair the " .. label,
+    hint = string.format("Repair Kit · %.0f s", secs),
+    enabled = function() return why_now() == nil end, why = why_now,
+    job = { secs = secs, label = "Repairing the " .. label,
+      check = function() local w = why_now(); return w == nil, w end,
+      tick = function(_, f)
+        if math.random() < 0.06 then play(SFX.ratchet .. tostring(math.random(1, 5)) .. ".ogg", { track = "SFX", volume = 0.45 }) end
+      end,
+      done = function()
+        local k, V, pack = KIT.kits(ctx)
+        if k < 1 then return false, "needs a Repair Kit in the pack" end
+        local ok, w = KIT.mendPiece(sid, uid, scn)
+        if not ok then return false, w end
+        V.removeItem(pack, "repairkit", 1)
+        play(SFX.done, { track = "UI", volume = 0.6 })
+        lastRepair = { sid = sid, uid = uid, piece = true, t = now() }
+        say(label .. " repaired")
+        return true
+      end } } }
+end
+-- Mend kit piece (sid, uid): square again if knocked (ruins.repairPiece, the
+-- one way a knock is undone) and its strength whole. → ok, why
+function KIT.mendPiece(sid, uid, skipKnock)
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  if not p then return false, "that piece is gone" end
+  local did = false
+  if p.wr and not skipKnock then
+    local RU = ref("ruins")
+    if RU and RU.repairPiece then did = RU.repairPiece(sid, uid) or did
+    else
+      local r = ST.get(sid)
+      if p.o_p ~= nil then p.pitch = p.o_p end
+      if p.o_r ~= nil then p.roll = p.o_r end
+      p.wr, p.o_p, p.o_r, p.wrl, p.wrs = nil, nil, nil, nil, nil
+      if r then ST.put(r) end
+      if ST.respawnPart then pcall(ST.respawnPart, sid, uid) end
+      did = true
+    end
+    if did then
+      local SR = ref("scenario_run")
+      if SR and SR.emit then pcall(SR.emit, "repair", sid, uid) end
+    end
+  end
+  local st = ST.partState and ST.partState(sid, uid)
+  if st and tonumber(st.hp) and tonumber(st.hp) < 0.999 and ST.setPartState then
+    local t2 = {}
+    for k, v in pairs(st) do t2[k] = v end
+    t2.hp = nil
+    ST.setPartState(sid, uid, next(t2) and t2 or nil)
+    did = true
+  end
+  if not did then return false, "nothing left to mend" end
+  return true
+end
+function KIT.provider(t, ctx)
+  if not (t and t.node) then return {} end
+  local out = KIT.reattachRows(t, ctx)
+  if #out > 0 then return out end
+  return KIT.pieceRows(t, ctx)
+end
+function KIT.register()
+  if KIT.reg then return end
+  local reg = ref("context_registry")
+  if reg and reg.register then
+    reg.register("prop", KIT.provider, { id = "kit_repair", order = 4 })
+    KIT.reg = true
+  end
 end
 
 -- Each piece guarded on its own: a pose that fails (a rig without a bone it

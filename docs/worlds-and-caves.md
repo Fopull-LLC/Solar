@@ -392,7 +392,7 @@ it bites (a reading that climbs, a recorded sound, dust, a caption carrying its 
 none is a wall: you may take the helmet off in a CO2 sump, fire the laser in a methane pocket, dig
 under a ticking roof or stand at a pitchblende face. It hurts; that is all. The rules are pure in
 `scripts/cave_hazards.lua` (on the Weather node, after `cave_field`); the scene half runs once per
-`cave_field` probe (2 Hz), with no rays of its own but one per rockfall.
+`cave_field` probe (2 Hz), with no rays of its own but up to seven per rockfall.
 
 ### 4.1 Cave air (`AIR`, `airAtLocal`; atmo, suit)
 
@@ -438,7 +438,7 @@ lights the pocket:
 
 The pocket is then **burnt out** for good (saved in `cave.burnt.<body>`).
 
-### 4.3 Rockfall (`unstableAt`, `rockfallPlan`, `slabHurt`)
+### 4.3 Rockfall (`unstableAt`, `rockfallSpot`, `slabScale`, `rubblePile`, `pileBuries`, `slabHurt`)
 
 - **Unstable cells.** A cell (12 m) is unstable with chance `UNSTABLE_K` (0.6) times the kind's
   `hazards.unstable`: about 30 % of cells in a collapse sink, 21 % in a lava tube and 6 % in karst.
@@ -447,17 +447,36 @@ The pocket is then **burnt out** for good (saved in `cave.burnt.<body>`).
 - **What sets it off.** Walking through it (a 4 % chance a probe while moving), or digging with
   the laser where the aim lands in one (15 % a probe). Each cell falls once (saved in
   `cave.fell.<body>`), and there are 30 s at least between falls.
-- **The fall.**
-  1. One ray up finds the roof over the point. A crack sounds there (`cave_crack`, at 0.8 ×) with
-     grit pattering (`cave_trickle`), and the caption **THE ROOF CRACKS** says to get clear.
+- **Where it comes down** (`rockfallSpot`; Ty 2026-11-11: falls were "trivial to avoid"). Walking:
+  on the crew 40 %, 3–5 m ahead along the way they walk 30 %, 3–5 m behind 30 %. Digging: at the
+  face under the cut's roof (1.2 m back from the beam's bite) half the time, 3–5 m behind the
+  crew (the way they came) the other half. A fall ahead or behind stops 1 m short of rock.
+- **The passage is measured once** (rays only at the fall: one along the passage for ahead or
+  behind, one up to the roof, one down to the floor, four across at half height): its height H
+  floor to roof and its narrowest width W. The long axis is the more open of the two across.
+- **The fall.** No caption (Ty: "it should just happen and I have to find out"): it is heard and
+  seen.
+  1. A crack sounds at the roof (`cave_crack`, at 0.8 ×) with grit pattering (`cave_trickle`).
   2. 1.5 s of dust follows (three puffs of `LaunchDust` and `DigClods`, fired downward).
-  3. Then 1–3 slabs fall from within 1.2 m of the roof point, as recorded rock comes down
-     (`cave_rockfall_*`).
-- **The slabs.** Each slab is a `LooseBoulder` at scale 0.7–1.4, adopted by mineral_field as loose
-  rock of the roof's material (`materialAt`), so it stays and can be hauled off. A slab that comes
-  within reach of the crew's chest while moving over 2.5 m/s hurts by `0.10 · s³ · v / 5` (6–75 %;
-  cause "crushed", "a rockfall"). A big slab falling 4 m costs about half your health. Each slab
-  hits once.
+  3. Then 1–3 slabs fall from inside the passage, as recorded rock comes down
+     (`cave_rockfall_*`). Each slab is a `LooseBoulder` of scale `slabScale(H, W)`: 0.7–1.4 where
+     there is room, never wider than 60 % of the passage, placed within its walls and under its
+     roof, and started downward at 2 m/s (a slab spawned still was seen hanging in the air).
+- **The heap** (`rubblePile`). When the slabs are down (or 3 s on), what came down stays as
+  terrain: three balls raised on the floor under the fall (the main one of radius r, a talus of
+  0.7 r either side 0.6 r along the passage), painted the roof's palette slot
+  (`terrain.slotAt`), so the Terrain Laser cuts it as that rock and pays it as that rock.
+  r = f · √(H² + 0.1 W²) with f 0.6–1.15, between 1.5 m (one planet voxel) and 5 m: in a 4 m
+  laser tunnel about a third of the falls close it and the rest choke it to a crawl or a
+  squeeze; a big gallery gets a heap, not a wall. Slabs over the heap's footprint are buried in
+  it; the rest stay as loose rock (`mineral_field.adoptBody`) that can be hauled off.
+- **Never buried alive** (`pileBuries`). A ball that would reach within 0.6 m of the crew's body
+  waits while they stand there and lands once they step clear (dust and a last knock of rock),
+  for up to 60 s; after that only the slabs stay. So a fall on the crew leaves its heap the
+  moment they move off, between them and where they stood.
+- **The hit.** A slab that comes within reach of the crew's chest while moving over 2.5 m/s hurts
+  by `0.10 · s³ · v / 5` (6–75 %; cause "crushed", "a rockfall"). A big slab falling 4 m costs
+  about half your health. Each slab hits once. No caption: the crew's own hurt shows it.
 - **Time to react.** 1.5 s of warning plus the fall's own second: room to step aside.
 
 ### 4.4 Cold and heat (`caveTempK`; `thermal.suitThermal`)
@@ -564,13 +583,15 @@ the planet moves.
   - the suit closing itself and never locking;
   - thermal's draw;
   - the scene half over stubs: first entry credits once, bad air shows and hurts bare-headed, the
-    laser lights firedamp and burns it out, a rockfall cracks, dusts and drops adopted slabs that
-    hurt, the ice cave's heater, the seam's dose, the rope hint;
+    laser lights firedamp and burns it out, a rockfall cracks, dusts (no caption) and drops adopted
+    slabs that hurt, leaves a heap painted the roof's rock that waits while the crew stands in it,
+    a fall behind the crew, the ice cave's heater, the seam's dose, the rope hint;
   - the recordings on disk and in SOURCES.md.
 - **`tests/smoke_ruins.lua`** gains the cave ruins: the sink share, flights and landings, the
   shaft's cache and its indices, the core's line, the sink camp's floor, and the scene over a
   world with a cave shell (found, dug once, stamped again, a cache crate looted, a reload).
 - **`tools/perf/hazardprobe.sh <engine> <seed…>`** (`hazardprobe_modes.lua`, spliced after
   caveprobe's) does each part in a real cave in turn: walking into a CO2 sump (the readings, the
-  helmet, the dare), the laser in firedamp, a rockfall photographed and one over the crew, the
+  helmet, the dare), the laser in firedamp, a rockfall photographed and one over the crew, a fall in a
+  laser-sized tunnel that blocks it and is dug through (RUBBLE, `only=rubble`), the
   dose at a seam, a vent, and the mine shaft and sink camp looted. It logs `HZ CHECK` lines.
