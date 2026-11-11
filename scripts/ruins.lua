@@ -260,6 +260,9 @@ GRAMMAR.camp = function(site)
   add("drum.steel", -1.8, 0, 3.4, 0, 0, 0, "orange", "prop")
   add("drum.steel", -2.5, 0, 3.0, 0, 0, 0, "oxide", "prop")
   add("cableReel.steel", 5.0, 0, -2.5, 0.6, 0, 0, nil, "prop")
+  -- (the interaction plan S5: a personnel locker by the hut's west wall; appended, so every
+  -- piece before it keeps its index: ri)
+  add("locker.steel", -0.64, T, 1.2, Q, 0, 0, "olive", "store")
   return P
 end
 -- HAB BLOCK: the two-storey hab (the fullbuilder's, kit pieces only): an
@@ -317,6 +320,10 @@ GRAMMAR.hab = function(site)
   add("crate.steel", 5, 0, 1.5, 0.2, 0, 0, "olive", "loot")
   add("crateS.steel", 5.2, 0, 0.4, 0, 0, 0, "orange", "loot")
   add("drum.steel", -2.4, 0, 1.6, 0, 0, 0, "oxide", "prop")
+  -- (S5) a locker beside the scrubber, clear of the ladder's foot; a store cabinet upstairs
+  -- between the table and the bunk
+  add("locker.steel", 1.38, T, -2.64, 0, 0, 0, "bone", "store")
+  add("cabinet.steel", -0.64, 2.6, -0.6, Q, 0, 0, "olive", "store")
   return P
 end
 -- POWER HALL: the reactor shed with its core pulled (the vessel base, the
@@ -362,6 +369,9 @@ GRAMMAR.reactor = function(site)
   add("tower", -5, 0, 4, 0, 0, 0, nil, "tower")
   add("crate.steel", 10.5, 0, 1.5, 0.4, 0, 0, "olive", "loot")
   add("crateS.steel", 7.6, T, -3.2, 0, 0, 0, "orange", "loot")
+  -- (S5) the shift's store cabinet and a locker on the east wall
+  add("cabinet.steel", 8.64, T, -8.5, -Q, 0, 0, "gunmetal", "store")
+  add("locker.steel", 8.64, T, -9.6, -Q, 0, 0, "gunmetal", "store")
   return P
 end
 -- RELAY POST: a tower on its pads, a mast of truss (one length fallen), a
@@ -495,6 +505,32 @@ function missing(full, bp)
   return out
 end
 
+-- ── pure: locks (the interaction plan S5) ──────────────────────────────────
+-- Which standing pieces are locked on a keypad, and their codes: doors by the
+-- site's kind (a power hall's nearly always, a relay post's never), a store
+-- cabinet or a locker three times in five. The codes are in the site's data
+-- logs and on its terminal's DATA page (scripts/loot.lua). → { [k] = code }
+-- (k: the piece's index in `kept`)
+LOCK_DOOR = { camp = 0.3, mine = 0.35, hab = 0.55, reactor = 0.85, relay = 0 }
+LOCK_STORE = 0.6
+LOCK_DOORS = { doorWall = true, doorWallM = true, airlockWall = true, doubleDoor = true, bulkhead = true }
+LOCK_STORES = { cabinet = true, locker = true }
+function codeOf(site, ri) return string.format("%04d", hash(tostring(site and site.seed or 1) .. ":code:" .. tostring(ri)) % 10000) end
+function lockPlan(site, kept)
+  local r = rng(hash(tostring(site and site.seed or 1) .. ":locks"))
+  local out = {}
+  local pd = LOCK_DOOR[site and site.kind] or 0.3
+  for k, e in ipairs(kept or {}) do
+    local name = type(e.id) == "string" and e.id:match("^([%w]+)") or ""
+    local roll = r()
+    if (LOCK_DOORS[name] and roll < pd) or (LOCK_STORES[name] and roll < LOCK_STORE) then
+      out[k] = codeOf(site, e.ri or k)
+    end
+  end
+  return out
+end
+function isLockDoor(id) return LOCK_DOORS[type(id) == "string" and id:match("^([%w]+)") or ""] == true end
+
 -- ── pure: the structure record ──────────────────────────────────────────────
 -- g = { x, y, z (the ground point), ux, uy, uz (up), fx, fy, fz (front) }
 -- in the body's frame; `now` the agency clock.
@@ -506,6 +542,13 @@ function recordOf(site, g, kept, now)
                 wr = e.wr, o_p = e.o_p, o_r = e.o_r, o_c = e.o_c, o_id = e.o_id, fill = e.fill }
     bp[i] = p
     if e.rl == "light" then st[tostring(i)] = { off = true } end
+  end
+  -- (S5) the keypads: a locked door is bolted too (kit_live's hold)
+  for k, code in pairs(lockPlan(site, kept)) do
+    local t = st[tostring(k)] or {}
+    t.kp = code
+    if isLockDoor(kept[k].id) then t.dh = "lock" end
+    st[tostring(k)] = t
   end
   return { b = site.body, x = g.x, y = g.y, z = g.z, ux = g.ux, uy = g.uy, uz = g.uz, fx = g.fx, fy = g.fy, fz = g.fz,
            n = site.name, by = "ruin", t = (now or 0) - (site.age or 0) * 86400, ru = site.id, bp = bp, st = st }
@@ -666,6 +709,7 @@ local function states()
   return S
 end
 local function write() if save and save.set then save.set("ruins.s", states()) end end
+function saveStates() write() end
 function state(id) local s = states(); local e = s[id]; if not e then e = {}; s[id] = e end return e end
 local function peek(id) return states()[id] end
 function peekState(id) return peek(id) end   -- (part_info: read without making an entry)
@@ -744,6 +788,8 @@ function discover(id, how, quiet)
     local x, y, z = pointOf(s)
     if how == "telescope" then
       say("ANOMALY", string.format("a regular shape at %s on %s · %s", latlon(x, y, z), s.body, s.name), 5.0)
+    elseif how == "log" then
+      say("SITE ON FILE", string.format("a %s on %s at %s · %s, from its records", LABEL[s.kind], s.body, latlon(x, y, z), s.name), 5.0)
     elseif how == "scanner" then
       say("RUIN MAPPED", string.format("the scanner's swath shows a %s on %s at %s", LABEL[s.kind], s.body, latlon(x, y, z)), 5.0)
     else
@@ -1060,6 +1106,23 @@ function searchCrate(id, ri, pack)
   local s, e = site(id), peek(id)
   local inv = ref("inventory")
   if not (s and e and inv) then return 0, "nothing here" end
+  -- (S5: with scripts/loot.lua every crate is a container `piece:<sid>:<uid>`, the
+  -- whole site rolled at once; a search is "take everything that fits")
+  local L = ref("loot")
+  local ST = ref("structures")
+  local r = L and e.sid and ST and ST.get(e.sid)
+  if r and L.prepare then
+    for _, p in ipairs(r.bp) do
+      if p.ri == ri then
+        L.prepare(r.id, p.uid)
+        local cid = L.cidOf(r.id, p.uid)
+        local a = inv.moveAllItems(cid, pack or "astro") or 0
+        local b = inv.transferAll(cid, pack or "astro") or 0
+        bump()
+        return a + b, not L.isEmpty(cid) and "the rest won't fit in the pack" or nil
+      end
+    end
+  end
   local cid = crateId(id, ri)
   if not filled(e, ri) then
     local items, mats = crateManifest(s, ri, ores_of(s.body))
@@ -1077,6 +1140,14 @@ end
 function crateEmpty(id, ri)
   local e = peek(id)
   local inv = ref("inventory")
+  local L = ref("loot")
+  local ST = ref("structures")
+  local r = L and e and e.sid and ST and ST.get(e.sid)
+  if r and L.filled then
+    for _, p in ipairs(r.bp) do
+      if p.ri == ri then return L.filled(r.id, p.uid) and L.isEmpty(L.cidOf(r.id, p.uid)) end
+    end
+  end
   if not (e and filled(e, ri) and inv) then return false end
   local cid = crateId(id, ri)
   return inv.isEmpty(cid) and #(inv.itemList(cid) or {}) == 0
@@ -1229,7 +1300,7 @@ local function provider(t, ctx)
         return ok
       end }
   end
-  if part.rl == "loot" then
+  if part.rl == "loot" and not ref("loot") then
     out[#out + 1] = { id = "ru_crate", type = "action", group = G,
       label = function() return crateEmpty(id, part.ri) and "The crate is empty" or "Search the crate" end,
       enabled = function() return not crateEmpty(id, part.ri) and near(ctx, t) end, why = "come closer",

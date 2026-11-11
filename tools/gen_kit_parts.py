@@ -1700,6 +1700,9 @@ PIECES.update(gen_kit_refinery.pieces(sys.modules[__name__]))
 import gen_kit_weapons  # noqa: E402
 MATS.update(gen_kit_weapons.MATERIALS)
 PIECES.update(gen_kit_weapons.pieces(sys.modules[__name__]))
+# ── S5 (interaction plan): the lockable storage props, cabinet and locker (tools/gen_kit_storage.py) ──
+import gen_kit_storage  # noqa: E402
+PIECES.update(gen_kit_storage.pieces(sys.modules[__name__]))
 
 # ── S4: PAINT SURFACES. node:setTint tints everything a node draws, so what
 # paint must not touch, and a wall's second face, are split into children of

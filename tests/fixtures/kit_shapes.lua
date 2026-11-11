@@ -284,4 +284,6 @@ return {
   KitLzDirector_steel = { lo = { -0.750, 0.000, -0.750 }, hi = { 0.750, 2.070, 0.750 }, colliders = 2, tris = 1540, children = { "Yoke", "Head" } },
   KitLzConsole_steel = { lo = { -0.620, 0.000, -0.420 }, hi = { 0.620, 1.289, 0.400 }, colliders = 1, tris = 276, children = {  } },
   KitLzRadar_steel = { lo = { -1.000, 0.000, -1.000 }, hi = { 1.000, 2.557, 1.000 }, colliders = 2, tris = 1088, children = {  } },
+  KitCabinet_steel = { lo = { -0.454, 0.000, -0.254 }, hi = { 0.454, 1.920, 0.280 }, colliders = 1, tris = 408, children = { "Glass" } },
+  KitLocker_steel = { lo = { -0.254, 0.000, -0.254 }, hi = { 0.254, 1.920, 0.280 }, colliders = 1, tris = 324, children = { "Glass" } },
 }

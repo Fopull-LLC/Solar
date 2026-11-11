@@ -137,7 +137,7 @@ do
         for _, q in ipairs(P) do
           local d = def(q.id)
           local name = q.id:match("^[^.]+")
-          if d and d.box and not q.dep and not PATH[name] and (q.rl == "prop" or q.rl == "loot" or q.rl == "fix" or q.rl == "core"
+          if d and d.box and not q.dep and not PATH[name] and (q.rl == "prop" or q.rl == "loot" or q.rl == "fix" or q.rl == "core" or q.rl == "store"
               or q.rl == "silo" or q.rl == "power" or q.rl == "array") and math.abs((q.y or 0) - dp.y) < 0.6 then
             local b = d.box
             local qc, qs = math.cos(q.yaw or 0), math.sin(q.yaw or 0)

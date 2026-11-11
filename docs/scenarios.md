@@ -80,6 +80,11 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 | `craft = { { file = "<id>/lander.json", name, where = { pad } \| { runway } \| { orbit = { body = "moon", alt, e, inc } } \| { ground = ref, offset }, control = false } }` | VAB launch-format JSON. `orbit` makes a station or a drone; `ground` makes a landed craft. |
 | `plants = { { struct, fuel = { item, n }, power, days, scramFor, standby, hold, protection, turbine, fill = { { uid \| part, kg } } } }` | A reactor plant in a staged structure, with a past: every fuel channel loaded, then `days` at `power` run through the plant's own catch-up (so the xenon, the decay heat and the trend are real), a SCRAM held `scramFor` s, a start-up to `standby` held `hold` s; then the protection and the turbine set, and tanks of its fluid networks filled. Graveyard Shift's plant: twenty days at 60 %, parked at 2 % with the trips bypassed. |
 | `wires = { { struct, from = { uid \| part, pin }, to = { uid \| part, pin } } }` | Signal Cables laid between two pins (logic_net), so a base's alarms and interlocks are live from the start: a console's `tripped` to an Alarm Beacon's `IN`. Blueprint pieces keep their order, so a piece's uid is its line in the blueprint. |
+| `tags = { { struct, part \| uid, name = "P-3" } }` | Designations painted on pieces, shown on their menus, on the consoles and in every refusal (part_info). |
+| `datalogs = { name = { title, who, when, lines = { … } \| text, codes = { { struct, part \| uid } }, rp = 0 } }` | Log cards (scripts/loot.lua). A card is the item `datalog:<name>`: put it in a container (below) or give it. Read in the box it was found in, in the pack, or on a terminal's DATA page; `codes` names the keypads whose codes it gives (their codes come from `locks`), so the keypad then offers "Key in 0417". `rp`: research points on the first read (default 0 for a scenario's card). |
+| `containers = { { struct, part \| uid, items = { id = n }, parts = { ["pid"] = n }, mats = { mat = n } } }` | What a piece that holds things holds: a crate, a small crate, shelving, a workbench's drawers, a bunk's footlocker, a store cabinet, a personnel locker (parts_kit `container`). Filled once: a setback's restaging does not fill it twice. |
+| `locks = { { struct, part \| uid, code = "0417", open = false } }` | A keypad on a door (its bolt shuts it) or a container. The player keys the code in, or forces it with a tool (loud, it breaks the lock; a door's seal). `open = true`: fitted, but open. |
+| `logs = { { struct, text, who, when = "23:40", kind } }` | Lines in the structure's base log, read on its consoles' LOG page. |
 
 ## 4. Steps and goals
 
@@ -119,6 +124,11 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 | power_read | struct, battery_above \| battery_below (share of the store), need_above \| need_below (kW drawn), supply_above \| supply_below (kW made), powered, breaker = part \| uid with state = closed \| open \| tripped |
 | part_hp | craft, part (id prefix) \| uid, above \| below: a craft part's health, 1 whole … 0 broken |
 | piece_state | struct, part \| uid, on (a pump or machine running), knocked, field = "<state key>" with eq \| ne \| lt \| gt \| lte \| gte \| is |
+| part_state | struct, part \| uid, key = "<state key>" with eq \| ne \| lt \| gt \| lte \| gte \| is. Keys: the piece's part state (off, shut, seal, tag…) and `knocked`, `pumpOn`, `lock` (none \| locked \| open \| broken), `locked`, `items` (what a container holds, a count) |
+| switched | struct, part \| uid, on = true \| false: a light, pump, valve, breaker or machine, by its system's own answer |
+| looted | struct, part \| uid, item \| mat, n: that item gone from the container (or `n` of it taken since the step opened); without item, the container emptied |
+| has_item | who, item \| mat, n = 1: their pack holds it (`item = "datalog:<name>"` works) |
+| terminal | struct, page: at the console on that page; `read = "<card name>"`: that log card read anywhere |
 | *(fail list)* room_unbreathable | struct, room = largest \| airlock \| n, secs: the room has been unbreathable that long |
 | *(fail list)* crew_dead | who \| any |
 | *(fail list)* suit_air | who, below |
@@ -228,6 +238,11 @@ A beat is a table with one key. Beats run in order from a queue. A line of dialo
 | hook | `"fn"` |
 | fail | `"why"` |
 | done | `true` |
+| tag | `{ struct, part \| uid, name = "L-1" \| false }`: paint (or clear) a designation. |
+| log | `{ struct, text, who, when, kind }`: a line in the base log. |
+| container | `{ struct, part \| uid, items, parts, mats, clear = true }`: put things in a container (`clear`: emptied first). |
+| lock | `{ struct, part \| uid, code = "1234" }` locks it on a code (a new code re-keys it); `code = false` takes the lock off; `open = true \| false` opens it or locks it again on its own code. |
+| terminal | `{ struct, part \| uid, page = "LOG" }`: open that console's terminal on a page (the crew must be at it: it closes when they are far); `close = true` closes it. |
 
 ### 5.2 Cutscenes
 
@@ -340,6 +355,30 @@ function surge(api) api.setVar("surged", true); api.run("surge_scene") end      
 ```
 
 `scenarios/_story` uses `scripts/scn_story_hooks.lua` and `prefabs/scn_story_hooks.prefab.ron`.
+
+## 6.1 Loot, keypads and log cards (all data)
+
+`scenarios/_story` hides its Repair Kit: Hale's note is on the hut's shelf, and the note gives the code of the small crate the kit is in.
+
+```lua
+start = {
+  datalogs = { hale_note = { title = "Hale's note", who = "Dr. Hale", when = "day 212",
+                             lines = { "Dele: the spare kit is in the small crate.", "Small crate: 0417" },
+                             codes = { { struct = "Story Hut", part = "crateS" } } } },
+  containers = { { struct = "Story Hut", part = "shelf", items = { ration = 3, ["datalog:hale_note"] = 1 } },
+                 { struct = "Story Hut", part = "crateS", items = { repairkit = 1 } } },
+  locks = { { struct = "Story Hut", part = "crateS", code = "0417" } },
+  logs = { { struct = "Story Hut", when = "21:10", who = "Dr. Hale", text = "Light out again." } },
+},
+steps = {
+  { id = "note", text = "Read Hale's note.", optional = true, goals = { { kind = "terminal", read = "hale_note" } } },
+  { id = "kit", text = "Open the small crate.", optional = true,
+    goals = { { kind = "part_state", struct = "Story Hut", part = "crateS", key = "locked", is = false },
+              { kind = "has_item", who = "crew:Okafor", item = "repairkit" } } },
+},
+```
+
+What the player can do with any of it, the scenario cannot forbid: they may force the crate (a tool, 25–60 s, loud, the lock broken for good) or strip the hut for parts (an Engineer, a tool). Write the goals for what happened (`looted`, `has_item`, `part_state`), not for the one way you expect.
 
 ## 7. A worked example: a fault, a choice, a fix
 

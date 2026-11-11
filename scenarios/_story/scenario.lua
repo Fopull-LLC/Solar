@@ -13,6 +13,13 @@
 --       dims the hut's ambient while the light is out; a METER (seconds in
 --       the dark, the hut's air) and a MODEL (the hut cooling while the
 --       light is out, with a line when it crosses 12 °C)
+--   S6 (the interaction plan §5.3; scripts/loot.lua): a log card on the
+--       shelf (start.datalogs, start.containers) gives the code of the small
+--       crate (start.locks) that holds the Repair Kit the fix needs; a line in
+--       the hut's base log (start.logs); optional steps on `terminal read`,
+--       `part_state` (locked), `has_item` and `looted`; the fix's beats paint
+--       the light "L-1" (tag), leave a ration on the shelf (container), lock
+--       the crate again (lock) and write the base log (log)
 return {
   id = "_story", title = "Story Probe", v = 2, order = 998,
   teaches = { "dialogue", "cutscenes", "events" },
@@ -41,6 +48,20 @@ return {
       ridge = { at = "crew:Okafor", offset = { 14, 0, -10 } },
     },
     structures = { { bp = "_story/hut.bp.txt", name = "Story Hut", at = "mark:hut", yaw = 0, air = true } },
+    -- S6: what is in the hut, and how it is locked
+    datalogs = {
+      hale_note = { title = "Hale's note", who = "Dr. Hale", when = "day 212",
+                    lines = { "Dele: the spare kit is in the small crate. I put it on a code after the last one walked off.",
+                              "Small crate: 0417" },
+                    codes = { { struct = "Story Hut", part = "crateS" } }, rp = 0 },
+    },
+    containers = {
+      { struct = "Story Hut", part = "shelf", items = { ration = 3, ["datalog:hale_note"] = 1 }, mats = { iron = 4 } },
+      { struct = "Story Hut", part = "crateS", items = { repairkit = 1, medkit = 1 } },
+      { struct = "Story Hut", part = "bunk", items = { flashlight = 1 } },
+    },
+    locks = { { struct = "Story Hut", part = "crateS", code = "0417" } },
+    logs = { { struct = "Story Hut", when = "21:10", who = "Dr. Hale", text = "Light out again. Third night running." } },
   },
   -- METERS: variables that follow a reading (no hooks)
   meters = {
@@ -98,6 +119,15 @@ return {
     { run = "intro" }, { run = "ask" },
   },
   steps = {
+    -- S6: the hut's things (optional, and first: open from the start; none blocks the walk or the fix)
+    { id = "note", text = "Read the note Hale left on the shelf.", optional = true,
+      goals = { { kind = "terminal", read = "hale_note" } } },
+    { id = "kit", text = "Open the small crate and take the Repair Kit.", optional = true,
+      goals = { { kind = "part_state", struct = "Story Hut", part = "crateS", key = "locked", is = false },
+                { kind = "has_item", who = "crew:Okafor", item = "repairkit" } },
+      on_done = { { log = { struct = "Story Hut", who = "Okafor", text = "Took the spare kit from the small crate." } } } },
+    { id = "rations", text = "Take the rations off the shelf.", optional = true,
+      goals = { { kind = "looted", struct = "Story Hut", part = "shelf", item = "ration" } } },
     { id = "walk", text = "Walk to the hut's door.", mark = "mark:door",
       goals = { { kind = "at", who = "crew:Okafor", at = "mark:door", r = 4 } } },
     -- a CHECKPOINT: a setback from here comes back to the fix, the light
@@ -106,6 +136,10 @@ return {
       on_enter = { { branch = { var = "faulted", is = true, beats = { { knock = { struct = "Story Hut", part = "lightFitting" } } } } } },
       goals = { { kind = "piece_ok", struct = "Story Hut", part = "lightFitting" }, { kind = "hook", fn = "faultSeen" } },
       on_done = { { light = { ambient = false } }, { look = { who = "Reyes", at = false } },
+                  { tag = { struct = "Story Hut", part = "lightFitting", name = "L-1" } },
+                  { container = { struct = "Story Hut", part = "shelf", items = { ration = 1 } } },
+                  { lock = { struct = "Story Hut", part = "crateS", open = false } },
+                  { log = { struct = "Story Hut", who = "Okafor", text = "L-1 back in. Ration on the shelf for Hale." } },
                   { say = { who = "hale", with = "okafor", text = "Lit. Thank you." } },
                   { say = { who = "vance", text = "Mast sees the hut lit. Harrow out." } }, { done = true } } },
     { id = "late", text = "The shift is over.", goals = { { kind = "var", name = "trust", lt = 0 } } },

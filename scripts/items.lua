@@ -168,6 +168,19 @@ ITEMS.spentRod = { name = "Spent Rod", kind = "consumable", kg = 40.0, L = 14, c
 ITEMS.datacore = { name = "Data Core", kind = "device", kg = 6.0, L = 4, cost = 0,
                    about = "an abandoned base's log in a shock case: carry it into the Research Lab to have it read" }
 
+-- LOOT (the interaction plan S5; scripts/loot.lua): what a ruin's crates,
+-- shelves and lockers hold besides the crew's own kit. Not held (no `hold`:
+-- never on the belt); carried, stowed, sold.
+--   ration      a sealed meal pack: worth carrying, worth selling
+--   rustytools  a roll of tools gone orange: their steel at the depot
+--   datalog     a log card; each one is its own item `datalog:<key>` (below)
+ITEMS.ration = { name = "Ration Pack", kind = "supply", kg = 0.8, L = 1.2, cost = 14,
+                 about = "a sealed meal pack, years past its date and still sealed: worth its weight to someone" }
+ITEMS.rustytools = { name = "Rusted Tool Roll", kind = "supply", kg = 3.5, L = 4, cost = 20,
+                     about = "spanners, a pry bar and a hacksaw gone orange in their canvas roll: worth their steel" }
+ITEMS.datalog = { name = "Data Log", kind = "data", kg = 0.2, L = 0.3, cost = 0,
+                  about = "a log card from an abandoned base: read it in the pack, or at a terminal" }
+
 -- THE BUILD KIT (deep-space addendum K1; scripts/field_builder.lua): the
 -- Engineer's field tablet in its hard carry frame. Every Engineer is issued
 -- one (field_builder, once per member: an Engineers-only issue, so not
@@ -230,8 +243,30 @@ local function resolve_part(id)
   if d then part_cache[id] = d end
   return d
 end
+-- ── DATA LOGS (the interaction plan S5) ──────────────────────────────────────
+-- A log card is an item `datalog:<key>`; its words are a record in the save
+-- (`loot.logs[key]`: title, who, when, lines, codes, coords; scripts/loot.lua
+-- rolls a ruin's, a scenario's start.datalogs names its own). 0.2 kg, 0.3 L.
+-- The name carries the title ("Data Log: Shift note"). Never in pairs(ITEMS).
+LOG_PREFIX = "datalog:"
+local log_cache = {}
+function isLog(id) return type(id) == "string" and id:sub(1, #LOG_PREFIX) == LOG_PREFIX end
+function forgetLogs() log_cache = {} end
+local function resolve_log(id)
+  local c = log_cache[id]
+  if c then return c end
+  local key = id:sub(#LOG_PREFIX + 1)
+  local all = save and save.get and save.get("loot.logs")
+  local rec = type(all) == "table" and all[key] or nil
+  local title = type(rec) == "table" and rec.title or nil
+  local d = { name = title and ("Data Log: " .. tostring(title)) or "Data Log", kind = "data", kg = 0.2, L = 0.3, cost = 0, log = key,
+              about = "a log card" .. (type(rec) == "table" and rec.who and (" signed " .. tostring(rec.who)) or "") .. ": read it in the pack or at a terminal" }
+  if rec then log_cache[id] = d end
+  return d
+end
 setmetatable(ITEMS, { __index = function(_, k)
   if type(k) == "string" and k:sub(1, #PART_PREFIX) == PART_PREFIX then return resolve_part(k) end
+  if type(k) == "string" and k:sub(1, #LOG_PREFIX) == LOG_PREFIX then return resolve_log(k) end
   return nil
 end })
 

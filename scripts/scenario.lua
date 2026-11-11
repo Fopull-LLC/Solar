@@ -900,6 +900,71 @@ kind("terminal", { eval = function(g, W)
   if g.page and st.page ~= g.page then return false, "on " .. tostring(st.page) end
   return true, "at the console" .. (st.page and (" · " .. tostring(st.page)) or "")
 end })
+-- (S6, the interaction plan §5.3) terminal = { read = "<log key>" }: that log
+-- card has been read (in the pack, at a box or on a terminal's DATA page);
+-- read without page/struct is its own condition. The kind above keeps
+-- { struct, page } for "at the console". Wrapped: read first.
+do
+  local at_console = KINDS.terminal.eval
+  KINDS.terminal.eval = function(g, W, mem, ctx)
+    if g.read ~= nil then
+      local r = W.logRead and W.logRead(g.read)
+      if not r then return false, "not read yet" end
+      if not (g.struct or g.page) then return true, "read" end
+    end
+    return at_console(g, W, mem, ctx)
+  end
+end
+-- part_state: a piece's live state by key (generalises piece_ok; the same
+-- read as piece_state): { struct, part | uid, key = "<field>", eq | ne | lt |
+-- gt | lte | gte | is }. Keys are the part state's (off, shut, seal, kp,
+-- tag...) plus `knocked`, `pumpOn`, `locked` (a keypad shut on its code) and
+-- `items` (what a container holds, a count).
+kind("part_state", { req = { "struct", "key" }, eval = function(g, W)
+  local p = W.piece and W.piece(g)
+  if not p then return false, "no such piece" end
+  local v = p[g.key]
+  return varTest(v, g), string.format("%s = %s", tostring(g.key), tostring(v))
+end })
+-- switched: a light, pump, valve, breaker, machine is on (or off): the
+-- system's own answer (fluid_net.isOn, reactor_plant.pumpOn, room_air,
+-- base_power, a light's switch). { struct, part | uid, on = true | false }
+kind("switched", { req = { "struct" }, eval = function(g, W)
+  local on = W.switched and W.switched(g)
+  if on == nil then return false, "no switch on that piece" end
+  local want = g.on ~= false
+  return on == want, on and "on" or "off"
+end })
+-- looted: something has come out of a container: { struct, part | uid,
+-- item? (or mat?), n? }. Without item: emptied. With n: that many taken
+-- since the first reading (kept in mem).
+kind("looted", { req = { "struct" }, eval = function(g, W, mem)
+  local have
+  if (g.item or g.mat) and W.containerCount then
+    have = W.containerCount(g, g.item, g.mat)
+    if have == nil then return false, "no such container" end
+  else
+    local c = W.container and W.container(g)
+    if not c then return false, "no such container" end
+    if g.item then have = c.items[g.item] or 0
+    elseif g.mat then have = c.mats[g.mat] or 0
+    else have = c.total or 0 end
+  end
+  if mem.base == nil then mem.base = have end
+  if g.n then
+    local took = (mem.base or 0) - have
+    return took >= g.n, string.format("%d of %d taken", math.max(0, took), g.n)
+  end
+  if g.item or g.mat then return have == 0, have == 0 and "taken" or string.format("%d still in it", have) end
+  return have == 0, have == 0 and "empty" or string.format("%d thing%s in it", have, have == 1 and "" or "s")
+end })
+-- has_item: someone carries it: { who, item | mat, n = 1 } (their pack)
+kind("has_item", { req = { "who" }, eval = function(g, W)
+  local n = W.itemCount and W.itemCount(who_of(g), g.item, g.mat)
+  if n == nil then return false, "no pack for " .. tostring(g.who) end
+  local want = g.n or 1
+  return n >= want, string.format("%d of %d", n, want)
+end })
 -- (a fail) a room has been unbreathable for `secs`: { struct, room =
 -- largest | airlock | n, secs = 60 }
 kind("room_unbreathable", { fail = true, req = { "struct" }, eval = function(g, W, mem, ctx)
@@ -1058,7 +1123,14 @@ function goalLabel(g)
   if k == "power_read" then return g.breaker and "The breaker" or "The power" end
   if k == "part_hp" then return string.format("%s on %s", tostring(g.part or g.uid or "part"), tostring(g.craft):gsub("^craft:", "")) end
   if k == "piece_state" then return tostring(g.part or g.uid or "the piece") end
-  if k == "terminal" then return g.page and ("The console's " .. tostring(g.page) .. " page") or "Use the console (E)" end
+  if k == "terminal" then
+    if g.read and not g.page then return "Read the log" end
+    return g.page and ("The console's " .. tostring(g.page) .. " page") or "Use the console (E)"
+  end
+  if k == "part_state" then return string.format("%s: %s", tostring(g.part or g.uid or "the piece"), tostring(g.key)) end
+  if k == "switched" then return string.format("%s %s", g.on == false and "Switch off" or "Switch on", tostring(g.part or g.uid or "it")) end
+  if k == "looted" then return g.item and string.format("Take the %s", (tostring(g.item):gsub("^%a+:", ""))) or "Empty it" end
+  if k == "has_item" then return string.format("Carry %s", tostring(g.item or g.mat)) end
   return k
 end
 
@@ -1256,7 +1328,10 @@ BEATS = { ops = "string", say = "table", caption = "table", camera = "table", wa
           face = "table", look = "table", light = "table", weather = "table", breaker = "table", wear = "table",
           music = "music",
           -- graveyard2: a body turned to face something; lying or sitting
-          turn = "table", pose = "table", gesture = "table" }
+          turn = "table", pose = "table", gesture = "table",
+          -- S6 (the interaction plan §5.3): a designation, a base-log line, a
+          -- container's contents, a keypad, a console opened on a page
+          tag = "table", log = "table", container = "table", lock = "table", terminal = "table" }
 GESTURES = { stand_talk = true, point = true, wave = true, lean_console = true, kneel_work = true, sit_idle = true, lie_rest = true }
 POSES = { lie = true, sit = true, stand = true }
 -- FW-C cast fields (the rest is refused, so a typo is caught)
@@ -1378,6 +1453,90 @@ function validate(sc, ctx)
       if type(t.name) ~= "string" or not t.name:match("%S") or #t.name > 12 then E(p .. ".name", "a designation of 1 to 12 characters")
       elseif tagged[t.name] then E(p .. ".name", "'" .. t.name .. "' is already start.tags[" .. tagged[t.name] .. "]")
       else tagged[t.name] = i end
+    end
+  end
+  -- S6 (the interaction plan §5.3): what the start puts in and on pieces.
+  --   datalogs   = { name = { title, who, when, lines | text, codes = { { struct, part | uid } }, rp } }
+  --                log cards; an item "datalog:<name>" in a container is one
+  --   containers = { { struct, part | uid, items = { id = n }, parts = { pid = n }, mats = { mat = n } } }
+  --   locks      = { { struct, part | uid, code = "4471", open = false } }   a keypad on a door or a container
+  --   logs       = { { struct, text, who, when, kind } }                     lines in the structure's base log
+  local function check_piece(p, t)
+    if type(t) ~= "table" then E(p, "a table { struct, part | uid, ... }") return false end
+    local sn = type(t.struct) == "string" and t.struct:gsub("^struct:", "") or nil
+    if not sn then E(p .. ".struct", "a structure's name")
+    elseif next(structs) and not structs[sn] then E(p .. ".struct", "no start.structures entry named " .. sn) end
+    if t.part == nil and t.uid == nil then E(p, "part or uid") end
+    if t.uid ~= nil and (type(t.uid) ~= "number" or t.uid < 1 or t.uid % 1 ~= 0) then E(p .. ".uid", "a piece's uid (a whole number)") end
+    if t.part ~= nil and type(t.part) ~= "string" then E(p .. ".part", "a part id (or its prefix)") end
+    return true
+  end
+  local function code_ok(c) return type(c) == "string" and c:match("^%d%d%d+$") ~= nil and #c <= 8 end
+  local datalogs = type(st.datalogs) == "table" and st.datalogs or {}
+  if st.datalogs ~= nil and type(st.datalogs) ~= "table" then E("start.datalogs", "a table of name = { title, who, when, lines | text, codes }") end
+  for k, lg in pairs(datalogs) do
+    local p = "start.datalogs." .. tostring(k)
+    if type(k) ~= "string" or not k:match("^[%w_%-]+$") then E(p, "a name of letters, digits, _ or -") end
+    if type(lg) ~= "table" then E(p, "a table { title, who, when, lines | text }")
+    else
+      if type(lg.title) ~= "string" then E(p .. ".title", "the card's title") end
+      if lg.lines == nil and lg.text == nil then E(p, "lines or text") end
+      if lg.lines ~= nil and type(lg.lines) ~= "table" then E(p .. ".lines", "a list of lines") end
+      if lg.text ~= nil and type(lg.text) ~= "string" then E(p .. ".text", "words") end
+      if lg.codes ~= nil and type(lg.codes) ~= "table" then E(p .. ".codes", "a list of { struct, part | uid }: the keypads whose codes it gives") end
+      for j, c in ipairs(type(lg.codes) == "table" and lg.codes or {}) do check_piece(string.format("%s.codes[%d]", p, j), c) end
+      if lg.rp ~= nil and type(lg.rp) ~= "number" then E(p .. ".rp", "research points the first read gives (0 for none)") end
+    end
+  end
+  local function check_bag(p, c)
+    for _, f in ipairs({ "items", "parts", "mats" }) do if c[f] ~= nil and type(c[f]) ~= "table" then E(p .. "." .. f, "a table of id = n") end end
+    for id, n in pairs(type(c.items) == "table" and c.items or {}) do
+      if type(n) ~= "number" or n < 1 then E(p .. ".items." .. tostring(id), "a count, 1 or more") end
+      local logk = type(id) == "string" and id:match("^datalog:(.+)$")
+      if logk then
+        if not datalogs[logk] then E(p .. ".items." .. tostring(id), "no start.datalogs entry named " .. logk) end
+      elseif ctx.itemExists and not ctx.itemExists(id) then E(p .. ".items." .. tostring(id), "no such item") end
+    end
+    for id, n in pairs(type(c.parts) == "table" and c.parts or {}) do
+      if ctx.partExists and not ctx.partExists(id) then E(p .. ".parts." .. tostring(id), "no such part") end
+      if type(n) ~= "number" or n < 1 then E(p .. ".parts." .. tostring(id), "a count, 1 or more") end
+    end
+    for m, n in pairs(type(c.mats) == "table" and c.mats or {}) do
+      if ctx.matExists and not ctx.matExists(m) then E(p .. ".mats." .. tostring(m), "no such material") end
+      if type(n) ~= "number" or n < 1 then E(p .. ".mats." .. tostring(m), "units, 1 or more") end
+    end
+  end
+  local function check_holder(p, part, want)
+    if type(part) == "string" and ctx.pieceKind then
+      local k = ctx.pieceKind(part)
+      if k ~= nil and not k[want] then E(p .. ".part", string.format("'%s' is not a %s", part, want == "container" and "piece that holds things (crate, shelf, workbench, bunk, cabinet, locker)" or "door or a container")) end
+    end
+  end
+  if st.containers ~= nil and type(st.containers) ~= "table" then E("start.containers", "a list of { struct, part | uid, items, parts, mats }") end
+  for i, c in ipairs(type(st.containers) == "table" and st.containers or {}) do
+    local p = string.format("start.containers[%d]", i)
+    if check_piece(p, c) then check_bag(p, c); check_holder(p, c.part, "container") end
+  end
+  if st.locks ~= nil and type(st.locks) ~= "table" then E("start.locks", "a list of { struct, part | uid, code }") end
+  for i, l in ipairs(type(st.locks) == "table" and st.locks or {}) do
+    local p = string.format("start.locks[%d]", i)
+    if check_piece(p, l) then
+      if not code_ok(l.code) then E(p .. ".code", "3 to 8 digits, in quotes (\"4471\")") end
+      if l.open ~= nil and type(l.open) ~= "boolean" then E(p .. ".open", "true (fitted but open) or false") end
+      check_holder(p, l.part, "lockable")
+    end
+  end
+  if st.logs ~= nil and type(st.logs) ~= "table" then E("start.logs", "a list of { struct, text, who, when }") end
+  for i, l in ipairs(type(st.logs) == "table" and st.logs or {}) do
+    local p = string.format("start.logs[%d]", i)
+    if type(l) ~= "table" then E(p, "a table { struct, text, who, when }")
+    else
+      local sn = type(l.struct) == "string" and l.struct:gsub("^struct:", "") or nil
+      if not sn then E(p .. ".struct", "a structure's name")
+      elseif next(structs) and not structs[sn] then E(p .. ".struct", "no start.structures entry named " .. sn) end
+      if type(l.text) ~= "string" or l.text == "" then E(p .. ".text", "the line") end
+      if l.when ~= nil and not (type(l.when) == "string" and l.when:match("^%d%d?:%d%d$")) then E(p .. ".when", "a clock time \"23:40\"") end
+      if l.who ~= nil and type(l.who) ~= "string" then E(p .. ".who", "who wrote it") end
     end
   end
   for i, c in ipairs(st.craft or {}) do
@@ -1557,6 +1716,30 @@ function validate(sc, ctx)
           elseif key == "objective" then
             if type(val.text) ~= "string" then E(pk .. ".text", "missing") end
             if val.step then check_step(pk .. ".step", val.step) end
+          -- S6: a designation, a base-log line, contents, a keypad, a console
+          elseif key == "tag" then
+            check_struct(pk .. ".struct", val.struct)
+            if not (val.part or val.uid) then E(pk, "part (an id prefix) or uid") end
+            if val.name ~= false and (type(val.name) ~= "string" or not val.name:match("%S") or #val.name > 12) then E(pk .. ".name", "a designation of 1 to 12 characters, or false to clear it") end
+          elseif key == "log" then
+            check_struct(pk .. ".struct", val.struct)
+            if type(val.text) ~= "string" or val.text == "" then E(pk .. ".text", "the line") end
+          elseif key == "container" then
+            check_struct(pk .. ".struct", val.struct)
+            if not (val.part or val.uid) then E(pk, "part (an id prefix) or uid") end
+            check_bag(pk, val)
+            check_holder(pk, val.part, "container")
+            if val.clear ~= nil and type(val.clear) ~= "boolean" then E(pk .. ".clear", "true: emptied first") end
+          elseif key == "lock" then
+            check_struct(pk .. ".struct", val.struct)
+            if not (val.part or val.uid) then E(pk, "part (an id prefix) or uid") end
+            if val.code ~= false and val.code ~= nil and not code_ok(val.code) then E(pk .. ".code", "3 to 8 digits in quotes, or false to take the lock off") end
+            if val.code == nil and val.open == nil then E(pk, "code (lock it), code = false (take it off) or open = true|false") end
+            check_holder(pk, val.part, "lockable")
+          elseif key == "terminal" then
+            check_struct(pk .. ".struct", val.struct)
+            if val.page ~= nil and type(val.page) ~= "string" then E(pk .. ".page", "a page id (\"REACTOR\", \"LOG\", \"DATA\")") end
+            if val.close ~= nil and type(val.close) ~= "boolean" then E(pk .. ".close", "true: close the console") end
           end
         end
       end
@@ -1575,6 +1758,22 @@ function validate(sc, ctx)
       if g[f] == nil then E(path .. "." .. f, "missing") end
     end
     if g.hold ~= nil and type(g.hold) ~= "number" then E(path .. ".hold", "seconds") end
+    -- S6: the new kinds' fields
+    if g.kind == "part_state" or g.kind == "switched" or g.kind == "looted" then
+      if g.part == nil and g.uid == nil then E(path, "part (an id prefix) or uid") end
+    end
+    if g.kind == "switched" and g.on ~= nil and type(g.on) ~= "boolean" then E(path .. ".on", "true or false") end
+    if (g.kind == "looted" or g.kind == "has_item") and g.n ~= nil and (type(g.n) ~= "number" or g.n < 1) then E(path .. ".n", "a count, 1 or more") end
+    if g.kind == "has_item" and g.item == nil and g.mat == nil then E(path, "item or mat") end
+    if (g.kind == "has_item" or g.kind == "looted") and type(g.item) == "string" then
+      local logk = g.item:match("^datalog:(.+)$")
+      if logk then if not datalogs[logk] then E(path .. ".item", "no start.datalogs entry named " .. logk) end
+      elseif ctx.itemExists and not ctx.itemExists(g.item) then E(path .. ".item", "no such item") end
+    end
+    if g.kind == "terminal" and g.read ~= nil then
+      if type(g.read) ~= "string" then E(path .. ".read", "a log card's name (start.datalogs) or key")
+      elseif next(datalogs) ~= nil and not datalogs[g.read] and not g.read:find(":", 1, true) then E(path .. ".read", "no start.datalogs entry named " .. g.read) end
+    end
     for _, f in ipairs({ "who", "at" }) do
       if g[f] ~= nil and type(g[f]) == "string" and g[f]:find(":", 1, true) then check_ref(path .. "." .. f, g[f]) end
     end

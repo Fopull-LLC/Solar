@@ -56,6 +56,19 @@
                 enabled: true,
                 params: [],
             ),
+            // what every piece holds, its keypad, what it strips into
+            // (scripts/loot.lua), and the panel E opens on a crate, a locker
+            // or a keypad (scripts/loot_panel.lua)
+            (
+                kind: "loot",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "loot_panel",
+                enabled: true,
+                params: [],
+            ),
         ],
     ),
 ]

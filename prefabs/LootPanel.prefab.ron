@@ -1,0 +1,34 @@
+[
+    (
+        // THE LOOT PANEL (the interaction plan S5): scripts/loot_panel.lua spawns
+        // this under the Ship HUD when E opens a crate, a locker, a drawer or a
+        // keypad (or a log card is read), draws it with ui.make while it is up
+        // and destroys it on Esc / E.
+        name: "Loot Panel",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        ui: Some((
+            // on the bottom of the screen, clear of the objectives card and the HUD's chips
+            place: Pin(
+                anchor: Bottom,
+                offset: (0.0, -64.0),
+            ),
+            size: (Fit, Fit),
+            stack: Some((
+                dir: Column,
+                gap: 0.0,
+                pad: 0.0,
+                align: Center,
+                justify: Start,
+            )),
+            visible: true,
+            opacity: 1.0,
+            order: 60,
+        )),
+    ),
+]

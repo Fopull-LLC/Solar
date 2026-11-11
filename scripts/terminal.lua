@@ -654,6 +654,8 @@ local function blocked_why()
   if fm and fm.isOpen and fm.isOpen() then return "facility" end
   local ip = ref("inventory_panel")
   if ip and ip.open then return "pack" end
+  local lp = ref("loot_panel")
+  if lp and lp.isOpen and lp.isOpen() then return "loot" end
   local om = ref("orbit_map")
   if om and om.isOpen and om.isOpen() then return "map" end
   local fb = ref("field_builder")

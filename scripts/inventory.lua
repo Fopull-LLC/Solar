@@ -17,6 +17,10 @@
 --   "salvage:<id>" a dropped pack lying in the world (scripts/salvage.lua)
 --   "crate:<n>"    a supply crate round the base (scripts/supply_crates.lua):
 --                  400 kg, 480 L (items.CRATE_KG, VOL.crate)
+--   "piece:<sid>:<uid>"  a kit piece that holds things (the interaction plan
+--                  S5: a crate, shelving, a workbench's drawers, a bunk's
+--                  footlocker, a cabinet, a locker; scripts/loot.lua): its
+--                  kilograms and litres are its part record's `container`
 --
 -- TWO LIMITS. Kilograms bind everything (materials weigh what materials.lua
 -- says, items what items.lua says). Litres bind ITEMS only: a pack is 60 L, a
@@ -267,7 +271,24 @@ KINDS = {
   fab    = { kg = 2000, L = 4000 },
   silo   = { kg = 8000, L = math.huge, one = true },
   hopper = { kg = 4000, L = math.huge },
+  -- (S5) a kit piece's store, when its record can't be read (loot.capsOf)
+  piece  = { kg = 100, L = 100 },
 }
+-- (S5) a piece container's kg and litres: scripts/loot.lua reads its part record
+local loot_ref, loot_miss = nil, -1e9
+local function piece_caps(cid)
+  if not (loot_ref and loot_ref.valid ~= false) then
+    local t = time or 0
+    if t - loot_miss < 2.0 and t >= loot_miss then return KINDS.piece.kg, KINDS.piece.L end
+    loot_ref = findScript and findScript("loot", { quiet = true }) or nil
+    if not loot_ref then loot_miss = t end
+  end
+  if loot_ref and loot_ref.capsOf then
+    local ok, kg, L = pcall(loot_ref.capsOf, cid)
+    if ok and kg then return kg, L or KINDS.piece.L end
+  end
+  return KINDS.piece.kg, KINDS.piece.L
+end
 function kindOf(cid)
   if type(cid) ~= "string" then return nil end
   local k = cid:match("^(%a+):")
@@ -280,7 +301,7 @@ function whyNot(cid, mat)
   cid = R(cid)
   local m = mats()
   if m and m.inTank and m.inTank(mat) then
-    if is_pack(cid) or cid:sub(1, 6) == "crate:" or cid:sub(1, 7) == "locker:" or cid:sub(1, 8) == "salvage:" then
+    if is_pack(cid) or cid:sub(1, 6) == "crate:" or cid:sub(1, 7) == "locker:" or cid:sub(1, 8) == "salvage:" or cid:sub(1, 6) == "piece:" then
       return ((m.label and m.label(mat)) or mat) .. " is kept in a tank"
     end
   end
@@ -314,8 +335,9 @@ function cap(cid)
   if cid == "base" then return params.base_kg end
   local caps = save.get("inv.cap") or {}
   if caps[cid] then return caps[cid] end
-  -- (X4) a Fabricator's store, a silo, a hopper
+  -- (X4) a Fabricator's store, a silo, a hopper; (S5) a piece's store
   local kk = kindOf(cid)
+  if kk == "piece" then return (piece_caps(cid)) end
   if kk then return KINDS[kk].kg end
   -- a base supply crate (scripts/supply_crates.lua): the registry's size
   if cid:sub(1, 6) == "crate:" then
@@ -733,6 +755,7 @@ function volCap(cid)
   if cid:sub(1, 7) == "locker:" then return V.locker end
   if cid:sub(1, 6) == "crate:" then return V.crate or 480 end
   local kk = kindOf(cid)
+  if kk == "piece" then local _, L = piece_caps(cid); return L end
   if kk then return KINDS[kk].L end
   if cid:sub(1, 5) == "hold:" then
     -- a hold's litres follow its Cargo Bays (250 kg each): 1000 L a bay

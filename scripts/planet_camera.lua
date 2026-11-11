@@ -496,6 +496,9 @@ local function panel_open()
   -- …and a console's terminal (terminal.lua: its keys are clicked)
   local tm = script_ref("terminal")
   if tm and tm.isOpen and tm.isOpen() then return true end
+  -- …and a crate's, a locker's or a keypad's panel (loot_panel.lua)
+  local lp = script_ref("loot_panel")
+  if lp and lp.isOpen and lp.isOpen() then return true end
   return false
 end
 

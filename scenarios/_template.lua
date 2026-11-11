@@ -76,6 +76,13 @@ return {
     crates = {                                 -- a "Supply drop" crate (salvage.lua) with crated parts
       -- { at = "crew:Okafor", offset = { 4, 0, 2 }, parts = { ["wall.steel"] = 6 }, items = { repairkit = 1 } },
     },
+    -- S6 (docs/scenarios.md §3.1, §6.1): pieces that hold things, keypads, log cards, base-log lines
+    -- tags = { { struct = "Shelter", part = "lightFitting", name = "L-1" } },
+    -- datalogs = { note = { title = "Shift note", who = "M. Okafor", when = "23:40",
+    --                       lines = { "Locker code below.", "Locker: 2580" }, codes = { { struct = "Shelter", part = "locker" } } } },
+    -- containers = { { struct = "Shelter", part = "shelf", items = { ration = 2, ["datalog:note"] = 1 }, parts = { ["lightFitting.steel"] = 1 }, mats = { iron = 4 } } },
+    -- locks = { { struct = "Shelter", part = "locker", code = "2580" } },     -- a door or a container; open = true: fitted but open
+    -- logs = { { struct = "Shelter", when = "06:10", who = "M. Okafor", text = "Scrubber cartridge changed." } },
     flags = {}, survey = {},
     craft = {
       -- { file = "my_scenario/lander.json", name = "Kestrel", where = { pad = true } }
@@ -88,6 +95,8 @@ return {
   -- walk = { who, to = ref }, look = { who, at = ref | false }, face = { who,
   -- emotion }, light = { ambient, fog, time, secs }, weather = { kind, secs },
   -- breaker = { struct, part, closed }, wear = { craft, part, hp }, music = "audio/music/x.ogg" | false
+  -- S6: tag = { struct, part, name }, log = { struct, text, who }, container = { struct, part, items, mats, clear },
+  -- lock = { struct, part, code = "1234" | false, open }, terminal = { struct, page = "LOG" | close = true }
 
   steps = {
     { id = "walk", text = "Walk to the marker.",
@@ -99,6 +108,9 @@ return {
     --   teach = { overlay = "ROOMS", catalogue = "WALL", ghost = "my_scenario/ghost.bp.txt", at = "mark:shelter" },
     --   checkpoint = true, act = "Act 2 · the shell", stage = { structures = { … } } },   -- a setback comes back here
     -- optional = true: counts for nothing, blocks nothing; parallel = "jobs": open together
+    -- S6 goals: { kind = "looted", struct, part, item, n }, { kind = "has_item", who, item | mat, n },
+    --   { kind = "part_state", struct, part, key = "locked", is = false }, { kind = "switched", struct, part, on = true },
+    --   { kind = "terminal", read = "note" } (a log card read)
   },
 
   fail = {

@@ -538,6 +538,9 @@ local function on_foot(node)
   -- At a console's terminal (terminal.lua): its keys take the left button.
   local tm = ref("terminal")
   if tm and tm.isOpen and tm.isOpen() then why("at a console") return false end
+  -- At a crate, a locker or a keypad (loot_panel.lua): its keys take the left button.
+  local lp = ref("loot_panel")
+  if lp and lp.isOpen and lp.isOpen() then why("at a container") return false end
   -- The map owns the camera (and the camera's screen ray starts thousands of
   -- metres out): no aiming, no rays, no plant queries from there.
   local om = ref("orbit_map")
@@ -2494,6 +2497,9 @@ local function e_taken()
   -- a console within reach (terminal.lua draws its own prompt)
   local tm = ref("terminal")
   if tm and tm.prompting and tm.prompting() then return "E is the console's", true end
+  -- a crate, a locker or a keypad within reach (loot_panel.lua draws its own prompt)
+  local lp = ref("loot_panel")
+  if lp and lp.prompting and lp.prompting() then return "E opens it", true end
   return nil
 end
 

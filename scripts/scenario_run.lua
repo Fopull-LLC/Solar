@@ -683,7 +683,9 @@ WORLD_BEATS = { reactor = true, knock = true, state = true, power = true, var = 
                 -- FW-C: what changes the world (or the light it is seen in)
                 light = true, weather = true, breaker = true, wear = true, music = true,
                 -- graveyard2: where a body faces and how it rests
-                turn = true, pose = true, gesture = true }
+                turn = true, pose = true, gesture = true,
+                -- S6: designations, the base log, contents, keypads
+                tag = true, log = true, container = true, lock = true }
 local stage_one        -- set by the staging section: (kind, entry, out)
 local walks = {}       -- id → { to = ref, offset, t1 }
 
@@ -1105,9 +1107,198 @@ local function piece_read(struct, part, uid)
   local c = { id = p.id, uid = uid_, knocked = p.wr == true }
   for k, v in pairs(st) do if type(v) ~= "table" then c[k] = v end end
   if RP and RP.plantOfPart and RP.plantOfPart(sid, uid_) and RP.pumpOn then c.pumpOn = RP.pumpOn(sid, uid_) end
+  -- (S6) a keypad's state and what a container holds
+  local LT = ref("loot")
+  if LT and LT.lockOf then
+    c.lock = LT.lockOf(sid, uid_)
+    c.locked = c.lock == "locked"
+    -- (a container's count only when a goal or a meter asks for it: `items` is read through the metatable)
+    if LT.containerAt(sid, uid_) then
+      setmetatable(c, { __index = function(t, k) if k == "items" then local cc = S6.contents(sid, uid_); return cc and cc.total or 0 end end })
+    end
+  end
   return c
 end
 W.piece = function(g) return piece_read(g.struct, g.part, g.uid) end
+
+-- ── S6 (the interaction plan §5.3): containers, keypads, log cards, tags,
+-- the base log and the console, as data (scripts/loot.lua does the work) ──
+S6 = {}
+local function part_def(id) local pb = ref("parts_base"); return pb and pb.partInfo and pb.partInfo(id) or nil end
+-- what container (sid, uid) holds: { items = { id = n }, mats = { mat = n }, total }
+function S6.contents(sid, uid)
+  local inv, LT = ref("inventory"), ref("loot")
+  if not (inv and LT) then return nil end
+  local cid = LT.cidOf(sid, uid)
+  local out = { items = {}, mats = {}, total = 0 }
+  for _, g in ipairs(inv.itemList(cid) or {}) do out.items[g.id] = g.n; out.total = out.total + g.n end
+  for _, it in ipairs(inv.items(cid) or {}) do out.mats[it.mat] = it.n; out.total = out.total + it.n end
+  return out
+end
+W.container = function(g)
+  local sid, uid = piece_of(g)
+  local LT = ref("loot")
+  if not (sid and LT and LT.containerAt(sid, uid)) then return nil end
+  return S6.contents(sid, uid)
+end
+-- one item's (or material's) count in a container: no list built (the goals run at 4 Hz)
+W.containerCount = function(g, item, mat)
+  local sid, uid = piece_of(g)
+  local LT, inv = ref("loot"), ref("inventory")
+  if not (sid and LT and inv and LT.containerAt(sid, uid)) then return nil end
+  local cid = LT.cidOf(sid, uid)
+  if item then return inv.itemCount(cid, item) or 0 end
+  return inv.count(cid, mat) or 0
+end
+-- a light, a pump, a valve, a breaker, a machine: on? (nil: no switch)
+W.switched = function(g)
+  local sid, uid, p = piece_of(g)
+  if not sid then return nil end
+  local d = part_def(p.id) or {}
+  local ST, FN, RP, RA, BP = ref("structures"), ref("fluid_net"), ref("reactor_plant"), ref("room_air"), ref("base_power")
+  local st = ST and ST.partState and ST.partState(sid, uid) or nil
+  if d.fl and FN and FN.isOn then return FN.isOn(sid, uid) == true end
+  if d.pump and RP and RP.pumpOn then return RP.pumpOn(sid, uid) == true end
+  if d.reject and RP then
+    if d.reject.kind == "tower" and RP.towerOn then return RP.towerOn(sid, uid) == true end
+    if RP.radiatorOpen then return RP.radiatorOpen(sid, uid) == true end
+  end
+  if d.life and RA and RA.machineOn then return RA.machineOn(sid, uid) == true end
+  if d.power and d.power.kind == "breaker" and BP and BP.breakerState then return BP.breakerState(sid, uid) == "closed" end
+  if d.light or d.switch or (d.power and d.power.kind == "load") then return not (st and st.off) end
+  return nil
+end
+-- how many of `item` (or units of `mat`) who's pack holds
+W.itemCount = function(who, item, mat)
+  local inv, C = ref("inventory"), ref("crew")
+  if not inv then return nil end
+  local id = member_id(who)
+  local cid = (id and C and C.packOf) and C.packOf(id) or (id and ("crew:" .. tostring(id))) or "astro"
+  if item then return inv.itemCount and inv.itemCount(cid, item) or 0 end
+  if mat then return inv.count and inv.count(cid, mat) or 0 end
+  return nil
+end
+W.logRead = function(key) local LT = ref("loot"); return LT and LT.isRead and LT.isRead(key) or false end
+-- the staging: log cards, containers, keypads, base-log lines (once per piece:
+-- a setback's restaging does not fill a crate twice)
+local function s6_done() local t = sget("scn.s6"); return type(t) == "table" and t or {} end
+function S6.stage(st, out)
+  local LT, inv, ST = ref("loot"), ref("inventory"), ref("structures")
+  if not (LT and inv and ST) then
+    if st.containers or st.locks or st.datalogs then out[#out + 1] = "S6: no loot rules in this scene" end
+    return
+  end
+  local done = s6_done()
+  local logs = {}
+  for name, lg in pairs(type(st.datalogs) == "table" and st.datalogs or {}) do
+    local codes = {}
+    for _, c in ipairs(lg.codes or {}) do
+      local sid, uid = piece_of(c)
+      local pst = sid and ST.partState(sid, uid)
+      local code = c.code
+      if not code then
+        for _, l in ipairs(st.locks or {}) do
+          local lsid, luid = piece_of(l)
+          if lsid == sid and luid == uid then code = l.code end
+        end
+      end
+      code = code or (pst and pst.kp)
+      if sid and code then codes[#codes + 1] = { sid = sid, uid = uid, code = code, label = c.label } end
+    end
+    logs[#logs + 1] = { key = name, title = lg.title, who = lg.who, when = lg.when, lines = lg.lines, text = lg.text, codes = codes, rp = lg.rp or 0, coords = lg.coords }
+  end
+  if #logs > 0 then LT.registerLogs(logs); out[#out + 1] = string.format("datalogs: %d", #logs) end
+  for i, c in ipairs(type(st.containers) == "table" and st.containers or {}) do
+    local sid, uid = piece_of(c)
+    local key = string.format("c%d:%s:%s", i, tostring(sid), tostring(uid))
+    if sid and LT.containerAt(sid, uid) and not done[key] then
+      S6.fill(sid, uid, c, false)
+      done[key] = true
+      out[#out + 1] = string.format("container %d: %s #%s", i, tostring(c.part or c.uid), tostring(uid))
+    elseif not sid or not LT.containerAt(sid, uid) then
+      out[#out + 1] = string.format("container %d failed: no container %s in %s", i, tostring(c.part or c.uid), tostring(c.struct))
+    end
+  end
+  for i, l in ipairs(type(st.locks) == "table" and st.locks or {}) do
+    local sid, uid = piece_of(l)
+    local key = string.format("l%d:%s:%s", i, tostring(sid), tostring(uid))
+    if sid and not done[key] then
+      local ok, why = LT.setCode(sid, uid, l.code, false)
+      if ok and l.open then LT.enterCode(sid, uid, l.code, false) end
+      done[key] = true
+      out[#out + 1] = string.format("lock %d: %s #%s %s", i, tostring(l.part or l.uid), tostring(uid), ok and "on its code" or tostring(why))
+    end
+  end
+  local BL = ref("base_log")
+  for i, l in ipairs(type(st.logs) == "table" and st.logs or {}) do
+    local sid = struct_id(tostring(l.struct or ""):gsub("^struct:", ""))
+    local key = string.format("g%d:%s", i, tostring(sid))
+    if sid and BL and BL.add and not done[key] then
+      BL.add(sid, l.kind or "note", (l.when and ("[" .. l.when .. "] ") or "") .. l.text, l.who or false)
+      done[key] = true
+    end
+  end
+  sset("scn.s6", done)
+end
+-- put a bag into container (sid, uid): items (datalog:<name> included), parts, mats
+function S6.fill(sid, uid, c, clear)
+  local LT, inv = ref("loot"), ref("inventory")
+  local cid = LT.cidOf(sid, uid)
+  if clear then
+    for _, g in ipairs(inv.itemList(cid) or {}) do inv.removeItem(cid, g.id, g.n) end
+    inv.clear(cid)
+  end
+  for id, n in pairs(c.items or {}) do inv.addItem(cid, id, n, { force = true }) end
+  for id, n in pairs(c.parts or {}) do inv.addItem(cid, "part:" .. id, n, { force = true }) end
+  for m, n in pairs(c.mats or {}) do inv.add(cid, m, n) end
+  if LT.remember then LT.remember(sid, uid) end
+end
+-- the beats: tag, log, container, lock, terminal
+function S6.beat(k, v)
+  local LT = ref("loot")
+  if k == "tag" then
+    local sid, uid = piece_of(v)
+    local PI = ref("part_info")
+    if sid and PI and PI.setTag then PI.setTag(sid, uid, v.name ~= false and v.name or nil) end
+  elseif k == "log" then
+    local sid = struct_id(tostring(v.struct or ""):gsub("^struct:", ""))
+    local BL = ref("base_log")
+    if sid and BL and BL.add then BL.add(sid, v.kind or "note", (v.when and ("[" .. v.when .. "] ") or "") .. v.text, v.who or false) end
+  elseif k == "container" then
+    local sid, uid = piece_of(v)
+    if sid and LT and LT.containerAt(sid, uid) then S6.fill(sid, uid, v, v.clear == true)
+    else say_log("container: no container " .. tostring(v.part or v.uid) .. " in " .. tostring(v.struct)) end
+  elseif k == "lock" then
+    local sid, uid = piece_of(v)
+    if not (sid and LT) then say_log("lock: no piece " .. tostring(v.part or v.uid)); return end
+    if v.code == false then
+      if LT.lockOf(sid, uid) == "locked" then local ST = ref("structures"); local st = ST.partState(sid, uid); LT.enterCode(sid, uid, st and st.kp, false) end
+      LT.clearCode(sid, uid, false)
+    elseif v.code then
+      LT.setCode(sid, uid, v.code, false)
+      if v.open then LT.enterCode(sid, uid, v.code, false) end
+    elseif v.open ~= nil then
+      local ST = ref("structures")
+      local st = ST and ST.partState(sid, uid)
+      if v.open and st and st.kp then LT.enterCode(sid, uid, st.kp, false) elseif not v.open then LT.relock(sid, uid, false) end
+    end
+  elseif k == "terminal" then
+    local T = ref("terminal")
+    if not T then return end
+    if v.close then if T.close then T.close() end return end
+    local sid = struct_id(tostring(v.struct or ""):gsub("^struct:", ""))
+    local uid = v.uid
+    if sid and not uid then
+      local ST = ref("structures")
+      local rec = ST and ST.get(sid)
+      for _, p in ipairs(rec and rec.bp or {}) do
+        local d = part_def(p.id)
+        if (not v.part and d and T.consoleKind and T.consoleKind(d, p, rec)) or (v.part and (p.id == v.part or tostring(p.id):sub(1, #v.part + 1) == v.part .. ".")) then uid = p.uid break end
+      end
+    end
+    if sid and uid and T.openAt then local ok, why = T.openAt(sid, uid, v.page); if not ok then say_log("terminal: " .. tostring(why)) end end
+  end
+end
 
 local hooks_api
 local function run_beat(b, e)
@@ -1228,6 +1419,7 @@ local function run_beat(b, e)
   elseif k == "breaker" then breaker_beat(v)
   elseif k == "wear" then wear_beat(v)
   elseif k == "music" then music_beat(v)
+  elseif k == "tag" or k == "log" or k == "container" or k == "lock" or k == "terminal" then S6.beat(k, v)
   end
   return nil
 end
@@ -1949,6 +2141,7 @@ local function stage_table(st, out)
   stage_lived_in(out)
   stage_plants(st.plants, out)
   stage_wires(st.wires, out)
+  S6.stage(st, out)
   stage_crates(st.crates, out)
   stage_flags(st.flags, out)
   stage_survey(st.survey, out)
@@ -2097,6 +2290,19 @@ hooks_api = function()
     end,
     now = function() return agency_now() end,
     log = function(s) say_log("[hook] " .. tostring(s)) end,
+    -- (S6) what a container holds (a copy), the newest base-log lines of a structure
+    container = function(struct, part)
+      local sid, uid = piece_of({ struct = struct, part = type(part) == "string" and part or nil, uid = type(part) == "number" and part or nil })
+      return sid and S6.contents(sid, uid) or nil
+    end,
+    baseLog = function(struct, n)
+      local sid = struct_id(tostring(struct or ""):gsub("^struct:", ""))
+      local BL = ref("base_log")
+      if not (sid and BL and BL.entries) then return {} end
+      local out = {}
+      for _, e in ipairs(BL.entries({ sid }, n or 20)) do out[#out + 1] = BL.lineOf(e) end
+      return out
+    end,
   }
 end
 W.hookGoal = function(fn, g)

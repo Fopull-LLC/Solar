@@ -49,8 +49,18 @@ local PB = loadlib("parts_base.lua", { findScript = function(k) return k == "par
 local BPS = loadlib("blueprints.lua")
 local RS = loadlib("research.lua", { save = { get = function() return nil end, set = function() end }, findScript = function() return nil end })
 
+local ITM = loadlib("items.lua")
+local MAT = loadlib("materials.lua")
 local CTX = {
   partExists = function(id) return PB.partInfo(id) ~= nil end,
+  -- (S6) the items, materials and pieces a start's containers and locks name
+  itemExists = function(id) return ITM.known(id) end,
+  matExists = function(m) return MAT.REG == nil or MAT.REG[m] ~= nil end,
+  pieceKind = function(prefix)
+    local d = PB.partInfo(prefix) or PB.partInfo(prefix .. ".steel") or PB.partInfo(prefix .. ".concrete")
+    if not d then return nil end
+    return { container = d.container ~= nil, lockable = d.container ~= nil or d.door ~= nil }
+  end,
   techExists = function(id) return RS.TECH[id] ~= nil end,
   readFile = function(p) return slurp("solar/" .. p) end,
   decodeBp = function(code) return BPS.decode(code) end,
@@ -608,7 +618,8 @@ do
   check("story: the fault cutscene ends by itself (its last shot does not hold it open)", not S.state().cutscene)
   tick(30)
   local fr = S.readingsNow()
-  check("story: the fix step reads the knocked piece and the hook goal", fr[2] and fr[2][1].reading == "knocked" and fr[2][2].reading == "the fault happened", fr[2] and (fr[2][1].reading .. " / " .. fr[2][2].reading))
+  local fi = SCN.stepIndex(S.scenario(), "fix") or 2
+  check("story: the fix step reads the knocked piece and the hook goal", fr[fi] and fr[fi][1].reading == "knocked" and fr[fi][2].reading == "the fault happened", fr[fi] and (fr[fi][1].reading .. " / " .. fr[fi][2].reading))
   lp.wr = nil
   ST.put(ST.get(hut))
   for _ = 1, 600 do tick() if S.phaseNow() ~= "running" then break end end
