@@ -19,7 +19,8 @@
 --   DOORS    every door: shut / open, its pressures, Lock, Hold open, an
 --            airlock's Cycle to this door
 --   AIR      every room (pressure, O2, CO2), the scrubbers and O2 generators,
---            equalise valves
+--            equalise valves; the cabin modules of crewed craft within 500 m
+--            (cabin_air, G1: pressure, O2, CO2, crew, a leak, the reserve)
 --   LOGIC    the controllers (a PLC's RUN is its enable), levers, buttons,
 --            readings; a cable-driven device's Local control (its bypass)
 --   CREW     who is where, their roles and doses
@@ -456,6 +457,39 @@ local function page_air(scope)
     end
   end
   if not any then rows[#rows + 1] = { type = "line", text = "no sealed rooms wired here", col = 1 } end
+  -- (G1) CRAFT CABINS: the modules of crewed craft standing within CRAFT_R of
+  -- the console's structure, docked or parked (scripts/cabin_air.lua)
+  local CA = ref("cabin_air")
+  if CA and CA.enabled and CA.enabled() and CA.modulesOf and CA.statusOf and findScripts and space and space.body then
+    local ST = ref("structures")
+    local rec = ST and ST.get(scope.sid)
+    local b = rec and space.body(rec.b)
+    local head = false
+    if b then
+      for _, v in ipairs(findScripts("vessel_controller")) do
+        local n = v.node
+        if n and n.valid ~= false and not v.structureMode and not (v.isLost and v.isLost()) then
+          local dx, dy, dz = n.x - b.x - rec.x, n.y - b.y - rec.y, n.z - b.z - rec.z
+          if dx * dx + dy * dy + dz * dz < 500 * 500 then
+            local G = CA.modulesOf(v)
+            for i, m in ipairs(G and G.mods or {}) do
+              if not head then rows[#rows + 1] = { type = "header", label = "CRAFT CABINS", col = 1 }; head = true end
+              rows[#rows + 1] = { type = "info", col = 1, label = string.format("%s · %s · %.1f m³", tostring(v.craftName or "craft"), m.label, m.V),
+                value = function()
+                  local s = CA.statusOf(v, i)
+                  if not s then return "—" end
+                  local t = CA.airLine and CA.airLine(s) or string.format("%.2f atm", s.p or 0)
+                  if (s.crew or 0) > 0 then t = t .. string.format(" · %d crew", s.crew) end
+                  if #(s.leaks or {}) > 0 then t = t .. " · LEAK" end
+                  return t .. string.format(" · reserve %.0f %%", 100 * (s.reserve or 0) / math.max(s.qcap or 0, 1e-6))
+                end,
+                warn = function() local s = CA.statusOf(v, i); return s ~= nil and (not s.breathable or s.venting) end }
+            end
+          end
+        end
+      end
+    end
+  end
   local mach = pieces(scope, "machine", 20)
   rows[#rows + 1] = { type = "header", label = "LIFE SUPPORT", col = 2 }
   if #mach == 0 then rows[#rows + 1] = { type = "line", text = "no scrubbers or O2 generators", col = 2 } end

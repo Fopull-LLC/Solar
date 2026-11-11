@@ -415,11 +415,19 @@ function repairTask(t)
 end
 
 -- Start one (the menu's act). → ok, why
-function startRepair(t, ctx)
+-- opts.patch (G1 cabin air): a PATCH over a cabin part's hole, not a full
+-- repair: 40 % of the time, the part to cabin_air.PATCH_HP (no hole over 0.5).
+function startRepair(t, ctx, opts)
   local why = repairWhyNot(t, ctx)
   if why then return false, why end
   local tk, why2 = repairTask(t)
   if not tk then return false, why2 end
+  if type(opts) == "table" and opts.patch then
+    local CA = ref("cabin_air")
+    tk.patch, tk.to = true, (CA and CA.PATCH_HP) or 0.55
+    tk.secs = tk.secs * 0.4
+    tk.label = "the leak in " .. tostring(tk.label or "the part")
+  end
   local I = items()
   local kept = I.keptProgress(part_st(t.vessel, t.uid, "rprog"), clock(), tk.secs)
   tk.done = kept
@@ -444,7 +452,7 @@ function startRepair(t, ctx)
   if a then R.from = { a.x, a.y, a.z } end
   lastStop = nil
   play(SFX.latch, { track = "SFX", volume = 0.6 })
-  say(string.format("REPAIRING %s%s — right-click → Cancel repair", tk.label or "part",
+  say(string.format("%s %s%s — right-click → Cancel repair", tk.patch and "PATCHING" or "REPAIRING", tk.label or "part",
     kept > 0 and string.format(" (resumed at %d%%)", math.floor(kept / tk.secs * 100 + 0.5)) or ""))
   return true
 end
@@ -484,13 +492,13 @@ local function finish(tk, how, why)
     local I, V = items(), inv()
     local before = V and V.itemCount(PACK, tk.item or "repairkit") or 0
     local hp, err = nil, nil
-    if v and v.repairPart then hp, err = v.repairPart(tk.uid, 1.0) end
+    if v and v.repairPart then hp, err = v.repairPart(tk.uid, tk.to or 1.0) end
     if hp then
       if V then V.removeItem(PACK, tk.item or "repairkit", 1) end
       if v then part_st(v, tk.uid, "rprog", false, true) end
       lastRepair = { uid = tk.uid, hp = hp, t = now(), kit_before = before, kit_after = V and V.itemCount(PACK, "repairkit") or 0 }
       play(SFX.done, { track = "UI", volume = 0.6 })
-      say(string.format("%s repaired — %d%%", tk.label or "part", math.floor(hp * 100 + 0.5)))
+      say(string.format("%s %s — %d%%", tk.label or "part", tk.patch and "patched" or "repaired", math.floor(hp * 100 + 0.5)))
       local c = crew()
       if c and c.get and c.patch then
         local okg, r = pcall(c.get, memberId())

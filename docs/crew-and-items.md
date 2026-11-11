@@ -1851,3 +1851,130 @@ docs/base-building.md §22).
 - **Moved like any item**: the inventory panel puts it into and takes it out
   of a crate or a craft's hold; the Build Kit draws it from a container in
   reach off the home world and puts it back on an undo or a Deconstruct.
+
+## 13. Cabin air on craft (scenarios2 PLAN §2 G1, built 2026-11-10)
+
+A craft's closed crew parts hold their own air: room_air's chemistry (base
+rooms, docs/base-building.md §14) on rooms taken from the assembly graph.
+`scripts/cabin_air.lua` (pure rulebook + a scene half on its own UI node,
+"Cabin Air" in scenes/system.ron). Wanted by Hard Vacuum and every long
+flight, and the base the walkable interiors will stand on (PLAN §5).
+
+### 13.1 Modules and doors
+- **Cabin parts**: Pod Mk1 (2.0 m³), Pod Mk2 (4.5), Crew Cabin (7.0), Swift
+  Cockpit (2.5); a modded crewed part with a hatch; any record with `cabinV`.
+  Open seats and saddles are not cabins.
+- **A module** is cabin parts bolted straight to each other (parent links of
+  `vessel_controller.aboardRecs`), named by its parts ("Pod Mk2 + Crew
+  Cabin"). A tank, decoupler or adapter between two pods makes two modules
+  and no door.
+- **Doors**: each cabin part's side hatch (crew.lua SEATS `hatch`) to the
+  outside; a Docking Port on a cabin part — a mated pair (`dockPorts().mate`,
+  docked craft are one assembly) joins two modules, an unmated one opens to
+  the outside; a lost cabin part (`lostParts`) that was bolted to one aboard
+  leaves a **breach**, always open. A mated port with no cabin behind it is a
+  blind tunnel: no door.
+- **States**: OPEN, SHUT (closed, its equalising valve open: 0.05 m³/s per
+  atm), SEALED (dogged, tight; the default). Part state `hatch` (side hatch)
+  and `ph` (a port's own; a mated pair is the less open of its two, so both
+  sides must open). Modules joined by open doors are one **network**, one
+  well-mixed volume.
+
+### 13.2 The air
+- Amounts in atm·m³ per cabin part, part state `cab` = { N, x, c, t, f }: it
+  rides docking, undocking, staging, the fleet record and revert, and a
+  module's air is the sum of its parts'. A part never seen starts at 1 atm of
+  normal air (every existing craft, the first time it loads).
+- **Reserve** (`cq`): compressed air on a regulator, room_air's FEED (opens
+  under 0.97 atm, closes at 1): Pod Mk1 8 atm·m³, Mk2 16, Cabin 20, Cockpit
+  8; flow 0.04–0.05 atm·m³/s. Refilled on the pad and on a Build Stand. The
+  "Air regulator" row turns a part's off (`creg` = "off").
+- **Scrubber**: every cabin part clears SCRUB_K × its crew's CO2 while the
+  craft's batteries hold charge (no new electrical load: flight is unchanged).
+- **Breathing**: seated crew per module (seatsOf), room_air USE / MAKE. One
+  crew in a Mk1 with the batteries flat: CO2 0.02 atm (unbreathable) in 1.9 h.
+- **Stepping**: each network by room_air.advance (closed form), the leaks and
+  open doors by room_air.equalise to the outside (exact exponentials, split
+  from the chemistry every 30 s at most), shut valves between networks the
+  same. Sealed, one 3,600 s step equals 3,600 one-second steps to 1e-6; with a
+  leak they meet within the regulator's 0.97–1.0 band. Stepped by the agency
+  clock (warp-exact), caught up on load (30 days at most).
+- **The outside**: room_air's rule at the craft's height (vacuum in orbit, a
+  world's rolled air on the ground).
+
+### 13.3 Leaks
+- A cabin part under hp 0.5 has a hole, `damage.holeArea(hp)`: none at 0.5,
+  (0.5 − hp)/0.45 squared × A_HOLE (10 cm) down to hp 0.05. It passes
+  LEAK_K = 120 m³/s per atm per m² (choked air through an orifice, Cd 0.6,
+  293 K): τ = V / (LEAK_K · A). A Mk1 at hp 0.45 (1.2 cm²) loses 63 % in
+  2.3 min; at hp 0.3 (20 cm²) in 8 s.
+- A network venting faster than τ 60 s shuts its regulator (an excess-flow
+  valve): the reserve is kept for after the patch. A slower leak is fed.
+- **Heard**: `audio/foley/leak_hiss.ogg` (a recorded CC0 gas leak, audio/
+  SOURCES.md), a 3D loop on the part, louder with the flow, while air goes
+  out of it; the three worst holes per network; within 60 m or aboard.
+- **Patched**: "Patch the leak" on the part's menu with a Repair Kit in hand
+  (item_hand's timed job, 40 % of a repair's time; on foot or EVA), the part
+  to PATCH_HP 0.55. A full repair mends it too.
+
+### 13.4 The crew
+- **Helmet aboard**: suit.lua asks `cabin_air.helmetAboard()`: off only in a
+  breathable module (or an open seat in breathable air); bare-headed when it
+  goes bad, the helmet goes on at once with a caption. "Remove helmet" /
+  "Put on helmet" are rows on the cabin part's menu, from the seat.
+- **Suit air**: planet_walker asks `avatarAir()`: "cabin" (breathable: the
+  suit refills at its usual rate and the O2 comes out of the module,
+  `takeO2`), "suit" (the module can't be breathed: the suit is breathed, and
+  a blackout aboard is no rescue), "open" (an open seat: the outside's air,
+  the suit drains in vacuum), nil (cabin air off: aboard is air, as before).
+- **Other crew** in their seats breathe their module (crew.recordStep with
+  the helmet on where it can't be breathed): their suits drain and, on
+  Permadeath, they die when they run dry.
+- **EVA** opens the hatch of the part the crew left (`vessel_controller.
+  lastExitUid`): the module vents, with the caption saying what is lost.
+  Crew left inside close it after 3 s; otherwise it stays open until someone
+  shuts it from outside (right-click the pod). Boarding seals it and the
+  regulator repressurises from the reserve (the helmet stays on until it is
+  breathable).
+- **Alarms**: a module that held 0.8 atm and vents: DEPRESSURISATION (the
+  cause, the time to unbreathable), the crew alarm every 2.5 s while the crew
+  is aboard or within 60 m. Air going bad round the crew: said once.
+- **Undocking** with the docking hatch not sealed: warned (vessel_controller.
+  undock asks `undockWarn`), never refused; both sides then vent.
+
+### 13.5 What shows it
+- **The IVA gauge** (the seat view; outside it, only while the avatar's
+  module is in trouble): CABIN · module, PRESS (atm), O2 and CO2 (kPa),
+  RESERVE (atm·m³), and a red line: LEAK n cm² · time to unbreathable, or
+  the reason the air is bad.
+- **The part's menu**: part_info's CABIN section (module, air, reserve, leak)
+  on a cabin part or a port on one; cabin_air's rows: HATCH state, Open /
+  Shut (valve open) / Seal (each warns what it does: "Opening it vents the
+  Pod Mk2 to vacuum: 1.00 atm gone in seconds"), Air regulator, Vent valve,
+  Patch the leak, the helmet.
+- **A base terminal's AIR page**: CRAFT CABINS, every module of a crewed
+  craft within 500 m of the console's structure.
+- **Settings › Agency › Cabin air: Realistic | Off** (save key
+  `craft.cabin_air`, per save, default realistic). Off: nothing runs.
+
+### 13.6 Scenarios
+- Goal `cabin`: { craft, module? ("worst" default, "crew", n, part id
+  prefix), p?, o2?, co2? (at most), breathable?, sealed? (not venting) }.
+- Fail `craft_pressure`: { craft, module?, below = 0.5, secs = 0 }.
+- `W.cabin(name, module)` (scenario_run) reads `cabin_air.cabinOf`;
+  scenario.validate checks the fields.
+
+### 13.7 Cost and tests
+- Never per frame per part: the graph is rebuilt when `partsGen()` moves or a
+  door changes; the air every 1 s of real time (O(modules), plus the
+  hp check of the cabin parts); events (boarding, EVA) every 0.25 s
+  (O(craft)); the outside every 5 s per craft; the gauge is drawn from the
+  cached reading.
+- `luajit solar/tests/smoke_cabin_air.lua`: the graph, leaks, hatches,
+  docking, breathing, one step against many, the scene half on a stub
+  engine, the setting, scenario kinds.
+- `tools/perf/cabinprobe.sh <engine> cabinorbit` (`cabinprobe_modes.lua`):
+  a Pod Mk2 over a mated port pair and a Pod Mk1 in orbit: the gauge, a
+  puncture (the alarm, the hiss, the falling gauge), the menu, the patch and
+  the repressurisation, the hatch venting, the docking hatch equalising and
+  opening, an EVA venting the cabin.

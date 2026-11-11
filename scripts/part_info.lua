@@ -21,6 +21,8 @@
 --              systems' own answers (base_grid.powerWhy, room_air.runWhy,
 --              logic_net.drivenBy, fluid_net.readout, the knock)
 --   Name this piece…   the designation the player gives it (part state `tag`)
+--   CABIN      (a craft's closed crew part or a port on one, G1) the module,
+--              its air, its reserve, a leak: cabin_air.infoRows
 --
 -- DESIGNATIONS: `designate(sid, uid)` → "P-3" (the part state's `tag`, else a
 -- running scenario's `start.tags` entry) or the label; `called(sid, uid)` →
@@ -408,6 +410,18 @@ local function provider(t, ctx)
 end
 providerFn = provider
 
+-- (G1) A CRAFT part in a cabin module (or a docking port on one): its CABIN
+-- section, the module's air as cabin_air reads it (the hatches and the patch
+-- are cabin_air's own rows).
+local function craft_cabin(t, ctx)
+  if not (t and t.vessel and t.uid) then return {} end
+  local CA = ref("cabin_air")
+  if not (CA and CA.infoRows) then return {} end
+  local ok, rows = pcall(CA.infoRows, t)
+  return (ok and rows) or {}
+end
+cabinFn = craft_cabin
+
 local reg_on, reg_t = false, -10
 function update(node, dt)
   if reg_on or now() - reg_t < 1.0 then return end
@@ -417,6 +431,7 @@ function update(node, dt)
     reg.register("prop", provider, { id = "part_info", order = 1 })
     -- (a VAB part placed live is a part of its structure's vessel)
     reg.register("part", provider, { id = "part_info_live", order = 1 })
+    reg.register("part", craft_cabin, { id = "part_info_cabin", order = 12 })
     reg_on = true
   end
 end

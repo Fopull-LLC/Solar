@@ -556,7 +556,10 @@ local function breathe(node, dt, under, aboard, ux, uy, uz)
     local death = c and c.deathOn and c.blackoutEnd and c.deathOn()
     local grace = death and c.blackoutGrace and c.blackoutGrace(down_src) or params.o2_blackout
     downLeft = math.max(0, grace - down_t)
-    if death and (aboard or (down_src == "hold" and not headUnder)) then
+    -- (G1) a cabin with no air to breathe is no rescue: only a breathable one
+    local CA0 = aboard and ref("cabin_air") or nil
+    local cab0 = CA0 and CA0.avatarAir and CA0.avatarAir() or nil
+    if death and ((aboard and (cab0 == nil or cab0 == "cabin")) or (down_src == "hold" and not headUnder)) then
       downed, downLeft = false, nil
       breath = math.max(breath, 0.05)
       log("breath: out of the blackout in time")
@@ -575,7 +578,16 @@ local function breathe(node, dt, under, aboard, ux, uy, uz)
   local su = ref("suit")
   local c = crew_air_lib()
   local src
-  if aboard then
+  -- (G1) aboard, cabin_air says what is breathed: a breathable module (the
+  -- suit refills from its air), one that isn't (the suit), an open seat (the
+  -- outside); nil (cabin air off, or no answer): the cabin is air, as before
+  local CA = aboard and ref("cabin_air") or nil
+  local cab = CA and CA.avatarAir and CA.avatarAir() or nil
+  if aboard and cab == "suit" then
+    src = "suit"
+  elseif aboard and cab == "open" and c and su and su.helmetOn then
+    src = c.airSource(su.helmetOn() == true, false, breathable_now(node, su))
+  elseif aboard then
     src = "ambient"
   elseif c and su and su.helmetOn then
     src = c.airSource(su.helmetOn() == true, headUnder, headUnder or breathable_now(node, su))
@@ -594,7 +606,15 @@ local function breathe(node, dt, under, aboard, ux, uy, uz)
   end
   if c then
     local pack = (c.packOf and c.packOf()) or "astro"
-    if aboard then
+    if aboard and cab == "cabin" then
+      -- refilled from the module's air, at the refill rate (never from nothing)
+      if suitO2 < 1 then
+        local add = math.min(1 - suitO2, dt / math.max(0.1, params.o2_refill))
+        local RA = ref("room_air")
+        if CA.takeO2 then CA.takeO2(add * (c.SUIT_AIR_SECS or 1200) * ((RA and RA.USE) or 0)) end
+        suitO2 = suitO2 + add
+      end
+    elseif aboard and cab == nil then
       if suitO2 < 1 then suitO2 = 1.0 end
     elseif src == "suit" then
       if not air.tanks or air.tanks_pack ~= pack then air.tanks, air.tanks_pack = c.tanksOf(pack), pack end

@@ -20,8 +20,10 @@
 -- world — the helmet goes back on at once (a crew does not walk into vacuum
 -- with it off), with a caption saying why. Under water bare-headed the crew
 -- is holding their breath: planet_walker drains the tank `breath_hold` times
--- faster (`breathMult`). Aboard a craft the cabin is air, so whatever the
--- crew wears there stays as it is.
+-- faster (`breathMult`). Aboard a craft the cabin's own air decides
+-- (cabin_air.helmetAboard, G1): off only where it can be breathed, and on at
+-- once when it goes bad; with cabin air off, whatever the crew wears there
+-- stays as it is.
 --
 -- The state is in the save ("crew.helmet", "crew.visor", "crew.lamps"), and
 -- checked against the air again on the first frame on foot after a load.
@@ -264,7 +266,14 @@ function canRemoveHelmet()
   if busy then return false, "Hands full: the neck ring is still turning." end
   if not wk then return false, "The crew isn't here." end
   if wk.downed then return false, "The crew is out cold." end
-  if not wk.onFoot then return false, "Only on foot." end
+  if not wk.onFoot then
+    -- (G1) aboard a craft: only in a module whose air can be breathed (cabin_air)
+    local CA = ref("cabin_air")
+    local ok, why = nil, nil
+    if CA and CA.helmetAboard then ok, why = CA.helmetAboard() end
+    if ok ~= nil then return ok, why end
+    return false, "Only on foot."
+  end
   if wk.headUnder or wk.swimming then return false, "Not under water." end
   local n = self_node or (wk.node)
   if not n then return false, "The crew isn't here." end
@@ -443,6 +452,16 @@ function update(node, dt)
     checked_load = true
   elseif wk and wk.onFoot then
     checked_load = true
+  elseif not helmet and not busy and wk and not wk.onFoot then
+    -- (G1) bare-headed aboard and the cabin's air goes bad: back on at once
+    local CA = ref("cabin_air")
+    local ok, why = nil, nil
+    if CA and CA.helmetAboard then ok, why = CA.helmetAboard() end
+    if ok == false then
+      apply(true)
+      local bc = ref("big_caption")
+      if bc and bc.show then bc.show("HELMET ON", why or "", 3.0) end
+    end
   end
   show()
 end

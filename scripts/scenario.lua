@@ -745,6 +745,44 @@ kind("craft_lost", { fail = true, req = { "craft" }, eval = function(g, W, mem)
   local lost = mem.seen == true and alive == false
   return lost, lost and "lost" or (alive and "flying" or "not out yet")
 end })
+-- G1 CABIN AIR (scripts/cabin_air.lua): a craft's module air, read through
+-- W.cabin(craft name, module) → { p, o2, co2, breathable, why, venting,
+-- leaks, reserve } | nil. `module`: "worst" (the default: the lowest
+-- pressure), "crew" (where the most crew sit), an index, or a part id prefix.
+CABIN_MODULES = { worst = true, crew = true }
+local function cabin_read(g, W)
+  local name = type(g.craft) == "string" and g.craft:gsub("^craft:", "") or g.craft
+  if W.cabin then return W.cabin(name, g.module) end
+  return nil
+end
+-- cabin: { craft, module?, p?, o2?, co2? (at most), breathable?, sealed? (no leak, nothing open) }
+kind("cabin", { req = { "craft" }, eval = function(g, W)
+  local a = cabin_read(g, W)
+  if not a then return false, "no cabin air on " .. tostring(g.craft) end
+  local ok, parts = true, {}
+  if g.p then ok = ok and a.p >= g.p; parts[#parts + 1] = string.format("%.2f of %.2f atm", a.p, g.p) end
+  if g.o2 then ok = ok and a.o2 >= g.o2; parts[#parts + 1] = string.format("O2 %.2f of %.2f", a.o2, g.o2) end
+  if g.co2 then ok = ok and a.co2 <= g.co2; parts[#parts + 1] = string.format("CO2 %.3f (max %.3f)", a.co2, g.co2) end
+  if g.breathable then ok = ok and a.breathable == true; parts[#parts + 1] = a.breathable and "breathable" or tostring(a.why or "not breathable") end
+  if g.sealed then
+    local tight = not a.venting
+    ok = ok and tight; parts[#parts + 1] = tight and "holding" or "venting"
+  end
+  if #parts == 0 then parts[1] = string.format("%.2f atm", a.p or 0) end
+  return ok, table.concat(parts, " · ")
+end })
+-- (a fail) craft_pressure: a module under `below` atm (0.5, the breathable
+-- floor) for `secs` (0): { craft, module?, below?, secs? }
+kind("craft_pressure", { fail = true, req = { "craft" }, eval = function(g, W, mem, ctx)
+  local a = cabin_read(g, W)
+  if not a then mem.since = nil; return false, "no cabin air yet" end
+  local below = g.below or 0.5
+  local now = ctx and ctx.now or 0
+  if a.p >= below then mem.since = nil; return false, string.format("%.2f atm", a.p) end
+  mem.since = mem.since or now
+  local held, secs = now - mem.since, g.secs or 0
+  return held >= secs, string.format("%.2f atm, under %.2f for %d s of %d", a.p, below, math.floor(held), math.floor(secs))
+end })
 kind("timer", { fail = true, req = { "secs" }, eval = function(g, W, mem, ctx)
   local from = (g.from == "step" and ctx and ctx.stepT0) or (ctx and ctx.t0) or 0
   if type(g.from) == "string" and g.from:sub(1, 5) == "step:" then
@@ -1131,6 +1169,8 @@ function goalLabel(g)
   if k == "switched" then return string.format("%s %s", g.on == false and "Switch off" or "Switch on", tostring(g.part or g.uid or "it")) end
   if k == "looted" then return g.item and string.format("Take the %s", (tostring(g.item):gsub("^%a+:", ""))) or "Empty it" end
   if k == "has_item" then return string.format("Carry %s", tostring(g.item or g.mat)) end
+  if k == "cabin" then return g.sealed and "Stop the leak" or (g.breathable and "Air in the cabin" or "The cabin's air") end
+  if k == "craft_pressure" then return string.format("%s's pressure", tostring(g.craft):gsub("^craft:", "")) end
   return k
 end
 
@@ -1769,6 +1809,21 @@ function validate(sc, ctx)
       local logk = g.item:match("^datalog:(.+)$")
       if logk then if not datalogs[logk] then E(path .. ".item", "no start.datalogs entry named " .. logk) end
       elseif ctx.itemExists and not ctx.itemExists(g.item) then E(path .. ".item", "no such item") end
+    end
+    if g.kind == "cabin" or g.kind == "craft_pressure" then
+      if g.craft ~= nil and type(g.craft) ~= "string" then E(path .. ".craft", "a craft's name (\"craft:<name>\")") end
+      local m = g.module
+      if m ~= nil and not (CABIN_MODULES[m] or (type(m) == "number" and m >= 1 and m % 1 == 0) or (type(m) == "string" and m:match("^%w+$"))) then
+        E(path .. ".module", "\"worst\", \"crew\", a module number or a part id prefix")
+      end
+      for _, f in ipairs({ "p", "o2", "co2", "below", "secs" }) do
+        if g[f] ~= nil and (type(g[f]) ~= "number" or g[f] < 0) then E(path .. "." .. f, "a number, 0 or more") end
+      end
+      if g.kind == "cabin" and (g.below ~= nil or g.secs ~= nil) then E(path, "below and secs belong to craft_pressure") end
+      if g.kind == "craft_pressure" and (g.p ~= nil or g.o2 ~= nil or g.co2 ~= nil) then E(path, "p, o2, co2 belong to the cabin goal; craft_pressure takes below and secs") end
+      for _, f in ipairs({ "breathable", "sealed" }) do
+        if g[f] ~= nil and type(g[f]) ~= "boolean" then E(path .. "." .. f, "true or false") end
+      end
     end
     if g.kind == "terminal" and g.read ~= nil then
       if type(g.read) ~= "string" then E(path .. ".read", "a log card's name (start.datalogs) or key")

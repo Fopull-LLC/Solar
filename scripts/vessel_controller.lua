@@ -4238,6 +4238,13 @@ function undock(port_uid)
     dock.msg = "nothing docked at that port"
     return false
   end
+  -- (G1) undocking with the docking hatch open vents both modules: said, never refused
+  local CA = findScript("cabin_air", { quiet = true })
+  if CA and CA.undockWarn then
+    local okw, w = pcall(CA.undockWarn, node.id, p.uid)
+    local bc = okw and w and findScript("big_caption")
+    if bc and bc.show then bc.show("HATCH OPEN", w, 4.0) end
+  end
   local info = assembly.info(node)
   if not info then return false end
   r2Before(node)
@@ -5100,6 +5107,8 @@ function standDown(node, x, y, z, vx, vy, vz)
   if crewAboard then
     local cl = crewLibNow()
     local id = cl and cl.activeId and cl.activeId()
+    -- (G1) the part the crew stepped out of: cabin_air opens its hatch
+    lastExitUid = id and memberSlot(id) or nil
     if id then unseatMember(id) end
   end
   crewAboard = false

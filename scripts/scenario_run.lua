@@ -276,6 +276,16 @@ function W.suitO2(who)
   local r = C.get(id)
   return r and r.o2
 end
+-- (G1) a craft's cabin air: module `which` of the craft named `name`
+-- (scripts/cabin_air.lua cabinOf) → status | nil
+function W.cabin(name, which)
+  local CA = ref("cabin_air")
+  if not (CA and CA.cabinOf and CA.enabled and CA.enabled()) then return nil end
+  for _, v in ipairs(vessels()) do
+    if v.craftName == name and not (v.isLost and v.isLost()) then return CA.cabinOf(v, which) end
+  end
+  return nil
+end
 function W.craftAlive(name)
   for _, v in ipairs(vessels()) do
     if v.craftName == name then return not (v.isLost and v.isLost()) end

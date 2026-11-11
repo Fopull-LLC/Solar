@@ -1192,6 +1192,16 @@ local function agency_rows(out)
       or "A Career save. ") .. "Crew safety applies to this save only: Permadeath can lose an astronaut, "
       .. "Rescue brings them home hurt, for a fee, Invincible means nothing hurts them.")
   end
+  -- CABIN AIR, per save (cabin_air.lua, G1): the craft's modules hold air
+  -- that leaks, vents and runs out, or the cabin is simply air
+  local ca = ref("cabin_air")
+  if ca and ca.mode and ca.setMode then
+    out[#out + 1] = choice("ca", "Cabin air", {
+      { label = "Realistic", value = "realistic" }, { label = "Off", value = "off" },
+    }, ca.mode(), function(v) ca.setMode(v) end)
+    out[#out + 1] = hint("cah", "Realistic: a craft's pods and cabins hold their own air. Hatches vent them, "
+      .. "damaged parts leak, the crew breathe it down and the reserve refills it. Off: aboard any craft is air.")
+  end
 end
 
 local TABS = {

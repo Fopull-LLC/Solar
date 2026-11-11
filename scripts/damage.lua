@@ -49,6 +49,8 @@
 --   verdict(amount)                 → "BURN THROUGH" | "WEAR 0.30" | "NO EFFECT"
 --   matOf(id)                       → the kit material from "<piece>.<mat>"
 --   hpAfter(hp, amount)             → hp (old saves have none: 1.0)
+--   holeArea(hp)                    → m²: the hole in a part's skin under hp 0.5
+--                                     (none at 0.5, A_HOLE at 0.05; cabin_air leaks by it)
 
 F_PART = { tank = 2e6, structural = 5e6, pod = 4e6, engine = 8e6, shield = 5e7 }
 F_MAT = { steel = 5e6, concrete = 2e7, glass = 5e5, regocrete = 1e7, graphite = 1e7, film = 1e4 }
@@ -133,3 +135,13 @@ function matOf(id)
 end
 
 function hpAfter(hp, amount) return math.max(0, (tonumber(hp) or 1.0) - math.max(0, amount or 0)) end
+
+-- A part under half its health has a hole through its skin (G1 cabin air): none
+-- at hp 0.5, growing with the square of the damage past it to A_HOLE (10 cm,
+-- "a pod loses its pressure") at hp 0.05. cabin_air.lua keeps the same rule.
+function holeArea(hp)
+  hp = tonumber(hp) or 1.0
+  if hp >= 0.5 then return 0 end
+  local s = clamp((0.5 - hp) / 0.45, 0.02, 1)
+  return A_HOLE * s * s
+end

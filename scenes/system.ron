@@ -3308,6 +3308,38 @@
                 order: 3,
             )),
         ),
+        // the air in the craft's crew modules: hatches, leaks, the crew's breathing,
+        // the IVA cabin gauge (cabin_air; scenarios2 G1)
+        (
+            name: "Cabin Air",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "cabin_air",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(7104),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Stretch(
+                    min: (0.0, 0.0),
+                    max: (1.0, 1.0),
+                    margin: (0.0, 0.0, 0.0, 0.0),
+                ),
+                size: (Pct(1.0), Pct(1.0)),
+                visible: false,
+                opacity: 1.0,
+                order: 3,
+            )),
+        ),
         // time warp on foot (. and ,), the warp chip, and why a warp was refused
         (
             name: "Warp Chip",

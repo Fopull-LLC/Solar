@@ -17,6 +17,7 @@
 | `ambience/` | `cave_creak_1..3`, `cave_groan_1..2` (mono: 3D sources on the rock): underground.lua | real recordings, `tools/build_grit_audio.py` (table below) | CC0 (freesound.org) |
 | `ambience/` | `cave_vent`, `cave_rumble`, `cave_water_far` (seamless loops), `cave_ice_crack_1..3` (mono): the cave kinds, underground.lua | real recordings, `tools/build_cave_audio.py` (the kinds' table below) | CC0 (freesound.org) |
 | `sfx/` | `breath_calm`, `breath_heavy`, `suit_hum` (seamless loops): the suit, soundscape.lua | real recordings, `tools/build_grit_audio.py` (table below) | CC0 (freesound.org) |
+| `foley/` | `leak_hiss` (a seamless mono loop: a 3D source on a craft part with a hole, cabin_air.lua, G1) | a real recording, cut by hand with ffmpeg (section below) | CC0 (freesound.org) |
 
 Levels (from `python3 tools/gen_soundscape_audio.py --stats`, confirmed with ffmpeg's
 `ebur128`): music ≈ −24 LUFS with peaks near −12 dBFS; ambience −25 to −29 LUFS
@@ -161,3 +162,12 @@ Drop sounds found by hand here (see audio/incoming/README.md for the list the ga
 - `foley/engine_four.ogg`, `foley/engine_two.ogg` — the gas engines' running
   loops (a four-stroke and a two-stroke single at 3000 rpm), synthesised by
   `tools/gen_engine_audio.py`; no recorded source.
+
+## audio/foley/leak_hiss — a hull leak (cabin_air.lua, G1, 2026-11-10)
+
+| file | source | licence | processing | loudness |
+|---|---|---|---|---|
+| `foley/leak_hiss` (6.5 s mono loop) | "FOL-gas-leak-02.wav" by henrikcederblad, https://freesound.org/people/henrikcederblad/sounds/615667/ — a foley recording of gas leaking, steady, 44.1 kHz (the author relicensed it CC0; the licence was read on the page, 2026-11-10) | CC0 1.0 | the HQ preview (`https://cdn.freesound.org/previews/615/615667_1819746-hq.mp3`), mono, 180 Hz–10 kHz, 0.4–7.4 s, the last 0.5 s crossfaded into the first (qsin), +9.7 dB | −33.7 → −24.1 LUFS, peak −10.6 dBFS; half-second RMS −23.6 to −24.5 dB through the seam |
+
+Rebuild: `ffmpeg -i fs_615667.mp3 -filter_complex "[0:a]aresample=44100,pan=mono|c0=0.5*c0+0.5*c1,highpass=f=180,lowpass=f=10000,atrim=0.4:7.4,asetpts=PTS-STARTPTS,asplit=2[a][b];[a]atrim=0.5:7.0,asetpts=PTS-STARTPTS[body];[b]atrim=0:0.5,asetpts=PTS-STARTPTS[head];[body][head]acrossfade=d=0.5:c1=qsin:c2=qsin[o]" -map "[o]" leak_raw.wav`, then `ffmpeg -i leak_raw.wav -af volume=9.7dB -c:a libvorbis -q:a 5 leak_hiss.ogg`.
+Seen and not used: "MrM_Gas_Steam_Escape.wav" #182359 (an air duster, CC0: bursts, not a steady leak); "Air Hiss" #367125 (2 s); "R17-35-Steam or Compressed Air" #479292 (an optical-track transfer with its noise); "Compressed Gas Leak SFX" on OpenGameArt (synthesised white noise).
