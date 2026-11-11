@@ -319,6 +319,14 @@ function JP.strip(vc, from_d, to_d)
   local U = V.up(assembly.info(vc.node).com)
   local F = V.fwdW(vc)
   F = unit(sub(F, scl(U, dot(F, U))))
+  -- (sheading = deg: the strip turned that far left of the way out; the bike
+  -- is turned square to it by the first JP.reset)
+  local sh = tonumber(params.sheading)
+  if sh and sh ~= 0 then
+    local L0 = unit(cross(U, F))
+    local c, sn = math.cos(math.rad(sh)), math.sin(math.rad(sh))
+    F = unit({ x = F.x * c + L0.x * sn, y = F.y * c + L0.y * sn, z = F.z * c + L0.z * sn })
+  end
   local rel0, made = V.ground(vc, F, U, from_d, to_d, 0)
   V.strip = { rel0 = rel0, F = F, U = U, d1 = to_d }
   P("JP flat strip %d..%d m: %d sculpts", from_d, to_d, made)
@@ -1812,3 +1820,169 @@ local function run_vnat()
   V.result()
 end
 
+
+-- ── vdrift ──────────────────────────────────────────────────────────────────
+-- HANDS OFF AT SPEED (playtest 2026-11-11: "automatic bike driving assist
+-- keeps wanting to slide or veer a certain direction due to planetary
+-- movement"). On the flat strip, for each of `speeds` (strs, default
+-- "10,20,30"): from a stop at the strip's start, held on its line up to the
+-- speed and steady there, then A/D let go (the steer command 0; the throttle
+-- still holds the speed) for `dsecs` s (default 5). Measured every TICK in
+-- the planet's frame: the drift is the integral of the planet-relative
+-- velocity across the great circle the bike was heading along when the bars
+-- were let go (assembly.info's vel, no world positions), so the rails'
+-- carry can't enter the measure. `JP DRIFT` lines: the drift after each
+-- second, the heading change, the lean (mean, peak), the bars, the yaw rate,
+-- the craft's heading against the planet's own motion on its rails, and the
+-- rails' speed (m a tick).
+JP.DR = nil
+function JP.drift_tick(dt)
+  local D, vc = JP.DR, JP.vcD
+  if not (D and vc and vc.node and vc.node.valid) or not dt or dt <= 0 then return end
+  local i = assembly.info(vc.node)
+  if not (i and i.com and i.vel) then return end
+  local b = home()
+  local p = sub(i.com, b)
+  local U = unit(p)
+  local v = i.vel
+  local vh = sub(v, scl(U, dot(v, U)))
+  local vl = len(vh.x, vh.y, vh.z)
+  if D.bprev then
+    local m = len(b.x - D.bprev.x, b.y - D.bprev.y, b.z - D.bprev.z)
+    D.rails = m
+    D.railsDir = (m > 1e-6) and { x = (b.x - D.bprev.x) / m, y = (b.y - D.bprev.y) / m, z = (b.z - D.bprev.z) / m } or D.railsDir
+  end
+  D.bprev = { x = b.x, y = b.y, z = b.z }
+  if not D.N0 then
+    if vl < 1 then return end
+    D.N0 = unit(cross(U, scl(vh, 1 / vl)))      -- + = U × front: the bike's LEFT
+    D.F0 = scl(vh, 1 / vl)
+    D.lat, D.t, D.n = 0, 0, 0
+    D.roll, D.rollMax, D.bars, D.yaw, D.vsum = 0, 0, 0, 0, 0
+    D.wl, D.wf, D.slip, D.tq, D.tqa = 0, 0, 0, 0, 0
+    D.marks = {}
+    -- the frame's front against the line through the two tyres (deg, + the
+    -- frame's nose above it): a roll torque about the frame's front is part yaw by its sine
+    local fr, rr
+    for _, w in ipairs(vc.R2.wheels or {}) do
+      local t = w.tyre
+      if t and t.valid then if (w.a or 0) > 0 then fr = t.tickPos or t.worldPos else rr = t.tickPos or t.worldPos end end
+    end
+    if fr and rr then
+      local cl = unit(sub(fr, rr))
+      local Fw0 = V.fwdW(vc)
+      D.offs = math.deg(math.asin(clamp(dot(Fw0, U) - dot(cl, U), -1, 1)))
+    end
+    return
+  end
+  D.tq = D.tq + (vc.R2.bikeTorque or 0)
+  D.tqa = D.tqa + math.abs(vc.R2.bikeTorque or 0)
+  if not D.vsRails and D.railsDir then
+    local rh = sub(D.railsDir, scl(U, dot(D.railsDir, U)))
+    local rl = len(rh.x, rh.y, rh.z)
+    D.vsRails = rl > 1e-3 and math.deg(math.atan2(dot(scl(rh, 1 / rl), D.N0), dot(scl(rh, 1 / rl), D.F0))) or 0
+  end
+  -- the wind across and along (planet frame, + left / + ahead), and the
+  -- slip: the velocity's angle off the bike's own front (+ sliding left)
+  if weather and weather.windAt then
+    local ok, wv = pcall(weather.windAt, vec3(i.com.x, i.com.y, i.com.z))
+    if ok and wv then D.wl, D.wf = D.wl + dot(wv, D.N0), D.wf + dot(wv, D.F0) end
+  end
+  local Fw = V.fwdW(vc)
+  local Fh = sub(Fw, scl(U, dot(Fw, U)))
+  local Fl_ = len(Fh.x, Fh.y, Fh.z)
+  if Fl_ > 1e-3 and vl > 0.5 then
+    Fh = scl(Fh, 1 / Fl_)
+    D.slip = D.slip + math.atan2(dot(vh, unit(cross(U, Fh))), dot(vh, Fh))
+  end
+  D.t = D.t + dt
+  D.n = D.n + 1
+  D.lat = D.lat + dot(v, D.N0) * dt
+  D.psi = (vl > 0.5) and math.deg(math.asin(clamp(dot(vh, D.N0) / vl, -1, 1))) or (D.psi or 0)
+  local R2 = vc.R2
+  local lean = R2.lean or 0
+  D.roll = D.roll + lean
+  D.rollMax = math.max(D.rollMax, math.abs(lean))
+  D.bars = D.bars + (R2.bikeSteer or 0)
+  D.yaw = D.yaw + (R2.yawRate or 0)
+  D.vsum = D.vsum + vl
+  local k = math.floor(D.t + 1e-6)
+  if k >= 1 and not D.marks[k] then D.marks[k] = { lat = D.lat, psi = D.psi } end
+end
+local function run_vdrift()
+  local vc = JP.bike("drift")
+  if not vc then return end
+  -- (A/B: rolltyres=0 the roll torque about the frame's front; hold=0 no
+  -- hands-off line hold)
+  if tonumber(params.rolltyres) == 0 then vc.BIKE_ROLL_TYRES = false end
+  if tonumber(params.hold) == 0 then vc.BIKE_HOLD = false end
+  P("JP DRIFT switches: roll about the tyres %s, hold %s", tostring(vc.BIKE_ROLL_TYRES), tostring(vc.BIKE_HOLD))
+  local speeds = jsplit(params.speeds or "10,20,30")
+  local secs = tonumber(params.dsecs) or 5
+  local vmax = 0
+  for _, v in ipairs(speeds) do vmax = math.max(vmax, v) end
+  -- (from a stop: ~1 m/s² to the speed at the top, 3 s steady, `secs` let go, 60 m spare)
+  local total = math.floor(30 + vmax * vmax / 1.5 + vmax * (3 + secs) + 60)
+  if not JP.strip(vc, -15, total) then return end
+  wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 90, "the whole strip")
+  P("JP strip profile (every 25 m): %s", JP.heights(vc, 0, total, 25))
+  local prev_tick = JP_TICK
+  JP_TICK = function(dt) JP.hold_tick(dt); JP.drift_tick(dt) end
+  JP.vcD = vc
+  local all_ok = true
+  for _, vt in ipairs(speeds) do
+    JP.reset(vc, 0)
+    -- up to the speed on the line, and steady there: within 0.6 m/s, 0.6 m of
+    -- the line and 1.5 deg of its heading for 1.5 s (or 3 s past the speed)
+    local t0, steady, at_v, tl = time, 0, nil, time
+    local fell = false
+    while time - t0 < 40 do
+      local drive, st = JP.cruise(vc, vt, true)
+      vc.R2.cmd = { drive = drive, steer = st }
+      hold_w(drive > 0.5)
+      yield()
+      if V.upness(vc.node) < 0.5 then fell = true; break end
+      local sp = V.speed(vc)
+      local _, lat = JP.along(vc)
+      if sp > vt - 1.5 then at_v = at_v or time end   -- (a 500 tops out near 29 m/s: 28.5 is 30)
+      if math.abs(sp - vt) < 0.6 and math.abs(lat) < 0.6 and math.abs(vc.R2.yawRate or 0) < 0.03 then steady = steady + (time - tl) else steady = 0 end
+      tl = time
+      if steady > 1.5 or (at_v and time - at_v > 3) then break end
+      if V.strip.d1 and JP.along(vc) > V.strip.d1 - vt * secs - 20 then P("JP DRIFT v %d: ran out of strip before steady", vt); break end
+    end
+    hold_w(false)
+    if fell then P("JP DRIFT v %d: FELL on the way up", vt); all_ok = false; break end
+    -- hands off: the steer command 0, the throttle holding the speed
+    -- (noair=1: the air's force off while let go, AERO.scale 0)
+    if (tonumber(params.noair) or 0) > 0 then vc.AERO.scale = 0 end
+    local d0, lat0 = JP.along(vc)
+    JP.DR = {}
+    local t1 = time
+    while time - t1 < 3 * secs + 2 do   -- (D.t counts the ticks: a loaded machine runs fewer a second)
+      local drive = JP.cruise(vc, vt, false)
+      vc.R2.cmd = { drive = drive, steer = 0 }
+      yield()
+      if V.upness(vc.node) < 0.5 then fell = true; break end
+      if JP.DR.t and JP.DR.t >= secs then break end
+    end
+    local D = JP.DR
+    JP.DR = nil
+    local d1, lat1 = JP.along(vc)
+    if (tonumber(params.noair) or 0) > 0 then vc.AERO.scale = nil end
+    if not D or not D.t then P("JP DRIFT v %d: no measure", vt); all_ok = false; break end
+    local m = {}
+    for s = 1, math.floor(secs) do local e = D.marks[s]; m[#m + 1] = e and string.format("%ds %.2f", s, e.lat) or "-" end
+    local n = math.max(1, D.n)
+    P("JP DRIFT %s v %d: let go %.0f m in at %.2f m/s, %.1f s: drift %.3f m (+ left) [%s], heading %+.2f deg, slip mean %+.3f deg, lean mean %+.2f peak %.2f deg, bars mean %+.3f deg, yaw mean %+.4f rad/s, mean speed %.2f, strip lat %.2f -> %.2f; wind across %+.2f along %+.2f m/s; roll torque mean %+.3f |%.3f| kN m, frame front %.1f deg over the tyres' line; heading vs the rails %.0f deg, rails %.2f m a tick; air x%.1f%s",
+      V.tag, vt, d0, V.speed(vc), D.t, D.lat, table.concat(m, ", "), D.psi or 0, math.deg(D.slip / n), math.deg(D.roll / n), math.deg(D.rollMax), D.bars / n, D.yaw / n,
+      D.vsum / n, lat0, lat1, D.wl / n, D.wf / n, D.tq / n, D.tqa / n, D.offs or -99, D.vsRails or -999, D.rails or -1, vc.AERO.scale or 1, fell and ", FELL" or "")
+    local ok = not fell and math.abs(D.lat) < (tonumber(params.dmax) or 0.5)
+    all_ok = all_ok and ok
+    V.check("drift_" .. vt, ok, "%d m/s hands off %.1f s: drift %.3f m, heading %+.2f deg", vt, D.t, D.lat, D.psi or 0)
+    if fell then break end
+    V.stop(vc)
+  end
+  JP_TICK = prev_tick
+  vc.R2.cmd = { drive = 0, steer = 0 }
+  V.result()
+end

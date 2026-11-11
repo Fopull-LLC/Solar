@@ -217,6 +217,67 @@ do
     S.defaults.sit_up == 0 and S.defaults.lean_fwd == 0 and S.defaults.grips == 0 and S.defaults.hand_lift == 0.1)
 end
 
+-- HOLDING THE LINE, HANDS OFF (holdLean; playtest 2026-11-11)
+do
+  local U = { 0, 1, 0 }
+  local g = 9.8
+  -- still turning: nothing held yet
+  local ph0, st0 = A.holdLean(nil, { 20, 0, 0 }, U, 0.2, 20, g, 1 / 60)
+  check("hold: not while the turn is still dying", ph0 == nil and st0.H == nil)
+  -- the turn died: the track is the heading, no error, no lean
+  local ph1, st1, e1 = A.holdLean(st0, { 20, 0, 0 }, U, 0.01, 20, g, 1 / 60)
+  check("hold: a new line starts on it", st1.y == 0 and st1.I == 0)
+  check("hold: takes the track as the heading", ph1 ~= nil and st1.H and near(st1.H[1], 1, 1e-9) and near(e1, 0, 1e-9))
+  check("hold: on the heading, upright (save the yaw left)", math.abs(ph1) < 0.01, tostring(ph1))
+  -- the track turned 2° left of it (+X front, left = U × F = −Z): lean right
+  local a = math.rad(2)
+  local st2 = { H = { 1, 0, 0 }, I = 0, y = 0 }
+  local ph2, _, e2 = A.holdLean(st2, { 20 * math.cos(a), 0, -20 * math.sin(a) }, U, 0, 20, g, 1 / 60)
+  check("hold: turned left of the heading reads + error", e2 > 0 and near(e2, a, 1e-6), tostring(e2))
+  check("hold: and asks a lean to the right", ph2 < 0, tostring(ph2))
+  local st3 = { H = { 1, 0, 0 }, I = 0, y = 0 }
+  local ph3 = A.holdLean(st3, { 20 * math.cos(a), 0, 20 * math.sin(a) }, U, 0, 20, g, 1 / 60)
+  check("hold: turned right, a lean to the left", ph3 > 0, tostring(ph3))
+  local st4 = { H = { 1, 0, 0 }, I = 0, y = 0 }
+  local ph4 = A.holdLean(st4, { 0, 0, -20 }, U, 0, 30, g, 1 / 60)
+  check("hold: never past HOLD_LEAN", near(math.abs(ph4), A.HOLD_LEAN, 1e-9), tostring(ph4))
+  -- along a great circle over a 600 m world, the held heading rides the curve: no error
+  local Rw, v, dt = 600, 25, 1 / 60
+  local st = nil
+  local emax = 0
+  for k = 0, 600 do
+    local th = v * k * dt / Rw
+    local Uk = { math.sin(th), math.cos(th), 0 }           -- up at the bike
+    local Vk = { v * math.cos(th), -v * math.sin(th), 0 }  -- along the circle, level
+    local _, s2, e = A.holdLean(st, Vk, Uk, 0, v, g, dt)
+    st = s2
+    if e then emax = math.max(emax, math.abs(e)) end
+  end
+  check("hold: running over the curve of a 600 m world, the heading rides it", emax < 1e-6, tostring(emax))
+  -- closed loop: a bike whose lean follows the lean asked (a 0.25 s lag),
+  -- turning at g tan φ / v, with a steady yaw pushed on it (a crosswind on
+  -- the rider: 0.02 rad/s, the 30 m/s veer jumpprobe vdrift measured):
+  -- it holds its line within 0.4 m and comes back onto it
+  for _, vv in ipairs({ 10, 20, 30 }) do
+    local hd, y, phi, lat = 0, 0, 0, 0
+    local s5 = nil
+    local latmax, dt2 = 0, 1 / 60
+    for _ = 1, 600 do
+      local Hd = { math.cos(hd), 0, -math.sin(hd) }       -- the track (left = −Z)
+      local ph, s6 = A.holdLean(s5, { vv * Hd[1], 0, vv * Hd[3] }, U, y, vv, g, dt2)
+      s5 = s6
+      phi = phi + ((ph or 0) - phi) * (dt2 / 0.25)
+      y = g * math.tan(phi) / vv + 0.02
+      hd = hd + y * dt2
+      lat = lat + vv * math.sin(hd) * dt2
+      latmax = math.max(latmax, math.abs(lat))
+    end
+    check(("hold: a steady push at %d m/s, 10 s: held within 0.4 m, back on the line"):format(vv),
+      latmax < 0.4 and math.abs(lat) < 0.1 and math.abs(hd) < math.rad(0.5),
+      ("off by %.3f m at most, %.3f m at the end, heading %.3f deg"):format(latmax, lat, math.deg(hd)))
+  end
+end
+
 if #failures > 0 then
   print(("smoke_moto: %d/%d FAILED"):format(#failures, #failures + passes))
   for _, f in ipairs(failures) do print("  FAIL " .. f) end

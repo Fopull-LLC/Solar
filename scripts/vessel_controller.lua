@@ -12387,6 +12387,28 @@ function r2TyreSlope(gdir, gl)
   return du / math.sqrt(du * du + hl * hl)
 end
 
+-- The line a bike rolls over on: from its rear tyre's contact to its
+-- front's (the end tyres' centres, this tick's poses of one read, less their
+-- radii along the up), unit, or nil. Its frame may be built pitched to it
+-- (the user's 500 sits 7° nose up on level ground) and squats on its
+-- springs: the roll the rider and the gyros put in is about THIS line.
+function r2TyreLine(U)
+  local f, r
+  for _, w in ipairs(R2.wheels) do
+    if w.tyre and w.tyre.valid ~= false then
+      if not f or (w.a or 0) > (f.a or 0) then f = w end
+      if not r or (w.a or 0) < (r.a or 0) then r = w end
+    end
+  end
+  if not (f and r and f ~= r) or (f.a or 0) - (r.a or 0) < 0.3 then return nil end
+  local pf, pr = f.tyre.tickPos or f.tyre, r.tyre.tickPos or r.tyre
+  local dr = (f.r or 0.33) - (r.r or 0.33)
+  local dx, dy, dz = pf.x - pr.x - U[1] * dr, pf.y - pr.y - U[2] * dr, pf.z - pr.z - U[3] * dr
+  local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if l < 0.3 then return nil end
+  return { dx / l, dy / l, dz / l }
+end
+
 -- A BIKE'S PUSH GOES WHERE ITS LOAD IS (playtest 2026-11-05: "still
 -- struggling to climb hills with bikes even the more powerful 500cc
 -- motors"). The traction control's push used to be split evenly between
@@ -13613,6 +13635,8 @@ BIKE_EASE = 0.8
 -- weight and feet, or a gyro, hold the lean the turn wants.
 BIKE_STEER_BALANCE = false
 BIKE_LEAN_RATE = math.rad(30)   -- rad/s
+BIKE_ROLL_TYRES = true          -- the roll torque about the tyres' line (r2TyreLine); false: the frame's front (A/B)
+BIKE_HOLD = true                -- hands off at speed, the line held (auto_drive.holdLean); false: off (A/B)
 function motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir)
   local L = AUTO.lib
   if not L or R2.motoOff then return end   -- (motoOff: a probe's switch)
@@ -13645,6 +13669,20 @@ function motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir)
     -- A/D ask for a lean (the rider's weight, feet or a gyro put it there)
     phiT = L.leanTarget(stick, math.abs(vf), gl, Lb, lock, mu)
   end
+  -- HANDS OFF AT SPEED: the line held (auto_drive.holdLean). Gone the moment
+  -- the stick moves, it slows past a walk or the tyres were off the ground.
+  -- (info.vel is the planet-relative velocity, U this tick's up: one read.)
+  if BIKE_HOLD and L.holdLean and math.abs(stick) < 0.02 and vf > (L.HOLD_V0 or 4)
+     and R2.bikeHoldT and time - R2.bikeHoldT < 0.1 then
+    local v = info.vel
+    local vu = v.x * U[1] + v.y * U[2] + v.z * U[3]
+    local ph, st, e = L.holdLean(R2.bikeHold, { v.x - U[1] * vu, v.y - U[2] * vu, v.z - U[3] * vu }, U, yaw, vf, gl, dt)
+    R2.bikeHold, R2.holdErr = st, e
+    if ph then phiT = ph end
+  else
+    R2.bikeHold, R2.holdErr = nil, nil
+  end
+  R2.bikeHoldT = time
   -- the lean asked for comes on at BIKE_LEAN_RATE: a rider tips in, and a
   -- step to full lean overshot it into a lowside
   local pt = R2.leanTs or phi
@@ -13714,10 +13752,20 @@ function motoBike(node, info, cmds, vf, gl, dt, rxv, upv, rzv, gdir)
   local tmax = L.balanceAuthority(gt, rider, vf) * ease
   local I = (info.mass or 0.3) * h * h
   local tq = L.bikeTorque(phi, rate, phiT, info.mass or 0.3, h, gl, alat, tmax, I)
-  -- (+ leans it left: a turn about −front). About the bike's OWN front, not
-  -- the level one: pitched up a slope or on its springs, a turn about the
-  -- level front is part yaw, and the balance spun the bike on the spot.
-  local Fb = L.vec.unit(Fw)
+  -- (+ leans it left: a turn about −front). About the line its tyres roll
+  -- on, not the level front: pitched up a slope or on its springs, a turn
+  -- about the level front is part yaw, and the balance spun the bike on the
+  -- spot. Nor about the frame's own front: a frame built nose up over its
+  -- tyres (the user's 500: 7.4°) turned sin 7.4° = 13 % of every kN·m the
+  -- rider held it upright with into a yaw nobody asked for (playtest
+  -- 2026-11-11: "keeps wanting to slide or veer a certain direction";
+  -- jumpprobe vdrift: held against a 5 m/s crosswind, 0.08–0.17 kN·m of roll
+  -- and so 0.01–0.02 kN·m of hidden yaw, which happened to lean against the
+  -- wind's own weathervane yaw). The heading itself is the hold's
+  -- (auto_drive.holdLean, above).
+  local Fb = (BIKE_ROLL_TYRES and r2TyreLine(U)) or L.vec.unit(Fw)
+  if Fb[1] * Fw[1] + Fb[2] * Fw[2] + Fb[3] * Fw[3] < 0 then Fb = { -Fb[1], -Fb[2], -Fb[3] } end
+  R2.rollAxis = Fb
   assembly.torque(node, vec3(-Fb[1] * tq, -Fb[2] * tq, -Fb[3] * tq))
   -- …and fore and aft: the rider on the pegs (and what the gyros have left)
   local ptq = motoPitch(node, info, dt, Fw, U, vf, gt * ease, rider) or 0

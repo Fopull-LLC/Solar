@@ -77,6 +77,7 @@ ROPE = {
   foot = 1.0,          -- m: the suit's centre over its soles
   top = 0.45,          -- m of line from the sheave to the upper hand, at the top
   knot = 0.35,         -- m of tail under a stopper knot at a free end
+  gap = 0.015,         -- m: the line's skin over the surface it lies on (its centre radius + gap out)
   floor = 0.70,        -- a hit facing up past this (≈45°) is ground the line lies on
   wall_max = 1.6,      -- m: how far from the line a wall is looked for (feet)
   step = 1.0,          -- m: the drape's step along a face
@@ -305,6 +306,79 @@ function move(st, want, dt, up, down, L)
   return st, ended, s0 > st.s and floor(st.phase) > floor(ph0)
 end
 
+-- THE CHORDS CLEARED. The drape's points lie on the surface, but the straight
+-- line between two of them can cut through the rock between: a bulge on a
+-- face the 1 m steps stepped over, the round of a lip (playtest 2026-11-11:
+-- "ropes can clip through walls"). Each segment is cast along, end to end;
+-- where it meets something short of its end, a point goes in on the surface
+-- there (R2 out along its normal) and both halves are checked again, so the
+-- line wraps a bulge the way a loaded rope does. At most CLEAR.most points
+-- (a line's worth of 1 m steps over a rough face), none on a piece shorter
+-- than CLEAR.min_seg. → points added [, "unknown"]
+CLEAR = { most = 64, min_seg = 0.1, skin = 0.004 }
+function clearPath(Pp, A, cast, R2, u)
+  local i, added = 1, 0
+  local ux, uy, uz = u[1], u[2], u[3]
+  while i < #Pp / 3 do
+    local j = 3 * (i - 1)
+    local x0, y0, z0 = Pp[j + 1], Pp[j + 2], Pp[j + 3]
+    local dx, dy, dz, l = norm3(Pp[j + 4] - x0, Pp[j + 5] - y0, Pp[j + 6] - z0)
+    local h = nil
+    if l > CLEAR.min_seg and added < CLEAR.most then
+      local why
+      h, why = cast(x0, y0, z0, dx, dy, dz, l)
+      if why == "unknown" then return added, "unknown" end
+    end
+    if h and h.d > CLEAR.skin and h.d < l - CLEAR.skin and h.d < CLEAR.min_seg and i > 1 then
+      -- the rock rises right in front of a point the line lies on: that
+      -- point is lifted off it (a new point there would be no piece at all)
+      Pp[j + 1], Pp[j + 2], Pp[j + 3] = x0 + h.nx * R2, y0 + h.ny * R2, z0 + h.nz * R2
+      added = added + 1
+    elseif h and h.d > CLEAR.skin and h.d < l - CLEAR.skin then
+      local mx, my, mz = h.x + h.nx * R2, h.y + h.ny * R2, h.z + h.nz * R2
+      local ax, ay, az = horiz(h.nx, h.ny, h.nz, ux, uy, uz)
+      if not ax then ax, ay, az = A[j + 1], A[j + 2], A[j + 3] end
+      table.insert(Pp, j + 4, mz); table.insert(Pp, j + 4, my); table.insert(Pp, j + 4, mx)
+      table.insert(A, j + 4, az); table.insert(A, j + 4, ay); table.insert(A, j + 4, ax)
+      added = added + 1
+    else
+      i = i + 1
+    end
+  end
+  return added
+end
+
+-- The tail's points (body-relative, flat x,y,z…) from the line's grounded
+-- end: TAIL m out along the way away from the wall, the last a little to
+-- the side, each set down on what is under it; cut short where the run
+-- meets something or there is no ground under it.
+TAIL = { { 0.35, 0 }, { 0.75, 0.25 } }
+function layTail(L, cast, R2)
+  local p, a, u = L.p, L.a, L.u
+  local n = L.n
+  local ex, ey, ez = p[3 * n - 2], p[3 * n - 1], p[3 * n]
+  local ax, ay, az = a[3 * n - 2], a[3 * n - 1], a[3 * n]
+  local sx, sy, sz = norm3(u[2] * az - u[3] * ay, u[3] * ax - u[1] * az, u[1] * ay - u[2] * ax)
+  local out = {}
+  local px, py, pz = ex, ey, ez
+  for _, k in ipairs(TAIL) do
+    local qx = ex + ax * k[1] + sx * k[2]
+    local qy = ey + ay * k[1] + sy * k[2]
+    local qz = ez + az * k[1] + sz * k[2]
+    local h, why = cast(qx + u[1] * 0.4, qy + u[2] * 0.4, qz + u[3] * 0.4, -u[1], -u[2], -u[3], 0.8)
+    if why == "unknown" or not h then break end
+    qx, qy, qz = h.x + h.nx * R2, h.y + h.ny * R2, h.z + h.nz * R2
+    local dx, dy, dz, l = norm3(qx - px, qy - py, qz - pz)
+    if l > 0.02 then
+      local hb = cast(px, py, pz, dx, dy, dz, l)
+      if hb and hb.d > 0.004 and hb.d < l - 0.004 then break end
+    end
+    out[#out + 1], out[#out + 2], out[#out + 3] = qx, qy, qz
+    px, py, pz = qx, qy, qz
+  end
+  return #out > 0 and out or nil
+end
+
 -- THE DRAPE. From the sheave (`G` the ground point, `u` up, `out` the boom's
 -- way, all body-relative), the line falls straight down; where it meets rock
 -- facing up it lies there (grounded), where it meets a face it runs down the
@@ -312,10 +386,34 @@ end
 -- (x,y,z, dx,dy,dz, max) → { x,y,z, nx,ny,nz, d } | nil [, "unknown"]
 -- (body-relative). → L (finished), or nil and why ("unknown": the ground
 -- there isn't made yet — ask again later).
+FACE_BACK = 0.6   -- m: how far off a face a step's end looks back for it
+-- Ground facing up under the line at (x,y,z): does it carry on LEDGE m out
+-- the way away from the wall (a)? → nil (it holds the line), the distance
+-- out to its lip (it doesn't), or "unknown".
+LEDGE = 0.4
+function ledgeLip(x, y, z, ax, ay, az, u, cast)
+  local function under(k)
+    local qx, qy, qz = x + ax * k + u[1] * 0.25, y + ay * k + u[2] * 0.25, z + az * k + u[3] * 0.25
+    local h, why = cast(qx, qy, qz, -u[1], -u[2], -u[3], 0.6)
+    if why == "unknown" then return "unknown" end
+    return h ~= nil
+  end
+  local far = under(LEDGE)
+  if far == "unknown" then return "unknown" end
+  if far then return nil end
+  local lo, hi = 0, LEDGE
+  for _ = 1, 5 do
+    local m = (lo + hi) / 2
+    local on = under(m)
+    if on == "unknown" then return "unknown" end
+    if on then lo = m else hi = m end
+  end
+  return math.max(0.03, hi)
+end
 function buildLayout(G, u, out, length, cast)
   local ux, uy, uz = u[1], u[2], u[3]
   local ox, oy, oz = out[1], out[2], out[3]
-  local R2 = ROPE.radius + 0.01
+  local R2 = ROPE.radius + ROPE.gap
   local cx = G[1] + ux * ROPE.drop_y + ox * ROPE.drop_out
   local cy = G[2] + uy * ROPE.drop_y + oy * ROPE.drop_out
   local cz = G[3] + uz * ROPE.drop_y + oz * ROPE.drop_out
@@ -344,29 +442,68 @@ function buildLayout(G, u, out, length, cast)
     push(px, py, pz)
     left = left - seg
     local nu = nx * ux + ny * uy + nz * uz
-    if nu >= ROPE.floor then grounded = true break end
-    -- a face: down along it (−u with its normal part taken out)
-    local tx, ty, tz, tl = norm3(-ux + nx * nu, -uy + ny * nu, -uz + nz * nu)
-    if tl < 0.05 then grounded = true break end
-    local stp = min(left, ROPE.step)
-    if stp <= 0.02 then break end
-    local h2, w2 = cast(px + nx * 0.02, py + ny * 0.02, pz + nz * 0.02, tx, ty, tz, stp)
-    if w2 == "unknown" then return nil, "unknown" end
-    local qx, qy, qz
-    if h2 then
-      qx, qy, qz = h2.x + h2.nx * R2, h2.y + h2.ny * R2, h2.z + h2.nz * R2
-      local hx2, hy2, hz2 = horiz(h2.nx, h2.ny, h2.nz, ux, uy, uz)
-      if hx2 then ax, ay, az = hx2, hy2, hz2 end
+    if nu >= ROPE.floor then
+      -- ground facing up: it holds the line only if it carries on beyond
+      -- it (a boulder's top or a narrow ledge in a shaft does not: the
+      -- line runs over its lip, away from the wall, and falls on)
+      local lip = ledgeLip(px, py, pz, ax, ay, az, u, cast)
+      if lip == "unknown" then return nil, "unknown" end
+      if not lip then grounded = true break end
+      local lx, ly, lz = px + ax * lip, py + ay * lip, pz + az * lip
+      push(lx, ly, lz)
+      left = left - lip
+      cx, cy, cz = lx + ax * 0.04, ly + ay * 0.04, lz + az * 0.04
     else
-      qx, qy, qz = px + tx * stp, py + ty * stp, pz + tz * stp
+      -- a face: down along it (−u with its normal part taken out)
+      local tx, ty, tz, tl = norm3(-ux + nx * nu, -uy + ny * nu, -uz + nz * nu)
+      if tl < 0.05 then grounded = true break end
+      local stp = min(left, ROPE.step)
+      if stp <= 0.02 then break end
+      local h2, w2 = cast(px + nx * 0.02, py + ny * 0.02, pz + nz * 0.02, tx, ty, tz, stp)
+      if w2 == "unknown" then return nil, "unknown" end
+      local qx, qy, qz
+      local hq = h2
+      if h2 then
+        -- a face that turns toward the line (concave) or a ledge: it meets it
+        qx, qy, qz = h2.x + h2.nx * R2, h2.y + h2.ny * R2, h2.z + h2.nz * R2
+      else
+        -- the face under the step's end, looked for back along the face's
+        -- normal: a face that rounds away (convex) still carries the line (a
+        -- loaded rope lies on it; the step's end was out in the air, and the
+        -- line was drawn in a sawtooth standing off the rock)
+        local ex, ey, ez = px + tx * stp, py + ty * stp, pz + tz * stp
+        local h3, w3 = cast(ex + nx * FACE_BACK, ey + ny * FACE_BACK, ez + nz * FACE_BACK, -nx, -ny, -nz, 2 * FACE_BACK)
+        if w3 == "unknown" then return nil, "unknown" end
+        if h3 and h3.d > 0.01 and (h3.nx * nx + h3.ny * ny + h3.nz * nz) > 0.3 then
+          hq = h3
+          qx, qy, qz = h3.x + h3.nx * R2, h3.y + h3.ny * R2, h3.z + h3.nz * R2
+        end
+      end
+      if qx then
+        local hx2, hy2, hz2 = horiz(hq.nx, hq.ny, hq.nz, ux, uy, uz)
+        if hx2 then ax, ay, az = hx2, hy2, hz2 end
+        local seg2 = len3(qx - px, qy - py, qz - pz)
+        push(qx, qy, qz)
+        left = left - seg2
+        if (hq.nx * ux + hq.ny * uy + hq.nz * uz) >= ROPE.floor then grounded = true break end
+        nx, ny, nz = hq.nx, hq.ny, hq.nz
+        cx, cy, cz = qx + nx * 0.02, qy + ny * 0.02, qz + nz * 0.02
+      else
+        -- the face falls away under the step (an overhang, the lip of a
+        -- drop): the line leaves it here and hangs straight down
+        cx, cy, cz = px + nx * 0.03, py + ny * 0.03, pz + nz * 0.03
+      end
     end
-    local seg2 = len3(qx - px, qy - py, qz - pz)
-    push(qx, qy, qz)
-    left = left - seg2
-    if h2 and (h2.nx * ux + h2.ny * uy + h2.nz * uz) >= ROPE.floor then grounded = true break end
-    cx, cy, cz = qx + nx * 0.02, qy + ny * 0.02, qz + nz * 0.02
   end
+  -- the chords between the points cleared of the rock they cut through
+  local added, wc = clearPath(Pp, A, cast, R2, u)
+  if wc == "unknown" then return nil, "unknown" end
   local L = finish({ p = Pp, a = A, u = { ux, uy, uz }, g = grounded, len = length, out = { ox, oy, oz } })
+  L.cleared = added
+  -- THE TAIL: a line that lies on the ground ends in a short run across it
+  -- (rope.lua draws it), laid on the ground there, not on a plane through
+  -- the end (on a slope or a rough floor that plane ran through the rock)
+  if grounded then L.tail = layTail(L, cast, R2) end
   -- the wall for the feet, every metre: along −away from the line
   local wd = {}
   for k = 0, floor(L.total) do
@@ -417,14 +554,19 @@ function guardGroups(recs)
   return out
 end
 
--- The save's copy (plain numbers; save.set keeps four tables deep).
+-- The save's copy (plain numbers; save.set keeps four tables deep). v 2: laid
+-- on what the player sees (solid_cast) with the chords cleared; a v 1 line,
+-- laid on the field alone, is laid again once the crew comes near.
+SAVE_V = 2
 local function r4(v) return floor(v * 1e4 + 0.5) / 1e4 end
 function toSave(L)
   local p, a, wd = {}, {}, {}
   for i, v in ipairs(L.p) do p[i] = r4(v) end
   for i, v in ipairs(L.a) do a[i] = r4(v) end
   for i, v in ipairs(L.wd or {}) do wd[i] = r4(v) end
-  return { v = 1, p = p, a = a, wd = wd, u = { L.u[1], L.u[2], L.u[3] }, g = L.g and 1 or 0, len = L.len,
+  local tl = nil
+  if L.tail then tl = {}; for i, v in ipairs(L.tail) do tl[i] = r4(v) end end
+  return { v = SAVE_V, p = p, a = a, wd = wd, tl = tl, u = { L.u[1], L.u[2], L.u[3] }, g = L.g and 1 or 0, len = L.len,
            out = L.out and { L.out[1], L.out[2], L.out[3] } or nil }
 end
 function fromSave(t)
@@ -434,6 +576,7 @@ function fromSave(t)
   for i, v in ipairs(t.p) do L.p[i] = v end
   for i, v in ipairs(t.a or {}) do L.a[i] = v end
   for i, v in ipairs(t.wd or {}) do L.wd[i] = v end
+  if type(t.tl) == "table" and #t.tl >= 3 then L.tail = {}; for i, v in ipairs(t.tl) do L.tail[i] = v end end
   if #L.a ~= #L.p then return nil end
   return finish(L)
 end
@@ -498,6 +641,97 @@ function field_cast(b, x, y, z, dx, dy, dz, mx)
   return { x = px - b.x, y = py - b.y, z = pz - b.z, nx = nx, ny = ny, nz = nz, d = t }
 end
 
+-- WHAT THE PLAYER SEES (playtest 2026-11-11: "ropes can clip through walls
+-- (seems like it's not following the meshed terrain, more like the SDF
+-- field)"). The ground drawn is the mesh the field is cut into, and the
+-- colliders are that mesh; kit pieces and props are colliders of their own,
+-- which the field knows nothing of. So the line is laid by the physics ray
+-- (raycast: the terrain's meshed colliders, every static collider), and the
+-- field answers only where that ray has nothing there yet: ground whose
+-- collider is not built (the field's hit SOLID.tol nearer than the mesh's, or
+-- the mesh's missing), and "unknown" ground still holds the layout back.
+-- Moving things (a craft not anchored, a body on the move) and the crew are
+-- passed through: the line is laid once and kept, and they move on.
+SOLID = { tol = 0.5, passes = 4 }
+solidStats = { rays = 0, mesh = 0, field = 0, through = 0, nearer = 0, dmax = 0 }   -- probes
+local function moving(n)
+  -- a craft (an assembly that is not anchored, as a base's kit structure is),
+  -- or a loose body on the move; a crate at rest is ground for the line
+  local k, first = 0, n
+  while n and n.valid ~= false and k < 8 do
+    local inf = assembly and assembly.info and assembly.info(n)
+    if inf and inf.mass then return not inf.anchored end
+    n = n.parent
+    k = k + 1
+  end
+  local v = first and first.valid ~= false and first.vel
+  return v ~= nil and (v.x * v.x + v.y * v.y + v.z * v.z) > 0.04
+end
+function solid_cast(b, x, y, z, dx, dy, dz, mx, ign)
+  local fh, why = field_cast(b, x, y, z, dx, dy, dz, mx)
+  if why == "unknown" then return nil, "unknown" end
+  if not raycast then return fh, why end
+  solidStats.rays = solidStats.rays + 1
+  local ox, oy, oz = b.x + x, b.y + y, b.z + z
+  local opts = (ign and #ign > 0) and { ignore = ign, ignoreChildren = true } or nil
+  local t0, ph, pd = 0, nil, nil
+  for _ = 1, SOLID.passes do
+    local ok, h = pcall(raycast, ox + dx * t0, oy + dy * t0, oz + dz * t0, dx, dy, dz, mx - t0, opts)
+    if not ok or not h then break end
+    local d = t0 + (h.distance or 0)
+    if h.node and moving(h.node) then
+      solidStats.through = solidStats.through + 1
+      t0 = d + 0.05
+      if t0 >= mx then break end
+    else
+      ph, pd = h, d
+      break
+    end
+  end
+  if ph and fh then
+    local e = fh.d - pd
+    if abs(e) > solidStats.dmax then solidStats.dmax = abs(e) end
+    if e > 0.02 then solidStats.nearer = solidStats.nearer + 1 end
+  end
+  -- (a ray starting a hair inside the field, outside the mesh — the mesh cuts
+  -- the field's corners — has the field's hit at its start: the mesh's then)
+  if ph and (not fh or pd <= fh.d + SOLID.tol or fh.d < 0.02) then
+    solidStats.mesh = solidStats.mesh + 1
+    local nx, ny, nz, nl = norm3(ph.nx or 0, ph.ny or 0, ph.nz or 0)
+    if nl < 1e-6 then nx, ny, nz = -dx, -dy, -dz end
+    return { x = ph.x - b.x, y = ph.y - b.y, z = ph.z - b.z, nx = nx, ny = ny, nz = nz, d = pd, mesh = true }
+  end
+  if fh then solidStats.field = solidStats.field + 1 end
+  return fh, why
+end
+
+-- The cast a layout of rope `id` is laid with: the physics ray past the
+-- davit itself and the crew (solid_cast), body-relative. nil until the
+-- davit's node is out (its own box would read as a wall beside the sheave).
+local function cast_for(id, b)
+  local dep = ref("deployables")
+  local pn = dep and dep.nodeOf and dep.nodeOf(id)
+  if not pn then return nil end
+  local ign = { pn }
+  local a = astro()
+  if a and a.valid ~= false then ign[2] = a end
+  return function(x, y, z, dx, dy, dz, mx) return solid_cast(b, x, y, z, dx, dy, dz, mx, ign) end
+end
+
+-- A layout worked out now from what is there. → L | nil, why
+local function lay(id)
+  local e = dep_entry(id)
+  if not e then return nil, "gone" end
+  local b = space and space.body and space.body(e.b)
+  if not (b and terrain and terrain.raycast) then return nil, "no ground" end
+  local cast = cast_for(id, b)
+  if not cast then return nil, "no davit" end
+  local ux, uy, uz, fx, fy, fz = facing(e.x, e.y, e.z, e.fx or 0, e.fy or 0, e.fz or 0)
+  return buildLayout({ e.x, e.y, e.z }, { ux, uy, uz }, { -fx, -fy, -fz }, ROPE.length, cast)
+end
+
+local stale = {}       -- id → true: a layout from an older save (laid on the field alone): laid again when near
+
 -- The line's layout, from the save, or worked out now from the ground (and
 -- kept). nil while the ground there isn't made, or for no such rope.
 function layoutOf(id)
@@ -505,25 +739,23 @@ function layoutOf(id)
   local L = layouts[id]
   if L then return L end
   if not save then return nil end
-  L = fromSave(save.get("rope." .. tostring(id)))
-  if L then layouts[id] = L return L end
+  local t = save.get("rope." .. tostring(id))
+  L = fromSave(t)
+  if L then
+    layouts[id] = L
+    if type(t) == "table" and (tonumber(t.v) or 1) < SAVE_V then stale[id] = true end
+    return L
+  end
   if now() - (retry[id] or -10) < 1.0 then return nil end
   retry[id] = now()
-  local e = dep_entry(id)
-  if not e then return nil end
-  local b = space and space.body and space.body(e.b)
-  if not (b and terrain and terrain.raycast) then return nil end
-  local ux, uy, uz, fx, fy, fz = facing(e.x, e.y, e.z, e.fx or 0, e.fy or 0, e.fz or 0)
-  local cast = function(x, y, z, dx, dy, dz, mx) return field_cast(b, x, y, z, dx, dy, dz, mx) end
-  local why
-  L, why = buildLayout({ e.x, e.y, e.z }, { ux, uy, uz }, { -fx, -fy, -fz }, ROPE.length, cast)
+  L = lay(id)
   if not L then return nil end
   layouts[id] = L
   save.set("rope." .. tostring(id), toSave(L))
   version = version + 1
   if log then
-    log(string.format("rope: #%d's line falls %.1f m (%s), climbable %.1f–%.1f m", id, L.total,
-      L.g and "on the ground" or "hanging free", L.s_top, L.s_max))
+    log(string.format("rope: #%d's line falls %.1f m (%s), climbable %.1f–%.1f m, %d points (%d round the rock)", id, L.total,
+      L.g and "on the ground" or "hanging free", L.s_top, L.s_max, L.n, L.cleared or 0))
   end
   return L
 end
@@ -567,7 +799,7 @@ local function sync_guards()
 end
 
 -- For probes: forget the cached layouts (they are read from the save again).
-function reloadLayouts() layouts, retry = {}, {}; version = version + 1 end
+function reloadLayouts() layouts, retry, stale = {}, {}, {}; if settleReset then settleReset() end; version = version + 1 end
 
 local function set_kinematic(a, on)
   local getc = a and (a.getComponent or a.getcomponent)
@@ -778,6 +1010,189 @@ function fixedUpdate(node, dt)
   end
 end
 
+-- ── the line settles again ──────────────────────────────────────────────────
+-- (playtest 2026-11-11: "I'd like the ability to mine near my ropes and
+-- they'll move to rebalance where they should be, without having to pick up
+-- and replace them"). A laid line is asleep: nothing of it runs. Near the
+-- crew (SETTLE.near m), one line at a time, every SETTLE.every s, the
+-- ground's field is read at its SIGNATURE (a point every SETTLE.step m along
+-- the line, and two under the davit's plate): a dig, a fill, a crater or a
+-- drill anywhere along it moves those numbers, whoever made the edit. A
+-- base's kit structure changing (structures.version) wakes the lines near
+-- the crew too. A woken line is laid again from what is there once the
+-- ground has been quiet SETTLE.quiet s (no edits pending, the signature the
+-- same since), and swapped in only if it moved; a line is also laid again
+-- once when the crew first comes near it in a session (an edit made while
+-- nobody was near is read then). Ground gone from under the
+-- davit's plate (an edit the dig guard did not stop) drops the davit to the
+-- ground below it, and the line falls with it.
+SETTLE = { near = 90, every = 0.25, step = 0.5, eps = 0.03, quiet = 0.6, moved = 0.03, most = 80 }
+settles = 0            -- probes: lines laid again after the ground changed
+settleChecks = 0       -- probes: signature reads
+settleMs = 0           -- probes: the dearest check or re-lay so far (ms)
+falls = 0              -- probes: davits dropped with their ground
+local sig = {}         -- id → { q = {…} } the field at the signature when last read
+local woke = {}        -- id → when the line was woken (its ground changed)
+local settle_t, settle_i = -10, 0
+local struct_ver = nil
+function settleReset() sig, woke = {}, {} end
+
+-- The signature's points (body-relative): along the line, then under the
+-- plate (G the ground point, u up).
+function sigPoints(L, G, u)
+  local pts = {}
+  local n = min(SETTLE.most, floor(L.total / SETTLE.step) + 1)
+  local step = n > 1 and L.total / (n - 1) or 0
+  for k = 0, n - 1 do
+    local x, y, z = at(L, k * step)
+    pts[#pts + 1] = { x, y, z }
+  end
+  if G then
+    pts[#pts + 1] = { G[1] - u[1] * 0.2, G[2] - u[2] * 0.2, G[3] - u[3] * 0.2 }
+    pts[#pts + 1] = { G[1] - u[1] * 0.6, G[2] - u[2] * 0.6, G[3] - u[3] * 0.6 }
+  end
+  return pts
+end
+-- Has the field moved at any of them? (q, q0: the numbers now and before)
+function sigMoved(q, q0, eps)
+  if not (q and q0) or #q ~= #q0 then return true end
+  for i = 1, #q do
+    if abs(q[i] - q0[i]) > (eps or SETTLE.eps) then return true end
+  end
+  return false
+end
+-- How far apart two layouts are (m): the largest gap between points the same
+-- arc length along each, the difference in length, 1 m if one lies on the
+-- ground and the other not.
+function layoutGap(A, B)
+  if not (A and B) then return math.huge end
+  local g = abs((A.total or 0) - (B.total or 0))
+  if (A.g and true or false) ~= (B.g and true or false) then g = max(g, 1) end
+  local n = max(A.n or 0, B.n or 0, 2) * 2
+  local tot = min(A.total, B.total)
+  for k = 0, n do
+    local s = tot * k / n
+    local ax, ay, az = at(A, s)
+    local bx, by, bz = at(B, s)
+    g = max(g, len3(ax - bx, ay - by, az - bz))
+  end
+  return g
+end
+
+local function read_sig(e, b, L)
+  local pts = sigPoints(L, { e.x, e.y, e.z }, L.u)
+  local q = {}
+  for i, p in ipairs(pts) do
+    local v = terrain.query(b.x + p[1], b.y + p[2], b.z + p[3])
+    if v == nil then return nil end
+    q[i] = v
+  end
+  settleChecks = settleChecks + 1
+  return q
+end
+
+-- The ground under the plate is gone: the davit drops to the ground below.
+local function fall_davit(id, e, b)
+  local dep = ref("deployables")
+  if not (dep and dep.place and dep.remove) then return end
+  local ux, uy, uz = norm3(e.x, e.y, e.z)
+  local h = field_cast(b, e.x + ux * 0.5, e.y + uy * 0.5, e.z + uz * 0.5, -ux, -uy, -uz, 60)
+  if C and C.id == id and release then release("fall", "the rope's footing gave way") end
+  local by, name = e.by, e.n
+  pcall(dep.remove, id)
+  layouts[id], sig[id], woke[id], stale[id] = nil, nil, nil, nil
+  if save.delete then save.delete("rope." .. tostring(id)) else save.set("rope." .. tostring(id), false) end
+  version = version + 1
+  falls = falls + 1
+  if h then
+    local nid = dep.place("rope", e.b, b.x + h.x, b.y + h.y, b.z + h.z, { by = by, name = name, fx = e.fx, fy = e.fy, fz = e.fz })
+    caption("The ground gave way under the rope's davit: it fell with it")
+    log(string.format("rope: #%d's footing dug away, the davit fell %.1f m (now #%s)", id, h.d - 0.5, tostring(nid)))
+  else
+    caption("The ground gave way under the rope's davit: it fell out of sight")
+    log(string.format("rope: #%d's footing dug away, nothing under it for 60 m", id))
+  end
+end
+
+-- One line looked at: its signature read, woken when it moved, laid again
+-- once quiet.
+local function settle_one(id, a)
+  local e = dep_entry(id)
+  local L = layouts[id]
+  if not (e and L and e.gx) then return end
+  local b = space.body(e.b)
+  if not b then return end
+  if len3(e.gx - a.x, e.gy - a.y, e.gz - a.z) > SETTLE.near then return end
+  local q = read_sig(e, b, L)
+  if not q then return end
+  local S = sig[id]
+  if not S then
+    -- first seen this session: laid again once from what is there (the
+    -- ground may have changed while nobody was near to read it)
+    sig[id] = { q = q }
+    if not woke[id] then woke[id] = -10 end
+  elseif sigMoved(q, S.q) then
+    S.q = q
+    woke[id] = now()
+    return
+  end
+  local w = woke[id]
+  if not w or now() - w < SETTLE.quiet then return end
+  if terrain.pending and terrain.pending() > 0 then return end
+  -- the plate's ground: both points under it in the air → gone
+  local nq = #q
+  if q[nq] > 0.1 and q[nq - 1] > 0.1 then fall_davit(id, e, b) return end
+  local L2, why = lay(id)
+  if not L2 then
+    if why ~= "unknown" and why ~= "no davit" then woke[id] = nil end
+    return
+  end
+  local was_stale = stale[id]
+  woke[id], stale[id] = nil, nil
+  sig[id] = { q = read_sig(e, b, L2) or q }
+  local gap = layoutGap(L, L2)
+  if gap > SETTLE.moved or was_stale then
+    layouts[id] = L2
+    save.set("rope." .. tostring(id), toSave(L2))
+    if gap > SETTLE.moved then
+      version = version + 1
+      settles = settles + 1
+      log(string.format("rope: #%d's ground changed: the line settled again (moved up to %.2f m; falls %.1f m, %s, %d points)",
+        id, gap, L2.total, L2.g and "on the ground" or "hanging free", L2.n))
+    end
+  end
+end
+
+local function settle_tick()
+  if now() - settle_t < SETTLE.every then return end
+  settle_t = now()
+  local a = astro()
+  local dep = ref("deployables")
+  if not (a and dep and dep.list and terrain and terrain.query) then return end
+  local list = dep.list("rope")
+  if #list == 0 then return end
+  local t0 = os.clock()
+  -- a kit structure changed: the lines near the crew wake
+  local st = ref("structures")
+  local sv = st and st.version
+  if sv ~= nil and struct_ver ~= nil and sv ~= struct_ver then
+    for _, e in ipairs(list) do
+      if e.gx and len3(e.gx - a.x, e.gy - a.y, e.gz - a.z) < SETTLE.near then woke[e.id] = now() end
+    end
+  end
+  struct_ver = sv
+  -- (a woken line first, else the next in turn: one line a check)
+  local pick = nil
+  for _, e in ipairs(list) do if woke[e.id] then pick = e.id break end end
+  if not pick then
+    settle_i = settle_i % #list + 1
+    pick = list[settle_i].id
+  end
+  if layouts[pick] then settle_one(pick, a) end
+  local ms = (os.clock() - t0) * 1000
+  if ms > settleMs then settleMs = ms end
+end
+
 -- ── taking it down ──────────────────────────────────────────────────────────
 function takeDown(id)
   if C and C.id == id then return false, "unclip first" end
@@ -882,6 +1297,7 @@ function update(node, dt)
     if C == nil then node:destroy() end
     return
   end
+  settle_tick()
   if now() - prune_t > 1.0 then
     prune_t = now(); prune(); sync_guards()
   elseif guard_ver ~= nil then

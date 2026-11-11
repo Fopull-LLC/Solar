@@ -105,6 +105,18 @@ before it turns. At a walk the bars are the rider's (A/D, full lock).
 - `auto_drive.bikeSteer` (steering under the fall, a true countersteer, no
   torque) is kept behind `BIKE_STEER_BALANCE` (off): on the engine's ball
   tyres it held some probe runs and threw others.
+- **Hands off at speed, the line is held** (playtest 2026-11-11: "keeps
+  wanting to slide or veer a certain direction"). It was never the planet's
+  motion (rails bodies only translate; `info.vel` is planet-relative): it was
+  the weather's 5 m/s crosswind on the rider, and nothing held the heading
+  once A/D were let go (u500, `jumpprobe vdrift`, 5 s hands off: 0.20 m off
+  its line at 10 m/s, 0.61 at 20, 0.57 at 30). `auto_drive.holdLean` takes
+  the track as the line once the stick's turn has died away and asks the
+  lean that brings the bike back onto it (heading error, distance off the
+  line, its integral); now 0.03 / 0.03 / 0.15 m. The balance torque is put
+  in about the line through the tyres (`r2TyreLine`), not the frame's own
+  front, which on a frame built pitched over its wheels was part yaw.
+  `BIKE_HOLD` / `BIKE_ROLL_TYRES` switch them for A/Bs.
 
 W/S drive and brake as on any rover; the parking brake holds it when stopped.
 

@@ -73,7 +73,7 @@ local L = R.buildLayout(G, U, OUT, ROPE.length, cast)
 check(L ~= nil, "a layout over a vertical cliff")
 local drop_y = 10 + ROPE.drop_y
 check(L.g == true, "the line lies on the floor")
-check(near(L.total, drop_y - (ROPE.radius + 0.01), 0.02), string.format("it falls the cliff and the davit: %.3f", L.total))
+check(near(L.total, drop_y - (ROPE.radius + ROPE.gap), 0.02), string.format("it falls the cliff and the davit: %.3f", L.total))
 check(near(L.p[1], 0) and near(L.p[2], drop_y) and near(L.p[3], 0.4 - ROPE.drop_out),
   "it leaves the sheave out over the drop")
 check(near(L.s_top, ROPE.top), "the top is under the sheave")
@@ -147,13 +147,123 @@ check(R.unclipKind(L4, L4.s_max) == "fall", "E at a free end lets go")
 -- 4. a meadow: the line lies under the boom
 local cast4 = world(function() return 0 end)
 local L5 = R.buildLayout({ 0, 0, 0 }, U, OUT, ROPE.length, cast4)
-check(L5 and L5.g and near(L5.total, ROPE.drop_y - ROPE.radius - 0.01, 0.02) and not R.climbable(L5),
+check(L5 and L5.g and near(L5.total, ROPE.drop_y - ROPE.radius - ROPE.gap, 0.02) and not R.climbable(L5),
   "on flat ground the line lies under the boom: nothing to climb")
 check(R.nearestS(L5, 0, 0, 0) == nil, "and nowhere to clip on")
 
 -- 5. ground not made yet: ask again later
 local L6, why6 = R.buildLayout(G, U, OUT, 30, function() return nil, "unknown" end)
 check(L6 == nil and why6 == "unknown", "ground not made yet: no layout, ask again")
+
+-- 6. A ROUNDED FACE (playtest 2026-11-11: "ropes can clip through walls"):
+-- a convex face, 50° at the lip to 82° 3 m out. The drape's 1 m steps down
+-- it are chords across a curve, and a chord across a convex curve runs
+-- inside the rock (8 cm at the lip) unless the chords are cleared.
+local function under(Lx, hf, skin)
+  -- samples every 2 cm along every segment (the tail too) under the ground by more than `skin`
+  local pts = {}
+  for i = 1, #Lx.p, 3 do pts[#pts + 1] = { Lx.p[i], Lx.p[i + 1], Lx.p[i + 2] } end
+  for i = 1, #(Lx.tail or {}), 3 do pts[#pts + 1] = { Lx.tail[i], Lx.tail[i + 1], Lx.tail[i + 2] } end
+  local bad, worst = 0, 0
+  for i = 1, #pts - 1 do
+    local a, b = pts[i], pts[i + 1]
+    local l = math.sqrt((b[2] - a[2]) ^ 2 + (b[3] - a[3]) ^ 2)
+    local k = math.max(1, math.ceil(l / 0.02))
+    for j = 0, k do
+      local f = j / k
+      local y, z = a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f
+      local d = hf(z) - y
+      if d > skin then bad = bad + 1 end
+      if d > worst then worst = d end
+    end
+  end
+  return bad, worst
+end
+local function hround(z)
+  if z > 0 then return 12 end
+  return math.max(0, 12 - 1.19 * z * z)
+end
+local castR = world(hround)
+local most = R.CLEAR.most
+R.CLEAR.most = 0
+local Lr0 = R.buildLayout({ 0, 12, 0.4 }, U, OUT, ROPE.length, castR)
+R.CLEAR.most = most
+local bad0, worst0 = under(Lr0, hround, 0.003)
+local Lr = R.buildLayout({ 0, 12, 0.4 }, U, OUT, ROPE.length, castR)
+local bad1, worst1 = under(Lr, hround, 0.003)
+check(bad0 > 0 and worst0 > 0.03, string.format("rounded face: uncleared, the chords cut %.3f m into the rock (%d samples)", worst0, bad0))
+check(Lr and Lr.g and bad1 == 0 and (Lr.cleared or 0) > 0,
+  string.format("rounded face: cleared, nothing inside (%d samples, worst %.4f m) with %d points put in", bad1, worst1, Lr and Lr.cleared or -1))
+check(Lr.total >= Lr0.total - 1e-6 and Lr.total < Lr0.total + 0.5, string.format("rounded face: the wrapped line is a touch longer (%.3f vs %.3f)", Lr.total, Lr0.total))
+check(R.climbable(Lr), "rounded face: still climbable")
+-- a boulder the straight drop misses but a chord clips: clearPath alone
+do
+  local function hb(z) local dz = z + 1.0; return (math.abs(dz) < 0.8) and (4 + math.sqrt(0.64 - dz * dz)) or 0 end
+  local cb = world(hb)
+  local Pp, A = { 0, 5, 0, 0, 4, -2.2 }, { 0, 0, -1, 0, 0, -1 }
+  local n = R.clearPath(Pp, A, cb, ROPE.radius + ROPE.gap, U)
+  local Lb = { p = Pp, a = A }
+  local bb = under(Lb, hb, 0.003)
+  check(n > 0 and bb == 0 and #Pp == #A, string.format("a boulder across a chord: %d points put in round it, %d samples inside", n, bb))
+  local Pq, Aq = { 0, 8, 0, 0, 7, 0 }, { 0, 0, -1, 0, 0, -1 }
+  check(R.clearPath(Pq, Aq, cb, 0.02, U) == 0 and #Pq == 6, "a clear chord is left as it is")
+end
+-- the tail lies on the ground, on a floor that rises away from the wall
+do
+  local function hs(z) if z > 0 then return 10 end return math.max(0, -z * 0.3 - 0.6) end   -- the floor rises 0.3 per m out from 2 m out
+  local cs = world(hs)
+  local Ls = R.buildLayout({ 0, 10, 0.4 }, U, OUT, ROPE.length, cs)
+  local bt = Ls and under(Ls, hs, 0.003) or -1
+  check(Ls and Ls.g and Ls.tail and #Ls.tail >= 3 and bt == 0, string.format("the tail lies on a rising floor (%d samples inside, %d tail points)",
+    bt, Ls and Ls.tail and #Ls.tail / 3 or 0))
+  local T2 = R.fromSave(R.toSave(Ls))
+  check(T2 and T2.tail and #T2.tail == #Ls.tail, "the tail survives the save")
+end
+
+-- a narrow ledge half way down a cliff does not hold the line; a wide one does
+do
+  local function hl(w) return function(z) if z > 0 then return 10 end if z > -w then return 5 end return 0 end end
+  local Ln = R.buildLayout({ 0, 10, 0.6 }, U, OUT, ROPE.length, world(hl(0.35)))
+  check(Ln and Ln.g and Ln.p[#Ln.p - 1] < 0.1, string.format("a 0.35 m ledge: the line runs over its lip to the floor (ends %.2f m up)", Ln and Ln.p[#Ln.p - 1] or -1))
+  local bn = Ln and under(Ln, hl(0.35), 0.003) or -1
+  check(bn == 0, string.format("…and nothing of it inside the ledge (%d samples)", bn))
+  local Lw = R.buildLayout({ 0, 10, 0.6 }, U, OUT, ROPE.length, world(hl(1.5)))
+  check(Lw and Lw.g and math.abs(Lw.p[#Lw.p - 1] - 5) < 0.1, string.format("a 1.5 m ledge holds it (ends %.2f m up)", Lw and Lw.p[#Lw.p - 1] or -1))
+end
+
+-- THE LINE SETTLES AGAIN: its signature, how far two layouts are apart
+do
+  local pts = R.sigPoints(L, G, U)
+  local nline = math.floor(L.total / R.SETTLE.step) + 1
+  check(#pts == nline + 2, string.format("signature: a point every %.1f m and two under the plate (%d)", R.SETTLE.step, #pts))
+  check(near(pts[#pts][2], G[2] - 0.6) and near(pts[#pts - 1][2], G[2] - 0.2), "signature: the plate's two points are under it")
+  local q0 = {}
+  for i = 1, #pts do q0[i] = 0.02 end
+  local q1 = {}
+  for i = 1, #pts do q1[i] = q0[i] end
+  check(not R.sigMoved(q1, q0), "signature: the same ground has not moved")
+  q1[5] = 0.02 + R.SETTLE.eps * 2
+  check(R.sigMoved(q1, q0), "signature: a dig beside the line moves it")
+  check(R.sigMoved(nil, q0) and R.sigMoved({ 1 }, q0), "signature: a missing read counts as moved")
+  check(near(R.layoutGap(L, L), 0, 1e-9), "gap: a layout is no distance from itself")
+  -- the floor under the cliff dug 3 m deeper: the line falls further
+  local castD = world(function(z) return z > 0 and 10 or -3 end)
+  local LD = R.buildLayout(G, U, OUT, ROPE.length, castD)
+  local gap = R.layoutGap(L, LD)
+  check(LD.g and near(LD.total - L.total, 3, 0.03) and gap > 2.9, string.format("gap: the floor dug 3 m, the line moves %.2f m", gap))
+  check(R.layoutGap(L, L4) >= 1, "gap: grounded against hanging free is a move")
+end
+-- the sway: a free line never swings its foot into the wall beside it
+do
+  local renv = setmetatable({}, { __index = _G })
+  local rchunk = assert(loadfile(here .. "../scripts/rope.lua"))
+  setfenv(rchunk, renv)
+  rchunk()
+  local cap = renv.swing_cap({ wd = { -1, 0.3, 0.25, -1 }, total = 30 })
+  check(cap > 0 and 30 * math.tan(cap) <= 0.25 - 0.0075 + 1e-9, string.format("sway: a wall 0.25 m off, the foot swings at most %.3f m", 30 * math.tan(cap)))
+  check(renv.swing_cap({ wd = { -1, -1 }, total = 30 }) == math.huge, "sway: no wall found, the sway's own amplitude")
+  check(renv.swing_cap({ wd = { 0.05 }, total = 10 }) == 0, "sway: a wall at the line, no sway")
+end
 
 -- SPEEDS
 local up1, dn1 = R.speeds(9.8, 135, false)

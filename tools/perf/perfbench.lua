@@ -441,8 +441,8 @@ local function boot()
   if save.deleteSlot then save.deleteSlot(s) end
   save.slot(s)
   save.set("g_seed", math.floor(params.seed))
-  for k, v in pairs({ g_planets = 3, g_moonchance = 0.6, g_atmo = 0.8, g_caves = 1.0, g_minorbit = 60000, g_spacing = 2.2,
-                      g_radmin = 600, g_radmax = 950, g_gravmin = 3.5, g_gravmax = 8.5, g_star = 1.0 }) do save.set(k, v) end
+  for k, v in pairs({ g_planets = 3, g_moonchance = 0.6, g_atmo = 0.8, g_caves = 1.0, g_minorbit = params.minorbit or 60000, g_spacing = 2.2,
+                      g_radmin = 600, g_radmax = 950, g_gravmin = 3.5, g_gravmax = 8.5, g_star = params.star or 1.0 }) do save.set(k, v) end
   local ns = findScript("menu_newsave")
   save.set("g_scale", math.floor(params.scale or (ns and ns.WORLD_SCALE) or 4))
   -- the panel's HOME WORLD choice: an alien start (homealien=1) with its seed

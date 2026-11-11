@@ -96,6 +96,23 @@ local function tube(pts, r)
   return P, N, UV, I
 end
 
+-- How far a free line may swing (rad) without its foot touching the wall
+-- beside it (playtest 2026-11-11: lines clipped through walls). The sway
+-- turns the whole line about the sheave, so only a line that hangs straight
+-- from it sways at all (rope.lua's `free`: one segment, nothing it lies on),
+-- and never further than leaves SWAY_SKIN m between its end and the nearest
+-- wall the layout found beside it (wd, every metre).
+local SWAY_SKIN = 0.08
+function swing_cap(L)
+  local wmin = nil
+  for _, d in ipairs(L.wd or {}) do
+    if d and d >= 0 and (not wmin or d < wmin) then wmin = d end
+  end
+  if not wmin then return math.huge end
+  local r = (params and params.draw_r) or 0.0075
+  return math.atan(math.max(0, wmin - r - SWAY_SKIN) / math.max(1, L.total or 1))
+end
+
 local function drop_old()
   if built and built.node and built.node.valid ~= false then built.node:destroy() end
   if built and built.mesh and mesh and mesh.free then pcall(mesh.free, built.mesh) end
@@ -122,7 +139,11 @@ local function build(node, L, ver)
   -- the end: a tail across the ground, or a stopper knot in the air
   local n = #pts
   local last = pts[n]
-  if L.g and n >= 2 then
+  if L.g and n >= 2 and L.tail then
+    -- the tail rope_climb laid on the ground (layTail)
+    local t = L.tail
+    for i = 1, #t - 2, 3 do pts[#pts + 1] = sub(loc({ t[i], t[i + 1], t[i + 2] }), first) end
+  elseif L.g and n >= 2 then
     local a = L.a
     local j = #a - 2
     local away = loc({ root[1] + a[j], root[2] + a[j + 1], root[3] + a[j + 2] })
@@ -153,7 +174,7 @@ local function build(node, L, ver)
   end
   drop_old()
   building = true
-  built = { ver = ver, mesh = name, free = not L.g, len = L.total }
+  built = { ver = ver, mesh = name, free = not L.g and n == 2, len = L.total, swing = swing_cap(L) }
   createNode("Rope Line", node, function(c)
     building = false
     if not (built and built.mesh == name) then c:destroy() return end
@@ -184,7 +205,7 @@ function update(node, dt)
     local c = built.node
     if c and c.valid ~= false and built.free then
       local st = rc.state and rc.state()
-      local amp = (st and st.id == id) and 0 or math.rad((params and params.sway) or 0.5)
+      local amp = (st and st.id == id) and 0 or math.min(math.rad((params and params.sway) or 0.5), built.swing or 0)
       local w = math.sqrt(9.8 / math.max(2, built.len or 10))
       local t = time or 0
       c.pitch = amp * math.sin(w * t + id)

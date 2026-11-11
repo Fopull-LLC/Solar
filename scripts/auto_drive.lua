@@ -281,6 +281,59 @@ function steerShare(v)
   return u * u * (3 - 2 * u)
 end
 
+-- HOLDING THE LINE, HANDS OFF (playtest 2026-11-11: "automatic bike
+-- driving assist keeps wanting to slide or veer a certain direction …
+-- causing me to crash when moving fast and letting go of directional
+-- inputs"). With A/D let go at speed the lean asked for was simply zero, and
+-- nothing held the heading: whatever turned the bike (a crosswind on the
+-- rider, a camber, a bump) was kept, and it ran off its line. Now, once the
+-- turn the stick was making has died away (yaw under HOLD_CAP rad/s), the
+-- track (the planet-relative velocity, level) is taken as the line to hold,
+-- and the lean asked for is the one whose turn brings the bike back onto
+-- it. The error is the heading's off the line plus HOLD_KL × the distance
+-- off it over the speed; the yaw rate wanted is HOLD_KP × that and HOLD_KI ×
+-- its integral (which takes out a steady crosswind or camber); the lean is
+-- the one that turns at that rate at this speed (tan φ = v r / g), plus
+-- HOLD_KY × the yaw rate still missing — never past HOLD_LEAN. The line is
+-- a direction, kept as a unit vector: a planet on its rails only
+-- translates, so it means the same in the planet's frame tick after tick;
+-- each tick it is laid back into the level of the ground under the bike
+-- (which turns as it runs over the curve of the world). The distance off
+-- it is the planet-relative velocity across it, summed (no world points).
+--   st   the hold's state (the caller keeps it; nil starts one)
+--   vh   the velocity, level (planet-relative); U up; yaw rate (+ left)
+-- → the lean asked (rad, + left) or nil while it is not holding yet, st,
+--   the heading error (rad, + the track has turned left of the line)
+HOLD_V0 = 4.0
+HOLD_CAP = 0.06
+HOLD_KP, HOLD_KI, HOLD_KL = 2.0, 0.5, 1.0
+HOLD_YAW = 0.12
+HOLD_KY = 0.25
+HOLD_I = 0.15
+HOLD_LEAN = math.rad(6)
+function holdLean(st, vh, U, yaw, v, g, dt)
+  st = st or {}
+  local vl = math.sqrt(dot(vh, vh))
+  if vl < 0.5 then return nil, st end
+  local vu = { vh[1] / vl, vh[2] / vl, vh[3] / vl }
+  if not st.H then
+    if math.abs(yaw or 0) > HOLD_CAP then return nil, st end
+    st.H, st.I, st.y = vu, 0, 0
+  end
+  local d = dot(st.H, U)
+  st.H = unit({ st.H[1] - U[1] * d, st.H[2] - U[2] * d, st.H[3] - U[3] * d })
+  local sn = dot(cross(st.H, vu), U)
+  local e = math.atan2(sn, dot(st.H, vu))
+  dt = dt or 0
+  st.y = (st.y or 0) + vl * sn * dt                       -- + left of the line
+  local ec = e + HOLD_KL * st.y / math.max(5, v or vl)
+  st.I = math.max(-HOLD_I, math.min(HOLD_I, (st.I or 0) + ec * dt))
+  local rw = math.max(-HOLD_YAW, math.min(HOLD_YAW, -HOLD_KP * ec - HOLD_KI * st.I))
+  g = math.max(0.1, g or 9.8)
+  local phi = math.atan((v or vl) * rw / g) + HOLD_KY * (rw - (yaw or 0))
+  return math.max(-HOLD_LEAN, math.min(HOLD_LEAN, phi)), st, e
+end
+
 -- ── 4. DRAWING THE MOVING HALVES ────────────────────────────────────────────
 -- `s` = how far the wheel has come up its axis from where it hangs unloaded
 -- (m), steer (deg). A fork's lower legs slide s up the axis and its whole
