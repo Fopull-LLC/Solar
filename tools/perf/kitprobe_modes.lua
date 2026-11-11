@@ -581,8 +581,19 @@ function KIT.block(ST, spot, k, live)
   for n = 1, (live or 0) do add("vab.locker", ((n % 6) - 3) * 2, 0.2, (math.floor(n / 6)) * 2 + 0.4) end
   return rec
 end
+-- the first-draw pipeline builds since the last call (perfbench's PB_PC), and
+-- what the GPU holds in pictures
+function KIT.pc_take(label)
+  local c = perf.counts()
+  if PB_PC then
+    P("KIT PC %s: pipelineCompile sum %.1f ms, worst frame %.1f ms · textureBytes %.1f MB · files %s", label, PB_PC.sum, PB_PC.max,
+      (c.textureBytes or -1) / 1048576, table.concat(PB_PC.files, ", "))
+  end
+  PB_PC = { sum = 0, max = 0, files = {} }
+end
 function KIT.run_perf()
   BK.tag = "kitperf"
+  PB_PC = { sum = 0, max = 0, files = {} }
   wait_ready(120)
   wait(2)
   local ST = findScript("structures")
@@ -604,6 +615,7 @@ function KIT.run_perf()
       perf.scriptMs("kit_load") or -1)
     VP.cam_off()
   end
+  KIT.pc_take("boot + no block")
   for _, case in ipairs({ { 13, 0, "kit_500" }, { 13, 30, "kit_500_live30" }, { 26, 0, "kit_2000" }, { 45, 0, "kit_6000" } }) do
     local rec = KIT.block(ST, spot, case[1], case[2])
     local t0 = W()
@@ -635,6 +647,7 @@ function KIT.run_perf()
       perf.scriptMs("structures") or -1, perf.scriptMs("kit_live") or -1, perf.scriptMs("struct_live") or -1, perf.scriptMs("vessel_controller") or -1,
       perf.scriptMs("kit_load") or -1)
     BK.shot(case[3], false)
+    KIT.pc_take(case[3])
     VP.cam_off()
     ST.remove(id)
     wait(3)

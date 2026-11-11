@@ -197,6 +197,18 @@ local function measure()
     end
   end
   local hs = perf.hitches() or {}
+  -- PB_PC: pipelineCompile (first-draw pipeline builds) summed and its worst
+  -- frame, plus the slow files the hitches named; a probe resets and reads it
+  if PB_PC then
+    local pc = parts.pipelineCompile or 0
+    PB_PC.sum = PB_PC.sum + pc
+    if pc > PB_PC.max then PB_PC.max = pc end
+    for _, h in ipairs(hs) do
+      for _, a in ipairs(h.assets or {}) do
+        if a.part == "pipelineCompile" then PB_PC.files[#PB_PC.files + 1] = string.format("%s %.1f", tostring(a.path), a.ms or 0) end
+      end
+    end
+  end
   local c = nil
   if FRAME % 10 == 0 then c = perf.counts() end
   local g = nil
