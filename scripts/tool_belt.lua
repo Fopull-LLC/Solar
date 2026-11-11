@@ -541,6 +541,11 @@ local function on_foot(node)
   -- At a crate, a locker or a keypad (loot_panel.lua): its keys take the left button.
   local lp = ref("loot_panel")
   if lp and lp.isOpen and lp.isOpen() then why("at a container") return false end
+  -- A scenario's BRIEFING or DEBRIEF card (scenario_ui.lua): the reticle's E
+  -- and its labels were drawn over the card (uxpolish 11-11)
+  local su = ref("scenario_ui")
+  local sw = su and su.showing and su.showing()
+  if sw == "brief" or sw == "debrief" then why("a scenario card is up") return false end
   -- The map owns the camera (and the camera's screen ray starts thousands of
   -- metres out): no aiming, no rays, no plant queries from there.
   local om = ref("orbit_map")

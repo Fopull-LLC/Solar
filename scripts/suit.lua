@@ -352,7 +352,7 @@ function setHelmet(on, opts)
     if not ok and tag == "cave" then
       caveDare, caveWarn = true, why
       local bc = ref("big_caption")
-      if bc and bc.show then bc.show("HELMET OFF IN BAD AIR", why or "", 3.5) end
+      if bc and bc.show then bc.show("HELMET OFF IN BAD AIR", why or "", 3.5, "alarm") end
     elseif not ok then lastReason = why return false, why end
   end
   lastReason = nil
@@ -468,7 +468,7 @@ function update(node, dt)
       apply(true, not checked_load)
       if checked_load then
         local bc = ref("big_caption")
-        if bc and bc.show then bc.show("HELMET ON", why or "", 3.0) end
+        if bc and bc.show then bc.show("HELMET ON", why or "", 3.0, "quiet") end
       end
     end
     checked_load = true
@@ -482,7 +482,7 @@ function update(node, dt)
     if ok == false then
       apply(true)
       local bc = ref("big_caption")
-      if bc and bc.show then bc.show("HELMET ON", why or "", 3.0) end
+      if bc and bc.show then bc.show("HELMET ON", why or "", 3.0, "quiet") end
     end
   end
   show()

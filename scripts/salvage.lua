@@ -322,6 +322,14 @@ local function blocked()
   if fm and fm.isOpen and fm.isOpen() then return true end
   local ip = ref("inventory_panel")
   if ip and ip.open then return true end
+  -- (uxpolish 11-11) a scenario's BRIEFING or DEBRIEF card: the crate's
+  -- tag was drawn over its GO line
+  local su = ref("scenario_ui")
+  local sw = su and su.showing and su.showing()
+  if sw == "brief" or sw == "debrief" then return true end
+  -- …and while a scenario line is on its plate (the tag sat on the plate)
+  local sg = ref("scenario_stage")
+  if sg and sg.current and sg.current() ~= nil then return true end
   return false
 end
 
@@ -370,7 +378,7 @@ function update(node, dt)
       msg = string.format("suit pack recovered · %.0f kg", moved)
     end
     local bc = ref("big_caption")
-    if bc and bc.show then bc.show((moved <= 0 and left > 0) and "PACK FULL" or (left > 0 and "SALVAGE" or "PACK RECOVERED"), msg .. ".", 3.5)
+    if bc and bc.show then bc.show((moved <= 0 and left > 0) and "PACK FULL" or (left > 0 and "SALVAGE" or "PACK RECOVERED"), msg .. ".", 3.5, "result")
     elseif caption then caption(msg) end
     local fx = ref("sfx")
     if fx and fx.play then fx.play(moved > 0 and "pickup" or "leave") end

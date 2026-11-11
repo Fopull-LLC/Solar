@@ -192,7 +192,7 @@ function vesselLost(was_piloting, craft)
   if bc and bc.show then
     bc.show("VESSEL LOST", (craft and craft ~= "" and craft ~= "Vessel")
       and (craft .. " is gone. You walked away from it.") or "The craft is gone. You walked away from it.",
-      5.0)
+      5.0, "alarm")
   end
 end
 

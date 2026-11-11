@@ -2890,6 +2890,14 @@ function doseOf(id)
   local r = get(id)
   return r and (tonumber(r.dose) or 0) or 0
 end
+-- (scn_vacuum) the suit's dosimeter: → rate (a game second, share of a
+-- lethal dose; 0 unless a source dosed them in the last 3 s), dose so far, src
+function doseNow(id)
+  id = id or activeId()
+  local ds = doseSeen[id]
+  local live = ds and now() - ds.t < 3.0
+  return live and (ds.rate or 0) or 0, doseOf(id), live and ds.src or nil
+end
 function addDose(id, amount, src, rate)
   local r = get(id)
   if not r or r.status == "dead" or (amount or 0) <= 0 then return nil end
@@ -2970,7 +2978,7 @@ local function handoff(dead_id, from_v)
     id = hire(1, { free = true })
     local r = get(id)
     local bc = ref("big_caption")
-    if bc and bc.show and r then bc.show("A NEW VOLUNTEER", "The agency has a new volunteer: " .. r.name, 6.0) end
+    if bc and bc.show and r then bc.show("A NEW VOLUNTEER", "The agency has a new volunteer: " .. r.name, 6.0, "quiet") end
   end
   if not id then return end
   -- out of the Command Centre as the avatar
@@ -3033,7 +3041,7 @@ local function rescue(id, cause, free)
       or string.format("%s was knocked out (%s) and is hurt: %d%% health. The agency brought them back to the base%s.",
         r.name, CAUSE_TEXT[cause] or cause, math.floor(hp * 100 + 0.5),
         paid and string.format(" (rescue: %s)", (co and co.money) and co.money(fee) or ("$" .. fee)) or "")
-    bc.show("CREW RESCUED", text, 6.0)
+    bc.show("CREW RESCUED", text, 6.0, "result")
   end
   lastRescue = { id = id, cause = cause, hp = hp, fee = paid and fee or 0, t = now() }
   log_(string.format("crew: #%d rescued (%s): hp %.2f, fee %s", id, tostring(cause), hp, paid and ("$" .. fee) or "none"))
@@ -3107,7 +3115,7 @@ function kill(id, cause, detail, opts)
     detail and ((tostring(detail):sub(1, 3) == "by " and " " or ", ") .. detail) or "")
   lastDeath = { id = id, name = r.name, cause = cause, text = text, t = now(), x = x, y = y, z = z }
   local bc = ref("big_caption")
-  if bc and bc.show then bc.show("ASTRONAUT LOST", text, 6.0) end
+  if bc and bc.show then bc.show("ASTRONAUT LOST", text, 6.0, "alarm") end
   log_("crew: " .. text)
   -- the controlled one: the camera holds 2 s, then control passes on
   if is_avatar then
@@ -3217,7 +3225,7 @@ go_down = function(id, cause, detail, opts)
   local bc = ref("big_caption")
   if bc and bc.show then
     bc.show("ASTRONAUT DOWN", string.format("%s is down (%s%s) and bleeding out: %d s. A Medkit can save them.",
-      r.name, CAUSE_TEXT[cause] or cause, detail and (", " .. detail) or "", math.floor(secs + 0.5)), 6.0)
+      r.name, CAUSE_TEXT[cause] or cause, detail and (", " .. detail) or "", math.floor(secs + 0.5)), 6.0, "alarm")
   end
   log_(string.format("crew: #%d DOWN (%s, %s): %.0f s to bleed out", id, tostring(cause), tostring(detail), secs))
   if is_avatar then
@@ -3387,7 +3395,7 @@ treat_tick = function(dt)
   TREAT = nil
   local bc = ref("big_caption")
   if T.kind == "revive" and bc and bc.show then
-    bc.show("ASTRONAUT REVIVED", string.format("%s is back on their feet (%d%%). Get them home to heal.", r.name, math.floor(hp * 100 + 0.5)), 5.0)
+    bc.show("ASTRONAUT REVIVED", string.format("%s is back on their feet (%d%%). Get them home to heal.", r.name, math.floor(hp * 100 + 0.5)), 5.0, "result")
   else
     caption(string.format("%s treated — %d%%", r.name, math.floor(hp * 100 + 0.5)))
   end
@@ -3654,7 +3662,7 @@ function start(node)
   if type(n) == "string" and n ~= "" then
     local bc = ref("big_caption")
     if bc and bc.show then
-      bc.show("THE CREW", n, 7.0)
+      bc.show("THE CREW", n, 7.0, "info")
       save.set("crew.notice", false)
     end
   end

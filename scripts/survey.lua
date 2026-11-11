@@ -481,13 +481,13 @@ local function flush()
   dirty = {}
 end
 
-local function caption(title, line)
+local function caption(title, line, kind)
   lastCaption = title .. " · " .. (line or "")
   -- (the first ticks after a load credit what the fleet already did, an old
   -- save's landers on other worlds among it: quietly, not a burst of captions)
   if stats.ticks < 3 then return end
   local bc = ref("big_caption")
-  if bc and bc.show then pcall(bc.show, title, line or "", 4.0) end
+  if bc and bc.show then pcall(bc.show, title, line or "", 4.0, kind or "info") end
 end
 
 -- Credit a world from a source. → RP gained (whole)
@@ -519,7 +519,7 @@ function credit(name, src, vals, opts)
   if log then log(string.format("survey: %s %s → %s (+%.1f RP)", name, HOW[src] or src, table.concat(rose, ","), g)) end
   if surveyed(r) and not r.done then
     r.done = clock()
-    if not home then caption("SURVEYED", string.format("%s: every layer known", name)) end
+    if not home then caption("SURVEYED", string.format("%s: every layer known", name), "quiet") end
   end
   return whole, g
 end

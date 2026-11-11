@@ -823,9 +823,9 @@ local function agency_now()
   if dp and dp.agencyClock then local ok, t = pcall(dp.agencyClock); if ok and type(t) == "number" then return t end end
   return tonumber(save and save.get and save.get("agency.clock")) or 0
 end
-local function say(title, line, secs)
+local function say(title, line, secs, kind)
   local bc = ref("big_caption")
-  if bc and bc.show then pcall(bc.show, title, line or "", secs or 4.0)
+  if bc and bc.show then pcall(bc.show, title, line or "", secs or 4.0, kind or "info")
   elseif caption then pcall(caption, title .. " · " .. (line or "")) end
   if log then log("ruins: " .. title .. " · " .. tostring(line or "")) end
 end
@@ -930,16 +930,19 @@ function discover(id, how, quiet)
   bump()
   stats.found = stats.found + 1
   feat("ruin_found", { key = id, b = s.body })   -- (progression P1)
+  -- (uxpolish 11-11: a site walked past or read from a log is filed on the
+  -- map and the log, never announced: the player finds it. A telescope's or
+  -- scanner's find answers the player's own look, so it is shown.)
   if not quiet then
     local x, y, z = pointOf(s)
     if how == "telescope" then
-      say("ANOMALY", string.format("a regular shape at %s on %s · %s", latlon(x, y, z), s.body, s.name), 5.0)
+      say("ANOMALY", string.format("a regular shape at %s on %s · %s", latlon(x, y, z), s.body, s.name), 5.0, "result")
     elseif how == "log" then
-      say("SITE ON FILE", string.format("a %s on %s at %s · %s, from its records", LABEL[s.kind], s.body, latlon(x, y, z), s.name), 5.0)
+      say("SITE ON FILE", string.format("a %s on %s at %s · %s, from its records", LABEL[s.kind], s.body, latlon(x, y, z), s.name), 5.0, "quiet")
     elseif how == "scanner" then
-      say("RUIN MAPPED", string.format("the scanner's swath shows a %s on %s at %s", LABEL[s.kind], s.body, latlon(x, y, z)), 5.0)
+      say("RUIN MAPPED", string.format("the scanner's swath shows a %s on %s at %s", LABEL[s.kind], s.body, latlon(x, y, z)), 5.0, "result")
     else
-      say("ABANDONED BASE", string.format("%s · a %s, empty %s days", s.name, LABEL[s.kind], tostring(s.age)), 5.0)
+      say("ABANDONED BASE", string.format("%s · a %s, empty %s days", s.name, LABEL[s.kind], tostring(s.age)), 5.0, "quiet")
     end
   end
   return true
@@ -1290,7 +1293,7 @@ function pullCore(id, pack)
   if save and save.set then save.set("ruins.cores", c) end
   write()
   bump()
-  say("DATA CORE", string.format("%s's log, 6 kg · carry it into the Research Lab", s.name), 4.0)
+  say("DATA CORE", string.format("%s's log, 6 kg · carry it into the Research Lab", s.name), 4.0, "result")
   return true
 end
 lastRead = nil
@@ -1336,7 +1339,7 @@ function readCores(pack)
     local SV = ref("survey")
     if rw.layer and SV and SV.creditNow and s.body then pcall(SV.creditNow, s.body, "datacore", rw.layer) end
     lastRead = { id = id, name = s.name, rp = rw.rp, lore = rw.lore, bp = saved, t = now() }
-    say("DATA CORE READ", string.format("%s · +%d RP%s · \"%s\"", s.name, rw.rp, saved and " · its blueprint is in your library" or "", rw.lore[3]), 6.0)
+    say("DATA CORE READ", string.format("%s · +%d RP%s · \"%s\"", s.name, rw.rp, saved and " · its blueprint is in your library" or "", rw.lore[3]), 6.0, "result")
     if log then for _, l in ipairs(rw.lore) do log("ruins: core " .. tostring(id) .. ": " .. l) end end
     read = read + 1
   end
@@ -1450,7 +1453,7 @@ function claim(id, ctx, force)
   local r = ST.get(e.sid)
   ST.put(r)
   bump()
-  say("CLAIMED", string.format("%s is yours: a base. Repair what leans, restore what's gone, and power it", s.name), 5.0)
+  say("CLAIMED", string.format("%s is yours: a base. Repair what leans, restore what's gone, and power it", s.name), 5.0, "result")
   return true
 end
 function baseOf(id)

@@ -183,8 +183,21 @@ local function pos_of(r)
     local rec = sid and ST and ST.get(sid)
     return rec and { body = rec.b, x = rec.x, y = rec.y, z = rec.z } or nil
   elseif k == "craft" then
+    -- (scn_vacuum) craft:<name>@<uid>: that part, where it is drawn this
+    -- frame (partFrameNow through a fresh handle: the craft's own node lags
+    -- the rails carry), made body-relative against this frame's body
+    local cn, pu = n:match("^(.+)@(%d+)$")
     for _, v in ipairs(vessels()) do
-      if v.craftName == n and not (v.isLost and v.isLost()) then return node_rel(v.node) end
+      if v.craftName == (cn or n) and not (v.isLost and v.isLost()) then
+        if pu and v.partFrameNow then
+          local F = v.partFrameNow(tonumber(pu), true)
+          if not F then return nil end
+          local d = space.dominant(F.ox, F.oy, F.oz)
+          local b = d and space.body(d)
+          return b and { body = d, x = F.ox - b.x, y = F.oy - b.y, z = F.oz - b.z } or nil
+        end
+        return node_rel(v.node)
+      end
     end
     return nil
   elseif k == "body" then
@@ -494,42 +507,20 @@ end
 -- this frame. orbit = ref (dist, height, turn° over secs) | from/to (dolly)
 -- + look | look + from.
 -- KEEPING CLEAR (Ty 2026-11-10: the camera inside Dana's face): a shot's
--- camera keeps SHOT_MIN m from the point it looks at, and a ray out to the
--- camera over the outer half of the line pulls the camera in front of
--- whatever stands there: a body, a wall, a part. The pull is
--- instant, the let-go eased, so a crowd passing does not pump the lens.
-SHOT_MIN, SHOT_CLEAR, SHOT_SKIN, SHOT_NEAR = 1.1, 0.55, 0.3, 1.5
+-- camera keeps SHOT_MIN m from the point it looks at. Everything else, out
+-- of every body, piece and wall, is planet_camera's (shot_clear), on the
+-- view as it is placed each frame, blend and all. The ray that was cast
+-- here, ten times a second from half way out, never saw a body the camera
+-- was already inside (Hollis's shot from Teodor's own mark sat 0.14 m from
+-- his axis: camclear_mon), and a thin ray slipped past the rest
+-- (Ty 2026-11-11: "cutscene camera still clipping inside of astronaut bodies").
+SHOT_MIN = 1.1
 local function keep_clear(st, cx, cy, cz, lx, ly, lz)
   local dx, dy, dz = cx - lx, cy - ly, cz - lz
   local L = math.sqrt(dx * dx + dy * dy + dz * dz)
-  if L < 1e-4 then return cx, cy, cz end
-  dx, dy, dz = dx / L, dy / L, dz / L
-  local want = math.max(L, SHOT_MIN)
-  -- (the ray starts half way out: the subject itself, a hut the camera
-  -- orbits or the body it frames, never pulls the camera inside it)
-  local s0 = math.max(SHOT_CLEAR, 0.5 * want)
-  local t = now()
-  -- (the ray ten times a second: what it keeps is a distance along the
-  -- shot's line, never a point)
-  if raycast and want > s0 + 0.05 and (not st.rt or t - st.rt >= 0.1 or t < st.rt) then
-    st.rt = t
-    local ok, hit = pcall(raycast, lx + dx * s0, ly + dy * s0, lz + dz * s0, dx, dy, dz, want - s0)
-    st.cap = nil
-    if ok and hit and hit.distance then
-      -- a body anywhere on the line pulls the camera in front of it; a piece
-      -- only when the camera is in it or against it (within SHOT_NEAR): the
-      -- far wall of a station the shot looks into from outside is not in
-      -- the way of anything (Graveyard's fly-in looked at a wall)
-      local nm = hit.node and hit.node.valid ~= false and tostring(hit.node.name or "") or ""
-      local body = nm == "CrewBody" or nm == "Astronaut" or nm:match("^Crew") ~= nil
-      if body or (want - (s0 + hit.distance)) < SHOT_NEAR then st.cap = math.max(s0, s0 + hit.distance - SHOT_SKIN) end
-    end
-  end
-  if st.cap then want = math.min(want, st.cap) end
-  local dt = st.t and math.max(0, math.min(0.1, t - st.t)) or 0
-  st.t = t
-  if not st.d or want < st.d then st.d = want else st.d = math.min(want, st.d + 2.5 * dt) end
-  return lx + dx * st.d, ly + dy * st.d, lz + dz * st.d
+  if L < 1e-4 or L >= SHOT_MIN then return cx, cy, cz end
+  local k = SHOT_MIN / L
+  return lx + dx * k, ly + dy * k, lz + dz * k
 end
 keepClear = keep_clear
 
@@ -573,7 +564,7 @@ local function camera_start(c)
   local prev = cam and cam.prev
   if not cam then prev = gm and gm.inputOwner end
   if gm and gm.inputOwner == nil then gm.inputOwner = "scenario" end
-  pc.setShot(shot_fn(c, now(), secs), cam and 0.6 or (c.ease or 1.0))
+  pc.setShot(shot_fn(c, now(), secs), cam and 0.6 or (c.ease or 1.0), { clear = true })
   cam = { t1 = now() + secs, prev = prev }
   return true
 end
@@ -1415,7 +1406,7 @@ function coreReadable(id)
 end
 local function core_refuse(why)
   local bc = ref("big_caption")
-  if bc and bc.show then pcall(bc.show, "DATA CORE", tostring(why), 4.5) end
+  if bc and bc.show then pcall(bc.show, "DATA CORE", tostring(why), 4.5, "story") end
   if audio and audio.play then pcall(audio.play, "audio/foley/key_strike.ogg", { track = "UI", volume = 0.3 }) end
   say_log("core refused: " .. tostring(why))
 end
@@ -1524,7 +1515,7 @@ local function core_beat(v, e)
     setVar("core_" .. tostring(v.seal), "sealed")
     say_log("core " .. tostring(v.seal) .. " sealed")
     local bc = ref("big_caption")
-    if bc and bc.show then pcall(bc.show, "DATA CORE SEALED", "unread · for Hendry Resources' counsel", 4.0) end
+    if bc and bc.show then pcall(bc.show, "DATA CORE SEALED", "unread · for Hendry Resources' counsel", 4.0, "story") end
   elseif v.id then
     local x = type(sget("scn.coresx")) == "table" and sget("scn.coresx") or {}
     x[#x + 1] = v
@@ -1575,7 +1566,7 @@ local function run_beat(b, e)
   elseif k == "run" then run_seq(v, true, e and e.cs)
   elseif k == "caption" then
     local bc = ref("big_caption")
-    if bc and bc.show then bc.show(v.title or v[1] or "", v.sub or v[2] or "", v.secs or v[3] or 4.0) end
+    if bc and bc.show then bc.show(v.title or v[1] or "", v.sub or v[2] or "", v.secs or v[3] or 4.0, "story") end
   elseif k == "camera" or k == "shot" then
     if not in_cut and not camera_quiet() then return "later" end
     if camera_start(v) and v.wait ~= false then beat_busy = { kind = "shot", t1 = cam.t1 } end
@@ -1601,6 +1592,15 @@ local function run_beat(b, e)
     bump()
   elseif k == "knock" then knock(v)
   elseif k == "reactor" then reactor_beat(v)
+  elseif k == "state" and v.craft then
+    -- (scn_vacuum) a craft part's own state: a hatch (`hatch`, `ph`), a
+    -- reactor's `output` / `critical`, a regulator (`creg`)…, as its menu sets it
+    local vc, uid = craft_part(v)
+    if vc and vc.partSt then
+      for n, x in pairs(v.st or {}) do vc.partSt(uid, n, x, true) end
+      local CA = ref("cabin_air")
+      if CA and CA.touch then pcall(CA.touch, vc) end
+    else say_log("state: no " .. tostring(v.part or v.uid) .. " on " .. tostring(v.craft)) end
   elseif k == "state" then
     local sid, uid = piece_of(v)
     local ST = ref("structures")
@@ -2280,12 +2280,64 @@ local function stage_craft(list, out)
     if not (bp and bp.parts) then out[#out + 1] = string.format("craft %d: unreadable %s", i, tostring(c.file))
     elseif not (VS and VS.launchNow) then out[#out + 1] = "craft: no vessel spawner"
     else
+      -- (scn_vacuum) crew = { { who, part | uid, slot } }: the seat plan
+      -- (bp.crew, vessel_controller's launch plan) by the start crew's names
+      if type(c.crew) == "table" and #c.crew > 0 then
+        local plan, map = {}, crew_ids()
+        for _, e in ipairs(c.crew) do
+          local id = map[e.who]
+          local uid = e.uid
+          if not uid and e.part then
+            for _, d in ipairs(bp.parts) do
+              local pid = tostring(d.id or "")
+              if pid == e.part or pid:sub(1, #e.part + 1) == e.part .. "." then uid = d.uid; break end
+            end
+          end
+          if id and uid then plan[#plan + 1] = { uid = uid, slot = e.slot or 1, id = id } end
+        end
+        local b2 = {}
+        for k2, x in pairs(bp) do b2[k2] = x end
+        b2.crew = plan
+        bp = b2
+        -- the crew launch IN it, as the builder's LAUNCH does (vessel_controller
+        -- seats them on its first tick only with this flag)
+        sset("shipyard.pilot", 1)
+      end
+      -- (scn_vacuum) the controller reads the launch's blueprint from the
+      -- save, as after the builder's LAUNCH: without this it flew whatever the
+      -- shipyard held last (a probe: no crew, no cabins)
+      sset("shipyard.blueprint", bp)
       local ok, why = VS.launchNow(wh.runway and "runway" or "pad", { bp = bp, force = true })
       out[#out + 1] = string.format("craft %d (%s): rollout %s %s", i, tostring(c.file), tostring(ok), tostring(why or ""))
-      local t1 = now() + 60
-      while now() < t1 and VS.launchState and VS.launchState() ~= "ready" do coroutine.yield() end
+      -- (scn_vacuum) until it is assembled AND flown: "ready" can come a few
+      -- frames before the controller takes the craft (piloted() was nil, so
+      -- the name, the seats and the orbit were skipped). Wall clock: the
+      -- game clock may stand still while the curtain is up.
+      local t1 = wall() + 90
+      while wall() < t1 do
+        local ls = VS.launchState and VS.launchState()
+        local pv = piloted()
+        if ls ~= "waiting" and ls ~= "assembling" and pv and pv.node and pv.node.valid then break end
+        coroutine.yield()
+      end
       local vc = piloted()
+      if not vc then out[#out + 1] = string.format("craft %d: never flown (launch %s)", i, tostring(VS.launchState and VS.launchState())) end
       if vc and c.name then if vc.setCraftName then pcall(vc.setCraftName, c.name) else vc.craftName = c.name end end
+      -- (scn_vacuum) the launch flies as the commander; the start crew's
+      -- `control` member, seated aboard elsewhere, is the one you play
+      local C = ref("crew")
+      if vc and C and type(c.crew) == "table" then
+        for _, sc_c in ipairs((sc.start and sc.start.crew) or {}) do
+          local id = sc_c.control and crew_ids()[sc_c.name]
+          if id and C.activeId() ~= id and vc.memberSlot and vc.memberSlot(id) and C.takeCraft then
+            pcall(C.takeCraft, vc, id)
+            local t1 = now() + 5
+            while now() < t1 and C.activeId() ~= id do coroutine.yield() end
+            out[#out + 1] = string.format("craft %d: you are %s (%s)", i, sc_c.name, tostring(C.activeId() == id))
+          end
+        end
+        vc = piloted() or vc
+      end
       if wh.ground and vc then
         local g = resolve_stage(wh.ground, wh.offset, wh.yaw)
         local b = g and space.body(g.body)
@@ -2315,23 +2367,50 @@ local function stage_craft(list, out)
           local off = { x = info.origin.x - info.com.x, y = info.origin.y - info.com.y, z = info.origin.z - info.com.z }
           assembly.teleport(vc.node, vec3(b.x + r.x + off.x, b.y + r.y + off.y, b.z + r.z + off.z))
           wait_secs(0.3)
+          -- (scn_vacuum) the velocity matched for where the craft IS each
+          -- time, and the impulse's yield measured net of the half second's
+          -- fall: the target was the velocity at the teleport point, and the
+          -- craft falls ~1-2 m/s every pass while it is matched, so the loop
+          -- stopped with a radial speed in it (pe -443 m on one run, +395 on
+          -- another: the Ansel hit the ground). A circular orbit (e = 0) is
+          -- re-aimed along the orbit's own plane at the local circular speed.
+          local hx = r.y * vel.z - r.z * vel.y
+          local hy = r.z * vel.x - r.x * vel.z
+          local hz = r.x * vel.y - r.y * vel.x
+          local hl = math.sqrt(hx * hx + hy * hy + hz * hz)
+          hx, hy, hz = hx / hl, hy / hl, hz / hl
+          local circ = (o.e or 0) == 0
           local gain = 1.0
-          for _ = 1, 12 do
+          for _ = 1, 24 do
             info = assembly.info(vc.node)
-            local dv = { x = vel.x - info.vel.x, y = vel.y - info.vel.y, z = vel.z - info.vel.z }
+            b = space.body(bn)
+            local px, py, pz = info.com.x - b.x, info.com.y - b.y, info.com.z - b.z
+            local pr = math.sqrt(px * px + py * py + pz * pz)
+            local want = vel
+            if circ then
+              local sp = math.sqrt(b.mu / pr)
+              local tx, ty, tz = hy * pz - hz * py, hz * px - hx * pz, hx * py - hy * px
+              local tl = math.sqrt(tx * tx + ty * ty + tz * tz)
+              want = { x = tx / tl * sp, y = ty / tl * sp, z = tz / tl * sp }
+            end
+            local dv = { x = want.x - info.vel.x, y = want.y - info.vel.y, z = want.z - info.vel.z }
             local dl = math.sqrt(dv.x * dv.x + dv.y * dv.y + dv.z * dv.z)
-            if dl < 0.5 then break end
+            if dl < 0.2 then break end
             local v0 = info.vel
+            local t0 = space.time()
             local s = info.mass / gain
             assembly.impulseAt(vc.node, vec3(dv.x * s, dv.y * s, dv.z * s), info.com)
             wait_secs(0.5)
             local i2 = assembly.info(vc.node)
-            local got = math.sqrt((i2.vel.x - v0.x) ^ 2 + (i2.vel.y - v0.y) ^ 2 + (i2.vel.z - v0.z) ^ 2)
+            local g = b.mu / (pr * pr) * (space.time() - t0)
+            local gx, gy, gz = -px / pr * g, -py / pr * g, -pz / pr * g
+            local got = math.sqrt((i2.vel.x - v0.x - gx) ^ 2 + (i2.vel.y - v0.y - gy) ^ 2 + (i2.vel.z - v0.z - gz) ^ 2)
             if got > 1e-3 then gain = math.max(0.02, math.min(5, gain * got / dl)) end
           end
           local io = assembly.info(vc.node)
           local el = space.elements and space.elements(io.origin.x, io.origin.y, io.origin.z, io.vel.x, io.vel.y, io.vel.z)
-          out[#out + 1] = string.format("craft %d in orbit of %s: pe %.0f m", i, bn, el and el.periapsis and (el.periapsis - b.radius) or -1)
+          out[#out + 1] = string.format("craft %d in orbit of %s: pe %.0f m, ap %.0f m", i, bn, el and el.periapsis and (el.periapsis - b.radius) or -1,
+            el and el.apoapsis and (el.apoapsis - b.radius) or -1)
         end
       end
       -- `control = false`: the craft is left there and the player is on foot
@@ -2751,7 +2830,7 @@ local function finish_now()
   set_phase("done")
   if not listeners.phase then
     local bc = ref("big_caption")
-    if bc and bc.show then bc.show(string.upper(med) .. " · " .. tostring(sc.title), (sc.debrief or {})[med] or "", 8.0) end
+    if bc and bc.show then bc.show(string.upper(med) .. " · " .. tostring(sc.title), (sc.debrief or {})[med] or "", 8.0, "story") end
     if (sc.after or "freeplay") == "freeplay" then continueFreeplay() end
   end
 end
@@ -2779,7 +2858,7 @@ local function setback_start(why)
   set_phase("setback")
   if not emit("setback", setback) then
     local bc = ref("big_caption")
-    if bc and bc.show then bc.show("BACK TO " .. string.upper(tostring(act)), setback.text, 5.0) end
+    if bc and bc.show then bc.show("BACK TO " .. string.upper(tostring(act)), setback.text, 5.0, "story") end
   end
 end
 local function setback_tick()
@@ -2804,7 +2883,7 @@ function fail(why)
   set_phase("failed")
   if not listeners.phase then
     local bc = ref("big_caption")
-    if bc and bc.show then bc.show("FAILED · " .. tostring(sc.title), fail_text, 8.0) end
+    if bc and bc.show then bc.show("FAILED · " .. tostring(sc.title), fail_text, 8.0, "story") end
   end
 end
 
@@ -2835,6 +2914,12 @@ local function meter_read(m, i)
   elseif src == "part" then
     mem["mpart:" .. i] = mem["mpart:" .. i] or {}
     return W.partHp(m, mem["mpart:" .. i])
+  elseif src == "cabin" then
+    -- (scn_vacuum) a craft module's air: p, o2, co2, reserve (atm·m³), res (its share)
+    local a = W.cabin(tostring(m.craft or ""):gsub("^craft:", ""), m.module)
+    if not a then return nil end
+    if fld == "res" then return (a.qcap or 0) > 0 and (a.reserve or 0) / a.qcap or 0 end
+    return tonumber(a[fld])
   elseif src == "piece" then
     local p = piece_read(m.struct, m.part, m.uid)
     local v = p and p[fld]
@@ -3041,7 +3126,20 @@ function cardStep()
   if s.mark then
     local x, y, z = pointOf(s.mark)
     local p = pos_of(s.mark)
-    if x then step.spot = { x = x, y = y, z = z, body = p and p.body, name = s.markName or tostring(s.mark):gsub("^%a+:", ""), near = "› You're there" } end
+    -- (uxpolish 11-11: a bare mark id, "front", read as a bug on the card
+    -- and on the world tag; the step's own "at" goal names the place)
+    local nm = s.markName
+    if not nm then
+      for _, g in ipairs(s.goals or {}) do
+        local l = g.label and tostring(g.label)
+        if l and l:match("^At ") then nm = l:gsub("^At t", "T"):gsub("^At ", "") break end
+      end
+    end
+    if not nm then
+      local raw = tostring(s.mark):gsub("^%a+:", "")
+      nm = raw:match("^%l+$") and ("The " .. raw) or raw
+    end
+    if x then step.spot = { x = x, y = y, z = z, body = p and p.body, name = nm, near = "› You're there" } end
   end
   return step
 end
@@ -3246,6 +3344,10 @@ local function body_node(id)
   end
   local n = C.bodyOf and C.bodyOf(id)
   if n and n.valid ~= false then return n end
+  -- (scn_vacuum) a member seated aboard a craft is a doll in the seat: the
+  -- picture is taken of that (the crew strip films the same one)
+  n = C.dollOf and C.dollOf(id)
+  if n and n.valid ~= false then return n end
   return nil
 end
 -- the body's helmet parts by name (suit.lua's attachments under the AstroModel)
@@ -3304,6 +3406,23 @@ local function pcam_place()
   if not (c and c.node and c.node.valid ~= false) then return end
   local n = c.target
   if not (n and n.valid ~= false) then return end
+  -- (scn_vacuum) a member seated aboard: their eye in the seat, from the IVA
+  -- rig (the crew strip films them the same way). face_frame takes "up" as
+  -- the ground's normal, which in orbit is nowhere near the seat's up: the
+  -- booth photographed the seat cushion.
+  if c.seat then
+    local I = ref("iva")
+    local eye, right, up, back
+    if I and I.eyeOf then eye, right, up, back = I.eyeOf(c.seat.v, c.seat.uid, c.seat.slot) end
+    if eye then
+      local d = c.dist and math.min(c.dist, 0.6) or 0.42
+      local cc = c.node.getcomponent and c.node:getcomponent("Camera")
+      if cc and c.fdist ~= d then c.fdist = d; pcall(function() cc.fovY = 2 * math.atan(0.2 / d) end) end
+      c.node.pos = eye - back * d - up * 0.03
+      c.node:lookAt(eye - up * 0.06, up)
+      return
+    end
+  end
   local hx, hy, hz, fx, fy, fz, ux, uy, uz = face_frame(n, c.id)
   if not hx then return end
   -- head and shoulders: a little under the eyes, from a step away
@@ -3380,13 +3499,24 @@ function capturePortrait(id, opts, cb)
   -- the helmet's glass, and its reflection band crossed the face: for the
   -- member you control the whole bubble is off for the picture
   local hide = HIDE_FOR_PORTRAIT
-  if opts.noHelmet or (C_ and id == (C_.activeId and C_.activeId())) then
+  -- (scn_vacuum) and for a member seated in a craft: inside a pod the
+  -- bubble put the face small and dark behind its ring (helmets go on when
+  -- a cabin vents), not the head-and-shoulders the plate frames
+  local seated_doll = C_ and C_.dollOf and C_.dollOf(id) == n
+  if opts.noHelmet or seated_doll or (C_ and id == (C_.activeId and C_.activeId())) then
     hide = { Helmet = true, ["Helmet Visor"] = true, ["Helmet Lamps"] = true }
   end
   for _, h in ipairs(find_named(n, hide, {}, 0)) do
     if h.visible ~= false then h.visible = false; hidden[#hidden + 1] = h end
   end
   pcam = { target = n, id = id, making = true, fc = fc, w0 = wall(), hidden = hidden, f0 = wall(), dist = opts.dist }
+  -- (scn_vacuum) seated aboard a craft: the seat it is, for the IVA eye
+  if C_ and C_.craftOf and C_.dollOf and C_.dollOf(id) == n then
+    local v = C_.craftOf(id)
+    local u, k = nil, nil
+    if v and v.memberSlot then u, k = v.memberSlot(id) end
+    if u then pcam.seat = { v = v, uid = u, slot = k } end
+  end
   local c = pcam
   createNode("Scenario Portrait Cam", nil, function(cn)
     c.node = cn

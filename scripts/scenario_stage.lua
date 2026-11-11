@@ -374,13 +374,20 @@ end
 -- seen through the set: the picture in phosphor green, and RADIO (or LINK
 -- LOST, a `link` with no path) by the name. `side` "with" is the
 -- listener's, smaller and dimmed on the right (say.with).
+PORTRAIT_PAD = 7
 local function portrait_tree(b, side)
   local p = portraitPath(b.portrait)
   local size = side == "with" and 64 or 92
   local key = side == "with" and "pw" or "pt"
+  -- (uxpolish 11-11, Ty: "portraits ... escaping the bounds of their boxes")
+  -- The picture is sized to the bezel's opening and laid in the box's
+  -- padding: an `inset` on top of the padding shifted it up and left over
+  -- the frame's screws, with a dark band right and below. PORTRAIT_PAD is
+  -- the screen frame's bezel (its 8 px corner less the lip).
+  local inner = size - 2 * PORTRAIT_PAD
   local kid
   if p then
-    kid = { "image", key = "img", inset = 4, texture = p, imageFit = "cover",
+    kid = { "image", key = "img", w = inner, h = inner, texture = p, imageFit = "cover",
             tintR = (b.radio or b.garbled) and 0.62 or nil, tintB = (b.radio or b.garbled) and 0.72 or nil,
             tintA = side == "with" and 0.55 or nil }
   else
@@ -388,7 +395,8 @@ local function portrait_tree(b, side)
             text = glyphOf(b.role), textSize = side == "with" and 30 or nil,
             textColor = side == "with" and { 0.30, 0.42, 0.34, 1.0 } or nil }
   end
-  return { "box", key = key, style = "hud/instrument", w = size, h = size, pad = p and 4 or 0, opacity = side == "with" and 0.5 or nil, kid }
+  return { "box", key = key, style = "hud/instrument", w = size, h = size, pad = p and PORTRAIT_PAD or 0, gap = 0,
+           align = "center", justify = "center", opacity = side == "with" and 0.5 or nil, kid }
 end
 -- the listener, on the right: the picture and the name under it, dimmed
 local function listener_tree(w)

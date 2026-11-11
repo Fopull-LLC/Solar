@@ -350,7 +350,9 @@ end
 function update(node, dt)
   self_n = node
   local pc, pw = ref("planet_camera"), ref("planet_walker")
+  -- (a cutscene's shot shows the body whole: planet_camera.shotW)
   local want = enabled and pc ~= nil and pc.firstPerson == true and pc.cockpit ~= true and pc.freecam ~= true
+    and not ((pc.shotW or 0) > 0)
     and pw ~= nil and pw.onFoot == true and node.valid ~= false
   local was = active
   active = want == true

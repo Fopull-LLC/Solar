@@ -78,17 +78,46 @@ end
 readText = read_text
 
 -- A JSON file of the scenario's (a craft), decoded: → value | nil, why
+-- (scn_vacuum) the VAB library's encoding (builder.libEncode): exact doubles
+-- as "\0d:<m>:<e>" (m × 2^e), "\0f:nan|inf", keys "\0n:" / "\0b:" / "\0s:".
+-- A craft file written by the builder reads back as the numbers it holds.
+function libDecode(v)
+  local t = type(v)
+  if t == "string" then
+    if v:sub(1, 1) ~= "\0" then return v end
+    local tag, rest = v:sub(2, 3), v:sub(4)
+    if tag == "s:" then return rest end
+    if tag == "d:" then
+      local m, e = rest:match("^(-?%d+):(-?%d+)$")
+      if m then return tonumber(m) * 2 ^ tonumber(e) end
+      return v
+    end
+    if tag == "f:" then return rest == "nan" and (0 / 0) or (rest == "-inf" and -math.huge or math.huge) end
+    return v
+  elseif t ~= "table" then return v end
+  local out = {}
+  for k, x in pairs(v) do
+    if type(k) == "string" and k:sub(1, 1) == "\0" then
+      local tag, rest = k:sub(2, 3), k:sub(4)
+      if tag == "n:" then k = tonumber(rest)
+      elseif tag == "b:" then k = rest == "true"
+      elseif tag == "s:" then k = rest end
+    end
+    if k ~= nil then out[k] = libDecode(x) end
+  end
+  return out
+end
 function readJson(path)
   if assets and assets.readJson then
     local ok, v, why = pcall(assets.readJson, path)
-    if ok and v ~= nil then return v end
+    if ok and v ~= nil then return libDecode(v) end
     if ok then return nil, why end
   end
   local t = read_text(path)
   if not t then return nil, "no file " .. path end
   if json and json.decode then
     local ok, v = pcall(json.decode, t)
-    if ok then return v end
+    if ok then return libDecode(v) end
     return nil, tostring(v)
   end
   return t ~= "" and { raw = t } or nil, "no json decoder"
@@ -1108,7 +1137,7 @@ end
 --   { var, start, active = goal, when = goal, rate, accel = 0, base = 0,
 --     rest, tau, min, max, round = 0.1, at = { { value, beats = {…} | run =
 --     "seq", down = true (crossing downward) } } }
-METER_READS = { reactor = true, grid = true, dose = true, suit = true, room = true, part = true, var = true, piece = true }
+METER_READS = { reactor = true, grid = true, dose = true, suit = true, room = true, part = true, var = true, piece = true, cabin = true }   -- (scn_vacuum) cabin.p|o2|co2|reserve|res (share) on a craft's module
 METER_MODES = { sample = true, integrate = true, peak = true, min = true }
 local function round_to(v, q) if not q or q <= 0 then return v end return math.floor(v / q + 0.5) * q end
 -- → the meter's new value (cur: its value now; r: the reading; first: the
@@ -1536,6 +1565,7 @@ function validate(sc, ctx)
     end
     if k == "crew" and not names[n] and next(names) then E(path, "no crew member named " .. n) end
     if k == "mark" and not marks[n] then E(path, "no mark named " .. n) end
+    if k == "craft" and n:find("@", 1, true) and not n:match("^.+@%d+$") then E(path, "craft:<name>@<uid>: a part of the craft by its blueprint uid") end
   end
   for i, s in ipairs(st.structures or {}) do
     local p = string.format("start.structures[%d]", i)
@@ -1798,6 +1828,15 @@ function validate(sc, ctx)
     end
     local wh = c.where or {}
     if not (wh.pad or wh.vab or wh.orbit or wh.ground or wh.stand or wh.runway) then E(p .. ".where", "pad, runway, vab, orbit, ground or stand") end
+    -- (scn_vacuum) crew = { { who = "<start crew name>", part = "<id prefix>" | uid = n, slot = 1 } }: seated at launch
+    if c.crew ~= nil and type(c.crew) ~= "table" then E(p .. ".crew", "a list of { who, part | uid, slot }") end
+    for j, e in ipairs(type(c.crew) == "table" and c.crew or {}) do
+      local pe = string.format("%s.crew[%d]", p, j)
+      if type(e.who) ~= "string" then E(pe .. ".who", "a start crew member's name")
+      elseif next(names) and not names[e.who] then E(pe .. ".who", "no crew member named " .. e.who) end
+      if not (e.part or e.uid) then E(pe, "part (an id prefix) or uid") end
+      if e.slot ~= nil and (type(e.slot) ~= "number" or e.slot < 1) then E(pe .. ".slot", "a seat number, 1 or more") end
+    end
   end
   for k, m in pairs(st.marks or {}) do check_ref("start.marks." .. k .. ".at", m.at) end
   -- (every mark a beat makes, first: a beat may name one made later)
@@ -1920,6 +1959,12 @@ function validate(sc, ctx)
             if val.run then check_seq(pk .. ".run", val.run) end
             if val["else"] then check_seq(pk .. ".else", val["else"]) end
             check_beats(pk .. ".beats", val.beats); check_beats(pk .. ".elseBeats", val.elseBeats)
+          elseif key == "state" and val.craft ~= nil then
+            -- (scn_vacuum) a craft part's own state (the part's `st`, as its menu would set it)
+            if type(val.craft) ~= "string" then E(pk .. ".craft", "a craft's name") end
+            if val.struct ~= nil then E(pk .. ".struct", "struct or craft, not both") end
+            if not (val.part or val.uid) then E(pk, "part (an id prefix) or uid") end
+            if type(val.st) ~= "table" then E(pk .. ".st", "the state keys to write { key = value }") end
           elseif key == "knock" or key == "state" or key == "power" then
             check_struct(pk .. ".struct", val.struct)
             if not (val.part or val.uid) then E(pk, "part (an id prefix) or uid") end
@@ -2044,8 +2089,8 @@ function validate(sc, ctx)
     if g.kind == "cabin" or g.kind == "craft_pressure" then
       if g.craft ~= nil and type(g.craft) ~= "string" then E(path .. ".craft", "a craft's name (\"craft:<name>\")") end
       local m = g.module
-      if m ~= nil and not (CABIN_MODULES[m] or (type(m) == "number" and m >= 1 and m % 1 == 0) or (type(m) == "string" and m:match("^%w+$"))) then
-        E(path .. ".module", "\"worst\", \"crew\", a module number or a part id prefix")
+      if m ~= nil and not (CABIN_MODULES[m] or (type(m) == "number" and m >= 1 and m % 1 == 0) or (type(m) == "string" and (m:match("^%w+$") or m:match("^#%d+$")))) then
+        E(path .. ".module", "\"worst\", \"crew\", a module number, \"#<uid>\" (the module that part is in) or a part id prefix")
       end
       for _, f in ipairs({ "p", "o2", "co2", "below", "secs" }) do
         if g[f] ~= nil and (type(g[f]) ~= "number" or g[f] < 0) then E(path .. "." .. f, "a number, 0 or more") end
@@ -2155,10 +2200,10 @@ function validate(sc, ctx)
     else
       if type(m.var) ~= "string" then E(p .. ".var", "the variable it keeps") end
       local src, fld = tostring(m.read or ""):match("^(%a+)%.?([%w_]*)$")
-      if not (src and METER_READS[src]) then E(p .. ".read", "reactor.<field>, grid.supply|need|stored|battery, dose.msv, suit.o2, room.p|o2|co2, part.hp, piece.<field> or var.<name>")
+      if not (src and METER_READS[src]) then E(p .. ".read", "reactor.<field>, grid.supply|need|stored|battery, dose.msv, suit.o2, room.p|o2|co2, part.hp, cabin.p|o2|co2|reserve|res, piece.<field> or var.<name>")
       elseif (src == "reactor" or src == "grid" or src == "room" or src == "piece") and m.struct == nil then E(p .. ".struct", "the structure it reads")
       elseif (src == "dose" or src == "suit") and m.who == nil then E(p .. ".who", "the crew member it reads")
-      elseif src == "part" and m.craft == nil then E(p .. ".craft", "the craft it reads") end
+      elseif (src == "part" or src == "cabin") and m.craft == nil then E(p .. ".craft", "the craft it reads") end
       if m.struct then check_struct(p .. ".struct", m.struct) end
       if m.mode ~= nil and not METER_MODES[m.mode] then E(p .. ".mode", "sample, integrate, peak or min") end
       if m.when ~= nil then

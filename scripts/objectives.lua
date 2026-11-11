@@ -827,14 +827,15 @@ local function row(key, style, text)
   return { "text", key = key, style = style, w = "100%", h = "fit", wrap = true, text = text }
 end
 
--- The switcher's strip along the top of the card: ◂  OBJECTIVE 2 / 3 · /  ▸.
+-- The switcher's strip along the top of the card: ◂  OBJECTIVE 2 OF 3  ▸ (/ steps it).
 -- Only when there is more than one thing to follow.
 local function pick_row(i, n)
   return { "row", key = "pick", w = "100%", h = "fit", gap = 6, align = "center",
     { "button", key = "pickPrev", style = "hud/button", w = 22, h = 18, text = "◂", textAlign = "center",
       onClicked = function() cycle(-1) end },
-    { "text", key = "pickText", style = "hud/label", w = "grow", h = "fit",
-      text = string.format("Objective %d / %d   ·   /", i, n) },
+    -- (a dangling "· /" read as a broken label: the key is in the tooltip)
+    { "text", key = "pickText", style = "hud/label", w = "grow", h = "fit", textAlign = "center",
+      text = string.format("Objective %d of %d", i, n), tooltip = "/ shows the next one" },
     { "button", key = "pickNext", style = "hud/button", w = 22, h = 18, text = "▸", textAlign = "center",
       onClicked = function() cycle(1) end },
   }
@@ -946,6 +947,10 @@ local function panel_up()
   -- A Ladder Controller's editor (logic_net.editorOpen() with no piece asks if one is up).
   local ln = ref("logic_net")
   if ln and ln.editorOpen and ln.editorOpen() then return true end
+  -- A scenario's BRIEFING or DEBRIEF card: the card overlapped it (uxpolish 11-11).
+  local su = ref("scenario_ui")
+  local sw = su and su.showing and su.showing()
+  if sw == "brief" or sw == "debrief" then return true end
   return false
 end
 
@@ -1113,7 +1118,8 @@ local MARK_UP = { FacCommand = 9.0, FacHangar = 12.0, FacDepot = 7.0,
 
 -- The screen the HUD already uses: a label that would land on the card, the
 -- status chips, the menu button or the tool belt is not drawn there.
-local BLOCKERS = { "Objectives", "Menu Btn", "Status HUD", "Tool HUD" }
+-- (uxpolish 11-11: and a scenario's dialogue plate, which the step's marker sat on)
+local BLOCKERS = { "Objectives", "Menu Btn", "Status HUD", "Tool HUD", "Scenario Dialogue" }
 local function blocked_rects()
   local out = {}
   for _, nm in ipairs(BLOCKERS) do
@@ -1192,7 +1198,10 @@ local function late_draw(node, dt)
       local ux, uy, uz = up_at(wx, wy, wz)
       local sx, sy, dep, on = camera.worldToScreen(wx + ux * 2.5, wy + uy * 2.5, wz + uz * 2.5)
       if d > params.arrived * 0.5 and on and sx and (not dep or dep > 0) then
-        local name = tostring(mk):gsub("^%a+:", "")
+        -- (uxpolish 11-11: the card's own name for the place, never the bare
+        -- mark id: "front · 60 m" read as a bug)
+        local cs = sr.cardStep and select(2, pcall(sr.cardStep))
+        local name = type(cs) == "table" and cs.spot and cs.spot.name or tostring(mk):gsub("^%a+:", "")
         if tag(sx, sy - 26 * k, string.format("%s  ·  %s", name, fmt_m(d)), 14 * k, 0.95, 0.86, 0.55, 1.0, rects) then
           draw.circle(sx, sy, 5 * k, 0.95, 0.80, 0.40, 0.95)
           draw.circleOutline(sx, sy, 10 * k, 0.95, 0.80, 0.40, 0.8, 2 * k)

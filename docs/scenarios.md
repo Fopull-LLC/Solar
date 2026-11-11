@@ -29,7 +29,7 @@ You can write one without touching the game's code. A scenario is a Lua table in
    - Only the beat kinds in §5 and the goal kinds in §4 are accepted.
    - Anything else is refused with an error that names the file and the field, e.g. `scenarios/x.lua: steps[3].goals[1].kind: unknown kind 'roms'`.
 2. **Never a world point.** The planet moves metres every tick (docs/positions-and-frames.md). Places are refs and siting rules:
-   - **Refs:** `crew:<name>`, `mark:<name>`, `struct:<name>`, `craft:<name>`, `body:home|moon|<name>`, and `base` (the spaceport).
+   - **Refs:** `crew:<name>`, `mark:<name>`, `struct:<name>`, `craft:<name>`, `craft:<name>@<uid>` (one part of the craft by its blueprint uid, where it is drawn this frame: a marker on a hull in orbit), `body:home|moon|<name>`, and `base` (the spaceport).
    - **Siting rules:** `base`, `near_base` (`dist` metres out), `far_flat_lit`, `far_flat`, and `"lat:12.5,lon:-40"`.
    - **Offsets** are `{ right, up, front }` metres in the ground frame of the point. Front is toward the world's north pole and up is the ground normal. An offset with `up = 0` is set down on the ground.
 3. **Goal truth is read live; step completion is latched.** A step is done the moment every goal reads true, and it stays done (`scn.done`).
@@ -77,7 +77,7 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 | `structures = { { bp = "<id>/x.bp.txt", name, at, offset, yaw, air = true, powered = true } }` | A SOLBP1 blueprint code, from the Build Kit's BLUEPRINTS tab or Shift+F12, built as a structure. `air = true`: every sealed room starts at 1 atm. `powered = true`: its grid's batteries start full; `powered = 0.71`: at that share. A later entry may stand `at = "struct:<an earlier one>"`. |
 | `crates = { { at, offset, parts = { ["wall.steel"] = 6 }, items = { repairkit = 1 }, name } }` | A "Supply drop" crate of crated parts that an Engineer builds from. |
 | `flags`, `survey` | A flag planted (deployables), survey layers credited. |
-| `craft = { { file = "<id>/lander.json", name, where = { pad } \| { runway } \| { orbit = { body = "moon", alt, e, inc } } \| { ground = ref, offset }, control = false } }` | VAB launch-format JSON. `orbit` makes a station or a drone; `ground` makes a landed craft. |
+| `craft = { { file = "<id>/lander.json", name, where = { pad } \| { runway } \| { orbit = { body = "moon", alt, e, inc } } \| { ground = ref, offset }, control = false, crew = { { who, part \| uid, slot } } } }` | VAB launch-format JSON. `orbit` makes a station or a drone; `ground` makes a landed craft. `crew` seats start crew by name (the launch's seat plan); the start crew's `control` member is the one you play, in their own seat. Hard Vacuum: Ewan on the flight deck, Mira in the hab. Build the JSON in the VAB and write it with the builder's `libText` (`tools/perf/vacprobe.sh anselbuild` does it for the Ansel); its uids are fixed, so beats and goals can name parts by uid. |
 | `plants = { { struct, fuel = { item, n }, power, days, scramFor, standby, hold, protection, turbine, fill = { { uid \| part, kg } } } }` | A reactor plant in a staged structure, with a past: every fuel channel loaded, then `days` at `power` run through the plant's own catch-up (so the xenon, the decay heat and the trend are real), a SCRAM held `scramFor` s, a start-up to `standby` held `hold` s; then the protection and the turbine set, and tanks of its fluid networks filled. Graveyard Shift's plant: twenty days at 60 %, parked at 2 % with the trips bypassed. |
 | `ruins = { { name, bp, at, offset, yaw, flat, age, company, decay, lean, gone, knocked, broken, lots, loot, lore } }` | A blueprint stamped as an abandoned ruin, decayed by its author (§5.9). A struct ref names it. |
 | `cores = { { id, struct, uid \| part, pages = { { date, text } }, who, title, power, air, needs, why, run, open, label } }` | Data Cores with authored entries, sitting in pieces (§5.9). |
@@ -127,6 +127,8 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 | hook | fn: your hooks' `goals[fn]` |
 | power_read | struct, battery_above \| battery_below (share of the store), need_above \| need_below (kW drawn), supply_above \| supply_below (kW made), powered, breaker = part \| uid with state = closed \| open \| tripped, burnt (a Power Cable made off at the structure is burnt through) |
 | part_hp | craft, part (id prefix) \| uid, above \| below: a craft part's health, 1 whole … 0 broken |
+| cabin | craft, module = worst \| crew \| n \| `#<uid>` (the module that part is in) \| part id prefix, p, o2, co2 (max), breathable, sealed (not venting): a craft module's air (G1, docs/crew-and-items.md §13) |
+| *(fail list)* craft_pressure | craft, module, below = 0.5, secs = 0: a craft module under that pressure that long |
 | piece_state | struct, part \| uid, on (a pump or machine running), knocked, field = "<state key>" with eq \| ne \| lt \| gt \| lte \| gte \| is. Besides the part's own state (`off`, `ir`, `seal`, `blown`…) the fields `served` (the grid feeds it; a tower: its base is powered), `running` (switched on and served) and, on a solar piece, `dust` |
 | part_state | struct, part \| uid, key = "<state key>" with eq \| ne \| lt \| gt \| lte \| gte \| is. Keys: the piece's part state (off, shut, seal, tag…) and `knocked`, `pumpOn`, `lock` (none \| locked \| open \| broken), `locked`, `items` (what a container holds, a count) |
 | switched | struct, part \| uid, on = true \| false: a light, pump, valve, breaker or machine, by its system's own answer |
@@ -165,7 +167,7 @@ meters = {
 
 | field | does |
 |---|---|
-| read | `reactor.<field>` (struct; the console's numbers: power, fuelK, primaryK, flow, genKW, netKW, inventory…), `grid.supply \| need \| stored \| battery` (struct), `dose.msv` (who), `suit.o2` (who), `room.p \| o2 \| co2` (struct, room), `part.hp` (craft, part \| uid), `piece.<field>` (struct, part \| uid; true/false read as 1/0), `var.<name>` |
+| read | `reactor.<field>` (struct; the console's numbers: power, fuelK, primaryK, flow, genKW, netKW, inventory…), `grid.supply \| need \| stored \| battery` (struct), `dose.msv` (who), `suit.o2` (who), `room.p \| o2 \| co2` (struct, room), `part.hp` (craft, part \| uid), `cabin.p \| o2 \| co2 \| reserve \| res` (craft, module: a craft module's air; `res` is the reserve's share), `piece.<field>` (struct, part \| uid; true/false read as 1/0), `var.<name>` |
 | mode | `sample` (the default: the reading), `integrate` (a sum over time), `peak`, `min` |
 | scale, delta, round | a factor; count from the first reading; round to this step |
 | when | a goal: the meter only runs while it reads true |
@@ -218,7 +220,7 @@ A beat is a table with one key. Beats run in order from a queue. A line of dialo
 | goto | `"stepId"` |
 | objective | `{ step, text }` |
 | knock | `{ struct, part \| uid }`: a fault. The piece leans and reads knocked (a Repair Kit fixes it), and a reactor pump or life machine stops. |
-| state | `{ struct, part, st = {…} }` |
+| state | `{ struct, part, st = {…} }`, or `{ craft, part \| uid, st = {…} }`: a craft part's own state as its menu sets it (a hatch `ph` / `hatch` open \| shut \| sealed, a reactor's `output` 10..100 or `critical`, a regulator `creg = "off"`). |
 | power | `{ struct, part, on }` |
 | spawn | `{ structure \| crate \| flag \| craft \| crew = … }`. A crew member who joins later (`crew = { name, role, title, where, post }`) may be named by the cast and by `walk`, `turn`… beats (Dust Season's Beck, in from the rover). |
 | remove | `"struct:Name"` |
@@ -261,9 +263,13 @@ A sequence that starts with `{ cutscene = true }` plays as a cutscene:
 - Every shot is re-aimed every frame from refs read against that frame's planet. A camera orbiting a hut stays on the hut while the world moves under it.
 - A shot keeps clear of what it frames.
   - The camera stays at least 1.1 m from the point it looks at.
-  - A ray over the outer half of the line, from that point out to the camera (ten times a second), pulls the camera in front of a person anywhere on it, or of a wall or part the camera is in or within 1.5 m of.
+  - Every frame, on the view as it is placed (the blend from the player's own camera included), planet_camera keeps the camera out of every body (`setShot(fn, secs, { clear = true })`, `shot_clear`):
+    - The crew on foot, and the player once the shot has most of the view, are capsules on their drawn poses, widened to 0.62 m from the axis. The camera stands in front of whoever is on the line, or just outside the one it looks at. A camera authored inside someone (a shot `from` a crew member's mark) steps out toward what it looks at.
+    - If the gap in front is too tight, the camera swings round the subject (eased) before it would go behind the one in the way.
+    - A ball swept from the point looked at pulls the camera in front of a wall or part it is in or within 1.5 m of, and an overlap test pushes it out of what is left. Both are cast from the drawn point moved by the player's tick-to-drawn gap (0-0.3 m measured at a base).
   - A building the shot looks into from outside is not "in the way".
   - The pull is instant and the let-go is eased.
+  - The player's body is shown whole in a shot (first person stands down), and hidden only while the camera is inside it, at the ends of a blend from the eyes.
 - Outside cutscenes, a `shot` or `camera` beat waits until the craft you fly is on the ground.
 
 ### 5.3 Events
@@ -308,6 +314,7 @@ Ty, 2026-11-10: "captured since every human should be random."
 - `portrait = "auto"` on a cast member with `crew = <name>` photographs that member's own face once the scenario is staged. It is the face the generator gave them in this playthrough.
   - The camera is re-placed from their body every frame until the picture answers (camera.captureTexture).
   - It takes one member at a time and costs a one-off hitch, not a per-frame cost.
+  - A member seated aboard a craft is photographed in the seat, from the IVA rig's eye (the crew strip's framing): Hard Vacuum's Ewan on the flight deck.
 - `look = <seed>` pins a face for an author who needs one (crew_faces.lookFor). The default is random.
 - `expression = "tired"` is the face they wear for the picture.
 - The fallback is `scenarios/<id>/<key>.png`, baked by `tools/perf/portraitbooth.sh <engine> <id>` with the same rig. It is used for anyone who never spawns (a voice off the roster, the dead: give them a `look` seed and the booth borrows a body for the shot) and before the live picture is taken.

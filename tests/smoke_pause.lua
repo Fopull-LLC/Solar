@@ -163,7 +163,9 @@ local rungs = {
   { "the suit pack", function(v) envs.inventory_panel.open = v end },
   { "the orbit map", function(v) map_open = v end },
   { "the peripherals console", function(v) periph_open = v end },
-  { "first person", function(v) envs.planet_camera.firstPerson = v end },
+  -- (first person is no rung since 2026-11-11: the game starts there and Esc
+  -- opens the menu, which frees the mouse; the pilot's seat still is one)
+  { "the pilot's seat", function(v) envs.planet_camera.cockpit = v end },
 }
 for _, r in ipairs(rungs) do
   -- Explicitly closed before each rung. Without this the loop passes for the

@@ -187,11 +187,15 @@ function buildModules(recs, ports, opts)
       end
       table.sort(m.uids)
       m.id = m.uids[1]
+      -- (scn_vacuum) "Crew Cabin ×2": two cans of one kind are not the one
+      -- can next door (Hard Vacuum's stores and hab read the same)
       local names, seen = {}, {}
       for _, u in ipairs(m.uids) do
         local l = recs[u].label or recs[u].id or "cabin"
-        if not seen[l] then seen[l] = true; names[#names + 1] = l end
+        if not seen[l] then seen[l] = 0; names[#names + 1] = l end
+        seen[l] = seen[l] + 1
       end
+      for j, l in ipairs(names) do if seen[l] > 1 then names[j] = l .. " ×" .. seen[l] end end
       m.label = table.concat(names, " + ")
     end
   end
@@ -415,6 +419,21 @@ function netStatus(RA, G, n, A, Q, env)
       local t2 = s.tau * ln((s.o2 - xo) / (RA.O2_MIN - xo))
       t = t and math.min(t, t2) or t2
     end
+    -- (scn_vacuum) a regulator that can feed the hole (no breach, no open
+    -- hatch, not all off: stepAir's rule) holds the module where its feed
+    -- meets the outflow; if that is breathable, the air lasts as long as the
+    -- reserve does, and only then bleeds down (the banner said "unbreathable
+    -- in 42 s" over a can holding 0.98 atm on its bottles for eight minutes)
+    local F = ((n.Gout > 0 and n.V / n.Gout < BREACH_TAU) or n.open or (n.regOff or 0) >= #n.mods) and 0 or (n.F or 0)
+    if t and F > 0 and q > 0 then
+      local hold = min(1.0, pout + F / n.Gout)
+      local share = s.p > 0 and s.o2 / s.p or 0.21
+      if hold > RA.P_MIN and hold * share > RA.O2_MIN then
+        local drain = min(F, n.Gout * max(0, min(s.p, 0.985) - pout))
+        if drain > 1e-9 then t = t + q / drain end
+        s.holding = true
+      end
+    end
     s.untilBad = t
   end
   s.mods = n.mods
@@ -540,6 +559,7 @@ local function door_states(v, c)
 end
 
 local function nets_of(v, c)
+  c.stat = nil      -- (doors, vents or regulators read again: the readings with them)
   c.S = door_states(v, c)
   c.nets, c.netOf, c.valves = networksOf(c.G, c.S, {
     hp = function(u) return v.partHp and v.partHp(u) or 1 end,
@@ -624,11 +644,23 @@ local function craft(v)
 end
 
 function modulesOf(v) local c = craft(v); return c and c.G or nil end
+-- A part's state was written from outside (a scenario's `state` beat on a
+-- hatch or a regulator): the doors and the readings again, now.
+function touch(v)
+  local c = craft(v)
+  if c and c.G and #c.G.mods > 0 and c.A then nets_of(v, c) end
+end
 
--- module i's status on craft v (its network's air)
+-- module i's status on craft v (its network's air). Worked out ONCE per
+-- air tick (or door change) and kept: the DEPRESSURISATION banner, the IVA
+-- gauge, the part's menu and the scenario reads all show the same reading,
+-- so one "unbreathable in" (scn_vacuum: the banner said 5 s while the gauge
+-- said 2 s, the banner's text frozen when the alarm went off).
 function statusOf(v, i)
   local c = craft(v)
   if not (c and c.G.mods[i] and c.nets) then return nil end
+  local cs = c.stat
+  if cs and cs[i] then return cs[i] end
   local RA = ref("room_air")
   if not RA then return nil end
   local n = c.nets[c.netOf[i]]
@@ -637,6 +669,9 @@ function statusOf(v, i)
   s.module = i
   s.crew = c.crew[i] or 0
   s.net = c.netOf[i]
+  s.at = now()
+  if not cs then cs = {}; c.stat = cs end
+  cs[i] = s
   return s
 end
 
@@ -674,6 +709,7 @@ local function step(v, c, a)
   c.a = a
   c.flow = env.flow
   write_air(v, c, a)
+  c.stat = nil      -- (the air moved: one fresh reading per module, on first ask)
 end
 
 -- ── doors ───────────────────────────────────────────────────────────────────
@@ -913,6 +949,29 @@ local function crew_records(v, c, dt)
 end
 
 -- ── alarms and the hiss ─────────────────────────────────────────────────────
+local function fmt_s(t)
+  if not t then return "—" end
+  if t > 5400 then return string.format("%.1f h", t / 3600) end
+  if t > 90 then return string.format("%.0f min", t / 60) end
+  return string.format("%.0f s", t)
+end
+-- How long the module can still be breathed, in words, from its one reading:
+-- "unbreathable in 40 s" | "unbreathable now" | nil (holding). The banner
+-- and the gauge both say this.
+local function eta_text(s)
+  if not s then return nil end
+  if not s.breathable or (s.untilBad and s.untilBad < 1.5) then return "unbreathable now" end
+  if s.untilBad then return "unbreathable in " .. fmt_s(s.untilBad) end
+  return nil
+end
+etaText = eta_text
+-- The DEPRESSURISATION banner's line, from the module's reading
+local function alarm_line(label, why, s)
+  local e = eta_text(s)
+  return string.format("The %s is losing its air: %s.%s", label, why, e and (" " .. e:sub(1, 1):upper() .. e:sub(2) .. ".") or "")
+end
+alarmLine = alarm_line
+
 local function near_avatar(v)
   if avatar.v and vid_of(avatar.v) == vid_of(v) then return true, 0 end
   local a = find and find("Astronaut")
@@ -961,8 +1020,6 @@ local function hiss_tick(v, c, near)
         local ok, h = pcall(audio.play, "audio/foley/leak_hiss.ogg", pn, { loop = true, track = "SFX", volume = w.vol, minDistance = 1.5, maxDistance = 30 })
         sounds[key] = { h = ok and h or true, vol = w.vol }
         lastLeakSound = { vid = c.id, uid = w.uid, vol = w.vol, t = now() }
-        local fx = ref("sfx")
-        if fx and fx.caption then pcall(fx.caption, "air hissing out") end
       end
     elseif math.abs((s.vol or 0) - w.vol) > 0.05 and s.h and type(s.h) ~= "boolean" then
       pcall(function() s.h:setVolume(w.vol) end)
@@ -973,6 +1030,11 @@ end
 
 local function alarm_tick(v, c, near)
   local pout = c.out and c.out.p or 0
+  -- (scn_vacuum) one alarm a NETWORK: three modules open to one hole are one
+  -- air, so one banner and one klaxon, naming the module the hole is in (it
+  -- was three banners overwriting each other, the last one "the Pod Mk2")
+  local lead = {}
+  for _, al2 in pairs(alarms_) do if al2.vid == c.id and al2.net then lead[al2.net] = true end end
   for i, m in ipairs(c.G.mods) do
     local s = statusOf(v, i)
     if s then
@@ -984,14 +1046,16 @@ local function alarm_tick(v, c, near)
         local cause = s.causes and s.causes[1]
         local why = cause and (cause.kind == "leak" and "a hole in the hull" or (cause.kind == "breach" and "a part torn away"
           or (cause.kind == "vent" and "the vent valve open" or (cause.state == "shut" and "a hatch's valve open" or "a hatch open")))) or "a leak"
-        al = { t0 = now(), snd_t = -10, vid = c.id, mod = i, cause = why }
+        local where = (cause and cause.uid and c.G.modOf[cause.uid]) and c.G.mods[c.G.modOf[cause.uid]].label or m.label
+        local first = not lead[s.net]
+        lead[s.net] = true
+        al = { t0 = now(), snd_t = first and -10 or math.huge, vid = c.id, mod = i, cause = why, net = s.net, label = where }
         alarms_[key] = al
-        lastAlarm = { vid = c.id, mod = i, label = m.label, cause = why, t = now(), p = s.p }
-        if near then
+        if first then lastAlarm = { vid = c.id, mod = i, label = where, cause = why, t = now(), p = s.p } end
+        if near and first then
           local bc = ref("big_caption")
-          local mins = s.untilBad and (s.untilBad > 90 and string.format("%.0f min", s.untilBad / 60) or string.format("%.0f s", s.untilBad)) or nil
-          local tail = (s.untilBad and s.untilBad < 1.5 or not s.breathable) and " Unbreathable now." or (mins and (" Unbreathable in " .. mins .. ".") or "")
-          if bc and bc.show then bc.show("DEPRESSURISATION", string.format("The %s is losing its air: %s.%s", m.label, why, tail), 4.5) end
+          al.line = alarm_line(where, why, s)
+          if bc and bc.show then bc.show("DEPRESSURISATION", al.line, 4.5, "alarm"); al.banner = true end
           local fx = ref("sfx")
           if fx and fx.caption then pcall(fx.caption, "DEPRESSURISATION: " .. why) end
         end
@@ -999,6 +1063,13 @@ local function alarm_tick(v, c, near)
       elseif al and not venting then
         alarms_[key] = nil
         if s.p < P_ALARM then c.pres[m.id] = false end
+      elseif al and al.banner then
+        -- the banner still up: its time-left follows the reading, as the gauge does
+        local bc = ref("big_caption")
+        if bc and bc.current == "DEPRESSURISATION" and bc.retext then
+          al.line = alarm_line(al.label or m.label, al.cause, s)
+          bc.retext("DEPRESSURISATION", al.line)
+        else al.banner = nil end
       end
       if al and near and now() - al.snd_t >= ALARM_EVERY and audio and audio.play then
         al.snd_t = now()
@@ -1010,7 +1081,7 @@ local function alarm_tick(v, c, near)
         if not c.said[m.id] and near then
           c.said[m.id] = true
           local bc = ref("big_caption")
-          if bc and bc.show then bc.show("CABIN AIR", string.format("The %s: %s.", m.label, tostring(s.why)), 4.0) end
+          if bc and bc.show then bc.show("CABIN AIR", string.format("The %s: %s.", m.label, tostring(s.why)), 4.0, "alarm") end
           lastAlarm = { vid = c.id, mod = i, label = m.label, cause = s.why, t = now(), kind = "air" }
         end
       elseif s.breathable then c.said[m.id] = nil end
@@ -1032,14 +1103,17 @@ local function events(v, c)
     local k = from and door_at(c, from, "hatch")
     if i and k then
       local ok, warn = set_door(v, c, k, "open", "eva")
+      c.evaK = k
       -- (who is left inside now: the seats as they are, the one who left not among them)
       local left = 0
       for _, s in ipairs(v.seatsOf and v.seatsOf() or {}) do if s.taken and s.taken ~= id and c.G.modOf[s.uid] == i then left = left + 1 end end
       c.crew[i] = left
       if left > 0 then c.closeAt = { k = k, t = now() + CLOSE_BEHIND } end
-      if warn then
+      -- (Ty 2026-11-11: only what the player must act on) the banner only
+      -- when nobody is left inside to close it behind them
+      if warn and (c.crew[i] or 0) == 0 then
         local bc = ref("big_caption")
-        if bc and bc.show then bc.show("HATCH OPEN", warn .. ((c.crew[i] or 0) > 0 and " The crew inside will close it." or " Close it from outside: right-click the hatch."), 4.0) end
+        if bc and bc.show then bc.show("HATCH OPEN", warn .. " Close it from outside: right-click the hatch.", 4.0, "result") end
       end
     end
   end
@@ -1048,12 +1122,13 @@ local function events(v, c)
     local k = door_at(c, u, "hatch")
     if k and c.S and c.S[k] ~= "sealed" then
       set_door(v, c, k, "sealed", "board")
-      local s = statusOf(v, c.G.modOf[u])
-      if s and not s.breathable then
-        local fx = ref("sfx")
-        if fx and fx.caption then pcall(fx.caption, string.format("hatch sealed: repressurising from the reserve (%.1f atm·m³)", s.reserve or 0)) end
-      end
     end
+    -- (scn_vacuum) and the hatch they went out by, if it is still open: the
+    -- crew position boarding picks can be the next can along, and the hab
+    -- they left stayed open to vacuum for good (its bottles never fed it)
+    local ke = c.evaK
+    c.evaK = nil
+    if ke and ke ~= k and c.S and c.S[ke] == "open" then set_door(v, c, ke, "sealed", "board") end
   end
   if c.closeAt and now() >= c.closeAt.t then
     local k = c.closeAt.k
@@ -1065,12 +1140,6 @@ local function events(v, c)
 end
 
 -- ── context rows (the part's menu) ──────────────────────────────────────────
-local function fmt_s(t)
-  if not t then return "—" end
-  if t > 5400 then return string.format("%.1f h", t / 3600) end
-  if t > 90 then return string.format("%.0f min", t / 60) end
-  return string.format("%.0f s", t)
-end
 local function air_line(s)
   if not s then return "—" end
   local t = string.format("%.2f atm · O2 %.0f %% · CO2 %.2f %%", s.p or 0, 100 * (s.o2 or 0) / math.max(s.p or 0, 1e-6), 100 * (s.co2 or 0) / math.max(s.p or 0, 1e-6))
@@ -1221,7 +1290,7 @@ function gaugeOf()
   local hole = 0
   for _, L in ipairs(s.leaks or {}) do hole = hole + L.A end
   return { label = s.label, p = s.p, o2 = s.o2, co2 = s.co2, share = s.p > 0 and s.o2 / s.p or 0, breathable = s.breathable, why = s.why,
-           venting = s.venting, untilBad = s.untilBad, reserve = s.reserve, qcap = s.qcap, hole = hole, crew = s.crew,
+           venting = s.venting, untilBad = s.untilBad, eta = eta_text(s), at = s.at, reserve = s.reserve, qcap = s.qcap, hole = hole, crew = s.crew,
            alarm_only = alarm_only, outside = c.out and c.out.p or 0 }
 end
 
@@ -1267,8 +1336,9 @@ local function draw(node)
   }
   local warn = nil
   if g.venting then
+    local e = g.eta
     warn = (g.hole > 0 and string.format("LEAK %.1f cm²", g.hole * 1e4) or "VENTING")
-      .. (g.breathable and (g.untilBad and (" · unbreathable in " .. fmt_s(g.untilBad)) or "") or " · AIR UNBREATHABLE")
+      .. ((e == "unbreathable now" and " · AIR UNBREATHABLE") or (e and (" · " .. e)) or "")
   elseif not g.breathable then warn = "AIR: " .. tostring(g.why or "unbreathable")
   end
   if warn then items[#items + 1] = { "text", key = "w", style = "hud/valueDanger", w = "100%", h = "fit", wrap = true, text = warn } end
@@ -1386,6 +1456,9 @@ function cabinOf(v, which)
   local c = craft(v)
   if not (c and #c.G.mods > 0) then return nil end
   if type(which) == "number" then return statusOf(v, which) end
+  -- (scn_vacuum) "#<uid>": the module that part belongs to (a craft JSON's uids are fixed)
+  local pu = type(which) == "string" and tonumber(which:match("^#(%d+)$"))
+  if pu then local i = c.G.modOf[pu]; return i and statusOf(v, i) or nil end
   if type(which) == "string" and which ~= "crew" and which ~= "worst" then
     local recs = v.aboardRecs and v.aboardRecs() or {}
     for i, m in ipairs(c.G.mods) do

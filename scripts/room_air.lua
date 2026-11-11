@@ -939,7 +939,7 @@ local function suit_refuses(s, sid, uid, farP)
     local d = s.R.doors[uid]
     local msg = string.format("Helmet off: the far side of the %s is at %.2f atm. Put your helmet on first.", d and d.label or "door", farP)
     local bc = ref("big_caption")
-    if bc and bc.show then bc.show("SUIT", msg, 3.0) end
+    if bc and bc.show then bc.show("SUIT", msg, 3.0, "result") end
     local fx = ref("sfx")
     if fx and fx.caption then fx.caption(msg) end
     if audio and audio.play then pcall(audio.play, "audio/sfx/crew_chime.ogg", { track = "UI", volume = 0.4 }) end
@@ -1234,7 +1234,7 @@ local function cyc_say(C, msg)
   local fx = ref("sfx")
   if fx and fx.caption then fx.caption(msg) end
   local bc = ref("big_caption")
-  if bc and bc.show and msg:find("vent", 1, true) then bc.show("AIRLOCK", msg, 3.5) end
+  if bc and bc.show and msg:find("vent", 1, true) then bc.show("AIRLOCK", msg, 3.5, "result") end
   lastCycle = msg
 end
 lastCycle = nil
@@ -1400,7 +1400,7 @@ local function alarm_tick(sid, s)
         lastAlarm = { sid = sid, rid = r.id, cause = cause, t = now(), kind = "depress" }
         local bc = ref("big_caption")
         local near = crew.sid == sid
-        if bc and bc.show and near then bc.show("DEPRESSURISATION", string.format("Room %d (%.0f m³) is losing its air: %s.", r.id, r.m3, cause), 4.0) end
+        if bc and bc.show and near then bc.show("DEPRESSURISATION", string.format("Room %d (%.0f m³) is losing its air: %s.", r.id, r.m3, cause), 4.0, "alarm") end
         local fx = ref("sfx")
         if fx and fx.caption then fx.caption("DEPRESSURISATION: " .. cause) end
         if log then log(string.format("room_air: DEPRESSURISATION in structure %s room %d (%.1f m³): %s", tostring(sid), r.id, r.m3, cause)) end
@@ -1414,7 +1414,7 @@ local function alarm_tick(sid, s)
         if not s.badSaid then
           s.badSaid = true
           local bc = ref("big_caption")
-          if bc and bc.show then bc.show("AIR", "Room " .. r.id .. ": " .. tostring(a.why) .. ".", 4.0) end
+          if bc and bc.show then bc.show("AIR", "Room " .. r.id .. ": " .. tostring(a.why) .. ".", 4.0, "alarm") end
           lastAlarm = { sid = sid, rid = r.id, cause = a.why, t = now(), kind = "air" }
         end
       elseif r.sealed and a.breathable and (s.crewIn[r.id] or 0) > 0 then s.badSaid = nil end
@@ -1901,7 +1901,7 @@ function warnVent(sid, uid, why, secs)
   local inRoom = crew.sid == sid and hi and byRoom and byRoom[hi] and byRoom[crew.rid or -1] == byRoom[hi]
   if inRoom then
     local bc = ref("big_caption")
-    if bc and bc.show then bc.show("VENTING IN " .. math.floor((secs or WARN_S) + 0.5) .. " s", string.format("Room %d: %s. Helmets on.", hi, why), math.min(4.5, secs or WARN_S)) end
+    if bc and bc.show then bc.show("VENTING IN " .. math.floor((secs or WARN_S) + 0.5) .. " s", string.format("Room %d: %s. Helmets on.", hi, why), math.min(4.5, secs or WARN_S), "alarm") end
     lastWarning.crew = true
   end
   local x, y, z = door_world(s, uid)

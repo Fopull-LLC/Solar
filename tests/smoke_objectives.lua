@@ -465,7 +465,7 @@ fleet = { { node = { valid = true, x = astro.x, y = astro.y, z = astro.z } } }
 astro.x, astro.y, astro.z = planet.x, planet.y + planet.radius, planet.z
 update(card, 1 / 60)
 ok(says("First Flight"), "unpicked, the card follows the contract: " .. table.concat(lines(), " | "))
-ok(el_of("pickText") and el_of("pickText").text:find("1 / 2", 1, true),
+ok(el_of("pickText") and el_of("pickText").text:find("1 of 2", 1, true),
   "two objectives open: the card says which of them it is on")
 ok(el_of("pickNext") and type(el_of("pickNext").onClicked) == "function", "...with a ▸ to click")
 
@@ -477,7 +477,7 @@ ok(says("Recover M. Moreau's pack") and says("300 m"),
 ok(says("42 kg"), "...and what is in the crate")
 ok(STORE["objectives.pick"] == "pack:7", "the pick is kept in the save: " .. tostring(STORE["objectives.pick"]))
 ok(selectedPack() == 7, "salvage.lua is told which crate is the objective")
-ok(el_of("pickText").text:find("2 / 2", 1, true), "...and the strip says 2 / 2")
+ok(el_of("pickText").text:find("2 of 2", 1, true), "...and the strip says 2 of 2")
 
 -- In the seat: the card stays up for the pack, measured from the CRAFT.
 walker.onFoot = false

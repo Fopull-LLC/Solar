@@ -504,7 +504,7 @@ end
 
 local function caption(title, text, secs)
   local bc = ref("big_caption")
-  if bc and bc.show then bc.show(title, text, secs or 6.0) end
+  if bc and bc.show then bc.show(title, text, secs or 6.0, "result") end
 end
 
 -- CALLED OFF. Nothing was launched, so the hull that was charged at rollout
@@ -1206,7 +1206,7 @@ local function site_caption(kind, on)
   local title = kind == "runway" and "WAITING FOR THE RUNWAY" or "WAITING FOR THE LAUNCH PAD"
   if on and site_note ~= title then
     site_note = title
-    bc.show(title, kind == "runway" and "Waiting for the runway…" or "Waiting for the launch pad…", SITE_WAIT_BASE)
+    bc.show(title, kind == "runway" and "Waiting for the runway…" or "Waiting for the launch pad…", SITE_WAIT_BASE, "result")
   elseif not on and site_note then
     if bc.current == site_note and bc.hide then bc.hide() end
     site_note = nil

@@ -86,8 +86,21 @@ local function readouts()
   -- DOSE (worlds W3): the suit's dosimeter, only while the ground reads over
   -- background (mineral_field's veins: uranite is black pitchblende, found by
   -- this, not by a glow). Caution yellow past 2.5 µSv/h; ▲ while it climbs.
+  -- (scn_vacuum) and a reactor's cone (vessel_thermal's dose pass, crew.lua
+  -- doseNow): the rate it is giving you now and what you have taken, in
+  -- millisieverts (a lethal dose, 1.0 on the record, is 5 Sv). It reads a
+  -- reactor the way it reads the ground, so an EVA past a core's shadow
+  -- shield shows on the same chip.
+  local cl = ref("crew")
+  local rrate, rdose = 0, 0
+  if cl and cl.doseNow and crew_afoot() then rrate, rdose = cl.doseNow() end
   local mf = ref("mineral_field")
-  if mf and mf.doseT and mf.doseT >= 0 and (time or 0) - mf.doseT < 1.0 and (mf.doseOre or 0) >= (mf.DOSE_SHOW or 0.15) then
+  local ore = mf and mf.doseT and mf.doseT >= 0 and (time or 0) - mf.doseT < 1.0 and (mf.doseOre or 0) >= (mf.DOSE_SHOW or 0.15)
+  if (rrate or 0) > 0 then
+    local uh = rrate * 5e6 * 3600 + (ore and (mf.dose or 0) or 0)       -- µSv/h
+    local v = uh >= 1000 and string.format("%.1f mSv/h ▲", uh / 1000) or string.format("%.0f µSv/h ▲", uh)
+    out[#out + 1] = { key = "dose", label = "Dose", value = string.format("%s · %.1f mSv", v, (rdose or 0) * 5000), warn = true }
+  elseif ore then
     local d = mf.dose or 0
     out[#out + 1] = { key = "dose", label = "Dose",
                       value = string.format(d < 10 and "%.2f µSv/h%s" or "%.0f µSv/h%s", d, mf.doseRising and " ▲" or ""),

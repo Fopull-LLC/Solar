@@ -451,7 +451,7 @@ local function blackout_end(node, ux, uy, uz)
         kg, where and (", " .. where) or "")
     end
     if paid then why = why .. string.format(". Rescue: $%d", fee) end
-    bc.show("CREW LOST", why .. ".", 7.0)
+    bc.show("CREW LOST", why .. ".", 7.0, "alarm")
   end
   lastDrop = id
   log(string.format("breath: the crew ran out of air and woke at the base (pack %.1f kg %s, fee %s)",

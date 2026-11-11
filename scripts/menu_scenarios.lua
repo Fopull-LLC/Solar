@@ -368,10 +368,12 @@ local function row_tree(sc)
     { "text", key = "c", style = ok and "panel/title" or "panel/cellMuted", w = 14, h = "fit", text = active and "▸" or " " },
     { "text", key = "t", style = ok and "panel/cellStrong" or "panel/cellMuted", w = 190, h = "fit",
       text = string.upper(sc.title or sc.id) .. ((sc.user or sc.mod or sc.source == "user") and "  · MOD" or "") },
-    { "text", key = "n", style = "panel/cellMuted", w = "grow", h = "fit", text = ok and rowNote(sc) or why },
+    -- (uxpolish 11-11: a locked row says it is locked, and a row with no
+    -- medal yet shows an empty pip, not a "·  —" that read as broken)
+    { "text", key = "n", style = "panel/cellMuted", w = "grow", h = "fit", text = ok and rowNote(sc) or ("Locked · " .. tostring(why or "")) },
     { "text", key = "m", style = best and MEDAL_STYLE[best] or "panel/cellMuted", w = 14, h = "fit", textSize = 13,
-      text = best and "●" or "·" },
-    { "text", key = "w", style = best and "panel/cell" or "panel/cellMuted", w = 52, h = "fit", text = best or "—" },
+      text = best and "●" or "○" },
+    { "text", key = "w", style = best and "panel/cell" or "panel/cellMuted", w = 52, h = "fit", text = best or "" },
   }
 end
 

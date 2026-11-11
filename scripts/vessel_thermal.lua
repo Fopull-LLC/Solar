@@ -84,7 +84,7 @@ local function say(S, text, big)
   S.msg, S.msg_t = text, time or 0
   if big then
     local bc = ref("big_caption")
-    if bc and bc.show then pcall(bc.show, big, text, 4.0) end
+    if bc and bc.show then pcall(bc.show, big, text, 4.0, "alarm") end
     local fx = ref("sfx")
     if fx and fx.play then pcall(fx.play, (big == "SCRAM" or big == "OVERHEAT") and "denied" or "chime", 1.0) end
   end

@@ -2930,7 +2930,7 @@ function survey(bname, quiet)
     if bc and bc.show then
       bc.show("SURVEY COMPLETE", string.format(
         "The Tracking Station mapped %d rare plants on %s. Look for the beams of light; the objectives card has the nearest.",
-        n, bname), 6.0)
+        n, bname), 6.0, "quiet")
     end
   end
   return n

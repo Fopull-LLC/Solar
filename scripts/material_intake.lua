@@ -777,7 +777,7 @@ local function fab_tick(dt)
   end
   say(string.format("%d fuel rod(s) out of the press — in the base's stores", #done), "fab")
   local bc = ref("big_caption")
-  if bc and bc.show then pcall(bc.show, "FUEL ROD READY", "In the base's stores — the VAB loads reactors from there.", 4.0) end
+  if bc and bc.show then pcall(bc.show, "FUEL ROD READY", "In the base's stores — the VAB loads reactors from there.", 4.0, "quiet") end
 end
 local provider_on = false
 

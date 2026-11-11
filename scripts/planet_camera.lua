@@ -85,7 +85,13 @@ shiftlock = false
 -- backing into a tunnel snapped the view to the eyes and back out again, and the
 -- game read as broken in exactly the places you spend the most time. First
 -- person is now a MODE you scroll into, not a distance that happens to you.
-firstPerson = false
+--
+-- THE GAME STARTS IN FIRST PERSON (Ty 2026-11-11). `foot_fp` is the player's
+-- own choice on foot (the wheel sets it); flying, the Build Kit, the free
+-- camera and the photo orbit put the view outside for as long as they last,
+-- and on foot again the view goes back to that choice.
+firstPerson = true
+local foot_fp = true
 -- Published: the mouse is grabbed to turn the view this frame (first person,
 -- shift lock, a held right button). While it is not, the cursor is the aim.
 mouseLooking = false
@@ -472,6 +478,21 @@ local function fp_body_ref()
   return fpb_n
 end
 
+-- Panels that may be absent from a scene: asked quietly, a missing one again
+-- every 2 s.
+POINTER_PANELS = { "crew_roster_panel", "fab_panel", "groups_panel", "peripheral_panel", "tracking_station" }
+local opt_refs, opt_miss = {}, {}
+local function optional_ref(kind)
+  local r = opt_refs[kind]
+  if r and r.valid ~= false then return r end
+  local t = time or 0
+  if opt_miss[kind] and t - opt_miss[kind] < 2.0 and t >= opt_miss[kind] then return nil end
+  r = findScript and findScript(kind, { quiet = true }) or nil
+  opt_refs[kind] = r
+  opt_miss[kind] = (r == nil) and t or nil
+  return r
+end
+
 -- Is one of the game's panels in front of the player? First person grabs the
 -- mouse, and a grabbed mouse cannot click a Sell button — so the grab has to
 -- know about the panels. The panels each already publish this for the tool belt.
@@ -499,6 +520,19 @@ local function panel_open()
   -- …and a crate's, a locker's or a keypad's panel (loot_panel.lua)
   local lp = script_ref("loot_panel")
   if lp and lp.isOpen and lp.isOpen() then return true end
+  -- (Ty 2026-11-11: "your mouse should be freed when you go to the menu" —
+  -- every panel with keys to click, not only the ones above: each of these
+  -- frees the mouse itself, and a first-person grab later in the same frame
+  -- took it straight back)
+  for _, k in ipairs(POINTER_PANELS) do
+    local s = optional_ref(k)
+    if s and s.isOpen and s.isOpen() then return true end
+  end
+  local su = optional_ref("scenario_ui")
+  if su and su.showing then
+    local w = su.showing()
+    if w == "brief" or w == "debrief" then return true end
+  end
   return false
 end
 
@@ -1217,7 +1251,11 @@ local function place_camera(node, dt)
   local kit = (not piloting) and script_ref("field_builder")
   local kit_h = kit
   kit = kit and kit.isOpen and kit.isOpen() or false
-  if kit then firstPerson, shiftlock = false, false end
+  if kit then firstPerson, shiftlock = false, false
+  elseif not piloting and foot_fp and not firstPerson and not photoOrbit then
+    firstPerson = true
+    clip_back = nil
+  end
   -- …and with a part in hand its wheel turns the part (K6), not the view
   if kit and kit_h.wantsScroll == true then dz = 0.0 end
   -- The gravity gun uses the wheel for its hold distance while it holds
@@ -1263,28 +1301,24 @@ local function place_camera(node, dt)
     if cockpit and seat_view(node, dt, blocked) then return end
   elseif firstPerson then
     if dz < -0.01 then
-      firstPerson = false
+      firstPerson, foot_fp = false, false
       params.distance = mind
       clip_back = nil   -- an explicit scroll arrives NOW; the ease is for walls
     end
   else
     local want = math.clamp(params.distance - dz, mind, maxd)
     if dz > 0.01 and params.distance <= mind + 0.001 and not kit then
-      firstPerson = true
+      firstPerson, foot_fp = true, true
       clip_back = nil
     end
     params.distance = want
   end
 
-  -- ESC LEAVES FIRST PERSON. First person grabs the mouse, and the HUD's ☰
-  -- button — the only way back to the main menu — needs a pointer. A mode you
-  -- can only leave if you happen to know about the scroll wheel is a trap, and
-  -- Esc is the key everybody tries first.
-  if firstPerson and not blocked and input.pressed("escape") then
-    firstPerson = false
-    params.distance = mind
-    clip_back = nil
-  end
+  -- ESC OPENS THE PAUSE MENU in first person too (Ty 2026-11-11: "your mouse
+  -- should be freed when you go to the menu"): the menu is a panel, so the
+  -- grab lets go while it is up (panel_open) and comes back when it closes.
+  -- It used to leave first person first, a rung that is gone now the game
+  -- starts behind the eyes.
   -- PHOTO ORBIT (F6). Not in first person or the seat: there is nothing to
   -- circle. Esc stops it before it opens anything (see `escTakenAt`).
   if not blocked and not cockpit and input.pressed("f6") then
@@ -1717,26 +1751,254 @@ function holding() return hold ~= nil end
 -- back out the same way when the shot is cleared; the blend is in the frame
 -- of the moment (both ends read the same frame), so nothing slides on the
 -- moving planet. Returns nothing; `shotOn()` says whether one is up.
-local shot = nil        -- { fn, w (0..1), dir (+1 in, -1 out), secs }
-function setShot(fn, secs)
+local shot = nil        -- { fn, w (0..1), dir (+1 in, -1 out), secs, clear = {} }
+-- Published: how far a kept-clear shot has the view (0 = none, 1 = all of
+-- it). fp_body stands down while it is above 0: the body is seen whole.
+shotW = 0
+-- opts.clear = true: the shot is kept out of every body, piece and wall and
+-- shows the player's body whole (shot_clear below: the scenario's cutscenes).
+-- Without it (the Research Lab's talk view, probes) the shot is placed as
+-- asked and the player's body is put away, as before.
+function setShot(fn, secs, opts)
   if type(fn) ~= "function" then return end
   local w = shot and shot.w or 0
-  shot = { fn = fn, w = w, dir = 1, secs = secs or 0.9 }
+  shot = { fn = fn, w = w, dir = 1, secs = secs or 0.9, clear = {},
+           keep = type(opts) == "table" and opts.clear == true }
 end
 function clearShot(secs)
   if shot then shot.dir = -1; shot.secs = secs or shot.secs end
 end
 function shotOn() return shot ~= nil and shot.dir > 0 end
 
+-- ── A SHOT KEEPS OUT OF BODIES (Ty 2026-11-11: "cutscene camera still
+-- clipping inside of astronaut bodies") ─────────────────────────────────────
+-- Run on the view as it is placed THIS frame (after the blend from the
+-- player's own camera, which crosses bodies too), every frame:
+--   * BODIES (the crew on foot, and the player once the shot has most of the
+--     view) are capsules on their drawn poses, tested exactly: a body's
+--     axis segment widened to SHOT_R_BODY, wider than the suit's pack and
+--     helmet. The line from the point looked at out to the camera is cut
+--     where it enters one, so the camera stands in front of whoever is in
+--     the way, or just outside the one it looks at; a camera an author put
+--     inside a body (a shot "from" a crew member's mark) steps out of it
+--     toward what it looks at. When the gap in front is too tight, the
+--     camera swings round the subject (eased), and only past every swing does
+--     it go behind the one in the way.
+--   * PIECES, WALLS AND GROUND: a ball swept out from the point looked at
+--     (ignoreStart: the piece looked at never pulls the camera into itself)
+--     pulls the camera in front of one it is in or against, and an overlap
+--     at the camera pushes it out of what is left. The physics answers from
+--     the colliders' TICK pose, so both queries are cast from the drawn point
+--     moved by the player's tick-to-drawn gap (docs/positions-and-frames.md
+--     rule 2; measured 0-0.3 m at a base, kept for a world that moves more).
+--   * The player's own body is hidden only while the camera is inside it
+--     (the first and last moments of a blend from first person).
+SHOT_R_BODY, SHOT_HALF_SEG = 0.62, 0.64   -- the suit capsule: radius 0.31, 1.9 m tall
+SHOT_R_WALL, SHOT_NEAR_WALL = 0.3, 1.5
+SHOT_MIN_FRONT = 0.6                      -- a pull-in keeps at least this share of the shot's distance
+local SHOT_SWINGS = { { 0, 0 }, { 25, 0 }, { -25, 0 }, { 0, 20 }, { 50, 0 }, { -50, 0 }, { 25, 35 }, { -25, 35 }, { 85, 0 }, { -85, 0 } }
+shotProbe = nil      -- (probes) the last frame's { inside = n, near = m, swing, pulled, shift }
+local shot_bodies_t, shot_bodies = -1, {}
+local function shot_body_nodes()
+  if time >= shot_bodies_t and time - shot_bodies_t < 0.5 then return shot_bodies end
+  shot_bodies_t = time
+  local out = {}
+  local C = script_ref("crew")
+  if C and C.bodyNodes then
+    local ok, t = pcall(C.bodyNodes)
+    if ok and type(t) == "table" then for _, n in pairs(t) do out[#out + 1] = n end end
+  end
+  shot_bodies = out
+  return out
+end
+-- the distance from point p to segment a ± u*h
+local function seg_dist(px, py, pz, c)
+  local qx, qy, qz = px - c.x, py - c.y, pz - c.z
+  local s = math.max(-c.h, math.min(c.h, qx * c.ux + qy * c.uy + qz * c.uz))
+  qx, qy, qz = qx - c.ux * s, qy - c.uy * s, qz - c.uz * s
+  return math.sqrt(qx * qx + qy * qy + qz * qz)
+end
+-- where the ray l + d*t is inside capsule c → t0, t1 (or nil)
+local function cap_span(l, d, c)
+  local wx, wy, wz = l.x - c.x, l.y - c.y, l.z - c.z
+  local b = d.x * c.ux + d.y * c.uy + d.z * c.uz
+  local dd = d.x * wx + d.y * wy + d.z * wz
+  local e = c.ux * wx + c.uy * wy + c.uz * wz
+  local den = 1 - b * b
+  local s = den > 1e-6 and (e - b * dd) / den or e
+  s = math.max(-c.h, math.min(c.h, s))
+  local tm = s * b - dd
+  local function f(t) return seg_dist(l.x + d.x * t, l.y + d.y * t, l.z + d.z * t, c) end
+  if f(tm) >= c.r then return nil end
+  local lo, hi = tm - 4 - c.h, tm
+  for _ = 1, 18 do local m = (lo + hi) * 0.5; if f(m) < c.r then hi = m else lo = m end end
+  local t0 = hi
+  lo, hi = tm, tm + 4 + c.h
+  for _ = 1, 18 do local m = (lo + hi) * 0.5; if f(m) < c.r then lo = m else hi = m end end
+  return t0, lo
+end
+-- along d from l: the farthest free distance at or in front of `want` (true),
+-- else the nearest free one past it (false); never inside the body looked at
+local function free_t(l, d, want, caps)
+  local sp = {}
+  local lo = 0.05
+  for i = 1, #caps do
+    local a, b = cap_span(l, d, caps[i])
+    if a then
+      if a <= 0 then lo = math.max(lo, b + 0.02) else sp[#sp + 1] = { a, b } end
+    end
+  end
+  local t = want
+  for _ = 1, #sp + 1 do
+    local moved = false
+    for i = 1, #sp do if t > sp[i][1] and t < sp[i][2] then t = sp[i][1] - 0.02; moved = true end end
+    if not moved then break end
+  end
+  if t >= lo then return t, true, lo end
+  t = math.max(want, lo)
+  for _ = 1, #sp + 1 do
+    local moved = false
+    for i = 1, #sp do if t > sp[i][1] and t < sp[i][2] then t = sp[i][2] + 0.02; moved = true end end
+    if not moved then break end
+  end
+  return t, false, lo
+end
+local function rot_about(v, k, ang)
+  local c, s = math.cos(ang), math.sin(ang)
+  return v * c + k:cross(v) * s + k * (k:dot(v) * (1 - c))
+end
+-- the view's point c and the point looked at l (this frame, drawn) → c kept clear
+local function shot_clear(st, c, l, up, w, dt)
+  local v = c - l
+  local want = v:length()
+  if want < 1e-3 then return c end
+  local d0 = v * (1 / want)
+  local b = space and space.dominant and space.dominant(l.x, l.y, l.z)
+  local bb = b and space.body(b)
+  local caps, ign = {}, {}
+  local function add(n)
+    if not (n and n.valid ~= false) then return end
+    ign[#ign + 1] = n
+    local p = n.worldPos
+    if not p then return end
+    local ux, uy, uz = 0, 1, 0
+    if bb then
+      ux, uy, uz = p.x - bb.x, p.y - bb.y, p.z - bb.z
+      local m = math.sqrt(ux * ux + uy * uy + uz * uz)
+      if m > 1e-6 then ux, uy, uz = ux / m, uy / m, uz / m end
+    end
+    caps[#caps + 1] = { x = p.x, y = p.y, z = p.z, ux = ux, uy = uy, uz = uz, h = SHOT_HALF_SEG, r = SHOT_R_BODY, n = n }
+  end
+  for _, n in ipairs(shot_body_nodes()) do add(n) end
+  local a = find and find("Astronaut")
+  local me = nil
+  if a and a.valid ~= false and not was_piloting then
+    if w >= 0.5 then add(a); me = caps[#caps] else ign[#ign + 1] = a end
+  end
+  -- the swing round the subject, eased in its own angles (the shot's own
+  -- line keeps moving under it: an orbit, a dolly)
+  -- (only once the shot has the view: mid-blend the line runs from the
+  -- player's own camera, and a swing there would only wander)
+  local pick = 1
+  for i, sw in ipairs(w >= 0.9 and SHOT_SWINGS or {}) do
+    local dd = d0
+    if sw[1] ~= 0 then dd = rot_about(dd, up, math.rad(sw[1])) end
+    if sw[2] ~= 0 then
+      local ax = up:cross(dd)
+      if ax:length() > 1e-4 then dd = rot_about(dd, ax:normalized(), -math.rad(sw[2])) end
+    end
+    local t, front = free_t(l, dd, want, caps)
+    if front and t >= SHOT_MIN_FRONT * want then pick = i break end
+  end
+  local tg = SHOT_SWINGS[pick]
+  if not st.yaw then st.yaw, st.pitch = tg[1], tg[2] end
+  local k = 1 - math.exp(-4 * (dt or 0))
+  st.yaw = st.yaw + (tg[1] - st.yaw) * k
+  st.pitch = st.pitch + (tg[2] - st.pitch) * k
+  local d = d0
+  if math.abs(st.yaw) > 0.05 then d = rot_about(d, up, math.rad(st.yaw)) end
+  if math.abs(st.pitch) > 0.05 then
+    local ax = up:cross(d)
+    if ax:length() > 1e-4 then d = rot_about(d, ax:normalized(), -math.rad(st.pitch)) end
+  end
+  local t, front, lo = free_t(l, d, want, caps)
+  -- the tick pose's gap: the queries below are answered there
+  local S = vec3(0, 0, 0)
+  if a and a.valid ~= false and a.tickPos and a.worldPos then S = a.tickPos - a.worldPos end
+  if S:length() > 50 then S = vec3(0, 0, 0) end
+  -- a piece the camera is in or against pulls it in front of it
+  if spherecast and t > SHOT_R_WALL then
+    local o = l + S
+    local ok, hit = pcall(spherecast, o, d, SHOT_R_WALL, t, { ignore = ign, ignoreStart = true })
+    if ok and hit and hit.distance and (t - hit.distance) < SHOT_NEAR_WALL then
+      local t2 = math.max(math.min(lo, t), hit.distance - 0.05)
+      if t2 < t then
+        local t3, f3 = free_t(l, d, t2, caps)
+        if f3 then t = t3 else t = t2 end
+      end
+    end
+  end
+  -- pull in at once; let go eased, and only what a pull took (a dolly's own
+  -- line is never lagged)
+  if st.t and st.t < (st.want or want) - 0.01 and t > st.t and front then
+    local inside = false
+    for i = 1, #caps do if seg_dist(l.x + d.x * st.t, l.y + d.y * st.t, l.z + d.z * st.t, caps[i]) < caps[i].r then inside = true end end
+    if not inside then t = math.min(t, st.t + 2.5 * (dt or 0)) end
+  end
+  st.t, st.want = t, want
+  local p = l + d * t
+  -- what is left: out of any piece or ground the camera still overlaps
+  if overlapSphere then
+    for _ = 1, 2 do
+      local ok, hits = pcall(overlapSphere, p + S, 0.22, { ignore = ign })
+      local h = ok and type(hits) == "table" and hits[1] or nil
+      if not (h and h.distance and h.nx) then break end
+      p = p + vec3(h.nx, h.ny, h.nz) * (h.distance + 0.02)
+    end
+  end
+  local inside, near = 0, 0
+  for i = 1, #caps do
+    local q = seg_dist(p.x, p.y, p.z, caps[i])
+    if q < 0.42 then inside = inside + 1 end
+    if q < caps[i].r - 0.02 then near = near + 1 end
+  end
+  shotProbe = { inside = inside, near = near, swing = pick, pulled = t < want - 0.01, shift = S:length(), bodies = #caps,
+                t = t, want = want }
+  return p, me
+end
+
+-- The player's body hidden while camera point c is inside it (`show`: and
+-- shown again when it is not).
+local function me_inside(c, show)
+  local a = find and find("Astronaut")
+  if not (a and a.valid ~= false and a.worldPos) then return end
+  local p = a.worldPos
+  local b = space and space.dominant and space.dominant(p.x, p.y, p.z)
+  local bb = b and space.body(b)
+  local u = bb and (p - vec3(bb.x, bb.y, bb.z)):normalized() or vec3(0, 1, 0)
+  local cap = { x = p.x, y = p.y, z = p.z, ux = u.x, uy = u.y, uz = u.z, h = SHOT_HALF_SEG }
+  local hide = seg_dist(c.x, c.y, c.z, cap) < 0.5
+  if hide then hidesBody = true; a.visible = false
+  elseif show then hidesBody = false; a.visible = true end
+end
+
 local function shot_tick(node, dt)
-  if not shot then return end
+  if not shot then shotW = 0 return end
   shot.w = math.max(0, math.min(1, shot.w + shot.dir * (dt or 0) / math.max(0.05, shot.secs)))
-  if shot.dir < 0 and shot.w <= 0 then shot = nil return end
-  local ok, cx, cy, cz, px, py, pz, ux, uy, uz = pcall(shot.fn)
-  if not (ok and cx and px) then
-    if shot.dir < 0 then shot = nil end
+  if shot.dir < 0 and shot.w <= 0 then
+    -- the last frame of a blend back to the eyes: first person's own body
+    -- (fp_body) is not back until next frame, so the whole body, head and
+    -- all, must not be drawn round the camera this one
+    if shot.keep and not was_piloting and not fp_drawn then me_inside(node.pos, false) end
+    shot = nil; shotW = 0
     return
   end
+  local ok, cx, cy, cz, px, py, pz, ux, uy, uz = pcall(shot.fn)
+  if not (ok and cx and px) then
+    if shot.dir < 0 then shot = nil; shotW = 0 end
+    return
+  end
+  shotW = shot.keep and shot.w or 0
   local t = shot.w
   t = t * t * (3 - 2 * t)
   local c0 = node.pos
@@ -1746,16 +2008,27 @@ local function shot_tick(node, dt)
   local l0 = c0 + f0 * d
   local c = vec3(c0.x + (cx - c0.x) * t, c0.y + (cy - c0.y) * t, c0.z + (cz - c0.z) * t)
   local l = vec3(l0.x + (px - l0.x) * t, l0.y + (py - l0.y) * t, l0.z + (pz - l0.z) * t)
+  local up = vec3(ux or 0, uy or 1, uz or 0)
+  if shot.keep then
+    local okc, cc = pcall(shot_clear, shot.clear, c, l, up, shot.w, dt)
+    if okc and cc then c = cc elseif not okc then log("planet_camera: shot_clear " .. tostring(cc)) end
+  end
   node.pos = c
-  node:lookAt(l, vec3(ux or 0, uy or 1, uz or 0))
+  node:lookAt(l, up)
   local f = (l - c):normalized()
   fwd_x, fwd_y, fwd_z = f.x, f.y, f.z
   cam_x, cam_y, cam_z = c.x, c.y, c.z
-  -- a shot frames someone else: the crew's own body stands out of it (the
-  -- placement above shows it again every frame, so nothing is left hidden)
-  if shot.w > 0.35 then
-    local a = find and find("Astronaut")
-    if a and a.valid ~= false then a.visible = false end
+  -- the player's own body is in the shot, whole (fp_body stands down while
+  -- shotW > 0), and hidden only while the camera is inside it: the first and
+  -- last moments of a blend from the eyes
+  if not shot.keep then
+    -- (a shot that frames someone else: the crew's own body stands out of it)
+    if shot.w > 0.35 then
+      local a = find and find("Astronaut")
+      if a and a.valid ~= false then a.visible = false end
+    end
+  elseif not was_piloting then
+    me_inside(c, true)
   end
 end
 

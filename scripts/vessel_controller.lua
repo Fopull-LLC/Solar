@@ -4309,7 +4309,7 @@ function undock(port_uid)
   if CA and CA.undockWarn then
     local okw, w = pcall(CA.undockWarn, node.id, p.uid)
     local bc = okw and w and findScript("big_caption")
-    if bc and bc.show then bc.show("HATCH OPEN", w, 4.0) end
+    if bc and bc.show then bc.show("HATCH OPEN", w, 4.0, "result") end
   end
   local info = assembly.info(node)
   if not info then return false end
@@ -11625,7 +11625,7 @@ function roboSay(head, line)
   if log then log("robotics: " .. line) end
   if not (piloting or crewAboard) then return end
   local bc = findScript and findScript("big_caption")
-  if bc and bc.show then bc.show(head, line, 4.0)
+  if bc and bc.show then bc.show(head, line, 4.0, "result")
   elseif caption then caption(line) end
 end
 

@@ -281,7 +281,7 @@ function advance()
   if bc and bc.show then
     bc.show("MISSION CONTROL ADVANCE",
       string.format("%s to keep the programme flying  ·  repaid from %d%% of what you earn",
-        money(a), math.floor(ADVANCE.share * 100 + 0.5)), 6)
+        money(a), math.floor(ADVANCE.share * 100 + 0.5)), 6, "quiet")
   end
   return a
 end

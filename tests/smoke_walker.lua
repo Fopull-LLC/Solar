@@ -318,8 +318,18 @@ ground_under, ASTRO.grounded, ASTRO.vy = true, true, 0
 tick(20)
 
 -- ── 2. FIRST PERSON IS A MODE ───────────────────────────────────────────────
-check("the game starts in third person", cam.firstPerson == false)
+-- (Ty 2026-11-11: "game should start in first person by default")
+check("the game starts in first person", cam.firstPerson == true)
+check("...the mouse steers from the start", mouse_locked == true)
+-- One click out puts you on the shoulder, body drawn.
+scroll = -1.0
+tick(1)
+scroll = 0.0
+tick(1)
+check("one click out of the start leaves first person", cam.firstPerson == false)
 check("...with the body drawn", ASTRO.visible == true and MODEL.visible == true)
+cam.params.distance = 7.0
+tick(1)
 
 -- Scroll all the way in. The camera must stop at its closest ORBIT first —
 -- there is no mushy half-metre where it sits inside the character's chest.
@@ -359,16 +369,18 @@ fac_open = false
 tick(2)
 check("...and first person takes it again when the panel closes", mouse_locked == true)
 
--- ESC IS A WAY OUT. First person holds the mouse, and the HUD's ☰ button — the
--- only route back to the main menu — needs a pointer. A mode you can only leave
--- by knowing about the scroll wheel is a trap.
+-- ESC OPENS THE PAUSE MENU, AND THE MENU FREES THE MOUSE (Ty 2026-11-11).
+-- First person is not a rung on the Esc ladder any more: the menu opens over
+-- it, the cursor is the menu's while it is up, and first person takes the
+-- mouse again when it closes.
 press("escape")
+envs.pause_menu = { open = true, node = { valid = true } }
 tick(1)
-check("Esc leaves first person", cam.firstPerson == false)
-check("...and gives the cursor back", mouse_locked == false)
--- Back in, to finish the scroll test below.
-scroll = 20.0; tick(1); scroll = 1.0; tick(1); scroll = 0.0; tick(1)
-check("...and you can get straight back in", cam.firstPerson == true)
+check("Esc in first person keeps first person (the menu opens over it)", cam.firstPerson == true)
+check("...and the open menu has the cursor", mouse_locked == false)
+envs.pause_menu.open = false
+tick(2)
+check("...and first person takes it again when the menu closes", mouse_locked == true and cam.firstPerson == true)
 
 -- One click out and you are back on the shoulder — not stuck cycling through
 -- the same click because the snap-in threshold keeps catching you.
@@ -1246,6 +1258,45 @@ local n3 = drop_onto(vec3(0, 1, 0), -6, 4)
 check("a hop off a kerb (under 0.12 s in the air) is no impact", n3 == 0)
 ASTRO.vy = 0
 tick(10)
+
+-- ── 9. A CUTSCENE SHOT KEEPS OUT OF BODIES (Ty 2026-11-11) ─────────────────
+-- planet_camera.setShot(fn, secs, { clear = true }): the camera never sits
+-- inside a crew member's suit, whether the author put it there (a shot
+-- "from" someone's mark) or someone walked into the line.
+do
+  local function body(x, y, z) return { valid = true, visible = true, worldPos = vec3(x, y, z) } end
+  local crewA, crewB = body(10, 1, 0), body(10, 1, -3)
+  envs.crew = { node = { valid = true }, bodyNodes = function() return { [5] = crewA, [6] = crewB } end }
+  local function axis_d(c, n)
+    local q = c - n.worldPos
+    local s = math.max(-0.64, math.min(0.64, q.y))
+    return (q - vec3(0, s, 0)):length()
+  end
+  -- (a) from crew A's own eyes, looking past B at a window 9 m off
+  cam.setShot(function() return 10, 1.75, 0, 10, 1.5, -9, 0, 1, 0 end, 0.05, { clear = true })
+  tick(30)
+  local c = CAMNODE.pos
+  check("a shot authored inside a body steps out of it", axis_d(c, crewA) >= 0.6, string.format("%.2f m from A's axis", axis_d(c, crewA)))
+  check("...and out of the one standing in its line", axis_d(c, crewB) >= 0.6, string.format("%.2f m from B's axis", axis_d(c, crewB)))
+  check("...toward what it looks at", c.z < 0, string.format("z %.2f", c.z))
+  -- (b) a close-up of A with B walking into the camera's place
+  cam.setShot(function() return 10, 1.7, -2.4, 10, 1.7, 0, 0, 1, 0 end, 0.05, { clear = true })
+  crewB.worldPos = vec3(10, 1, -2.4)
+  tick(30)
+  c = CAMNODE.pos
+  check("a body walking into the camera's place pushes the camera out of it", axis_d(c, crewB) >= 0.6 and axis_d(c, crewA) >= 0.6,
+    string.format("%.2f m from B, %.2f m from A", axis_d(c, crewB), axis_d(c, crewA)))
+  local ok_every = true
+  for i = 1, 40 do
+    crewB.worldPos = vec3(10 + math.sin(i * 0.3) * 0.8, 1, -2.4 + math.cos(i * 0.2) * 0.8)
+    tick(1)
+    if axis_d(CAMNODE.pos, crewB) < 0.6 or axis_d(CAMNODE.pos, crewA) < 0.6 then ok_every = false end
+  end
+  check("...every frame while it moves about", ok_every)
+  cam.clearShot(0.05)
+  tick(10)
+  envs.crew = nil
+end
 
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}

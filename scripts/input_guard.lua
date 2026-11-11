@@ -133,6 +133,10 @@ end
 
 function start(node)
   install(input)
+  -- (a new scene starts with the pointer free: the main menu, after a game
+  -- that was in first person, must never open with the mouse grabbed — Ty
+  -- 2026-11-11. The game scene's camera takes it again if it wants it.)
+  if input and input.setMouseLocked then pcall(input.setMouseLocked, false) end
   -- (a new scene: nothing holds the keyboard any more)
   local h = holds(input)
   for k in pairs(h) do h[k] = nil end

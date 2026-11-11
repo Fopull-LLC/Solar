@@ -11,7 +11,7 @@
 -- Three things, then:
 --
 --   * ESC BACKS OUT ONE LEVEL, everywhere, in a fixed order. A panel closes
---     first, then first person, then this. Nothing else in the game may open on
+--     first, then the pilot's seat, then this. Nothing else in the game may open on
 --     an Esc that something else has already answered, which is why the ladder
 --     is written down here rather than implied by five scripts each polling the
 --     key and hoping.
@@ -69,7 +69,7 @@ local CONTROLS = {
     { keys = { "ctrl" }, shown = "CTRL", what = "dive, in water" },
     { keys = {}, shown = "RIGHT MOUSE", what = "hold to look around" },
     { keys = { "alt" }, shown = "MMB / ALT", what = "keep looking without holding a button" },
-    { keys = {}, shown = "SCROLL", what = "zoom  ·  all the way in is first person" },
+    { keys = {}, shown = "SCROLL", what = "zoom  ·  you start in first person: scroll out for the shoulder view, all the way in for first person" },
     { keys = { "e" }, shown = "E  or  ⏎", what = "go into the building you are at" },
   } },
   { group = "Tools", col = 1, rows = {
@@ -202,12 +202,11 @@ local function something_else_is_up()
   -- The Build Kit (field_builder.lua): Esc drops the part in hand, then closes the kit.
   local fb = ref("field_builder")
   if fb and fb.isOpen and (fb.isOpen() or fb.escTakenAt == time) then return true end
-  -- First person is a level too: the first Esc puts you back on the shoulder,
-  -- the second opens this. Backing out one thing at a time is the whole
-  -- convention, and skipping a rung is how a menu ambushes you.
-  -- So is the pilot's seat (V while flying): Esc leaves it first.
+  -- The pilot's seat (V while flying) is a rung: Esc leaves it first.
+  -- (First person is not: the game starts there, and Esc opens this menu,
+  -- which frees the mouse — Ty 2026-11-11.)
   local pc = ref("planet_camera")
-  if pc and (pc.firstPerson or pc.cockpit) then return true end
+  if pc and pc.cockpit then return true end
   -- Cinematic mode and the free camera (F4 / F5): Esc leaves them first,
   -- and an Esc they took this frame was theirs.
   if pc and (pc.cinematic or pc.escTakenAt == time) then return true end

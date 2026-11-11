@@ -1683,7 +1683,7 @@ function geodeFind(body, mat, n, depth, src)
     if log then log(string.format("RARE FIND: a Star Geode — resonant crystal %.0f m down on %s", depth or 0, body)) end
     local bc = ref("big_caption")
     if bc and bc.show then
-      bc.show("STAR GEODE", string.format("Resonant crystal from %.0f m down: a Star Geode find on %s.", depth or 0, body), 5.0)
+      bc.show("STAR GEODE", string.format("Resonant crystal from %.0f m down: a Star Geode find on %s.", depth or 0, body), 5.0, "result")
     end
   end
   return true

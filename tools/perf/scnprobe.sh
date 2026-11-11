@@ -24,11 +24,16 @@ mkdir -p $S/tools
 cp $HERE/bench.sh $HERE/table.py $HERE/perfbench.lua $HERE/lockpool.sh $S/tools/
 SOLVE=""
 for f in "$SOL/scenarios/$id/solve.lua"; do [ -f "$f" ] && SOLVE="$f"; done
-python3 - "$S/tools/perfbench.lua" "$HERE/scnprobe_modes.lua" $SOLVE <<'PY'
+# EXTRA_LUA: more chunks spliced in after the modes (a per-frame monitor
+# defines MON_tick(), called from perfbench's update, and MON_total() at DONE:
+# tools/perf/camclear_mon.lua watches the cutscene camera)
+python3 - "$S/tools/perfbench.lua" "$HERE/scnprobe_modes.lua" $SOLVE ${EXTRA_LUA:-} <<'PY'
 import sys
 p = sys.argv[1]
 m = "".join(open(x).read() + "\n" for x in sys.argv[2:])
 s = open(p).read()
+s = s.replace("function update(node, dt)\n  measure()", "function update(node, dt)\n  measure()\n  if MON_tick then MON_tick() end", 1)
+s = s.replace('  P("DONE mode %s', '  if MON_total then MON_total() end\n  P("DONE mode %s', 1)
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
 # the scenario mode makes its own slot: no perfbench boot()

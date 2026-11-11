@@ -370,11 +370,11 @@ function atCommand(x, y, z)
 end
 local function at_command(node) return atCommand(node.x, node.y, node.z) end
 
-local function say(key, title, line, dur)
+local function say(key, title, line, dur, kind)
   if said[key] then return end
   said[key] = true
   local bc = ref("big_caption")
-  if bc and bc.show then pcall(bc.show, title, line or "", dur or 3.5) end
+  if bc and bc.show then pcall(bc.show, title, line or "", dur or 3.5, kind or "quiet") end
 end
 
 local function tick(dt)
@@ -426,7 +426,7 @@ local function tick(dt)
     if id and C.hurt then pcall(C.hurt, id, HYPOX_HP * dt / 60, "hypoxia", "thin air without a mask") end
     stats.hypox = stats.hypox + 1
     lastState = "hypoxia"
-    say("hypox", "THIN AIR · MASK", string.format("O₂ %.2f bar: too little to live on for long. Wear an O₂ Mask, or the helmet.", info.ppO2), 4.0)
+    say("hypox", "THIN AIR · MASK", string.format("O₂ %.2f bar: too little to live on for long. Wear an O₂ Mask, or the helmet.", info.ppO2), 4.0, "alarm")
   end
 end
 

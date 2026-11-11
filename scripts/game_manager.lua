@@ -101,6 +101,8 @@ function exitToMenu()
   -- on a worker, a plain flush returns before the data is on disk; rc16
   -- accepts `wait` and writes at once, as before.)
   save.flush({ wait = true })
+  -- the main menu opens with the pointer free (Ty 2026-11-11)
+  if input and input.setMouseLocked then pcall(input.setMouseLocked, false) end
   scene.load("menu")
 end
 

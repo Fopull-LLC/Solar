@@ -55,7 +55,7 @@ end
 -- size inside the frame's border (playtest: a 4:3 target "cover"-fitted into
 -- its frame drew past the border, off the strip's left edge).
 SIZES = { small = { w = 112, h = 112, tw = 168, th = 168 }, large = { w = 208, h = 208, tw = 312, th = 312 } }
-FRAME_PAD = 3                -- the frame's border round the picture (design units, every side)
+FRAME_PAD = 6                -- the frame's border round the picture (design units, every side): the hud/chip frame's 6-unit corner (at 3 the picture covered the bezel and the plate ran into its bottom edge — uxpolish 11-11)
 MODES = { "small", "large", "hidden" }
 -- Measured on rc38 (tools/perf/ivaprobe.sh ivapod2, Medium, 1920×1052): a
 -- portrait target pays for a whole scene render whatever its cullMask (the
@@ -476,7 +476,14 @@ local function arrow(key, glyph, on, h, d)
 end
 
 -- A row of on-foot chips no wider than the strip may be: it wraps.
-local function chip_w(label) return #label * 6.0 + 16 end
+-- (uxpolish 11-11: a "fit" key has no side padding, so its first letter sat
+-- on the bezel and ran out past the card. Each key is given this width, side
+-- padding included: about 6 design units a character of the tracked
+-- capitals, counted in characters, not bytes.)
+local function chip_w(label)
+  local n = select(2, tostring(label):gsub("[^\128-\191]", ""))
+  return math.floor(n * 6.2 + 24 + 0.5)
+end
 
 local function describe(v, list, L, afoot, chips_any, cap_in)
   local C = ref("crew")
@@ -513,10 +520,11 @@ local function describe(v, list, L, afoot, chips_any, cap_in)
   end
   if #afoot > 0 or (not v and (C and C.living and C.living() or 0) > 1) then
     rows[#rows + 1] = { "row", key = "afh", w = "fit", h = 18, gap = 8, pad = 0, align = "center",
-      { "text", key = "t", style = "hud/micro", w = "fit", h = 14, text = v and "ON FOOT" or "CREW" },
-      (not v) and { "button", key = "pick", style = "hud/button", w = 58, h = 18, text = "CREW ▸", textAlign = "center",
+      -- (on foot the button says CREW itself: a "CREW" label beside it read twice)
+      v and { "text", key = "t", style = "hud/micro", w = "fit", h = 14, text = "ON FOOT" }
+        or { "button", key = "pick", style = "hud/button", w = 58, h = 18, text = "CREW ▸", textAlign = "center",
         selected = pickerOpen or nil, tooltip = "Switch to another crew member, or travel to one far away",
-        onClicked = function() togglePicker() end } or nil }
+        onClicked = function() togglePicker() end } }
     local est, shown = 0, {}
     for i, e in ipairs(afoot) do
       if i > 6 then break end
@@ -526,7 +534,7 @@ local function describe(v, list, L, afoot, chips_any, cap_in)
     local row = { "row", key = "afoot", w = math.max(1, math.min(cap_in, est)), h = "fit", gap = 4, pad = 0, align = "center", wrap = true }
     for i, e in ipairs(shown) do
       -- (not focusable: a click must not leave Space able to click it again)
-      row[#row + 1] = { "button", key = "af" .. i, style = "hud/button", w = "fit", h = 20, focusable = false,
+      row[#row + 1] = { "button", key = "af" .. i, style = "hud/button", w = math.min(cap_in, chip_w(e.label)), h = 20, focusable = false,
                         text = e.label, textAlign = "center", onClicked = e.act }
     end
     rows[#rows + 1] = row
@@ -611,9 +619,12 @@ local function afoot_entries(v)
     if e.kind == "crew" and e.id ~= active then
       -- (graveyard2, Ty: "no indicators for what roles everyone has") the
       -- role in words on the chip: "K.DANA · ENGINEER 3 m · CONTROL"
+      -- (uxpolish 11-11: a scenario's long title, "Scientist · Agnes
+      -- Lindqvist's son", ran the chip out of its card: the role only)
       local rt = C.roleTitle and C.roleTitle(e.id)
-      out[#out + 1] = { label = string.format("%s%s %s · CONTROL", shortName(e.name), rt and (" · " .. string.upper(rt)) or "",
-                                              e.dist and string.format("%.0f m", e.dist) or ""),
+      rt = rt and (tostring(rt):match("^(.-)%s*·") or rt) or nil
+      out[#out + 1] = { label = string.format("%s%s%s · CONTROL", shortName(e.name), rt and (" · " .. string.upper(rt)) or "",
+                                              e.dist and string.format(" · %.0f m", e.dist) or ""),
                         act = function() local ok, why = C.control(e.id); if not ok then say(why or "can't") end end }
     end
   end

@@ -325,6 +325,26 @@ do
   CA.tickNow()
   local s = CA.statusOf(v, 1)
   check(s and s.venting and #s.leaks == 1 and s.p < 0.9, string.format("punctured: venting through %d hole, %.2f atm after 10 s", s and #s.leaks or -1, s and s.p or -1))
+  -- (scn_vacuum) one reading per air tick: the banner and the gauge say the
+  -- same time left (the shot had "Unbreathable in 5 s" over "unbreathable in 2 s")
+  do
+    E.time = 21.7
+    local s2 = CA.statusOf(v, 1)
+    local eta = CA.etaText(s2)
+    local line = CA.alarmLine(s2.label, "a hole in the hull", s2)
+    check(s2 == s and eta and line:lower():find(eta, 1, true) ~= nil,
+      string.format("one reading a tick: the banner \"%s\" carries the gauge's \"%s\"", line, tostring(eta)))
+    store["agency.clock"] = 1012; E.time = 22
+    CA.tickNow()
+    local s3 = CA.statusOf(v, 1)
+    check(s3 ~= s2 and s3.p < s2.p, string.format("the next tick reads again: %.3f → %.3f atm", s2.p, s3.p))
+    check(CA.cabinOf(v, "#1") == s3 and CA.cabinOf(v, "#99") == nil, "cabinOf(v, \"#<uid>\"): the module that part is in")
+    local BC = load_script("big_caption.lua", env({}, {}))
+    BC.show("DEPRESSURISATION", CA.alarmLine(s2.label, "a hole in the hull", s2), 4.5)
+    local ok1 = BC.retext("DEPRESSURISATION", CA.alarmLine(s3.label, "a hole in the hull", s3))
+    local ok2 = BC.retext("VESSEL LOST", "x")
+    check(ok1 and not ok2, "big_caption.retext: the banner's line follows the reading, another title is left alone")
+  end
   store["agency.clock"] = 1100; E.time = 110
   CA.tickNow()
   local ok, why = CA.helmetAboard()
@@ -381,6 +401,24 @@ do
   store["craft.cabin_air"] = "off"
   check(CA.avatarAir() == nil and CA.helmetAboard() == nil and CA.infoRows({ vessel = v, uid = 1 }) == nil, "cabin air off: no answers, the old rules")
   store["craft.cabin_air"] = nil
+  -- (scn_vacuum) out of one can, back in through the next: the hatch they
+  -- left by is sealed behind them too (Hard Vacuum: the hab stayed open)
+  do
+    local w = craft({ P(31, "pod"), P(32, "cabin", 31) })
+    w.seats = { { uid = 32, slot = 1, taken = 7 } }
+    w.crewAboard = true
+    S["__all_vessel_controller"] = { v, w }
+    E.time = E.time + 1.5          -- (cabin_air reads the craft list once a second)
+    CA.eventsNow()
+    w.crewAboard, w.leftAt, w.lastExitUid, w.seats = false, 730, 32, {}
+    CA.eventsNow()
+    local k32 = CA.doorOf(w, 32, "hatch")
+    local open1 = CA.doorsOf(w)[k32].state == "open"
+    w.crewAboard, w.seats = true, { { uid = 31, slot = 1, taken = 7 } }
+    CA.eventsNow()
+    check(open1 and CA.doorsOf(w)[k32].state == "sealed", "boarding by the pod seals the cabin's hatch they went out by")
+    S["__all_vessel_controller"] = { v }
+  end
   -- the state rides the part: a new script instance reads it back
   local CA2 = load_script("cabin_air.lua", env(store, S))
   getfenv(CA2.tickNow).time = 701

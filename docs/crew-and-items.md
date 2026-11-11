@@ -2004,7 +2004,29 @@ flight, and the base the walkable interiors will stand on (PLAN §5).
   prefix), p?, o2?, co2? (at most), breathable?, sealed? (not venting) }.
 - Fail `craft_pressure`: { craft, module?, below = 0.5, secs = 0 }.
 - `W.cabin(name, module)` (scenario_run) reads `cabin_air.cabinOf`;
-  scenario.validate checks the fields.
+  scenario.validate checks the fields. `module = "#<uid>"` is the module
+  that part is in (a craft JSON's uids are fixed); meters read
+  `cabin.p | o2 | co2 | reserve | res`; a `state` beat with `craft` writes a
+  hatch, a regulator or a reactor's output (Hard Vacuum, scenarios/hard_vacuum).
+- **One reading per air tick** (scn_vacuum): `statusOf` works a module out
+  once per air tick or door change and keeps it, so the DEPRESSURISATION
+  banner, the IVA gauge, the part's menu and the scenario reads show the same
+  "unbreathable in" (`etaText`). The banner's line follows that reading while
+  it is up (`big_caption.retext`); before, it froze at the alarm ("in 5 s"
+  over a gauge saying "in 2 s").
+- **Time left counts the bottles** (scn_vacuum): a module whose regulator
+  can hold it breathable against its leak (no breach, no open hatch, τ over
+  60 s) reads "unbreathable in" the reserve's time plus the bleed after it,
+  not the bleed alone (a stores can holding 0.98 atm read "in 42 s").
+- **One alarm a network**: modules open to one hole raise one
+  DEPRESSURISATION, naming the module the hole is in, with one klaxon.
+- **Boarding** also seals the hatch the crew went out by, when the crew
+  position boarding picks is in the next can along (Hard Vacuum's hab stayed
+  open to vacuum). A patch's job mends to PATCH_HP, not to new (crew_task).
+- **The dosimeter** (status_hud's Dose chip, on foot and on EVA) reads a
+  reactor's cone too (`crew.doseNow`): the rate now and the dose taken, in
+  mSv. On Hard Vacuum's EVA it climbs as you drift out of the shadow shield's
+  shadow.
 
 ### 13.7 Cost and tests
 - Never per frame per part: the graph is rebuilt when `partsGen()` moves or a

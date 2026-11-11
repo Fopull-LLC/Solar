@@ -522,14 +522,22 @@ local function kinds()
   return CK
 end
 
-local function say(key, title, line, secs, every)
+-- (Ty 2026-11-11: "Why does it tell me when there's a cave-in? It should
+-- just happen and I have to find out.") A cave says nothing on screen: the
+-- roof cracks, the air goes bad, a pocket burns, and the Air / Flammable /
+-- Cold / Heat chips and the suit's own readings are how it is found out.
+-- Every line goes to big_caption as "quiet" (the log and its history); only
+-- breathing bad air with the helmet open is an "alarm", the one thing here
+-- the player must act on. First entries credit their survey and RP, and the
+-- codex lines are filed, silently.
+local function say(key, title, line, secs, every, kind)
   last.said = last.said or {}
   local t = last.said[key]
   if t and now() - t < (every or 1e9) then return false end
   last.said[key] = now()
   local bc = ref("big_caption")
-  if bc and bc.show then pcall(bc.show, title, line or "", secs or 4.0)
-  elseif caption then pcall(caption, title .. " · " .. (line or "")) end
+  if bc and bc.show then pcall(bc.show, title, line or "", secs or 4.0, kind or "quiet")
+  elseif caption and kind == "alarm" then pcall(caption, title .. " · " .. (line or "")) end
   if log then log("cave_hazards: " .. title .. " · " .. tostring(line or "")) end
   return true
 end
@@ -1180,7 +1188,7 @@ local function step_probe(cf, name, gdt, rdt)
     if h > 0 and id and C.hurt then
       pcall(C.hurt, id, h * rdt / 60, "gas", "breathed " .. (LABEL[worst] or worst) .. " bare-headed")
       stats.harm = stats.harm + h * rdt / 60
-      say("dare:" .. worst, "BREATHING " .. (LABEL[worst] or worst), "Your head swims. Helmet on.", 2.5, 8)
+      say("dare:" .. worst, "BREATHING " .. (LABEL[worst] or worst), "Your head swims. Helmet on.", 2.5, 8, "alarm")
     end
   end
   -- 3. methane and the laser

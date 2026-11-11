@@ -329,7 +329,11 @@ end
 -- consumption); this default mends the part and uses up the kit.
 onDone = {}
 onDone.repair = function(id, t, v)
-  if v and v.repairPart then v.repairPart(t.uid, 1.0) end
+  -- (scn_vacuum) a patch (cabin_air's "Patch the leak": t.patch, t.to =
+  -- PATCH_HP) mends it to that, not to new: the patch row's job came out of
+  -- here at 100 %
+  local to = (t.patch and tonumber(t.to)) or 1.0
+  if v and v.repairPart then v.repairPart(t.uid, to) end
   if v and v.partSt then v.partSt(t.uid, "rprog", false, true) end
   local c, inv = ref("crew"), ref("inventory")
   local pack = c and c.packOf and c.packOf(id) or "astro"
@@ -341,7 +345,9 @@ onDone.repair = function(id, t, v)
   if r and c.patch then c.patch(id, { repairs = (r.repairs or 0) + 1 }) end
   local bc = ref("big_caption")
   local label = t.name or "part"
-  if bc and bc.show then bc.show("REPAIRED", label .. " — 100%", 3.0) else caption(label .. " repaired — 100%") end
+  -- (a patch says so on the line, not in the middle of the screen: Ty 11-11)
+  if t.patch then caption(label .. " patched — the leak is stopped")
+  elseif bc and bc.show then bc.show("REPAIRED", label .. " — 100%", 3.0, "result") else caption(label .. " repaired — 100%") end
 end
 
 -- The work spot this tick (for probes and the walker), and the hit point in
