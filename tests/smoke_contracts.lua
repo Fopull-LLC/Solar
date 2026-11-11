@@ -435,6 +435,197 @@ do
   table.remove(mi.PROGRAMME)
 end
 
+-- ── (progression P2) THE ARC, walked feat by feat ───────────────────────────
+-- A fresh career's programme from First Steps to Wheels and Wings: each
+-- milestone opens when what it requires is done, each goal ticks on its feat
+-- (or research, or contract), and each grant opens what PLAN §2.3 says, read
+-- by research.lua straight from the save. Then old saves: nothing re-locked.
+do
+  local keep = {}
+  for k, v in pairs(store) do keep[k] = v end
+  local function clear(keepers)
+    for k in pairs(store) do if not keepers[k] then store[k] = nil end end
+  end
+  local base_keys = { ["system.home"] = true, ["base.body"] = true }
+  for _, b in ipairs(ROSTER.bodies) do base_keys["world." .. b.name] = true end
+  clear(base_keys)
+  local radio = {}
+  envs.ops_strip = { valid = true, say = function(t, who) radio[#radio + 1] = { t = t, who = who } end }
+  local caps = 0
+  API.caption = function() caps = caps + 1 end
+  local rs = load_script("solar/scripts/research.lua", "research")
+  local F = load_script("solar/scripts/feats.lua", "feats")
+  local function st(id) for _, e in ipairs(mi.programme()) do if e.m.id == id then return e.state, e.needs end end end
+  local function done(id) return st(id) == "done" end
+  local function step() mi.progTick() end
+  local bal0 = co.balance()
+
+  -- the order of the arc
+  local order = {}
+  for _, m in ipairs(mi.PROGRAMME) do order[#order + 1] = m.id end
+  check("the arc's nine come first, in order", table.concat(order, ",", 1, 9)
+    == "first_steps,homestead,lights_on,shelter,salvage,ironworks,underground,fission,wheels", table.concat(order, ","))
+  check("…then Rare Finds, the comms ladder and Reach, as they were", table.concat(order, ",", 10)
+    == "rare_finds,relay_net,sky,beyond,reach", table.concat(order, ",", 10))
+  check("Fission requires Ironworks AND Underground", type(mi.progById("fission").requires) == "table"
+    and #mi.progById("fission").requires == 2)
+  local s, needs = st("fission")
+  check("…and says both while it waits", s == "locked" and needs == "Ironworks and Underground", needs)
+
+  -- 1. First Steps → the Build Kit
+  step()
+  check("a fresh career: First Steps open, no Build Kit, Homestead locked", st("first_steps") == "active"
+    and not rs.isUnlocked("buildkit") and st("homestead") == "locked")
+  store["inv.seen"] = { timber = true, iron = true }
+  step()
+  check("First Steps done grants the Build Kit", done("first_steps") and rs.isUnlocked("buildkit"))
+  check("…and opens Homestead (and Rare Finds), not the Relay Network", st("homestead") == "active"
+    and st("rare_finds") == "active" and st("relay_net") == "locked")
+
+  -- 2. Homestead → the Solar Array and the Battery Bank
+  check("no Solar Array before a base", not rs.isUnlocked("solarArray"))
+  F.mark("wood_built", { n = 8 }); F.mark("ruin_found", { key = "near" })
+  step()
+  check("timber and the ruin found tick two goals", not done("homestead"))
+  F.mark("base_founded", { key = 1 })
+  check("a base opens the Solar Array and the Battery Bank at once (featGrant)", rs.isUnlocked("solarArray") and rs.isUnlocked("batteryBank"))
+  check("…said on the radio, once, never as a caption", #radio == 1 and radio[1].who == "Ops" and caps == 0, radio[1] and radio[1].t)
+  step()
+  check("Homestead done: Lights On, Shelter and Salvage open", done("homestead") and st("lights_on") == "active"
+    and st("shelter") == "active" and st("salvage") == "active" and st("relay_net") == "locked")
+  check("…paid its goals and its reward", co.balance() - bal0 >= 400 + 300 + 300 + 600 + 800, co.balance() - bal0)
+
+  -- 3. Lights On → the tower, heavy power; the Relay Network
+  check("the tower and heavy power wait", not rs.isUnlocked("tower") and not rs.isUnlocked("powerCable35")
+    and (rs.blockedBy("powerCable95") or ""):find("through a night", 1, true) ~= nil, rs.blockedBy("powerCable95"))
+  F.mark("grid_served")
+  check("a grid served opens the Base Station Tower", rs.isUnlocked("tower"))
+  F.mark("cable_laid"); F.mark("night_held")
+  check("a night held opens heavy power (the 35/95 mm² and HV drums by ALIAS)", rs.isUnlocked("power2")
+    and rs.isUnlocked("powerCable35") and rs.isUnlocked("hvCable"))
+  step()
+  check("Lights On done: Ironworks, Wheels and the Relay Network open", done("lights_on") and st("ironworks") == "active"
+    and st("wheels") == "active" and st("relay_net") == "active")
+
+  -- 4. Shelter → life support, fluids
+  F.mark("room_sealed")
+  check("a sealed room opens life support", rs.isUnlocked("life") and not rs.isUnlocked("fluids"))
+  F.mark("room_breathable")
+  check("air you made opens the fluids", rs.isUnlocked("fluids") and not rs.isUnlocked("logic"))
+  F.mark("fluid_moved")
+  check("a pump that moved something opens the logic", rs.isUnlocked("logic"))
+  F.mark("slept_in")
+  step()
+  check("Shelter done: Underground opens; Fission still waits on Ironworks", done("shelter") and st("underground") == "active"
+    and st("fission") == "locked")
+
+  -- 5. Salvage → the Probe Core from a core read
+  F.mark("ruin_stripped", { n = 3 }); F.mark("lock_opened"); F.mark("core_read")
+  step()
+  check("a core read grants the Probe Core", rs.isUnlocked("probe") and not done("salvage"))
+  F.mark("ruin_claimed")
+  step()
+  check("…a claimed ruin finishes Salvage", done("salvage"))
+
+  -- 6. Ironworks
+  check("the refinery wants an ore studied first", (rs.blockedBy("refinery") or ""):find("ore studied", 1, true) ~= nil, rs.blockedBy("refinery"))
+  check("the Quarry wants a refinery run", (rs.blockedBy("quarry") or ""):find("refinery run", 1, true) ~= nil, rs.blockedBy("quarry"))
+  F.mark("ore_studied", { key = "iron" })
+  rs.grant("refinery", "test")
+  F.addAmount("machine_worked", 120.6)
+  step()
+  local ln = mi.progGoalLines("ironworks")[3] or ""
+  check("refining shows its kilograms", ln:find("(120 of 200 kg)", 1, true) ~= nil, ln)
+  F.addAmount("machine_worked", 80.0)
+  check("the Quarry: past the feat, a price", rs.blockedBy("quarry") == nil or not (rs.blockedBy("quarry") or ""):find("refinery run", 1, true), rs.blockedBy("quarry"))
+  F.mark("part_fabricated")
+  step()
+  check("Ironworks done", done("ironworks"))
+
+  -- 7. Underground → shoring
+  F.mark("cave_kinds", { key = "lava" }); F.mark("cave_kinds", { key = "karst" })
+  check("two cave kinds open the shoring", rs.isUnlocked("shoring"))
+  F.mark("cave_cache")
+  step()
+  check("…not done without pitchblende", not done("underground"))
+  store["inv.seen"].uranium = true
+  step()
+  check("a uranium sample stands in for the dose (any)", done("underground") and st("fission") == "active")
+
+  -- 8. Fission
+  check("the Ember wants an Isotope Skid's night first", (rs.blockedBy("ember") or ""):find("Isotope Skid", 1, true) ~= nil, rs.blockedBy("ember"))
+  F.mark("rtg_night"); rs.grant("ember", "test"); F.mark("reactor_critical"); F.mark("scram_seen")
+  step()
+  check("Fission done", done("fission"))
+
+  -- 9. Wheels and Wings → the Battery Pack
+  check("the Cargo Bay wants a kilometre on wheels", (rs.blockedBy("cargo") or ""):find("1 km driven", 1, true) ~= nil, rs.blockedBy("cargo"))
+  F.addAmount("drive_km", 1500)
+  step()
+  local wl = mi.progGoalLines("wheels")[1] or ""
+  check("driving shows its kilometres", wl:find("(1.5 of 2 km)", 1, true) ~= nil, wl)
+  check("…the Battery Pack still locked", not rs.isUnlocked("packB"))
+  F.addAmount("drive_km", 600)
+  step()
+  check("2 km driven grants the Battery Pack", rs.isUnlocked("packB"))
+  rs.grant("cargo", "test"); F.mark("bulk_hauled"); store["mission.done"] = { firstflight = true }; F.mark("run_cycle", { key = "r1" })
+  step()
+  check("Wheels and Wings done", done("wheels"))
+  check("no milestone ever spoke as a big caption", caps == 0, caps)
+
+  -- the wood goal while the kit has no timber (W1 not in this build)
+  clear(base_keys)
+  envs.parts_kit = { valid = true, MATS = { steel = {} }, PIECES = { wall = {} } }
+  store["prog.done"] = { first_steps = true }
+  local b1 = co.balance()
+  step()
+  local hl = mi.progGoalLines("homestead")[1] or ""
+  check("no timber in the kit: the wood goal is waived, and says so", hl:find("waived", 1, true) ~= nil and hl:sub(1, 3) == "✓", hl)
+  check("…paying nothing for it", co.balance() == b1, co.balance() - b1)
+  check("…and the tower is open while there is no Camp Mast to found a base with", rs.isUnlocked("tower"))
+  envs.parts_kit.MATS.wood = {}; envs.parts_kit.PIECES.campMast = {}
+  check("with the Camp Mast in the kit, the tower waits for a served grid", not rs.isUnlocked("tower"))
+  envs.parts_kit = nil
+
+  -- OLD SAVES: nothing re-locked (feats.migrate's P2 half)
+  -- (a) far along: the Relay Network done (the kit, the probe, the pack came from it)
+  clear(base_keys)
+  store["prog.done"] = { first_steps = true, rare_finds = true, relay_net = true }
+  store["prog.perm"] = { relay_net = { true, true } }
+  store["res.done"] = { probe = true, packB = true, buildkit = true, dish = true }
+  store["feats.mig"] = 1
+  F.migrate()
+  local all = true
+  for _, t in ipairs({ "buildkit", "packB", "probe", "dish", "tower", "power2", "life", "fluids", "logic", "quarry", "shoring" }) do
+    if not rs.isUnlocked(t) then all = false; print("  (old save: " .. t .. " locked)") end
+  end
+  check("an old save past the Relay Network keeps every piece it could build", all)
+  step()
+  check("…its milestones stand; the arc opens beside them", done("relay_net") and st("sky") == "active" and st("homestead") == "active")
+  -- (b) mid-way: the 10 % stage passed, the kit in hand
+  clear(base_keys)
+  store["prog.done"] = { first_steps = true }
+  store["prog.perm"] = { relay_net = { true } }
+  store["feats.mig"] = 1
+  F.migrate()
+  step()
+  check("an old save on the Relay Network keeps it open (prog.open) and its kit's pieces", st("relay_net") == "active"
+    and rs.isUnlocked("buildkit") and rs.isUnlocked("life") and rs.isUnlocked("tower"))
+  -- (c) First Steps done, no kit yet: nothing was buildable, so nothing is granted
+  clear(base_keys)
+  store["prog.done"] = { first_steps = true }
+  store["feats.mig"] = 1
+  F.migrate()
+  step()
+  check("an old save before the kit: the kit now (First Steps), the arc's gates still to earn", rs.isUnlocked("buildkit")
+    and not rs.isUnlocked("life") and st("relay_net") == "active" and st("homestead") == "active")
+
+  -- restore
+  envs.ops_strip, envs.research, envs.feats, API.caption = nil, nil, nil, nil
+  clear({})
+  for k, v in pairs(keep) do store[k] = v end
+end
+
 -- ── report ──────────────────────────────────────────────────────────────────
 local bad = {}
 for _, c in ipairs(checks) do

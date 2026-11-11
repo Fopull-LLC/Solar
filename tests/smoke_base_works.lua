@@ -131,18 +131,19 @@ ok(#lines == 6 and lines[6][1] == "Refit  4 more parts" and lines[6][2] == "$" .
   "past six, the cheapest are summed on one line")
 ok(RB.inBay(0, 0.5, 0) and RB.inBay(5.0, 0.3, -7.0) and not RB.inBay(6.0, 0.3, 0) and not RB.inBay(0, 6, 0), "the bay floor box")
 
--- ── progression: the Battery Pack comes with 25 % relay coverage ───────────
+-- ── progression: the Battery Pack comes with 2 km on wheels ────────────────
 -- (playtest 2026-11-04) no copper and no Battery needed; the big Battery
--- still wants copper.
+-- still wants copper. (P2: Wheels and Wings' drive goal grants it; it was the
+-- Relay Network's 25 % stage, and a save granted it there keeps it.)
 ok(RS.TECH.packB and RS.TECH.packB.after == nil and RS.TECH.packB.mat == nil, "the Battery Pack needs neither the Battery nor copper")
 ok(RS.TECH.battery.mat == "copper", "the Battery still needs copper")
 store["res.done"] = {}
 store["prog.done"] = {}
-ok(not RS.isUnlocked("packB") and (RS.blockedBy("packB") or ""):find("Relay Network", 1, true) ~= nil, "…locked until the Relay Network, and says so")
-store["prog.done"] = { relay_net = true }
-ok(RS.isUnlocked("packB"), "…open in a save that already finished the Relay Network")
+ok(not RS.isUnlocked("packB") and (RS.blockedBy("packB") or ""):find("Wheels and Wings", 1, true) ~= nil, "…locked until Wheels and Wings, and says so")
+store["prog.done"] = { wheels = true }
+ok(RS.isUnlocked("packB"), "…open in a save that already finished Wheels and Wings")
 store["prog.done"] = {}
-ok(RS.grant("packB", "test") and RS.isUnlocked("packB"), "…and granted by the 25 % goal")
+ok(RS.grant("packB", "test") and RS.isUnlocked("packB"), "…and granted by the drive goal (as the 25 % goal did)")
 store["res.done"] = {}
 
 if #failures > 0 then

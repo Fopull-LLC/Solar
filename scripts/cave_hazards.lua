@@ -1275,6 +1275,7 @@ local function step_probe(cf, name, gdt, rdt)
     if rate > 0 and id and C.addDose then
       pcall(C.addDose, id, rate * gdt, "a pitchblende seam", rate)
       stats.dosed = stats.dosed + rate * gdt
+      local FT = ref("feats"); if FT and FT.accrue then pcall(FT.accrue, "dose_taken", gdt, FT.DOSE_S) end   -- (progression P2)
       last.dose = { t = now(), rate = rate * 3600, ore = ore, forced = fdo > 0 }
       say("dose", "RADON", tell("dose", string.format("A pitchblende seam within metres: %.1f %% of a lethal dose an hour here.", rate * 3600 * 100)), 4.0, 90)
     end

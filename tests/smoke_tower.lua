@@ -299,10 +299,13 @@ local n0 = LOOKUPS.n
 for _ = 1, 100 do BT.update({}, 0.016) end
 check(LOOKUPS.n - n0 <= 2, "an idle frame looks nothing up (" .. tostring(LOOKUPS.n - n0) .. " lookups in 100 frames)")
 
--- ── M3: the Build Kit is the 10 % unlock ────────────────────────────────────
+-- ── M3: the Build Kit (progression P2: First Steps grants it) ──────────────
 local rs_store = {}
 local RS = load_script("research.lua", env(rs_store, {}))
-check(not RS.isUnlocked("buildkit") and RS.blockedBy("buildkit"):find("10%", 1, true), "the Build Kit is locked: " .. tostring(RS.blockedBy("buildkit")))
+check(not RS.isUnlocked("buildkit") and RS.blockedBy("buildkit"):find("First Steps", 1, true), "the Build Kit is locked: " .. tostring(RS.blockedBy("buildkit")))
+rs_store["prog.done"] = { first_steps = true }
+check(RS.isUnlocked("buildkit"), "...First Steps done opens it")
+rs_store["prog.done"] = nil
 local uok = RS.unlock("buildkit")
 check(not uok and not RS.isUnlocked("buildkit"), "...and can't be bought")
 check(RS.grant("buildkit", "Relay Network") and RS.isUnlocked("buildkit"), "...a grant opens it")
@@ -330,8 +333,8 @@ local goal = nil
 for _, m in ipairs(okm and menv.PROGRAMME or {}) do
   if m.id == "relay_net" then goal = m.goals[1] end
 end
-check(goal and type(goal.grant) == "table" and goal.grant[1] == "probe" and goal.grant[2] == "buildkit" and goal.frac == 0.10 and goal.ops,
-  "the Relay Network's 10 % goal grants { probe, buildkit } and has Ops' line")
+check(goal and goal.grant == "probe" and goal.frac == 0.10 and goal.ops,
+  "the Relay Network's 10 % goal grants the Probe Core (P2: the kit is First Steps') and has Ops' line")
 
 -- the station's FLEET column: a BASES group (fleet_view)
 local FV = load_script("fleet_view.lua", env({}, {}))

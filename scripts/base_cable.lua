@@ -763,6 +763,7 @@ function lay(a, z, opts)
                 paid = { cost = q.cost, ship = q.ship, foot = 0, total = q.total, t = t, supplier = q.supplier, by = by } }
   local id = add(rec)
   if spawn_mesh then spawn_mesh(rec) end
+  if (L or 0) >= 40 then local FT = ref("feats"); if FT and FT.once then pcall(FT.once, "cable_laid", { b = ra.b }) end end   -- (progression P2)
   if c and c.credit and by then pcall(c.credit, by, "built", 1, { body = ra.b }) end
   lastLay = { id = id, len = L, total = q.total, t = t, n = #pts, mass = q.mass }
   -- the ring: undo = a full refund within the minute; redo = lay it again

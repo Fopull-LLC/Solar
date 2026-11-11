@@ -380,6 +380,73 @@ local RARE_HINT = {
   river = "They grow on the banks, a step up from the water.",
 }
 
+-- (progression P2) THE ARC'S GOALS: task (what to do, a short imperative)
+-- and hint (ONE sentence: the card is read at a glance while walking). A
+-- function for the ones whose words depend on the world (the ruin's bearing,
+-- what founds a base in this build).
+local function kit_has(piece)
+  local K = ref("parts_kit")
+  return K ~= nil and type(K.PIECES) == "table" and K.PIECES[piece] ~= nil
+end
+FEAT_STEP = {
+  wood_built = { "Build with timber.", "Saw planks from felled trees at a Sawbench, or order them at the Depot, and place timber pieces with the Build Kit." },
+  ruin_found = function(astro)
+    local R = ref("ruins")
+    local hint = "Ops logged an old camp from the air: walk out and look for it."
+    local home = space and astro and space.dominant(astro.x, astro.y, astro.z)
+    local s = R and R.nearOf and home and R.nearOf(home)
+    local b = s and space.body(home)
+    if s and b and R.pointOf and not s.pending then
+      local ok, x, y, z = pcall(R.pointOf, s)
+      local way = ok and x and rough_way(astro, b.x + x, b.y + y, b.z + z)
+      if way then hint = "Survey report: " .. way .. "." end
+    end
+    return "Find the abandoned camp near home.", hint
+  end,
+  base_founded = function()
+    local how = kit_has("campMast") and "raise a Camp Mast with the Build Kit" or "place a Base Station Tower with the Build Kit"
+    return "Found a base of your own.", "The Engineer claims a ruin (\"Claim the site\"), or " .. how .. "."
+  end,
+  grid_served = { "Power a load from a source.", "A Solar Array and a Battery Bank on one grid with a light or a tower: 150 m round a tower is one grid, and a cable joins two." },
+  cable_laid = { "Lay a 40 m power cable.", "Take a Power Cable drum from the Build Kit and click one part, then another 40 m or more away." },
+  night_held = { "Keep the grid up through a night.", "The bank must carry every load from dusk to dawn; a Desk Monitor's POWER page says how long it lasts, and time warp shortens the wait." },
+  room_sealed = { "Close a sealed room.", "Steel walls, floor and roof round 8 m³ or more with the door shut: timber leaks, and the ROOMS overlay shows a sealed room." },
+  room_breathable = { "Make the room's air your own.", "A CO2 Scrubber inside it, on the grid and running, for an hour of breathable air." },
+  slept_in = { "Spend a night indoors.", "Stand inside the sealed room from dusk to dawn: time warp helps." },
+  ruin_stripped = { "Strip pieces from a ruin.", "An Engineer with a Repair Kit strips what is sound: look at a piece and choose \"Strip for parts\"." },
+  lock_opened = { "Open a lock.", "The code is written down somewhere on the site; or force it." },
+  core_read = { "Read a ruin's Data Core.", "Pull the core from the ruin's terminal and carry it into the Research Lab." },
+  ruin_claimed = { "Claim a ruin.", "At the site the Engineer chooses \"Claim the site\", and its tower founds a base." },
+  ore_studied = { "Study an ore.", "Put ore in at the Materials Intake and send a sample up to the Research Lab." },
+  machine_worked = { "Refine 200 kg of ore.", "A Crusher and a Furnace on the grid, fed through a hopper: ore in, metal out." },
+  part_fabricated = { "Fabricate a part.", "Research the Fabricator, then queue a part at it: it works from your own steel." },
+  cave_kinds = { "Explore two kinds of cave.", "Cave mouths open at the feet of cliffs and in sinkholes: take a lamp, and watch the air." },
+  cave_cache = { "Find a cave cache.", "Old mine heads and sinkhole camps left a crate at the bottom: open it." },
+  rtg_night = { "Run a grid on an Isotope Skid through a night.", "An Isotope Skid on a grid with loads carries them whether the sun is up or not." },
+  reactor_critical = { "Bring a reactor critical.", "Build the core from NUCLEAR pieces, fuel it, and pull the rods at the Reactor Control Console." },
+  scram_seen = { "Trip the reactor.", "Press SCRAM at the Reactor Control Console: the rods drop and the plant shuts down." },
+  drive_km = { "Drive 2 km.", "A bike or a rover: every metre on wheels counts, anywhere." },
+  bulk_hauled = { "Deliver a bulk haul.", "Sign a bulk haul at the Ops Board and bring the load home in a Cargo Bay." },
+  run_cycle = { "Automate a run.", "Fly a supply run once, then hand it to the autopilot at the Tracking Station." },
+  dose_taken = { "Find pitchblende.", "Uranium lies 20 to 50 m down, often in chasm caves, and the suit reads its dose within metres of a seam." },
+}
+local function feat_step(astro, m, g)
+  local e = FEAT_STEP[g.id]
+  if type(e) == "function" then return e(astro, m, g) end
+  if type(e) == "table" then return e[1], e[2] end
+  return nil
+end
+-- A research goal: what still stands in its way, or where to click.
+local function tech_step(g)
+  local rs = ref("research")
+  local label = (rs and rs.labelOf and rs.labelOf(g.id)) or g.id
+  local why = rs and rs.blockedBy and rs.blockedBy(g.id)
+  local co = ref("company")
+  local price = rs and rs.priceText and rs.priceText(g.id, co and co.money) or nil
+  if why then return "Research the " .. label .. ".", "First it " .. why .. "." end
+  return "Research the " .. label .. ".", "Click its locked card in the catalogue" .. (price and (" (" .. price .. ")") or "") .. " and click again to confirm."
+end
+
 -- What to do about one programme goal: task, hint.
 local function prog_guidance(mi, astro, m, g, niche)
   local home = mi.homeName and mi.homeName() or nil
@@ -461,6 +528,22 @@ local function prog_guidance(mi, astro, m, g, niche)
     return "Link a moon to the network.", "A relay on or around a moon, in sight of one of yours."
   elseif g.kind == "linked" then
     return "Link another planet to the network.", "Across the system it takes a Deep Space Dish at one end at least."
+  -- (progression P2) the arc's kinds
+  elseif g.kind == "feat" then
+    local task, hint = feat_step(astro, m, g)
+    if task then return task, hint end
+  elseif g.kind == "tech" then
+    return tech_step(g)
+  elseif g.kind == "contract" then
+    local c = mi.byId and mi.byId(g.id)
+    return "Fly " .. ((c and c.title) or "the contract") .. ".", "Sign it at the Ops Board in the Command Centre."
+  elseif g.kind == "any" then
+    for _, sub in ipairs(g.of or {}) do
+      if sub.kind == "feat" then
+        local task, hint = feat_step(astro, m, sub)
+        if task then return task, hint end
+      end
+    end
   end
   return m.title, first_sentence(m.brief)
 end
@@ -480,11 +563,18 @@ local function prog_step(astro, flying, only)
     if g and (only == nil or m.id == only) and (only ~= nil or not flying or FLOWN[g.kind]) then
       local task, hint = prog_guidance(mi, astro, m, g, niche)
       local others = {}
-      for _, o in ipairs(act) do if o ~= m then others[#others + 1] = o.title end end
+      for _, o in ipairs(act) do if o ~= m and mi.progNextGoal(o.id) then others[#others + 1] = o.title end end
       local foot = nil
       if not flying then
-        foot = (#others > 0 and ("Also open: " .. table.concat(others, ", ") .. ".  ") or "")
-          .. "Paid contracts: the Ops Board at the Command Centre."
+        -- (P2: the arc opens three or four at once; two names, then a count, so
+        -- the foot stays one line or two on the card)
+        local also = ""
+        if #others > 3 then
+          also = string.format("Also open: %s, %s and %d more (press / to switch).  ", others[1], others[2], #others - 2)
+        elseif #others > 0 then
+          also = "Also open: " .. table.concat(others, ", ") .. ".  "
+        end
+        foot = also .. "Paid contracts: the Ops Board at the Command Centre."
       end
       return { key = "prog:" .. m.id .. ":" .. i, label = "Programme · " .. m.title,
                task = task, hint = hint, goals = mi.progGoalLines(m.id),

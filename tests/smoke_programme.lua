@@ -4,7 +4,9 @@
 -- drives every state transition:
 --
 --   * a new save opens First Steps and nothing else; it pays once both
---     materials have been held, and opens Rare Finds and the Relay Network;
+--     materials have been held, grants the Build Kit, and opens Homestead and
+--     Rare Finds (progression P2: the Relay Network follows Lights On, whose
+--     feats are set here by hand; smoke_contracts walks the arc itself);
 --   * a rare goal resolves to the niches the home world actually has (and is
 --     waived when it has none), and ticks on the specimen's first sight;
 --   * the relay goals wait (and say so) while comms does not report, react to
@@ -133,7 +135,8 @@ second()
 check("research registers the rare materials", mats.REG.geode ~= nil and mats.label("rare_peak") ~= "rare_peak")
 check("a new save opens First Steps", state_of("first_steps") == "active", state_of("first_steps"))
 check("…and nothing else", state_of("rare_finds") == "locked" and state_of("relay_net") == "locked"
-  and state_of("sky") == "locked" and state_of("beyond") == "locked")
+  and state_of("sky") == "locked" and state_of("beyond") == "locked" and state_of("homestead") == "locked")
+check("no Build Kit before First Steps", not rs.isUnlocked("buildkit"))
 check("the first active milestone is First Steps", (mi.progActive()[1] or {}).id == "first_steps")
 check("Relay Dish is locked behind the Relay Network milestone",
   (rs.blockedBy("dish") or ""):find("Relay Network", 1, true) ~= nil, rs.blockedBy("dish"))
@@ -168,17 +171,18 @@ inv.add("astro", "regolith", 1)
 second()
 check("mined ore finishes First Steps", state_of("first_steps") == "done", state_of("first_steps"))
 check("…and pays its reward once", co.balance() == f0 + 400, co.balance() - f0)
+check("…and grants the Build Kit (P2)", rs.isUnlocked("buildkit"))
 check("the card announces the milestone first", card_text():find("MILESTONE", 1, true) ~= nil)
 T = T + 10   -- the banner's moment passes
 ct = card_text()
-check("with a little in the pack the card still follows the programme", ct:find("Rare Finds", 1, true) ~= nil
+check("with a little in the pack the card still follows the programme: Homestead next (P2)", ct:find("Programme · Homestead", 1, true) ~= nil
   and ct:find("Sell what", 1, true) == nil, ct)
-check("…and says where to look", ct:find("ravine", 1, true) ~= nil, ct)
+check("…and says what to do", ct:find("timber", 1, true) ~= nil, ct)
 check("…and what the milestone pays", ct:find("Completes for", 1, true) ~= nil, ct)
-check("…and what else is open", ct:find("Also open: Relay Network", 1, true) ~= nil, ct)
+check("…and what else is open", ct:find("Also open: Rare Finds", 1, true) ~= nil, ct)
 check("…and stops wanting to sell", ct:find("Sell what", 1, true) == nil, ct)
-check("…and opens Rare Finds and the Relay Network", state_of("rare_finds") == "active"
-  and state_of("relay_net") == "active" and state_of("sky") == "locked")
+check("…and opens Homestead and Rare Finds, not the Relay Network yet", state_of("rare_finds") == "active"
+  and state_of("homestead") == "active" and state_of("relay_net") == "locked" and state_of("sky") == "locked")
 check("the card's announcement names the milestone", mi.lastPaid and mi.lastPaid.label == "MILESTONE"
   and mi.lastPaid.title == "First Steps")
 second()
@@ -257,6 +261,21 @@ do
   w.atmo = 0.7
 end
 
+-- ── 3b. (P2) Homestead and Lights On, by their feats ───────────────────────
+store.feats = { wood_built = { n = 8 }, ruin_found = { n = 1 }, base_founded = { n = 1 } }
+second()
+check("Homestead's feats finish it", state_of("homestead") == "done" and state_of("lights_on") == "active", state_of("homestead"))
+check("…the base opened the Solar Array", rs.isUnlocked("solarArray") and rs.isUnlocked("batteryBank"))
+check("…and the Relay Network still waits on Lights On", state_of("relay_net") == "locked")
+local rl = nil
+for _, e in ipairs(mi.programme()) do if e.m.id == "relay_net" then rl = e end end
+check("…and says so", rl and rl.needs == "Lights On", rl and rl.needs)
+store.feats.grid_served, store.feats.cable_laid, store.feats.night_held = { n = 1 }, { n = 1 }, { n = 1 }
+second()
+check("Lights On's feats finish it", state_of("lights_on") == "done", state_of("lights_on"))
+check("…granting the tower and heavy power", rs.isUnlocked("tower") and rs.isUnlocked("power2"))
+check("…and open the Relay Network", state_of("relay_net") == "active")
+
 -- ── 4. the relay network ────────────────────────────────────────────────────
 check("without comms the relay goals wait", not ticked("relay_net", 1))
 check("…and say why", (mi.progGoalLines("relay_net")[1] or ""):find("not reporting", 1, true) ~= nil,
@@ -303,7 +322,7 @@ hooked()
 tick(1)
 check("the change hook re-polls on the next frame", ticked("relay_net", 2))
 check("25% completes the Relay Network", state_of("relay_net") == "done")
-check("…and grants the Battery Pack", rs.isUnlocked("packB"))
+check("…and no longer grants the Battery Pack (P2: Wheels and Wings does)", not rs.isUnlocked("packB"))
 check("…granting the Relay Dish (satellite relays)", rs.isUnlocked("dish") and rs.blockedBy("dish") == nil)
 check("…and opens Eyes in the Sky", state_of("sky") == "active")
 check("Deep Space Dish is locked behind Eyes in the Sky",
@@ -367,8 +386,13 @@ check("Beyond's rewards: 2 sky stages + 1 + milestone + 2 links + milestone",
 -- (X7) only Reach is left: its goals are bases, runs and surveys off the home
 -- world (base_roles, route_ops, survey: none in this harness, so none tick)
 local left = mi.progActive()
-check("nothing left in progress but Reach, which waits on bases off the home world",
-  #left == 1 and left[1].id == "reach" and not ticked("reach", 1), #left)
+local has_reach, comms_left = false, false
+for _, m in ipairs(left) do
+  if m.id == "reach" then has_reach = true end
+  if m.id == "relay_net" or m.id == "sky" or m.id == "beyond" then comms_left = true end
+end
+check("the comms ladder is done; Reach waits on bases off the home world (and the arc's others are open)",
+  has_reach and not comms_left and not ticked("reach", 1), #left)
 
 -- ── 7. a comms script that throws ───────────────────────────────────────────
 comms.coverage = function() error("boom") end

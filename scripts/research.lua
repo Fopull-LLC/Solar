@@ -12,7 +12,11 @@
 --   another tech the obvious ladders (docking before cargo)
 --
 -- That is the whole point of the material economy: mining and harvesting are
--- how you pay for, and qualify for, the next part. There is no separate research
+-- how you pay for, and qualify for, the next part. And (progression P1/P2,
+-- docs/progression.md) DOING things is: a base founded opens the Solar
+-- Array, a sealed room the life support, a night held the heavy power. Those
+-- gates are `featGrant` (given the moment the feat is in the save) or `feat`
+-- (a thing to do first, then the price), read from the save in both scenes. There is no separate research
 -- screen — a locked card in the builder tells you exactly what it wants and
 -- unlocks on the spot when you click it, which is where you're standing when you
 -- want it.
@@ -54,12 +58,13 @@ defaults = {}
 TECH = {
   tankM      = { cost = 600,  label = "FT-M Tank" },
   battery    = { cost = 300,  label = "Battery",        mat = "copper" },
-  -- The bike's tank-shaped Battery Pack: the small cells. The ground network
-  -- earns it (playtest 2026-11-04): the Relay Network's 25 % goal grants it
-  -- (missions.lua), no copper needed; the big Battery still wants a sample of
-  -- copper. `progGrant`: a save that already finished the milestone has it.
-  packB      = { cost = 150,  label = "Battery Pack",   prog = "relay_net", progGrant = true,
-                 progLabel = "Relay Network (25% of the ground linked)" },
+  -- The bike's tank-shaped Battery Pack: the small cells. Driving earns it
+  -- (progression P2): Wheels and Wings' 2 km goal grants it (missions.lua),
+  -- no copper needed; the big Battery still wants a sample of copper.
+  -- `progGrant`: a save that already finished the milestone has it (a save
+  -- that passed the Relay Network's 25 % before P2 was granted it then).
+  packB      = { cost = 150,  label = "Battery Pack",   prog = "wheels", progGrant = true,
+                 progLabel = "Wheels and Wings (2 km driven)" },
   engineM    = { cost = 1400, label = "Anvil" },
   -- The relay dish is what a SATELLITE relay is made of: it opens once the
   -- ground network is up (the Relay Network milestone grants it outright), so
@@ -72,7 +77,8 @@ TECH = {
   fuelLine   = { cost = 700,  label = "Fuel Line",      after = "radialDec" },
   radialTank = { cost = 1200, label = "Radial Tank",    after = "tankM" },
   solar      = { cost = 2200, label = "Solar Panel",    mat = "silica",  after = "battery" },
-  cargo      = { cost = 500,  label = "Cargo Bay",      mat = "iron" },
+  -- (P2) the Cargo Bay after a kilometre on wheels (a rover's first job)
+  cargo      = { cost = 500,  label = "Cargo Bay",      mat = "iron", feat = "drive_km", featN = 1000 },
   rcs        = { cost = 2600, label = "RCS Block",      after = "engineM", rep = 3 },
   skipper    = { cost = 4500, label = "Skipper",        mat = "iron",    after = "engineM", rep = 8 },
   dockPort   = { cost = 3800, label = "Docking Port",   mat = "copper",  rep = 6, after = "rcs" },
@@ -86,7 +92,8 @@ TECH = {
   radFin       = { cost = 300,  label = "Radiator Fin",   after = "rtg" },
   radPanel     = { cost = 1200, label = "Radiator Panel", after = "rtg" },
   radTruss     = { cost = 3200, label = "Truss Radiator", after = "radPanel", rep = 6 },
-  ember        = { cost = 9000, label = "Ember Reactor",  mat = "uranium", after = "radPanel", rep = 6 },
+  -- (P2) the Ember after an Isotope Skid has carried a grid through a night
+  ember        = { cost = 9000, label = "Ember Reactor",  mat = "uranium", after = "radPanel", rep = 6, feat = "rtg_night" },
   shadowShield = { cost = 1800, label = "Shadow Shield",  after = "ember" },
   -- THE SURVEY PARTS (expansion X1; scripts/parts_survey.lua): the scanner
   -- after the probe core (it rides a satellite), the telescope wants silica
@@ -99,10 +106,10 @@ TECH = {
   -- money and research points. The crusher, the furnace and its radiators
   -- first; the kiln and the mixer want a silica sample; the electrolyser and
   -- the Fabricator come after the refinery.
-  refinery     = { cost = 6000,  label = "Refinery (Crusher, Furnace)", mat = "iron", rp = 40 },
+  refinery     = { cost = 6000,  label = "Refinery (Crusher, Furnace)", mat = "iron", rp = 40, feat = "ore_studied" },
   ceramics     = { cost = 3500,  label = "Kiln and Mixer", mat = "silica", after = "refinery", rp = 30 },
   electrolysis = { cost = 9000,  label = "Electrolyser", after = "refinery", rp = 120 },
-  fabrication  = { cost = 12000, label = "Fabricator", after = "refinery", rp = 150 },
+  fabrication  = { cost = 12000, label = "Fabricator", after = "refinery", rp = 150, feat = "machine_worked" },
   -- DIRECTED ENERGY (expansion X9; scripts/beam.lua, lasers.lua, parts_kit
   -- DEFENCE): the banks, bus, emitter, lens, director, console and radar;
   -- amplifier stages after it; the craft turret wants both copper and the
@@ -110,13 +117,14 @@ TECH = {
   lasers       = { cost = 18000, label = "Directed Energy (capacitors, emitter, director)", mat = "copper", rp = 120 },
   laserAmp     = { cost = 30000, label = "Amplifier Stages", after = "lasers", rp = 250 },
   laserTurret  = { cost = 14000, label = "Laser Turret", after = "lasers", rp = 80 },
-  -- THE BUILD KIT (deep-space M3): not bought, GIVEN: the Relay Network's
-  -- first goal (10 % of the ground linked) grants it (missions.lua), and from
-  -- then the Depot stocks it and every Engineer is issued one at the base
-  -- (field_builder). `grantOnly`: no price, no click; `permGrant`: a save
-  -- that already passed that goal has it.
-  buildkit     = { cost = 0, label = "Build Kit", grantOnly = true, permGrant = { "relay_net", 1 },
-                   grantLabel = "10% of the ground linked (Relay Network)" },
+  -- THE BUILD KIT (deep-space M3; progression P2): not bought, GIVEN: First
+  -- Steps grants it (cut a plant, mine some ore), and from then the Depot
+  -- stocks it and every Engineer is issued one at the base (field_builder).
+  -- `grantOnly`: no price, no click; `progGrant`: First Steps done;
+  -- `permGrant`: a save that passed the Relay Network's 10 % before P2 (when
+  -- the kit came from there) keeps it.
+  buildkit     = { cost = 0, label = "Build Kit", grantOnly = true, prog = "first_steps", progGrant = true,
+                   permGrant = { "relay_net", 1 }, grantLabel = "the First Steps milestone (cut a plant, mine some ore)" },
   -- FEATS (progression P1, scripts/feats.lua; Ty 11-11: "make solar panels
   -- unlock when you set up your first base"). `featGrant`: given the moment
   -- the feat is marked, read from the save (feats.hasIn), so the builder and
@@ -128,16 +136,38 @@ TECH = {
                    grantLabel = "a base of your own (a Camp Mast, a Base Station Tower, or a claimed ruin)" },
   batteryBank  = { cost = 0, label = "Battery Bank", grantOnly = true, featGrant = "base_founded",
                    grantLabel = "a base of your own (a Camp Mast, a Base Station Tower, or a claimed ruin)" },
-  -- (progression W1) timber shoring for the mines: given once a cave has
-  -- been explored (feats `cave_kinds`, marked by cave_hazards; the plan asks
-  -- two kinds, but featGrant reads one: P2 may raise it)
-  shoring      = { cost = 0, label = "Mine Shoring Frame", grantOnly = true, featGrant = "cave_kinds",
+  -- THE ARC'S GRANTS (progression P2, PLAN §2.2; docs/progression.md §3):
+  -- each opens the moment the thing is done (featGrant), on the pieces'
+  -- `tech` (parts_kit TECH_OF; the cable drums through ALIAS). `scnOpen`: a
+  -- scenario's world is the author's, so these never lock one.
+  --   tower   the Base Station Tower, once a grid carries its load. Until the
+  --           Camp Mast exists (`openWithout`: the wood tier) it stays open,
+  --           or a claimed ruin would be the only way to found a base
+  --   power2  heavy cables, HV, the Transformer, the Power Pole, the 160 A panel
+  --   life    the life-support machines and the pressure pieces
+  --   fluids  the FLUID section (pipes, tanks, pumps, valves)
+  --   logic   the LOGIC section, bar the button, lever, lamp and signal cable
+  --   quarry  Quarry Posts and Drive: bought, once a refinery has run
+  --   shoring the Mine Shoring Frame (W1's piece), once a cave is explored:
+  --           one kind opens it (Underground then asks for two)
+  tower        = { cost = 0, label = "Base Station Tower", grantOnly = true, featGrant = "grid_served", scnOpen = true,
+                   openWithout = "campMast", grantLabel = "a base grid that carries its load (Lights On)" },
+  power2       = { cost = 0, label = "Heavy Power (35/95 mm², HV, Transformer, Power Pole)", grantOnly = true,
+                   featGrant = "night_held", scnOpen = true, grantLabel = "a grid held through a night (Lights On)" },
+  life         = { cost = 0, label = "Life Support (scrubber, O2, air, pressure doors)", grantOnly = true,
+                   featGrant = "room_sealed", scnOpen = true, grantLabel = "a sealed room (Shelter)" },
+  fluids       = { cost = 0, label = "Fluids (pipes, tanks, pumps, valves)", grantOnly = true,
+                   featGrant = "room_breathable", scnOpen = true, grantLabel = "a room with air you made (Shelter)" },
+  logic        = { cost = 0, label = "Logic (sensors, modules, radio)", grantOnly = true,
+                   featGrant = "fluid_moved", scnOpen = true, grantLabel = "a pump that moved something (fluids)" },
+  quarry       = { cost = 2500, label = "Quarry (Posts, Drive)", feat = "machine_worked", rp = 20, scnOpen = true },
+  shoring      = { cost = 0, label = "Mine Shoring Frame", grantOnly = true, featGrant = "cave_kinds", scnOpen = true,
                    grantLabel = "a cave explored" },
 }
 
 -- BASE parts behind a craft part's research (the BASE section's ids are not
 -- tech ids): the Isotope Skid is four Isotope Cells.
-ALIAS = { isotopeSkid = "rtg" }
+ALIAS = { isotopeSkid = "rtg", powerCable35 = "power2", powerCable95 = "power2", hvCable = "power2" }
 local function tid(id) return ALIAS[id] or id end
 
 -- Published for panels.
@@ -195,10 +225,18 @@ local function feat_n(id)
   local e = type(t) == "table" and t[id] or nil
   return type(e) == "table" and (tonumber(e.n) or 0) or 0
 end
-function featDone(id) return feat_n(id) >= 1 end
-local function feat_label(id)
+function featDone(id, n) return feat_n(id) >= (n or 1) end
+local function feat_label(id, n)
   local F = findScript and findScript("feats", { quiet = true })
+  if F and F.labelOf then return F.labelOf(id, n) end
   return (F and F.LABEL and F.LABEL[id]) or (tostring(id):gsub("_", " "))
+end
+-- (P2) `openWithout`: a kit piece the gate assumes (the Camp Mast founds the
+-- base before the tower); a catalogue without it leaves the gate open. Asked
+-- of parts_kit where it is in the scene (the builder: the save's rule alone).
+local function piece_missing(id)
+  local K = findScript and findScript("parts_kit", { quiet = true })
+  return K ~= nil and type(K.PIECES) == "table" and K.PIECES[id] == nil
 end
 
 -- A SANDBOX save (company.lua, `game.mode`) has the whole catalogue open from
@@ -206,9 +244,12 @@ end
 function isUnlocked(id)
   id = tid(id)
   if not TECH[id] then return true end
-  if save.get("game.mode") == "sandbox" then return true end
+  local mode = save.get("game.mode")
+  if mode == "sandbox" then return true end
+  if mode == "scenario" and TECH[id].scnOpen then return true end
   if TECH[id].progGrant and (save.get("prog.done") or {})[TECH[id].prog] then return true end
-  if TECH[id].featGrant and featDone(TECH[id].featGrant) then return true end
+  if TECH[id].featGrant and featDone(TECH[id].featGrant, TECH[id].featGrantN) then return true end
+  if TECH[id].openWithout and piece_missing(TECH[id].openWithout) then return true end
   local pg = TECH[id].permGrant
   if pg then
     local pm = (save.get("prog.perm") or {})[pg[1]]
@@ -238,9 +279,9 @@ function blockedBy(id)
   id = tid(id)
   local t = TECH[id]
   if not t or isUnlocked(id) then return nil end
-  if t.grantOnly then return "needs " .. (t.grantLabel or (t.featGrant and feat_label(t.featGrant)) or "a milestone") end
+  if t.grantOnly then return "needs " .. (t.grantLabel or (t.featGrant and feat_label(t.featGrant, t.featGrantN)) or "a milestone") end
   -- (P1) a thing done in the world first: never a refusal there, a line here
-  if t.feat and not featDone(t.feat) then return "needs " .. feat_label(t.feat) end
+  if t.feat and not featDone(t.feat, t.featN) then return "needs " .. feat_label(t.feat, t.featN) end
   if t.after and not isUnlocked(t.after) then
     return "needs " .. labelOf(t.after)
   end

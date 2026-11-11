@@ -245,6 +245,7 @@ function after(w, rep, dt)
       local q, mat = 0, nil
       if i and rep then q, mat = N.convFlow(rep, i) end
       s.q, s.qmat = q, mat
+      if (q or 0) > 0 and (dt or 0) > 0 then local FT = ref("feats"); if FT and FT.addAmount then pcall(FT.addAmount, "machine_worked", q * dt) end end   -- (progression P2)
       if P.m == "mixer" then s.need = MC.waterFor("mixer", q) end
     elseif P.fab then
       local F = fab_load(P)
@@ -253,6 +254,7 @@ function after(w, rep, dt)
         local why, made = MC.fabAdvance(F, dt, s.duty or 0, fab_env(w, P))
         s.fwhy = why
         if made > 0 then
+          local FT = ref("feats"); if FT and FT.mark then pcall(FT.mark, "part_fabricated", { n = made }) end   -- (progression P2)
           PROF.fab_made = PROF.fab_made + made
           say(string.format("%s: a crate is ready in its store (%d left in the queue)", P.label, MC.queued(F)))
         end

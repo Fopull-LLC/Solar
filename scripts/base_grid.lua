@@ -901,6 +901,7 @@ local function advance_all(a)
       G.status[g.id] = s
     end
   end
+  local FT = ref("feats"); if FT and FT.gridTick then pcall(FT.gridTick, G.list, G.models, G.status, a, { slotOf = slotOf, slotLight = slotLight, slotInfo = slotInfo }) end   -- (progression P2)
   write_save(a)
   last_adv = now()
   if w0 then PROF.advance_ms = (wall() - w0) * 1000 end

@@ -365,6 +365,7 @@ local function step_struct(e, a)
         E.rep = rep
         PROF.segs = PROF.segs + (rep.segs or 0)
         couple(e, E, h)
+        local FT = ref("feats"); if FT and FT.fluidStep then pcall(FT.fluidStep, e, E) end   -- (progression P2: fluid_moved)
       end
     end
     left = left - h

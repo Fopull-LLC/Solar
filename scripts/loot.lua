@@ -607,6 +607,7 @@ function settlePending(cid)
 end
 -- Make container (sid, uid) ready to open: a ruin's site rolled, its pending items in.
 function prepare(sid, uid)
+  local FT = ref("feats"); if FT and FT.cacheOpened then pcall(FT.cacheOpened, sid, uid) end   -- (progression P2: cave_cache)
   if not filled(sid, uid) then fillSite(sid) end
   settlePending(cidOf(sid, uid))
   remember(sid, uid)

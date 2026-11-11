@@ -1,8 +1,8 @@
 # Progression: feats, and the ruin near home
 
-The progression rework (work/progression/PLAN.md) as built. Slices P1 (feats)
-and R1 (the ruin near home) are in, and W1 (the wood tier: docs/base-building.md §35); P2 (the nine milestones)
-and the load model (W2) come later.
+The progression rework (work/progression/PLAN.md) as built. Slices P1 (feats),
+R1 (the ruin near home), W1 (the wood tier: docs/base-building.md §35) and P2
+(the nine milestones, §3) are in; the load model (W2) comes later.
 
 Ty, 11-11: *"make solar panels unlock when you set up your first base, and in
 general rework the whole progression to involve all the new mechanics"*;
@@ -28,10 +28,7 @@ happens:
 | `cave_kinds` (n) | cave_hazards `first_entry` | a cave kind's first entry (key: the kind) |
 | `run_cycle` (n) | route_ops | a run's cycle done |
 
-Still to be marked (they need a new detection, not a line): `grid_served`,
-`night_held`, `room_sealed`, `room_breathable`, `fluid_moved`, `logic_fired`,
-`machine_worked`, `part_fabricated`, `reactor_critical`, `storm_held`,
-`rtg_night`, `dose_taken`, `cave_cache`, `drive_km` (PLAN §2.1).
+P2 added the detections the arc needs (§3.3). Still unmarked: `storm_held`.
 
 - **Save:** `feats = { [id] = { n, t (first, agency clock), b, k = { [key] = 1 } } }`.
 - **API:** `mark(id, { key, b, n, quiet })`, `markAtLeast(id, n)`, `has(id, n)`,
@@ -111,3 +108,101 @@ found no flat ground was dropped silently.
 Tests: `tests/smoke_feats.lua`, `tests/smoke_ruins.lua` (the R1 blocks), and
 `tests/smoke_contracts.lua` (the programme's `feat` kind). The engine probe is
 `tools/perf/ruinprobe.sh <engine> near`.
+
+## 3. The arc (`scripts/missions.lua` PROGRAMME, P2)
+
+Ty, 11-11: *"rework the whole progression to involve all the new
+mechanics"*. The career used to be a comms ladder; it is now nine milestones
+of things done in the world, then the comms ladder as it was.
+
+### 3.1 The milestones
+
+| # | Milestone | Requires | Goals | Grants |
+|---|---|---|---|---|
+| 1 | First Steps | — | a plant cut, an ore mined | the Build Kit (`buildkit`: `progGrant`) |
+| 2 | Homestead | First Steps | 8 timber pieces (`wood_built`; waived while the kit has no timber), the ruin near home found, a base of your own | `base_founded` → Solar Array, Battery Bank |
+| 3 | Lights On | Homestead | `grid_served`, `cable_laid` (40 m), `night_held` | Base Station Tower, heavy power |
+| 4 | Shelter | Homestead | `room_sealed`, `room_breathable`, `slept_in` | life support, fluids |
+| 5 | Salvage | Homestead | 3 pieces stripped, a lock opened, a core read, a ruin claimed | the core: Probe Core |
+| 6 | Ironworks | Lights On | an ore studied, the Refinery researched, 200 kg refined, a part fabricated | (the Quarry becomes a price) |
+| 7 | Underground | Shelter | 2 cave kinds, a cave cache, a dose read or a uranium sample (`any`) | shoring |
+| 8 | Fission | Ironworks and Underground | `rtg_night`, the Ember researched, `reactor_critical`, `scram_seen` | — (the reactor is the prize) |
+| 9 | Wheels and Wings | Lights On | 2 km driven, the Cargo Bay researched, a bulk haul, the First Flight contract, a run | 2 km → Battery Pack |
+| — | Rare Finds | First Steps | as before (a side milestone) | |
+| — | Relay Network | **Lights On** | 10 % → Probe Core; 25 % | Relay Dish |
+| — | Eyes in the Sky, Beyond, Reach | as before | as before | as before |
+
+- **Goal kinds** added: `tech` (research done), `contract` (a ladder contract
+  flown), `any` (one of a list), and `waive = "wood"` on a feat goal.
+- **`requires`** takes one id or a list. `prog.open[id]` opens a milestone
+  whatever it requires (the migration's, below).
+- A goal's `ops` line goes to the Ops strip. A milestone never raises a big
+  caption: its money shows on the objectives card's banner.
+- **The card** (`objectives.lua`): every feat goal has a task and one hint
+  (`FEAT_STEP`); "Find the abandoned camp" carries a survey bearing to the
+  near site; a research goal says what still stands in its way. Counted goals
+  read `(1.2 of 2 km)`, `(120 of 200 kg)`. The foot names two other open
+  milestones and counts the rest ("and 3 more (/ switches)").
+
+### 3.2 The gates (`research.lua`, `parts_kit.TECH_OF`)
+
+Every gate is a catalogue card's lock line, never a refusal in the world.
+
+| TECH | Opens on | Pieces |
+|---|---|---|
+| `tower` | `grid_served` | the Base Station Tower; **open while the kit has no Camp Mast** (`openWithout`), or a claimed ruin would be the only way to found a base |
+| `power2` | `night_held` | Power Cable 35 / 95 mm², HV Cable (ALIAS), Transformer, Power Pole, Breaker Panel 160 A |
+| `life` | `room_sealed` | Scrubber, O2 Generator, Air Tank Rack, N2 Compressor, O2 Concentrator, Airlock Receiver, Equalise Valve, Airlock Wall, Pressure Bulkhead, Pressure Hatch |
+| `fluids` | `room_breathable` | the FLUID section (the Charging Pump stays `ember`) |
+| `logic` | `fluid_moved` | the LOGIC section bar the Signal Cable, Push Button, Lever Switch and Indicator Lamp |
+| `quarry` | bought ($2,500 + 20 RP) after `machine_worked` | Quarry Post, Quarry Drive |
+| `shoring` | `cave_kinds` | the wood tier's shoring frame |
+| `buildkit` | First Steps done (or the old Relay Network 10 %) | the Build Kit |
+| `packB` | Wheels and Wings' 2 km goal (or finished) | the Battery Pack |
+
+Existing research took a feat lock: `refinery` an ore studied, `fabrication`
+a refinery run, `ember` an Isotope Skid's night, `cargo` 1 km driven
+(`featN`). A sandbox has everything; a **scenario** has the gates marked
+`scnOpen` (its world is the author's); the P1 grants stay the scenario's
+`start.research` to give.
+
+### 3.3 The detections (`feats.lua`, one line in each system)
+
+| Feat | Hook | Rule |
+|---|---|---|
+| `grid_served` | base_grid `advance_all` → `gridTick` | a grid with an owned structure, a source and a load, every load served for 60 s of agency time |
+| `night_held`, `rtg_night`, `slept_in` | the same | the grid's light profile (`M.prof`; a stand-in cell at its first part when it has no arrays) marks dark slots; from dusk to dawn with nothing shed (`s.short`) the night is held; with an Isotope Skid in the grid also `rtg_night`; the active crew member in a sealed room the whole night, `slept_in`. A night crossed in one advance at warp counts. State in `feats.gn`. |
+| `room_sealed` | room_air `solve` → `roomsSolved` | a sealed room of 8 m³ or more in an owned structure |
+| `room_breathable` | room_air `advance_struct` → `airStep` | a sealed network (no opening, 8 m³ or more) with breathable air counts its time while a scrubber in it runs (`n.S > 0`: on and powered), 3,600 s in all; a brownout pauses the count, bad air or an opening resets it. On an alien-air home the room closes round the outside's air: it needs air from tank racks (an O2 Generator alone makes 2.8e-5 atm·m³/s, a day and more for a hut) |
+| `fluid_moved` | fluid_net `step_struct` → `fluidStep` | 100 kg moved in a network with a pump running |
+| `logic_fired` | logic_net `apply` | a command on to a device, lamp or alarm |
+| `machine_worked` (kg) | refinery `after` | kg/s worked × dt (`addAmount`) |
+| `part_fabricated` | refinery `after` | a Fabricator's crate |
+| `reactor_critical`, `scram_seen` | reactor_plant `publish` → `reactorTick` | k ≥ 0.9995 with power; a trip after that |
+| `dose_taken` | cave_hazards (the dose step) | 60 s of dose read (`accrue`) |
+| `cave_cache` | loot `prepare` → `cacheOpened` | a container in a ruin's cave (`cv`, `ri` ≥ 1000) |
+| `cable_laid` | base_cable `lay` | a run of 40 m or more |
+| `drive_km` (m) | missions `wheel_odo` | 4 Hz: the piloted craft on its wheels, the engine's planet-relative speed × game seconds |
+| `bulk_hauled` | missions `payout` | a generated bulk haul paid |
+
+"Owned" is anything but an unclaimed ruin's structure (`feats.owned`).
+
+### 3.4 Old saves (`feats.migrate`, version 2)
+
+- A save that had the Build Kit the old way (the Relay Network's 10 %, or
+  `res.done.buildkit`) could place every kit piece: the arc's gates are
+  written as researched, so nothing it could build is taken away.
+- A save past First Steps keeps the Relay Network open (`prog.open`).
+- The feats its records prove are marked: a power source with a base
+  (`grid_served`; with a bank or an Isotope Skid, `night_held`; a skid,
+  `rtg_night`), a refinery machine (`machine_worked` 200), a Fabricator, an
+  ore studied (`res.studied`), the metres a contract odometer kept. Sealed
+  rooms mark themselves when room_air solves them on load.
+- The milestones then tick on their own and pay what they pay.
+
+Tests: `tests/smoke_contracts.lua` walks the arc feat by feat, the waived
+wood goal, the tower's `openWithout`, and three old saves; `tests/smoke_feats.lua`
+covers the detectors against stand-ins, the migration and the gates;
+`tests/smoke_programme.lua` keeps the comms ladder's checks. The engine
+probe is `tools/perf/arcprobe.sh <engine> arc` (a fresh career through
+Shelter) and `arcold` (an old save copied in).

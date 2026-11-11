@@ -1392,6 +1392,27 @@ function costOf(piece, mat)
   return math.floor(P.cost * (COSTK[mat] or 1) / 10 + 0.5) * 10
 end
 
+-- (progression P2, PLAN §2.2) the research a piece waits for, where it has
+-- no `tech` of its own: research.lua's arc grants (given when the thing is
+-- done: a sealed room opens the life support, …). By piece, then by section;
+-- TECH_OPEN keeps a section's first pieces free (a button lighting a lamp is
+-- how the signals are learned). The Fan Heater and the hab pieces stay open.
+TECH_OF = {
+  scrubber = "life", o2gen = "life", airTank = "life", n2comp = "life", o2conc = "life",
+  airReceiver = "life", eqValve = "life", airlockWall = "life", bulkhead = "life", pressHatch = "life",
+  transformer = "power2", powerPole = "power2", breaker160 = "power2",
+  qPost = "quarry", qDrive = "quarry",
+}
+SECTION_TECH = { FLUID = "fluids", LOGIC = "logic" }
+TECH_OPEN = { sigCable = true, liButton = true, liLever = true, loLamp = true }
+function techOf(piece)
+  local P = PIECES[piece]
+  if not P then return nil end
+  if P.tech then return P.tech end
+  if TECH_OPEN[piece] then return nil end
+  return TECH_OF[piece] or SECTION_TECH[P.section]
+end
+
 cache = {}
 local function resolve(piece, mat)
   local P = PIECES[piece]
@@ -1423,7 +1444,7 @@ local function resolve(piece, mat)
     netgear = P.netgear, pole = P.pole, cableAt = P.cableAt,
     -- (S6) the reactor's components: the core's lattice, ports, the loops' gear
     nuclear = P.nuclear, ports = P.ports, pipe = P.pipe, pump = P.pump, press = P.press, hx = P.hx, turbine = P.turbine,
-    reject = P.reject, console = P.console, rad = P.rad, tech = P.tech,
+    reject = P.reject, console = P.console, rad = P.rad, tech = techOf(piece),
     -- (S7) the fluid network's pieces; an equalise valve
     fl = P.fl, eqv = P.eqv,
     -- (S8) logic: its pins and what it is to the signals; the Signal Cable's drum

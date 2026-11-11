@@ -196,16 +196,36 @@ local CATALOGUE = {
 --
 -- Contracts are work you SIGN, one at a time. The programme is the company's
 -- own direction, and it runs alongside whatever is on the books: nothing to
--- sign, nothing to abandon, it counts as it happens. One arc:
+-- sign, nothing to abandon, it counts as it happens.
 --
---   1  First Steps     cut a plant, mine some ore                     (home)
---   2  Rare Finds      a plant from a ravine floor, one from a peak,
---                      a Star Geode (a pocket, or deep crystal)        (home)
---   3  Relay Network   ground relays until 10 / 25 % of the home
---                      planet's ground has a link home   → Probe Core, Battery Pack, Relay Dish
---   4  Eyes in the Sky relay satellites in orbit grow the network to
---                      50 / 80 % of the planet (ground + satellites)   → Deep Space Dish
---   5  Beyond          link a moon, then another planet
+-- THE ARC (progression P2, work/progression/PLAN.md §2.3; docs/progression.md
+-- §3; Ty 11-11: "rework the whole progression to involve all the new
+-- mechanics"). Goals are mostly FEATS (scripts/feats.lua): things done in the
+-- world, marked by the systems that know. Each grant is research.lua's.
+--
+--   1  First Steps     cut a plant, mine some ore             → the Build Kit
+--   2  Homestead       timber pieces, the ruin near home, a base of your own
+--                      (base_founded → Solar Array, Battery Bank)
+--   3  Lights On       a grid that carries its load, a 40 m cable, a night
+--                      held                             → Base Station Tower, heavy power
+--   4  Shelter         a sealed room, air you made, a night indoors
+--                                                        → life support, fluids
+--   5  Salvage         strip a ruin, open a lock, read a core, claim one
+--                                                        → Probe Core (the core)
+--   6  Ironworks       an ore studied, the refinery, 200 kg worked, a part
+--                      fabricated                      (→ the Quarry to research)
+--   7  Underground     two cave kinds, a cave's cache, radiation or uranium
+--                                                        → shoring
+--   8  Fission         an Isotope Skid through a night, the Ember, a reactor
+--                      critical, a trip
+--   9  Wheels and Wings 2 km driven, the Cargo Bay, a bulk haul, the first
+--                      flight, a run                    → Battery Pack
+--   then  Rare Finds (a side milestone), the Relay Network (after Lights On),
+--   Eyes in the Sky, Beyond and Reach, as they were.
+--
+-- `requires`: one milestone id or a list (all of them done). `prog.open`
+-- (feats.migrate, an older save) opens one whatever it requires: a save that
+-- was already on the Relay Network keeps it.
 --
 -- Each goal can pay on its own (`pay`, `grant`: one tech id or a list of
 -- them) — a staged goal is a reward per stage — and the milestone pays its
@@ -235,6 +255,11 @@ local CATALOGUE = {
 --   feat     id= n=     (progression P1) a thing done in the world, n times
 --                       (scripts/feats.lua: a base founded, a ruin found, a
 --                       lock opened …), read from the save's `feats`
+--            waive="wood"  (P2) met at once while the kit has no timber
+--                       (the wood tier, W1, not in this build)
+--   tech     id=        (P2) the research is done (research.isUnlocked)
+--   contract id=        (P2) a ladder contract completed (mission.done)
+--   any      of={…}     (P2) any one of the goals listed
 --
 -- The comms numbers come from the relay network (comms.lua); they are polled
 -- once a second, guarded, and a network that does not report yet is a goal
@@ -248,10 +273,107 @@ PROGRAMME = {
     id = "first_steps", title = "First Steps",
     brief = "Before the board signs off anything that flies, it wants to know the\n" ..
             "colony can feed itself: something cut, something mined.",
+    -- (P2) finishing it grants the Build Kit (research.lua buildkit: progGrant)
     reward = 400, rep = 0,
     goals = {
       { kind = "sample", class = "flora", label = "Cut a plant (Terrain Laser: hold E, or uproot it with the Gravity Gun)" },
       { kind = "sample", class = "ore", label = "Mine some ore (Terrain Laser)" },
+    },
+  },
+  -- ── THE ARC (progression P2) ─────────────────────────────────────────────
+  {
+    id = "homestead", title = "Homestead", requires = "first_steps",
+    brief = "The Engineer has the Build Kit. Put up something of your own, and find\n" ..
+            "the camp the survey flight saw from the air: its yard still holds panels.",
+    reward = 800, rep = 1,
+    goals = {
+      { kind = "feat", id = "wood_built", n = 8, waive = "wood", pay = 300,
+        label = "Build 8 timber pieces" },
+      { kind = "feat", id = "ruin_found", pay = 300, label = "Find the abandoned camp near home" },
+      { kind = "feat", id = "base_founded", pay = 600, label = "A base of your own (raise a mast or claim the ruin)" },
+    },
+  },
+  {
+    id = "lights_on", title = "Lights On", requires = "homestead",
+    brief = "Panels by day, a bank for the night. A base is a grid: sources, loads,\n" ..
+            "cables and breakers. Keep the lights on from dusk to dawn.",
+    reward = 1500, rep = 1,
+    goals = {
+      { kind = "feat", id = "grid_served", pay = 300, label = "A grid that carries its load for a minute" },
+      { kind = "feat", id = "cable_laid", pay = 200, label = "Lay a power cable run of 40 m or more" },
+      { kind = "feat", id = "night_held", pay = 500, label = "Hold a grid through a night without a brownout" },
+    },
+  },
+  {
+    id = "shelter", title = "Shelter", requires = "homestead",
+    brief = "Walls that hold air, and air worth holding. Timber leaks; steel seals.\n" ..
+            "A sealed room, a scrubber on the grid, and a night slept inside it.",
+    reward = 2500, rep = 1,
+    goals = {
+      { kind = "feat", id = "room_sealed", pay = 400, label = "Close a sealed room (8 m³ or more)" },
+      { kind = "feat", id = "room_breathable", pay = 600, label = "An hour of breathable air in it, a scrubber running" },
+      { kind = "feat", id = "slept_in", pay = 400, label = "Spend a night inside a sealed room" },
+    },
+  },
+  {
+    id = "salvage", title = "Salvage", requires = "homestead",
+    brief = "The ones who came before left more than walls. Strip what is sound,\n" ..
+            "open what they locked, and read what they wrote down.",
+    reward = 1200, rep = 1,
+    goals = {
+      { kind = "feat", id = "ruin_stripped", n = 3, pay = 200, label = "Strip three pieces from a ruin" },
+      { kind = "feat", id = "lock_opened", pay = 200, label = "Open a lock: its code, or forced" },
+      { kind = "feat", id = "core_read", pay = 300, grant = "probe", label = "Read a ruin's Data Core (unlocks the Probe Core)" },
+      { kind = "feat", id = "ruin_claimed", pay = 300, label = "Claim a ruin" },
+    },
+  },
+  {
+    id = "ironworks", title = "Ironworks", requires = "lights_on",
+    brief = "Ore is only rock until it is worked. Study it, crush it, smelt it,\n" ..
+            "and make a part of your own from your own steel.",
+    reward = 4000, rep = 2,
+    goals = {
+      { kind = "feat", id = "ore_studied", pay = 300, label = "Study an ore at the Research Lab" },
+      { kind = "tech", id = "refinery", pay = 600, label = "Research the Refinery (Crusher, Furnace)" },
+      { kind = "feat", id = "machine_worked", n = 200, pay = 800, label = "Refine 200 kg of ore" },
+      { kind = "feat", id = "part_fabricated", pay = 1000, label = "Fabricate a part" },
+    },
+  },
+  {
+    id = "underground", title = "Underground", requires = "shelter",
+    brief = "Under the hills the rock is hollow, and the old crews went down there.\n" ..
+            "Take a lamp, watch the air, and bring back what they left.",
+    reward = 3000, rep = 2,
+    goals = {
+      { kind = "feat", id = "cave_kinds", n = 2, pay = 500, label = "Explore two kinds of cave" },
+      { kind = "feat", id = "cave_cache", pay = 600, label = "Find a cache left in a cave" },
+      { kind = "any", pay = 400, label = "Find pitchblende: a dose read on the suit, or a uranium sample",
+        of = { { kind = "feat", id = "dose_taken" }, { kind = "sample", mat = "uranium" } } },
+    },
+  },
+  {
+    id = "fission", title = "Fission", requires = { "ironworks", "underground" },
+    brief = "Isotope cells first, then a pile of your own. A reactor that runs is\n" ..
+            "the prize; one that trips safely is the lesson.",
+    reward = 9000, rep = 3,
+    goals = {
+      { kind = "feat", id = "rtg_night", pay = 1000, label = "An Isotope Skid carries a grid through a night" },
+      { kind = "tech", id = "ember", pay = 1000, label = "Research the Ember Reactor" },
+      { kind = "feat", id = "reactor_critical", pay = 3000, label = "Bring a reactor critical" },
+      { kind = "feat", id = "scram_seen", pay = 1000, label = "Trip it: a SCRAM (or live through worse)" },
+    },
+  },
+  {
+    id = "wheels", title = "Wheels and Wings", requires = "lights_on",
+    brief = "The ground pays first: drive it, haul it, then fly it and let the\n" ..
+            "autopilot run it while you do something else.",
+    reward = 3000, rep = 2,
+    goals = {
+      { kind = "feat", id = "drive_km", n = 2000, pay = 300, grant = "packB", label = "Drive 2 km on wheels (unlocks the Battery Pack)" },
+      { kind = "tech", id = "cargo", pay = 300, label = "Research the Cargo Bay" },
+      { kind = "feat", id = "bulk_hauled", pay = 500, label = "Deliver a bulk haul (Ops Board, ground work)" },
+      { kind = "contract", id = "firstflight", pay = 400, label = "Fly the first flight contract" },
+      { kind = "feat", id = "run_cycle", pay = 800, label = "An automated run completes a cycle" },
     },
   },
   {
@@ -277,17 +399,17 @@ PROGRAMME = {
     -- 800 m world) — with a stage on the way so the first beacons pay. The
     -- rest of the planet is what the Relay Dish it unlocks is for: satellites
     -- (Eyes in the Sky) grow the network from there.
-    id = "relay_net", title = "Relay Network", requires = "first_steps",
+    id = "relay_net", title = "Relay Network", requires = "lights_on",
     brief = "A craft past the horizon is a craft nobody can talk to. Plant Relay\n" ..
             "Beacons on high ground — cheap, and each one only has to see the last —\n" ..
             "until a quarter of the ground has a link home. Then go up.",
     reward = 3000, rep = 2, grants = { "dish" },
     goals = {
-      -- (deep-space M3: the 10 % stage also opens the Build Kit, `buildkit`:
-      -- the Depot stocks it, every Engineer is issued one at the base)
-      { kind = "groundcov", frac = 0.10, pay = 800, grant = { "probe", "buildkit" }, label = "10% of the ground has a link home",
+      -- (P2: the Build Kit moved to First Steps and the Battery Pack to
+      -- Wheels and Wings; research keeps both for saves that had them here)
+      { kind = "groundcov", frac = 0.10, pay = 800, grant = "probe", label = "10% of the ground has a link home",
         ops = "You can hear us from a tenth of the ground. Time to build somewhere else." },
-      { kind = "groundcov", frac = 0.25, pay = 1500, grant = "packB", label = "25% of the ground has a link home (unlocks the Battery Pack)" },
+      { kind = "groundcov", frac = 0.25, pay = 1500, label = "25% of the ground has a link home" },
     },
   },
   {
@@ -1521,6 +1643,22 @@ PROG_NICHE_WHERE = NICHE_WHERE
 
 local function prog_done() return save.get("prog.done") or {} end
 local function prog_perm() return save.get("prog.perm") or {} end
+-- (P2) is milestone m open: what it requires (one id or a list) done, or the
+-- save holding it open (`prog.open`, feats.migrate). → bool, the titles it waits for
+local function req_list(m)
+  local r = m.requires
+  if r == nil then return {} end
+  if type(r) == "table" then return r end
+  return { r }
+end
+local function req_met(m, done)
+  done = done or prog_done()
+  local po = save.get("prog.open")
+  if type(po) == "table" and po[m.id] then return true end
+  for _, id in ipairs(req_list(m)) do if not done[id] then return false end end
+  return true
+end
+progOpen = req_met
 
 function progById(id)
   for _, m in ipairs(PROGRAMME) do if m.id == id then return m end end
@@ -1771,9 +1909,19 @@ function featCount(id)
   local e = type(t) == "table" and t[id] or nil
   return type(e) == "table" and (tonumber(e.n) or 0) or 0
 end
+-- (P2) is a goal waived here: `waive = "wood"` while the kit has no timber
+function progWaived(g)
+  if g.waive == "wood" then
+    local K = ref("parts_kit")
+    return K ~= nil and type(K.MATS) == "table" and K.MATS.wood == nil
+  end
+  return false
+end
 
 -- Is goal i of milestone m met right now? (The tick latches it.)
-local function prog_goal_now(m, i, g, niches)
+local prog_goal_now
+prog_goal_now = function(m, i, g, niches)
+  if g.waive and progWaived(g) then return true end
   if g.kind == "sample" then
     -- A home goal counts the home world's pockets, not the discovery set.
     if g.home and g.mat == "geode" then return home_geode() end
@@ -1802,6 +1950,15 @@ local function prog_goal_now(m, i, g, niches)
     return (progNet.orbit or 0) >= (g.n or 1)
   elseif g.kind == "feat" then
     return featCount(g.id) >= (g.n or 1)
+  -- (P2) research done, a ladder contract flown, any one of a list
+  elseif g.kind == "tech" then
+    local rs = ref("research")
+    return rs ~= nil and rs.isUnlocked ~= nil and rs.isUnlocked(g.id) == true
+  elseif g.kind == "contract" then
+    return done_set()[g.id] == true
+  elseif g.kind == "any" then
+    for j, sub in ipairs(g.of or {}) do if prog_goal_now(m, i, sub, niches) then return true end end
+    return false
   elseif g.kind == "linked" then
     local home = homeName()
     for _, name in ipairs(progNet.linked or {}) do
@@ -1833,6 +1990,7 @@ local function prog_goal_now(m, i, g, niches)
 end
 
 function progGoalLabel(m, i, g, niches)
+  if g.waive and progWaived(g) then return (g.label or g.kind) .. " (waived: no timber yet)" end
   if g.kind == "rare" then
     local n = (niches or rare_niches(m))[i]
     if n == false then return "No rare plants of that kind here (waived)" end
@@ -1853,8 +2011,12 @@ local function prog_tail(g)
     return "   (now " .. pct(g.kind == "groundcov" and progNet.ground or progNet.sky) .. ")"
   elseif g.kind == "orbitrelay" then
     return string.format("   (%d in orbit)", progNet.orbit or 0)
-  elseif g.kind == "feat" and (g.n or 1) > 1 then
-    return string.format("   (%d of %d)", math.min(featCount(g.id), g.n), g.n)
+  elseif g.kind == "feat" and (g.n or 1) > 1 and not (g.waive and progWaived(g)) then
+    -- (P2) a distance or a mass in its units: "(1.2 of 2 km)", "(80 of 200 kg)"
+    local c = math.min(featCount(g.id), g.n)
+    if g.id == "drive_km" then return string.format("   (%.1f of %g km)", c / 1000, g.n / 1000) end
+    if g.id == "machine_worked" then return string.format("   (%d of %d kg)", c, g.n) end
+    return string.format("   (%d of %d)", c, g.n)
   end
   return ""
 end
@@ -1910,9 +2072,12 @@ function programme()
   local done = prog_done()
   local out = {}
   for _, m in ipairs(PROGRAMME) do
-    local st = done[m.id] and "done" or ((not m.requires or done[m.requires]) and "active" or "locked")
-    local r = m.requires and progById(m.requires)
-    out[#out + 1] = { m = m, state = st, needs = r and r.title or nil }
+    local st = done[m.id] and "done" or (req_met(m, done) and "active" or "locked")
+    local needs = {}
+    for _, id in ipairs(req_list(m)) do
+      if not done[id] then local r = progById(id); needs[#needs + 1] = r and r.title or id end
+    end
+    out[#out + 1] = { m = m, state = st, needs = #needs > 0 and table.concat(needs, " and ") or nil }
   end
   return out
 end
@@ -1964,7 +2129,7 @@ prog_tick_body = function()
   net_dirty = false
   local done, perm = prog_done(), prog_perm()
   for _, m in ipairs(PROGRAMME) do
-    if not done[m.id] and (not m.requires or done[m.requires]) then
+    if not done[m.id] and req_met(m, done) then
       local pm = perm[m.id] or {}
       local niches = rare_niches(m)
       local all = true
@@ -1977,8 +2142,8 @@ prog_tick_body = function()
             save.set("prog.perm", perm)
             local label = progGoalLabel(m, i, g, niches)
             log("  ✓ " .. m.title .. ": " .. label)
-            -- A waived goal (no such place on this world) pays nothing.
-            local pay = (g.kind == "rare" and niches[i] == false) and 0 or (g.pay or 0)
+            -- A waived goal (no such place on this world; no timber) pays nothing.
+            local pay = ((g.kind == "rare" and niches[i] == false) or (g.waive and progWaived(g))) and 0 or (g.pay or 0)
             local c = company()
             if pay > 0 and c and c.earn then c.earn(pay, m.title .. ": " .. label) end
             if type(g.grant) == "table" then
@@ -1988,8 +2153,11 @@ prog_tick_body = function()
             end
             if pay > 0 then prog_announce(label, pay, m.title:upper()) end
             if g.ops then
+              -- (P2: a milestone's word is a radio line on the strip, never a big caption)
               log("OPS: " .. g.ops)
-              if caption then pcall(caption, "Ops: " .. g.ops) end
+              local strip = ref("ops_strip")
+              if strip and strip.say then pcall(strip.say, g.ops, "Ops")
+              elseif caption then pcall(caption, "Ops: " .. g.ops) end
             end
           else
             all = false
@@ -2723,6 +2891,7 @@ local function payout(m)
     if c.addRep then c.addRep(m.rep or 0, "completed " .. m.title) end
   end
   consume(m)
+  if m.gen and m.kind == "bulk" then local FT = ref("feats"); if FT and FT.mark then pcall(FT.mark, "bulk_hauled") end end   -- (P2)
   if m.gen then
     local gd = save.get("mission.gdone") or {}
     if GEN_KINDS[m.kind] and GEN_KINDS[m.kind].once then
@@ -2829,8 +2998,34 @@ local function charter_tick()
 end
 
 local refill_t = -1
+-- (P2) DRIVE_KM: metres on wheels, whatever is on the books (the contract's
+-- odometer above runs only for a contract). Four times a second: the craft
+-- being piloted, on its wheels, at the engine's own speed (planet-relative:
+-- docs/positions-and-frames.md rule 4) over the game seconds since the last
+-- look, a jump past ODO_MAX_SPEED dropped. To feats.drive_km in whole metres.
+local wodo_t, wodo_g = -1, nil
+local function wheel_odo()
+  local t = time or 0
+  if t - wodo_t < 0.25 then return end
+  wodo_t = t
+  local g = (space and space.time) and space.time() or t
+  local gdt = wodo_g and (g - wodo_g) or 0
+  wodo_g = g
+  if gdt <= 0 or gdt > 30 then return end
+  local v = piloted()
+  if not (v and v.node and v.node.valid ~= false) then return end
+  local info = assembly.info(v.node)
+  if not (info and on_wheels(v, info)) then return end
+  local vel = info.vel
+  local sp = vel and math.sqrt((vel.x or 0) ^ 2 + (vel.y or 0) ^ 2 + (vel.z or 0) ^ 2) or 0
+  if sp < 0.3 or sp > ODO_MAX_SPEED then return end
+  local FT = ref("feats")
+  if FT and FT.addAmount then pcall(FT.addAmount, "drive_km", sp * gdt, { quiet = true }) end
+end
+
 function update(node, dt)
   here_name = space.dominant(node.x, node.y, node.z) or here_name
+  wheel_odo()
   -- The board and the charter, once a second: neither changes faster.
   if (time or 0) - refill_t >= 1.0 or refill_t < 0 or net_dirty then
     refill_t = time or 0

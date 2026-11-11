@@ -612,6 +612,7 @@ local function solve(sid)
     end
   end
   S[sid] = s
+  local FT = ref("feats"); if FT and FT.roomsSolved then pcall(FT.roomsSolved, sid, s) end   -- (progression P2: room_sealed)
   if w0 then PROF.solve_ms = (wall() - w0) * 1000 end
 end
 
@@ -800,6 +801,7 @@ local function advance_struct(sid, s, a)
       s.air[id] = { N = st.N * k, x = st.x * k, c = st.c * k, f = st.feed }
     end
   end
+  local FT = ref("feats"); if FT and FT.airStep then pcall(FT.airStep, sid, s, all, dt, statusOf) end   -- (progression P2: room_breathable)
 end
 
 -- The air in room rid of structure sid: → status (statusOf) + { V, sealed, venting, net }

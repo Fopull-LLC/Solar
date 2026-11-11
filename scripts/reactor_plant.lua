@@ -272,6 +272,7 @@ function gridAux(sid, uid)
   return 0
 end
 local function publish(e)
+  local FT = ref("feats"); if FT and FT.reactorTick then pcall(FT.reactorTick, e) end   -- (progression P2: reactor_critical, scram_seen)
   local R = RX()
   local o = e.o or {}
   e.pe = math.max(0, (o.Pe or 0) / 1000)

@@ -37,6 +37,9 @@ f()
 local R = E
 
 check(R.rpOf("refinery") == 40 and R.rpOf("tankM") == 0, "rpOf: the refinery 40, the FT-M tank none")
+-- (progression P2) the refinery also wants an ore studied first: a feat
+check((R.blockedBy("refinery") or ""):find("ore studied", 1, true) ~= nil, "the refinery wants an ore studied: " .. tostring(R.blockedBy("refinery")))
+store.feats = { ore_studied = { n = 1 }, machine_worked = { n = 1 } }
 store["res.pts"] = 12
 local why = R.blockedBy("refinery")
 check(why and why:find("needs 40 RP") and why:find("has 12"), "short of RP: " .. tostring(why))

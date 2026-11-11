@@ -608,6 +608,7 @@ lastCommands = {}
 local function apply(c)
   local m = META[c.key]
   if not m then return end
+  if c.b == true and (m.dev or m.kind == "lamp" or m.kind == "alarm") then local FT = ref("feats"); if FT and FT.once then pcall(FT.once, "logic_fired") end end   -- (progression P2)
   local sid, uid = m.sid, m.uid
   lastCommands[#lastCommands + 1] = { key = c.key, pin = c.pin, b = c.b, t = agency_now() }
   if #lastCommands > 40 then table.remove(lastCommands, 1) end
