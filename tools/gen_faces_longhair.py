@@ -1444,6 +1444,11 @@ def main():
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
     if "--tex" in sys.argv or not (dry or only):
         img, _ = texture()
+        # alpha cut to 0/255 at the material's own cutoff (HairLong 0.35): the
+        # same pixels pass at full size, and an all-0/255 picture keeps its
+        # coverage down the mips (engine 0701), so hair doesn't thin out at range
+        img = img.copy()
+        img[..., 3] = np.where(img[..., 3] >= round(0.35 * 255), 255, 0).astype(np.uint8)
         if not dry:
             Image.fromarray(img, "RGBA").save(os.path.join(TEXDIR, "hair_long.png"))
             print("texture", img.shape)
