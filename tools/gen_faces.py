@@ -981,7 +981,7 @@ MATS = {
     # the normal map, a little light through them from behind
     "HairLong": ('(\n color: (0.2, 0.15, 0.1),\n texture: Some("textures/faces/hair_long.png"),\n'
                  ' roughness: 0.76,\n'
-                 ' metallic: 0.0,\n backlight: 0.15,\n shading: Physical,\n alpha_cutoff: 0.35,\n'
+                 ' metallic: 0.0,\n reflectivity: 0.3,\n backlight: 0.15,\n shading: Physical,\n alpha_cutoff: 0.35,\n'
                  ' blend: Some(Cutout),\n)'),
     "CapCloth": ('(\n color: (1.0, 1.0, 1.0),\n texture: Some("textures/suit/fabric_albedo.png"),\n'
                  ' normal_map: Some("textures/suit/fabric_normal.png"),\n normal_strength: 1.0,\n'

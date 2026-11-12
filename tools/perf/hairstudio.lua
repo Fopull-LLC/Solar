@@ -14,6 +14,7 @@ local W0 = W()
 local function P(fmt, ...) print(string.format("HAIR %7.2f " .. fmt, W() - W0, ...)) end
 local CO, CASE
 local cam_at = nil
+local cam_follow = nil      -- an actor whose moves the camera follows (case motion)
 local pending = 0
 local spin = nil           -- { k = actor, yaw0, rate } turning an actor's root
 local moves = {}           -- actor k → { dx, dy, dz } offset from its start (the root's own place)
@@ -151,6 +152,7 @@ local MAIN = function()
     local f, s, m, root, hair = actor(1)
     local st = params.style or "long"
     local fr = frame_at(f, 1.6, 0.6, 0.0, 0.15)
+    cam_follow = 1          -- the camera rides along with the actor's moves (it lost them in a sprint)
     lights_on(fr)
     -- the camera stays put (in world) while the actor moves
     -- the tips relative to the hair's root, the rest turned with the actor
@@ -330,6 +332,7 @@ local MAIN = function()
   end
   local t = W() + 10
   while pending > 0 and W() < t do yield() end
+  wait(4.0)               -- the async picture writes land before quitting
   P("DONE")
   if params.quit > 0 then app.quit() end
   while true do yield() end
@@ -373,7 +376,8 @@ end
 function lateUpdate(node, dt)
   local c = find("Camera")
   if c and cam_at then
-    c.pos = vec3(cam_at[1], cam_at[2], cam_at[3])
-    c:lookAt(vec3(cam_at[4], cam_at[5], cam_at[6]), vec3(0, 1, 0))
+    local mv = (cam_follow and moves[cam_follow]) or { 0, 0, 0 }
+    c.pos = vec3(cam_at[1] + mv[1], cam_at[2] + mv[2], cam_at[3] + mv[3])
+    c:lookAt(vec3(cam_at[4] + mv[1], cam_at[5] + mv[2], cam_at[6] + mv[3]), vec3(0, 1, 0))
   end
 end

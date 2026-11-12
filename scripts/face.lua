@@ -219,6 +219,7 @@ end
 --     the engine does by itself after a jump of more than a couple of metres.
 LONG_HAIR = { long = true, wavy = true, shoulder = true, lowtail = true, braid = true, halfup = true }
 local hair_anim, hair_model, hair_owner = nil, nil, nil
+local head_look = nil       -- the eased look at a near camera { dx, dy, dz (from the face), weight }
 local hair_g_t, hair_reset = -10, false
 hairGravity = nil          -- the last gravity handed to the springs { x, y, z } (probes)
 
@@ -599,10 +600,25 @@ function lateUpdate(node, dt)
   if cx and not dead and model_node then
     local dx, dy, dz = cx - node.x, cy - node.y, cz - node.z
     local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-    if d < P("look_m") and d > 0.6 then
+    -- the head turns to the camera at a person's pace, not in one frame (a
+    -- camera that jumps snapped it, and the snap threw long hair): the
+    -- point it looks at, kept relative to the face (never a world point
+    -- across frames), and the weight are eased
+    local w_want = (d < P("look_m") and d > 0.6) and math.min(1, (P("look_m") - d) / 1.5) or 0
+    local k = 1 - math.exp(-(wdt or 0) * 5)
+    local hl = head_look
+    if not hl then hl = { dx, dy, dz, 0 }; head_look = hl end
+    hl[1], hl[2], hl[3] = hl[1] + (dx - hl[1]) * k, hl[2] + (dy - hl[2]) * k, hl[3] + (dz - hl[3]) * k
+    hl[4] = hl[4] + (w_want - hl[4]) * k
+    if hl[4] > 0.01 then
       suit_anim = suit_anim or (model_node.animator and model_node:animator()) or nil
+      if suit_anim then
+        pcall(suit_anim.lookAt, suit_anim, { "Head" }, vec3(node.x + hl[1], node.y + hl[2], node.z + hl[3]),
+              { limit = 28, weight = 0.6 * hl[4] })
+      end
+    end
+    if d < P("look_m") and d > 0.6 then
       local w = math.min(1, (P("look_m") - d) / 1.5)
-      if suit_anim then pcall(suit_anim.lookAt, suit_anim, { "Head" }, vec3(cx, cy, cz), { limit = 28, weight = 0.6 * w }) end
       pcall(anim.lookAt, anim, { "EyeL" }, vec3(cx, cy, cz), { limit = 30, weight = w })
       pcall(anim.lookAt, anim, { "EyeR" }, vec3(cx, cy, cz), { limit = 30, weight = w })
     end

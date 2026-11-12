@@ -102,8 +102,12 @@ COLLIDERS = [
     ("HairRoot", np.array([0.0, -0.070, -0.030]), 0.054, np.array([0.0, -0.180, -0.025])),   # the neck
 ] + _ring() + [
     ("HairBody", np.array([0.0, -0.322, -0.025]), 0.205, None),     # the neck dam and the chest under it
-    ("HairBody", np.array([0.180, -0.222, -0.060]), 0.112, None),   # the shoulders (round the arm's joint)
-    ("HairBody", np.array([-0.180, -0.222, -0.060]), 0.112, None),
+    # the shoulders, sloping from the collar down to the arm (no dome to flare over)
+    ("HairBody", np.array([0.105, -0.160, -0.050]), 0.055, np.array([0.255, -0.205, -0.055])),
+    ("HairBody", np.array([-0.105, -0.160, -0.050]), 0.055, np.array([-0.255, -0.205, -0.055])),
+    # the upper arms, hanging (idle; a swing forward still meets the hair)
+    ("HairBody", np.array([0.215, -0.250, -0.060]), 0.065, np.array([0.235, -0.480, -0.050])),
+    ("HairBody", np.array([-0.215, -0.250, -0.060]), 0.065, np.array([-0.235, -0.480, -0.050])),
     ("HairBody", np.array([-0.16, -0.256, -0.262]), 0.150, np.array([0.16, -0.256, -0.262])),   # the pack: top, back
     ("HairBody", np.array([-0.16, -0.430, -0.290]), 0.100, np.array([0.16, -0.430, -0.290])),   # its lower back
 ]
@@ -726,8 +730,17 @@ def build_hang(name, st, G, skin, rng):
         nS = len(S)
         ln = np.r_[0, np.cumsum(np.linalg.norm(np.diff(path, axis=0), axis=1))]
         total = ln[-1]
-        w0 = 0.009 if c < 0.8 else 0.011 + 0.003 * rng.random()
-        col = FINE if c < 0.6 else int(rng.integers(0, 5))
+        # layers: the inner hair dense and dark, the outer sparse, finer and
+        # lighter (narrower cards at the silhouette)
+        w0 = (0.009 if c < 0.8 else 0.011 + 0.003 * rng.random()) * (1.15 - 0.45 * depth)
+        if c < 0.6:
+            col = FINE
+        elif depth < 0.4:
+            col = int(rng.choice([2, 0]))
+        elif depth > 0.8:
+            col = int(rng.choice([4, FINE, 1]))
+        else:
+            col = int(rng.integers(0, 5))
         Lr, Rr, N, UV, C, JW = [], [], [], [], [], []
         for i, p in enumerate(path):
             t = unit(path[min(i + 1, len(path) - 1)] - path[max(i - 1, 0)])
@@ -746,8 +759,8 @@ def build_hang(name, st, G, skin, rng):
             N.append(shade_n)
             UV.append(col_uv(col, ln[i], 2, 0.0, 1.0 / max(total, 1e-6) * 1.0)[0:2] if False else
                       ((((col + 0.03) / ATLAS), v), (((col + 0.97) / ATLAS), v)))
-            dark = 0.62 + 0.38 * depth
-            rootd = 0.75 + 0.25 * smooth(0.0, 0.06, ln[i])
+            dark = 0.50 + 0.55 * depth ** 0.8
+            rootd = 0.70 + 0.30 * smooth(0.0, 0.06, ln[i])
             C.append((dark * rootd, dark * rootd, dark * rootd, 1.0 - 0.35 * smooth(0.8, 1.0, v)))
             if i < nS - 1:
                 JW.append(norm4({skin.ix["HairRoot"]: 1.0}))
@@ -761,7 +774,57 @@ def build_hang(name, st, G, skin, rng):
         M.quad_strip(Lr, Rr, N, UV, C, JW)
     if knot is not None:
         knot_bun(M, knot, skin, rng, r=0.018)
+    hairline_wisps(M, st, skin, rng)
     return M
+
+
+def hairline_wisps(M, st, skin, rng, n=420):
+    """Short fine wisps along the hairline, the parting and the nape,
+    lying the way the hair is combed: so the edge of the hair is soft and
+    broken, not the rim of a cap."""
+    tie = None
+    if st.get("kind") in ("tail", "braid"):
+        tie = tie_point(st)
+    made, tries = 0, 0
+    j = norm4({skin.ix["HairRoot"]: 1.0})
+    while made < n and tries < n * 80:
+        tries += 1
+        ph = rng.uniform(-np.pi, np.pi)
+        th = float(np.arcsin(rng.uniform(np.sin(-0.55), 1.0)))
+        c = float(GH.hairline(np.array(ph), np.array(th), st.get("line", "normal")))
+        if not (0.03 < c < 0.65):
+            continue
+        p0 = scalp_pt(ph, th, 0.0)
+        if tie is not None:
+            tp = GH.to_angles(tie)
+            e_phi, e_th = float(tp[0]), float(tp[1])
+        else:
+            a = math.atan2(abs(p0[0]) + 0.004, p0[2] - 0.035)
+            a = max(1.05, min(st.get("amax", np.pi), a))
+            e_phi, e_th = (1 if p0[0] >= 0 else -1) * a, release_th(a)
+        S = scalp_path(ph, th, e_phi, e_th, 0.0006, 0.0025, 12, over_line=False)
+        ln = np.r_[0, np.cumsum(np.linalg.norm(np.diff(S, axis=0), axis=1))]
+        L = 0.010 + 0.022 * rng.random() * (0.5 + c)
+        k = max(2, int(np.searchsorted(ln, L)))
+        Q = S[:k + 1]
+        lq = ln[:k + 1]
+        w = 0.005 + 0.003 * rng.random()
+        col = 4                        # the sparsest clump's tip end: a few soft strands
+        Lr, Rr, N, UV, C, JW = [], [], [], [], [], []
+        for i, q in enumerate(Q):
+            t = unit(Q[min(i + 1, len(Q) - 1)] - Q[max(i - 1, 0)])
+            nrm = unit(q - GH.O)
+            sd = unit(np.cross(nrm, t))
+            v = lq[i] / max(lq[-1], 1e-6)
+            Lr.append(q - sd * w * 0.5 * (1 - 0.5 * v))
+            Rr.append(q + sd * w * 0.5 * (1 - 0.5 * v))
+            N.append(nrm)
+            vv = 0.62 + 0.38 * v
+            UV.append((((col + 0.25) / ATLAS, vv), ((col + 0.75) / ATLAS, vv)))
+            C.append((0.75, 0.75, 0.75, 0.85 - 0.45 * v))
+            JW.append(j)
+        M.quad_strip(Lr, Rr, N, UV, C, JW)
+        made += 1
 
 
 def yield_knot_card(M, ph, th, knot, skin, rng):
@@ -893,6 +956,7 @@ def build_tail(name, st, G, skin, rng, braid=False):
         M.quad_strip(Lr, Rr, N, UV, C, JW)
     # the tie: hair wrapped round it
     knot_bun(M, tie + unit(np.array([tie[0], 0.0, tie[2] + 0.03])) * 0.004, skin, rng, r=0.011, n=40)
+    hairline_wisps(M, st, skin, rng, n=360)
     if braid:
         plait(M, G[0], st, skin, rng)
     # the loose tendrils at the temples (chains n_main.. n_main+1)
@@ -936,7 +1000,7 @@ def plait(M, Gc, st, skin, rng):
     nS = 120
     for j in range(3):
         phase = j * 2 * np.pi / 3
-        ring = 6
+        ring = 10
         rails = [[] for _ in range(ring)]
         meta = []
         for i in range(nS + 1):
@@ -944,10 +1008,10 @@ def plait(M, Gc, st, skin, rng):
             p, t = along(Gc.F, s)
             sd, nn = card_frame(p, t)
             taper = 1 - 0.45 * smooth(0.55, 1.0, s / total)
-            A = 0.0105 * taper
+            A = 0.0095 * taper
             th = 2 * np.pi * s / lam + phase
             c = p + sd * A * math.sin(th) + nn * 0.55 * A * math.sin(2 * th)
-            rad = 0.0072 * taper * (0.92 + 0.08 * math.cos(3 * th))
+            rad = 0.0088 * taper * (0.80 + 0.20 * abs(math.cos(3 * th)))
             for r in range(ring):
                 ang = r / ring * 2 * np.pi
                 rails[r].append(c + (sd * math.cos(ang) + nn * math.sin(ang)) * rad)
@@ -1008,8 +1072,8 @@ def plait(M, Gc, st, skin, rng):
     for r in range(ring + 1):
         ang = r / ring * 2 * np.pi
         d = sd * math.cos(ang) + nn * math.sin(ang)
-        Lr.append(p + d * 0.0062 - t * 0.004)
-        Rr.append(p + d * 0.0062 + t * 0.004)
+        Lr.append(p + d * 0.0068 - t * 0.006)
+        Rr.append(p + d * 0.0068 + t * 0.006)
         N.append(d)
         UV.append((((SOLID + 0.1) / ATLAS, 0.5), ((SOLID + 0.9) / ATLAS, 0.5)))
         C.append((0.25, 0.25, 0.25, 1.0))
@@ -1145,13 +1209,12 @@ def spring_spec(ind):
 
 # ── the texture ─────────────────────────────────────────────────────────────
 def texture(n=1024, seed=11):
-    """The long cards' atlas (grey, alpha) and its normal map. v = 0 is the
+    """The long cards' atlas (grey, alpha; the second value is unused). v = 0 is the
     root, v = 1 the tip."""
     rng = np.random.default_rng(seed)
     cw = n // ATLAS
     A = np.zeros((n, n), np.float32)          # coverage
     G = np.zeros((n, n), np.float32)          # grey (premultiplied by coverage)
-    NX = np.zeros((n, n), np.float32)         # across-strand normal x (premultiplied)
     ys = np.arange(n)
     v = ys / (n - 1)
     for col in range(ATLAS):
@@ -1181,7 +1244,11 @@ def texture(n=1024, seed=11):
                 wav = rng.uniform(0.3, 1.6) * (2.5 if col == 3 else 1.0)
                 bow = 0.0
             wd = rng.uniform(0.85, 1.35) if col != FINE else rng.uniform(0.6, 0.8)
-            br = float(np.clip(rng.normal(0.86, 0.08), 0.6, 1.0))
+            # real variation: most strands mid, a few dark ones under, a
+            # few light ones that catch the light
+            r_ = rng.random()
+            br = float(np.clip(rng.normal(0.78, 0.10), 0.5, 1.0)) if r_ < 0.8 else \
+                (float(rng.uniform(0.45, 0.6)) if r_ < 0.9 else float(rng.uniform(0.92, 1.0)))
             fr = rng.uniform(2, 7)
             ph = rng.uniform(0, 6.3)
             drift = rng.uniform(-4, 4) if col not in (SOLID, LOBE) else 0.0
@@ -1192,23 +1259,33 @@ def texture(n=1024, seed=11):
                 xs = np.clip(xs, x0 + 2, x0 + cw - 3)
             if col == LOBE:
                 xs = cx + bow * np.sin(v * np.pi) * 1.0 - (x0 + cw / 2 - cx) * 0.25 * (np.cos(v * np.pi * 2) - 1) * 0.3
-            tip = np.ones(n) if col in (SOLID, LOBE) else smooth(ln_, ln_ - 0.12, v)
+            # soft tapered tips: the strand thins and fades over its last quarter
+            tip = np.ones(n) if col in (SOLID, LOBE) else smooth(ln_, ln_ - 0.25, v)
             tip = np.where(v > ln_, 0.0, tip)
+            wdv = wd * (1.0 if col in (SOLID, LOBE) else (0.55 + 0.45 * tip))
             base = np.floor(xs - wd - 1).astype(int)
             for o in range(int(2 * wd + 4)):
                 x = base + o
                 ok = (x >= x0) & (x < x0 + cw) & (tip > 0)
-                dx = (x + 0.5 - xs) / wd
+                dx = (x + 0.5 - xs) / wdv
                 cov = np.clip(1 - np.abs(dx), 0, 1) * tip
                 ok &= cov > 0
                 yy, xx, cv, dd = ys[ok], x[ok], cov[ok], dx[ok]
                 a0 = A[yy, xx]
                 A[yy, xx] = a0 + (1 - a0) * cv
                 G[yy, xx] = G[yy, xx] * (1 - cv) + br * cv
-                NX[yy, xx] = NX[yy, xx] * (1 - cv) + np.clip(dd, -1, 1) * 0.8 * cv
         if col == SOLID:
+            # the under-layer: dark and low in contrast (the shadow under the hair)
             A[:, x0:x0 + cw] = 1.0
-            G[:, x0:x0 + cw] = np.maximum(G[:, x0:x0 + cw], 0.35)
+            G[:, x0:x0 + cw] = 0.30 + 0.25 * G[:, x0:x0 + cw]
+        elif col != LOBE:
+            # a sheen band across the clump a little way from the root (the
+            # anisotropic highlight hair has, baked: strands catch it a
+            # little apart from each other)
+            b0 = 0.16 + 0.05 * (col % 3)
+            band = np.exp(-((v - b0) / 0.05) ** 2)[:, None]
+            jit = 1 + 0.5 * np.sin(np.arange(cw)[None, :] * 0.9 + col)
+            G[:, x0:x0 + cw] *= 1 + 0.35 * band * jit
         if col == LOBE:
             # a lobe darkens toward its ends, where it tucks under the next
             shade = 0.45 + 0.55 * np.sin(v * np.pi) ** 0.6
@@ -1222,17 +1299,17 @@ def texture(n=1024, seed=11):
     img = np.zeros((n, n, 4), np.uint8)
     for k in range(3):
         img[..., k] = np.round(rgb * 255)
-    # alpha: the coverage (the cut at 0.5 leaves the strands' cores, gaps between)
-    img[..., 3] = np.round(np.clip(A * 1.05, 0, 1) * 255)
+    # alpha: the coverage, dithered where it is partial (a blue-ish noise
+    # added before the cutout breaks the cut's stair-steps into a stipple,
+    # which the mips and the antialiasing soften)
+    noise = rng.random((n, n)).astype(np.float32)
+    noise = (noise + np.roll(noise, 1, 0) + np.roll(noise, 1, 1)) / 3 - 0.5
+    partial = (A > 0.02) & (A < 0.98)
+    Ad = np.where(partial, A + noise * 0.55, A)
+    img[..., 3] = np.round(np.clip(Ad, 0, 1) * 255)
     # bleed the colour out under the transparent texels (mips don't go black at the edges)
     img = _bleed(img)
-    nx = np.clip(NX, -1, 1)
-    nz = np.sqrt(np.clip(1 - nx * nx, 0, 1))
-    nm = np.zeros((n, n, 3), np.uint8)
-    nm[..., 0] = np.round((nx * 0.5 + 0.5) * 255)
-    nm[..., 1] = 128
-    nm[..., 2] = np.round((nz * 0.5 + 0.5) * 255)
-    return img, nm
+    return img, None
 
 
 def _bleed(img, rounds=6):
@@ -1257,7 +1334,7 @@ def main():
     dry = "--dry" in sys.argv
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
     if "--tex" in sys.argv or not (dry or only):
-        img, nm = texture()
+        img, _ = texture()
         if not dry:
             Image.fromarray(img, "RGBA").save(os.path.join(TEXDIR, "hair_long.png"))
             print("texture", img.shape)
