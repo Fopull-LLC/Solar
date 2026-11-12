@@ -816,6 +816,19 @@ local function body_rows(t, ctx)
   if not t.name then return {} end
   local out = {}
   rows_common(out, ctx, { kind = "body", name = t.name })
+  -- (scnfix) a waypoint where the right-click met the ground (mapPick's hit)
+  if t.hit and WPT then
+    out[#out + 1] = { type = "action", id = "wpadd", group = "WAYPOINT", label = "Place a waypoint here",
+      act = function()
+        local n, why = WPT.add(t.name, t.hit.x, t.hit.y, t.hit.z)
+        if ctx and ctx.toast then ctx.toast(n and ("WP " .. n .. " placed") or why, not n) end
+        return n ~= nil, why
+      end }
+    if #WPT.load() > 0 then
+      out[#out + 1] = { type = "action", id = "wpclear", group = "WAYPOINT", label = string.format("Clear the waypoints (%d)", #WPT.load()),
+        act = function() WPT.clear(); return true end }
+    end
+  end
   local b = space.body(t.name)
   if b then
     out[#out + 1] = { type = "info", id = "size", label = "Radius", value = TM.fmtDist(b.radius) }
@@ -893,8 +906,156 @@ local function try_register()
   r.register("body", body_rows, { id = "target", order = 5 })
   r.register("craft", craft_rows, { id = "target", order = 5 })
   r.register("dockchoice", choice_rows, { id = "target", order = 5 })
+  r.register("waypoint", WPT.rows, { id = "waypoint", order = 5 })
   registered_with = r
   return true
+end
+
+-- ── WAYPOINTS (scnfix, Ty 2026-11-12: "place your own waypoint markers on
+-- the map") ──────────────────────────────────────────────────────────────────
+-- Right-click a world on the map: "Place a waypoint here" drops WP n where
+-- the click meets the ground. Each one shows in the world as a tag with its
+-- distance (pinned to the screen's edge, with the side to turn to, when it is
+-- off screen) and on the map; right-click it on the map to remove it (or the
+-- world's "Clear the waypoints"). Kept BODY-RELATIVE (the planet moves:
+-- docs/positions-and-frames.md rule 1), placed against this frame's body
+-- when drawn, and saved in the slot (`nav.waypoints`). Global table: this
+-- script's main chunk keeps its locals few.
+WPT = { list = nil, KEY = "nav.waypoints", MAX = 9, PICK_PX = 16, NEAR = 12 }
+WPT.COLOR = { 0.45, 0.92, 1.0 }
+function WPT.load()
+  if WPT.list then return WPT.list end
+  WPT.list = {}
+  local sv = save and save.get and save.get(WPT.KEY)
+  if type(sv) == "table" then
+    for _, w in ipairs(sv) do
+      if type(w) == "table" and type(w.body) == "string" and tonumber(w.x) and tonumber(w.n) then
+        WPT.list[#WPT.list + 1] = { n = w.n, body = w.body, x = w.x, y = w.y, z = w.z, h = w.h }
+      end
+    end
+  end
+  return WPT.list
+end
+function WPT.store()
+  local out = {}
+  for i, w in ipairs(WPT.load()) do out[i] = { n = w.n, body = w.body, x = w.x, y = w.y, z = w.z, h = w.h } end
+  if save and save.set then save.set(WPT.KEY, out) end
+end
+-- a point ON `body`, body-relative (its surface under it: the height is
+-- found again when it is near) → n, or nil and why
+function WPT.add(body, bx, by, bz)
+  local L = WPT.load()
+  if #L >= WPT.MAX then return nil, string.format("%d waypoints is the most: remove one first", WPT.MAX) end
+  local used = {}
+  for _, w in ipairs(L) do used[w.n] = true end
+  local n = 1
+  while used[n] do n = n + 1 end
+  L[#L + 1] = { n = n, body = body, x = bx, y = by, z = bz }
+  table.sort(L, function(a, b) return a.n < b.n end)
+  WPT.store()
+  return n
+end
+function WPT.remove(n)
+  local L = WPT.load()
+  for i, w in ipairs(L) do if w.n == n then table.remove(L, i); WPT.store(); return true end end
+  return false
+end
+function WPT.clear() WPT.list = {}; WPT.store() end
+function WPT.name(w) return "WP " .. tostring(w.n) end
+-- where a ray meets a sphere (the near side) → t or nil. Pure.
+function WPT.raySphere(ox, oy, oz, dx, dy, dz, cx, cy, cz, r)
+  local lx, ly, lz = ox - cx, oy - cy, oz - cz
+  local b = lx * dx + ly * dy + lz * dz
+  local c = lx * lx + ly * ly + lz * lz - r * r
+  local disc = b * b - c
+  if disc < 0 then return nil end
+  local t = -b - math.sqrt(disc)
+  if t < 0 then t = -b + math.sqrt(disc) end
+  return t >= 0 and t or nil
+end
+-- the drawn point of a waypoint this frame (its body read now), lifted `up` m
+-- over the ground → x, y, z, ux, uy, uz | nil
+function WPT.point(w, up)
+  local b = space and space.body and space.body(w.body)
+  if not b then return nil end
+  local l = math.sqrt(w.x * w.x + w.y * w.y + w.z * w.z)
+  if l < 1e-6 then return nil end
+  local ux, uy, uz = w.x / l, w.y / l, w.z / l
+  local r = (w.h or b.radius) + (up or 0)
+  return b.x + ux * r, b.y + uy * r, b.z + uz * r, ux, uy, uz
+end
+-- the ground's height under a waypoint, from the terrain's field (once, and
+-- once more when near: far chunks answer coarsely) → radius | nil
+function WPT.ground(w, near, r0)
+  if w.h and (w.fine or not near) then return w.h end
+  local b = space.body(w.body)
+  if not (b and terrain and terrain.query) then return nil end
+  local l = math.sqrt(w.x * w.x + w.y * w.y + w.z * w.z)
+  local ux, uy, uz = w.x / l, w.y / l, w.z / l
+  -- (the field is clamped to a few voxels off the surface: walked in steps
+  -- from a first guess, the viewer's own radius)
+  local r = w.h or r0 or b.radius
+  for _ = 1, 40 do
+    local ok, d = pcall(terrain.query, b.x + ux * r, b.y + uy * r, b.z + uz * r)
+    if not (ok and type(d) == "number") then return w.h end
+    if math.abs(d) < 0.25 then
+      w.h = r
+      if near then w.fine = true end
+      return r
+    end
+    r = r - d
+  end
+  return w.h
+end
+-- the waypoint nearest a screen pixel on the map (within PICK_PX)
+function WPT.at(sx, sy)
+  if not (camera and camera.worldToScreen) then return nil end
+  local best, bd = nil, WPT.PICK_PX
+  for _, w in ipairs(WPT.load()) do
+    local x, y, z = WPT.point(w, 0)
+    if x then
+      local px, py, _, on = camera.worldToScreen(x, y, z)
+      if on and px then
+        local d = math.sqrt((px - sx) ^ 2 + (py - sy) ^ 2)
+        if d < bd then best, bd = w, d end
+      end
+    end
+  end
+  return best
+end
+-- the map's marks: a ring on the ground and the name
+function WPT.drawMap(px_at, label, lk)
+  local c = WPT.COLOR
+  for _, w in ipairs(WPT.load()) do
+    local x, y, z, ux, uy, uz = WPT.point(w, 0)
+    if x then
+      local s = px_at(x, y, z, 7)
+      if draw.disc then draw.disc(x, y, z, ux, uy, uz, s * 0.55, s, c[1], c[2], c[3], 0.95) end
+      if draw.line then draw.line(x, y, z, x + ux * s * 3, y + uy * s * 3, z + uz * s * 3, c[1], c[2], c[3], 0.9) end
+      local sx, sy, _, on = camera.worldToScreen(x + ux * s * 3, y + uy * s * 3, z + uz * s * 3)
+      if on and sx and label then label(sx, sy - 13 * (lk or 1), WPT.name(w), 12 * (lk or 1)) end
+    end
+  end
+end
+-- a waypoint's own right-click menu (on the map)
+function WPT.rows(t, ctx)
+  local out = {}
+  local w = nil
+  for _, x in ipairs(WPT.load()) do if x.n == t.n then w = x end end
+  if not w then return out end
+  out[#out + 1] = { type = "action", id = "wpremove", group = "WAYPOINT", label = "Remove " .. WPT.name(w),
+    act = function() WPT.remove(w.n); if ctx and ctx.toast then ctx.toast(WPT.name(w) .. " removed") end; if ctx and ctx.close then ctx.close() end; return true end }
+  out[#out + 1] = { type = "action", id = "wptarget", group = "WAYPOINT", label = "Set target (" .. WPT.name(w) .. ")",
+    act = function()
+      local r = w.h or (space.body(w.body) or {}).radius or 0
+      local l = math.sqrt(w.x * w.x + w.y * w.y + w.z * w.z)
+      return targetSpot(w.body, w.x / l * r, w.y / l * r, w.z / l * r, WPT.name(w))
+    end }
+  if #WPT.load() > 1 then
+    out[#out + 1] = { type = "action", id = "wpclear", group = "WAYPOINT", label = string.format("Clear the waypoints (%d)", #WPT.load()),
+      act = function() WPT.clear(); if ctx and ctx.close then ctx.close() end; return true end }
+  end
+  return out, WPT.name(w), "waypoint"
 end
 
 -- ── the map: a right-click on a world or a craft ────────────────────────────
@@ -902,6 +1063,12 @@ end
 -- or within 18 px of its centre) or craft (18 px). → a menu target or nil.
 function mapPick(sx, sy)
   if not (camera and camera.worldToScreen) then return nil end
+  -- (scnfix) a waypoint under the pointer is its own menu
+  local wp = WPT.at(sx, sy)
+  if wp then
+    local x, y, z = WPT.point(wp, 0)
+    return { kind = "waypoint", n = wp.n, label = WPT.name(wp), map = true, wx = x, wy = y, wz = z }
+  end
   local best, bd = nil, 18.0
   for _, v in ipairs(vessels()) do
     if not lost(v) then
@@ -930,7 +1097,17 @@ function mapPick(sx, sy)
       if (d < math.max(18, rpx)) and d < bbd then bb, bbd = b, d end
     end
   end
-  if bb then return { kind = "body", name = bb.name, label = bb.name, map = true } end
+  if bb then
+    local pick = { kind = "body", name = bb.name, label = bb.name, map = true }
+    -- (scnfix) where the pointer's ray meets the world: a waypoint's spot,
+    -- body-relative (read against the body as it is now)
+    if camera.screenToRay then
+      local ok, ox, oy, oz, dx, dy, dz = pcall(camera.screenToRay, sx, sy)
+      local t = ok and ox and WPT.raySphere(ox, oy, oz, dx, dy, dz, bb.x, bb.y, bb.z, bb.radius)
+      if t then pick.hit = { x = ox + dx * t - bb.x, y = oy + dy * t - bb.y, z = oz + dz * t - bb.z } end
+    end
+    return pick
+  end
   return nil
 end
 
@@ -967,6 +1144,7 @@ end
 -- ── the map drawing (orbit_map calls this in its pass) ──────────────────────
 local ca = { t = -10, key = nil, res = nil }
 function drawMap(subject, px_at, label, lk)
+  pcall(WPT.drawMap, px_at, label, lk)
   local T = resolve()
   if not T then return end
   local me = piloted()
@@ -1430,11 +1608,63 @@ local function after_camera(node, dt, fn)
   if not (pc_late and pc_late.valid) then pc_late = findScript("planet_camera", { quiet = true }) end
   if pc_late and pc_late.valid and pc_late.deferLate then pc_late.deferLate(node, dt, fn) else fn(node, dt) end
 end
+-- (scnfix) the waypoints over the world: a tag with the distance along the
+-- ground, pinned to the edge with the side to turn to when off screen (each
+-- its own slot down the edge). Drawn poses (rule 2): the body read now, the
+-- viewer's drawn node.
+WPT_PIN = {}
+function WPT.drawWorld(vx, vy, vw, vh, k)
+  local L = WPT.load()
+  if #L == 0 then return end
+  local me = piloted()
+  local o = (me and me.node) or (find and find("Astronaut"))
+  if not o then return end
+  local ox, oy, oz = o.x, o.y, o.z
+  if o.worldPos then local p = o.worldPos; ox, oy, oz = p.x, p.y, p.z end
+  local c = WPT.COLOR
+  local slot = 0
+  for _, w in ipairs(L) do
+    local b = space.body(w.body)
+    if b then
+      -- the distance along the ground: the angle between the two, at the viewer's radius
+      local ax, ay, az = ox - b.x, oy - b.y, oz - b.z
+      local la = math.sqrt(ax * ax + ay * ay + az * az)
+      local lw = math.sqrt(w.x * w.x + w.y * w.y + w.z * w.z)
+      local cosang = la > 0 and lw > 0 and (ax * w.x + ay * w.y + az * w.z) / (la * lw) or 1
+      local d = math.acos(math.max(-1, math.min(1, cosang))) * la
+      -- the ground under it, from the terrain once it is in reach
+      if d < 3000 then WPT.ground(w, d < 400, la - 1.0) end
+      -- (no ground read yet: the viewer's own height stands in)
+      local x, y, z = WPT.point(w, w.h and 3.0 or (la - 1.0 - (w.h or b.radius) + 3.0))
+      if x and d > WPT.NEAR then
+        local sx, sy, dep, on = camera.worldToScreen(x, y, z)
+        local text = string.format("◇ %s  ·  %s", WPT.name(w), TM.fmtDist(d))
+        local was = WPT_PIN[w.n]
+        local grace = (was == "on") and -12 * k or 12 * k
+        local where, px, py = TM.edgePin(sx, sy, dep, on, vx, vy, vw, vh, k, 0.40, slot, grace)
+        WPT_PIN[w.n] = where
+        if where == "on" then
+          tag(px, py - 24 * k, text, 13 * k, c[1], c[2], c[3], 1.0)
+          draw.circleOutline(px, py, 8 * k, c[1], c[2], c[3], 0.9, 2 * k)
+        else
+          slot = slot + 1
+          tag(px, py, where == "right" and (text .. "  ›") or ("‹  " .. text), 13 * k, c[1], c[2], c[3], 1.0)
+        end
+      end
+    end
+  end
+end
 local function late_draw(node, dt)
   if (params and params.enabled or 1) < 0.5 then return end
   if not (camera and camera.worldToScreen and camera.screenRect and draw and draw.text) then return end
   readout = nil
-  if not target or blocked() then return end
+  if blocked() then return end
+  -- (scnfix) the player's waypoints, target or none
+  do
+    local wx, wy, ww, wh = camera.screenRect()
+    if ww and ww > 0 then pcall(WPT.drawWorld, wx, wy, ww, wh, wh / uiH()) end
+  end
+  if not target then return end
   local me = piloted()
   local T = resolve()
   if not T then return end

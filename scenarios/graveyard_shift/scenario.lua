@@ -434,6 +434,7 @@ return {
       hint2 = "Item 2 of Dana's log: the PROTECTION toggle on the console's REACTOR page. If it reads BYPASS, set it to ARMED. Not a step, but it matters later." },
     { id = "p30", text = "Raise the reactor from 2 % to 30 %. Console: Setpoint +10 %, three times. Watch the period.",
       goals = { { kind = "reactor", struct = "Kerne Station", power_above = 0.28, label = "Reactor at 30 %" } },
+      waitLabel = "Reactor power climbing to 30 %",     -- (scnfix) once the setpoint asks for it
       hint = "At the console press E: on the REACTOR page, Setpoint + steps it 5 % (its right-click menu: Setpoint +10 %). The automatic controller walks the rods out for you.",
       on_done = { { say = { who = "priya", text = "Thirty on your board. Dana's note says the turbine next. She underlined it twice." } } } },
     { id = "turbine", text = "Put the turbine on line (console: Turbine online).",
@@ -441,6 +442,7 @@ return {
       hint = "The console's REACTOR page (E) has a Turbine online key, so does its menu. It needs steam: 10 % of its rating to spin.",
       on_done = { { say = { who = "priya", text = "There. A step, then a hum. I felt that in the rock. Thank you for not slamming it." } } } },
     { id = "p60", text = "Raise to 60 % and hold it there for a minute. Not over: PL-7's clamp.",
+      waitLabel = "Holding 60 % for a minute",
       goals = { { kind = "reactor", struct = "Kerne Station", power_above = 0.57, label = "Reactor at 60 %", hold = 60 },
                 { kind = "reactor", struct = "Kerne Station", power_below = 0.64, label = "Not over 60 % (the PL-7 clamp)" } },
       hint = "Setpoint +10 % three more times. The turbine follows the steam.",
@@ -451,6 +453,9 @@ return {
       stage = { plants = { { struct = "Kerne Station", standby = 0.6, hold = 600, turbine = true } },
                 beats = { { pose = { who = "Kowalczyk", kind = "lie", struct = "Kerne Station", spot = { -5.55, 0.68, 8.45 }, toward = { -6.6, 0.68, 8.45 }, stand = "mark:bunk" } } } },
       goals = { { kind = "hook", fn = "bearing_read", label = "Feed pump bearings" } },
+      -- (scnfix, Ty 11-12: a wait with no feedback) the quiet before the hum
+      -- (the `hum` event, 35 s into this step)
+      wait = { label = "Night shift at 60 %", secs = 35, note = "Nothing to do but watch the board — wait, or skip time ( . )" },
       hint = "Nothing to do but hold 60 % and keep an eye on the console. Something will come up: listen to Priya." },
     { id = "setback", text = "OP-14 step 1: setpoint to 40 % so FW-1 can carry the secondary alone.",
       goals = { { kind = "reactor", struct = "Kerne Station", power_below = 0.43, label = "Reactor at 40 %" } },
@@ -488,12 +493,17 @@ return {
                 beats = { { pose = { who = "Kowalczyk", kind = "lie", struct = "Kerne Station", spot = { -5.55, 0.68, 8.45 }, toward = { -6.6, 0.68, 8.45 }, stand = "mark:bunk" } } } },
       on_enter = { { branch = { var = "prot_ok", is = true, beats = { { reactor = { struct = "Kerne Station", protection = true } } } } } },
       goals = { { kind = "reactor", struct = "Kerne Station", power_below = 0.02, label = "Reactor shut down" } },
+      -- (scnfix) the small hours until the break (the `trip` event, 30 s in);
+      -- after the scram, the bar follows the power running down
+      wait = { label = "Four hours to day shift", secs = 30, note = "Nothing to do but hold 60 % — wait, or skip time ( . )" },
+      waitLabel = "Reactor power running down",
       hint = "At the console press E: SCRAM is the red key, every rod in two seconds (its right-click menu has it too). If the board says TRIPPED it already has.",
       hint2 = "Dana is asleep in the bunk room, through the north door of the control room: walk up to her bunk to wake her." },
     { id = "stabilise", text = "Stop the loss of coolant and refill the primary.", mark = "mark:mu1",
       goals = { { kind = "hook", fn = "makeup", label = "Makeup on: P-3 running, MU-1 open" },
                 { kind = "hook", fn = "welded", label = "PL-7 welded" },
                 { kind = "hook", fn = "covered", label = "Primary refilled, fuel cool", hold = 10 } },
+      waitLabel = "The primary holding full",
       hint = "P-3 (the process pump) and MU-1 (its gate valve) are by the pressuriser: right-click P-3 to start it, or start it from the console's REACTOR page (E: MAKEUP). Weld PL-7 from its menu: an Engineer, 30 s.",
       hint2 = "PL-7 is the lagged spool south of the core, between the pump elbow and the tee. Stand clear of the gap in the shield." },
     -- ACT 4

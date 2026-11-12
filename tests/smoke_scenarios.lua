@@ -483,6 +483,10 @@ do
   check("the optional room step latched alongside", (store["scn.done"] or {}).hut ~= nil)
   for _ = 1, 120 do stand(mp); frame() end
   check("hold: not before 5 s", (store["scn.done"] or {}).wait == nil)
+  -- (scnfix, Ty 11-12) a step only waiting on a hold says so: the bar, the time left
+  local wst = RUN.state().wait
+  check("wait: a running hold shows a bar with the time left", wst and wst.eta > 0.5 and wst.eta < 4.5 and wst.frac > 0.1 and wst.frac < 0.9 and wst.id == "wait",
+    wst and string.format("%s eta %.2f frac %.2f", tostring(wst.label), wst.eta, wst.frac) or "no wait")
   for _ = 1, 240 do stand(mp); frame() end
   for _ = 1, 60 do stand(mp); frame() end
   check("on_done: a mark beat added a mark (after the lines before it)", store["scn.marks"].beyond ~= nil)
@@ -553,6 +557,36 @@ do
   RUN5.completeStep()
   for _ = 1, 20 do frame(); RUN5.update(node, 1 / 60) end
   check("F11 latches the current step", (store["scn.done"] or {}).walk ~= nil)
+
+  -- (scnfix, Ty 11-12: "I drove past the first relay marker straight to
+  -- Asha and was stuck") ordered waypoints: a later step met passes the
+  -- ones before it; their on_done does not play, their on_skip does; a
+  -- step met from the start is no reason to skip
+  do
+    local PS = SCN.load("_probe")
+    local keep = PS.steps
+    PS.steps = {
+      { id = "a", text = "To the post.", mark = "mark:post", goals = { { kind = "at", who = "crew:Okafor", at = "mark:post", r = 4 } },
+        on_done = { { var = { a_done = true } } }, on_skip = { { var = { a_skipped = true } } } },
+      { id = "b", text = "To the hut.", mark = "mark:hut", goals = { { kind = "at", who = "crew:Okafor", at = "mark:hut", r = 4 } } },
+      { id = "c", text = "Plant the flag.", goals = { { kind = "flag_on", body = "home" } } },
+    }
+    for k in pairs(store) do if k:sub(1, 4) == "scn." then store[k] = nil end end
+    store.g_scenario = "_probe"
+    roster[1].status = "afoot"
+    local RS = loadlib("scenario_run.lua", env)
+    RS.start(node)
+    for _ = 1, 400 do frame(); RS.update(node, 1 / 60) if RS.phaseNow() == "running" then break end end
+    for _ = 1, 30 do frame(); RS.update(node, 1 / 60) end
+    check("skip: the flag met from the start passes nothing", (store["scn.done"] or {}).a == nil, table.concat(log_lines, " | "):sub(-300))
+    local hm = store["scn.marks"].hut
+    for _ = 1, 40 do stand(hm); frame(); RS.update(node, 1 / 60) end
+    local dn = store["scn.done"] or {}
+    check("skip: standing at the second marker latches the first with it", dn.a ~= nil and dn.b ~= nil, tostring(dn.a) .. " " .. tostring(dn.b))
+    for _ = 1, 400 do frame(); RS.update(node, 1 / 60) end      -- (the opening's line holds the beats behind it)
+    check("skip: the passed step's on_skip plays, its on_done does not", RS.var("a_skipped") == true and RS.var("a_done") == nil, tostring(RS.var("a_skipped")) .. " " .. tostring(RS.var("a_done")) .. " " .. table.concat(log_lines, " | "):sub(-500))
+    PS.steps = keep
+  end
 
   -- ── v2: the story probe (scenarios/_story/: a folder scenario with hooks) ──
   local function fresh_run(id)

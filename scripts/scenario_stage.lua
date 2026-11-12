@@ -6,7 +6,7 @@
 --
 --   DIALOGUE  a lower-third plate: the speaker's portrait (a picture the beat
 --             names, a live render target, or a stencilled role glyph), the
---             name and role, the line typed at 40 characters a second, then
+--             name and role, the line typed out (CPS, PAUSE at punctuation), then
 --             click / Space / Enter for the next line. A line with choices
 --             shows 2–4 keys (1–4, or ↑ ↓ and Enter; a pad navigates them)
 --             and holds the world still until one is picked. Every line is
@@ -27,7 +27,7 @@
 --
 -- Pure (luajit): normChoices(c), barH(t, on, from), queue (newQ, add, cur).
 
-CPS = 40
+CPS = 36              -- (scnfix 11-12) the typewriter's pace; PAUSE below at punctuation
 BAR_H = 76            -- design units at 720 (about 10 % of the screen)
 BAR_SECS = 0.45
 SKIP_HOLD = 1.0       -- s of Esc to skip a cutscene
@@ -56,6 +56,43 @@ local function usub(s, n)
   return s
 end
 typedText = usub
+
+-- THE TYPEWRITER'S PACE (scnfix, Ty 2026-11-12: "typed out cleanly,
+-- character by character, every time ... a short pause at punctuation").
+-- Each character takes 1/cps s; a comma, a colon, a full stop or a dash
+-- followed by a space holds the next one a little. Pure: the same rule in
+-- ops_strip and scenario_ui (each script loads alone in the luajit tests).
+PAUSE = { [","] = 0.12, [";"] = 0.2, [":"] = 0.2, ["."] = 0.3, ["!"] = 0.3, ["?"] = 0.3, ["—"] = 0.16, ["…"] = 0.3 }
+-- → the characters shown `t` s into `text`, and whether that is all of it
+function pacedChars(text, t, cps)
+  text = tostring(text or "")
+  local step, acc, n, i, L = 1 / (cps or CPS), 0, 0, 1, #text
+  while i <= L do
+    local b = text:byte(i)
+    local w = b < 0x80 and 1 or (b >= 0xF0 and 4 or (b >= 0xE0 and 3 or (b >= 0xC0 and 2 or 1)))
+    acc = acc + step
+    if acc > (t or 0) then return n, false end
+    n = n + 1
+    local p = PAUSE[text:sub(i, i + w - 1)]
+    if p and text:sub(i + w, i + w) == " " then acc = acc + p end
+    i = i + w
+  end
+  return n, true
+end
+-- → the seconds `text` takes to type
+function pacedSecs(text, cps)
+  text = tostring(text or "")
+  local step, acc, i, L = 1 / (cps or CPS), 0, 1, #text
+  while i <= L do
+    local b = text:byte(i)
+    local w = b < 0x80 and 1 or (b >= 0xF0 and 4 or (b >= 0xE0 and 3 or (b >= 0xC0 and 2 or 1)))
+    acc = acc + step
+    local p = PAUSE[text:sub(i, i + w - 1)]
+    if p and text:sub(i + w, i + w) == " " then acc = acc + p end
+    i = i + w
+  end
+  return acc
+end
 
 -- choices → { { id, text } … } (at most 4; strings get their index as id)
 function normChoices(c)
@@ -612,8 +649,8 @@ function update(node, dt)
     local line = D.lines[D.i] or ""
     if not D.typed then
       D.t = D.t + dt
-      local n = math.floor(D.t * CPS)
-      if n >= ulen(line) then D.typed, D.n = true, ulen(line); drawn_key = nil; sfx("chime")
+      local n, all = pacedChars(line, D.t, CPS)
+      if all then D.typed, D.n = true, ulen(line); drawn_key = nil; sfx("chime")
       else D.n = n end
     end
     if input and input.pressed then
@@ -657,6 +694,12 @@ function update(node, dt)
     redraw(node)
     drawn_key = key
   elseif D and not D.typed and D.n ~= last_n then
+    -- (scnfix, Ty 2026-11-12: "the typing indicator, then the whole line
+    -- after a delay") ui.make is QUEUED: the find() right after it found
+    -- nothing on a new plate, the node stayed nil and the typewriter wrote
+    -- nowhere until the line was done and redrawn. Looked for again here,
+    -- once the make has been applied.
+    if not (text_node and text_node.valid ~= false) and find then text_node = find("Scenario Dialogue Line") end
     if text_node and text_node.valid ~= false then
       text_node.text = usub(D.lines[D.i], D.n) .. "▌"
       last_n = D.n

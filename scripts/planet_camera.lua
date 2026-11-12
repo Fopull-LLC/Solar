@@ -1916,8 +1916,21 @@ function shotOn() return shot ~= nil and shot.dir > 0 end
 --     (the first and last moments of a blend from first person).
 SHOT_R_BODY, SHOT_HALF_SEG = 0.62, 0.64   -- the suit capsule: radius 0.31, 1.9 m tall
 SHOT_R_WALL, SHOT_NEAR_WALL = 0.3, 1.5
+-- (scnfix, Ty 2026-11-12: "the cutscene at the base puts the camera INSIDE
+-- the base geometry") only a wall within SHOT_NEAR_WALL of the camera pulled
+-- it in: an orbit that swung behind a building put the camera in its rooms,
+-- or behind its walls, the subject out of sight. Now a wall between the two
+-- farther than SHOT_LOOK_IN from the subject HIDES it: from then on (the
+-- shot's whole life, so it never flips back) the swings must be clear of
+-- walls too, and with none clear the camera comes in front of the wall. A
+-- wall within SHOT_LOOK_IN of the subject (it stands against it, or in a
+-- doorway) is not counted.
+SHOT_LOOK_IN, SHOT_MIN_DIST = 1.5, 1.1
 SHOT_MIN_FRONT = 0.6                      -- a pull-in keeps at least this share of the shot's distance
-local SHOT_SWINGS = { { 0, 0 }, { 25, 0 }, { -25, 0 }, { 0, 20 }, { 50, 0 }, { -50, 0 }, { 25, 35 }, { -25, 35 }, { 85, 0 }, { -85, 0 } }
+-- (scnfix: the last rows look down from over the roofs: a camera an orbit
+-- took behind a building climbs over it rather than closing on the subject)
+local SHOT_SWINGS = { { 0, 0 }, { 25, 0 }, { -25, 0 }, { 0, 20 }, { 50, 0 }, { -50, 0 }, { 25, 35 }, { -25, 35 }, { 85, 0 }, { -85, 0 },
+                      { 0, 45 }, { 40, 45 }, { -40, 45 }, { 0, 62 }, { 90, 45 }, { -90, 45 }, { 180, 35 } }
 shotProbe = nil      -- (probes) the last frame's { inside = n, near = m, swing, pulled, shift }
 local shot_bodies_t, shot_bodies = -1, {}
 local function shot_body_nodes()
@@ -2021,7 +2034,17 @@ local function shot_clear(st, c, l, up, w, dt)
   -- (only once the shot has the view: mid-blend the line runs from the
   -- player's own camera, and a swing there would only wander)
   local pick = 1
-  for i, sw in ipairs(w >= 0.9 and SHOT_SWINGS or {}) do
+  -- the tick pose's gap: the queries below are answered there
+  local S = vec3(0, 0, 0)
+  if a and a.valid ~= false and a.tickPos and a.worldPos then S = a.tickPos - a.worldPos end
+  if S:length() > 50 then S = vec3(0, 0, 0) end
+  local function wall_clear(dd)
+    if not (st.hidden and spherecast) then return true end
+    local okw, hw = pcall(spherecast, l + S, dd, SHOT_R_WALL, want, { ignore = ign, ignoreStart = true })
+    return not (okw and hw and hw.distance) or hw.distance <= SHOT_LOOK_IN or (want - hw.distance) < SHOT_NEAR_WALL
+  end
+  -- (scnfix) a hidden subject swings mid-blend too: closing on it was worse
+  for i, sw in ipairs((w >= 0.9 or (st.hidden and w >= 0.3)) and SHOT_SWINGS or {}) do
     local dd = d0
     if sw[1] ~= 0 then dd = rot_about(dd, up, math.rad(sw[1])) end
     if sw[2] ~= 0 then
@@ -2029,7 +2052,7 @@ local function shot_clear(st, c, l, up, w, dt)
       if ax:length() > 1e-4 then dd = rot_about(dd, ax:normalized(), -math.rad(sw[2])) end
     end
     local t, front = free_t(l, dd, want, caps)
-    if front and t >= SHOT_MIN_FRONT * want then pick = i break end
+    if front and t >= SHOT_MIN_FRONT * want and wall_clear(dd) then pick = i break end
   end
   local tg = SHOT_SWINGS[pick]
   if not st.yaw then st.yaw, st.pitch = tg[1], tg[2] end
@@ -2043,16 +2066,25 @@ local function shot_clear(st, c, l, up, w, dt)
     if ax:length() > 1e-4 then d = rot_about(d, ax:normalized(), -math.rad(st.pitch)) end
   end
   local t, front, lo = free_t(l, d, want, caps)
-  -- the tick pose's gap: the queries below are answered there
-  local S = vec3(0, 0, 0)
-  if a and a.valid ~= false and a.tickPos and a.worldPos then S = a.tickPos - a.worldPos end
-  if S:length() > 50 then S = vec3(0, 0, 0) end
   -- a piece the camera is in or against pulls it in front of it
+  local walled = false
   if spherecast and t > SHOT_R_WALL then
     local o = l + S
     local ok, hit = pcall(spherecast, o, d, SHOT_R_WALL, t, { ignore = ign, ignoreStart = true })
     if ok and hit and hit.distance and (t - hit.distance) < SHOT_NEAR_WALL then
       local t2 = math.max(math.min(lo, t), hit.distance - 0.05)
+      if t2 < t then
+        local t3, f3 = free_t(l, d, t2, caps)
+        if f3 then t = t3 else t = t2 end
+      end
+    elseif ok and hit and hit.distance and hit.distance > SHOT_LOOK_IN then
+      -- (scnfix) a wall between, well in front of the camera: the subject
+      -- is hidden (the camera in a building's rooms, or behind it). The
+      -- swings look for a clear line from the next frame on; until one is
+      -- found the camera stands in front of the wall
+      st.hidden = true
+      walled = true
+      local t2 = math.max(SHOT_MIN_DIST, hit.distance - 0.05)
       if t2 < t then
         local t3, f3 = free_t(l, d, t2, caps)
         if f3 then t = t3 else t = t2 end
@@ -2064,7 +2096,8 @@ local function shot_clear(st, c, l, up, w, dt)
   if st.t and st.t < (st.want or want) - 0.01 and t > st.t and front then
     local inside = false
     for i = 1, #caps do if seg_dist(l.x + d.x * st.t, l.y + d.y * st.t, l.z + d.z * st.t, caps[i]) < caps[i].r then inside = true end end
-    if not inside then t = math.min(t, st.t + 2.5 * (dt or 0)) end
+    -- (scnfix: a hidden shot lets go faster, it waited behind a wall)
+    if not inside then t = math.min(t, st.t + (st.hidden and math.max(2.5, want * 0.5) or 2.5) * (dt or 0)) end
   end
   st.t, st.want = t, want
   local p = l + d * t
@@ -2084,7 +2117,7 @@ local function shot_clear(st, c, l, up, w, dt)
     if q < caps[i].r - 0.02 then near = near + 1 end
   end
   shotProbe = { inside = inside, near = near, swing = pick, pulled = t < want - 0.01, shift = S:length(), bodies = #caps,
-                t = t, want = want }
+                t = t, want = want, hidden = st.hidden == true, walled = walled }
   return p, me
 end
 

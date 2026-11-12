@@ -451,7 +451,7 @@ local function show_line(who, text, secs, opts)
     s.with = { who = w.who, name = w.name, tag = w.tag, color = w.color, portrait = w.portrait, radio = w.radio }
   end
   s.t0 = now()
-  s.secs = secs or (1.5 + 0.06 * #s.text)
+  s.secs = secs or SC5R.lineSecs(s.text)
   line = s
   -- (gy3) the speaker looks at whoever it is said to, they look back
   if talkBegin then pcall(talkBegin, s, opts and opts.with, opts and opts.look) end
@@ -2039,6 +2039,8 @@ local function walks_tick()
         end
       end
     end
+    -- (scnfix) a walk to a craft's seat (SC5R.board) ends in the seat
+    if walks[id] == nil and w.board then local bv = w.board; w.board = nil; SC5R.board(bv) end
   end
 end
 
@@ -2989,6 +2991,13 @@ end
 -- craft set down far away standing on their wheels, a craft's batteries ────
 -- Globals in one table (the main chunk is near its local ceiling).
 SC5R = {}
+-- (scnfix) a line's time on screen: the plate types it out (scenario_stage
+-- pacedChars: CPS and a pause at punctuation), then it is read
+function SC5R.lineSecs(text)
+  local stg = ref("scenario_stage")
+  local typ = (stg and stg.pacedSecs) and stg.pacedSecs(text) or (#text / 36)
+  return math.max(1.5 + 0.06 * #text, typ + 1.6 + 0.03 * #text)
+end
 -- a craft's controller by name (or "craft:<name>")
 function SC5R.vc(name)
   local n = tostring(name or ""):gsub("^craft:", "")
@@ -3271,6 +3280,29 @@ function SC5R.board(v)
   if not vc then say_log("board: no craft " .. tostring(v.craft)); return end
   local cur = C.craftOf and C.craftOf(id)
   if cur and cur.node and vc.node and cur.node.id == vc.node.id then return end
+  -- (scnfix, Ty 2026-11-12: "my crewmate teleported onto the rover with me")
+  -- a member on foot in sight of the craft WALKS to it and climbs in when
+  -- there (the walk's end boards them: walks_tick); seated straight away
+  -- only with no body near, mid-staging, in a cutscene (its author walks
+  -- them), with `walk = false` (the hurt), or when the walk runs out of time
+  if not v.now and v.walk ~= false and phase == "running" and not cut and not cur and C.bodyNodes and vc.node and not (C.activeId and C.activeId() == id) then
+    local okb, bn = pcall(C.bodyNodes)
+    local n = okb and type(bn) == "table" and bn[id] or nil
+    if n and n.valid ~= false then
+      local dx, dy, dz = n.x - vc.node.x, n.y - vc.node.y, n.z - vc.node.z
+      local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+      if dist > 2.6 and dist < 150 then
+        local bv = {}
+        for k2, x2 in pairs(v) do bv[k2] = x2 end
+        bv.now = true
+        walks[id] = { to = "craft:" .. tostring(vc.craftName or v.craft):gsub("^craft:", ""), t1 = now() + dist / 1.1 + 20, who = v.who,
+                      speed = dist > 25 and 2.3 or 1.5, near = 2.0, board = bv }
+        if C.patch then C.patch(id, { pose = false, gesture = false }) end
+        say_log(string.format("board: %s walks to %s (%.0f m)", tostring(v.who), tostring(v.craft), dist))
+        return
+      end
+    end
+  end
   -- (`seat`: that seat part's slot, when it is free)
   local su, sk = nil, nil
   if v.seat and vc.seatsOf then
@@ -3825,6 +3857,195 @@ local function meters_models(t, ctx)
   end
 end
 
+-- ── scnfix (Ty's playtest 2026-11-12) ──────────────────────────────────────
+-- SKIPPING AHEAD. "I drove past the first relay marker straight to Asha and
+-- was stuck: the objective still wanted r1." A step whose only unmet goals
+-- are being AT a place (a mark, a structure, a craft's part: a waypoint) is
+-- passed over when a later step is already met: the steps between, if they
+-- are waypoints too, latch with it. Their on_done beats do not play (what
+-- they said happened did not); a step's `on_skip` beats do. Never past a
+-- checkpoint or a parallel group, nor a step with `skip = false`; at most
+-- SKIP_AHEAD steps ahead. `optional` steps in between are left as they are.
+SKIP_AHEAD = 10
+function SC5R.placeRef(r)
+  if type(r) ~= "string" then return false end
+  return r:sub(1, 5) == "mark:" or r:sub(1, 7) == "struct:" or r == "base" or r:find("@", 1, true) ~= nil
+end
+-- `rows`: the step's goals as read (met); nil reads them here (the memory
+-- "ahead:", so a hold or an event's memory is never disturbed)
+function SC5R.waypointish(st, rows, ctx)
+  if st.skip == false or st.parallel then return false, false end
+  local R_ = rulebook()
+  local all, at_left = true, false
+  for j, g in ipairs(st.goals or {}) do
+    local met
+    if rows then met = rows[j] and rows[j].met
+    else
+      local key = "ahead:" .. st.id .. ":" .. j
+      mem[key] = mem[key] or {}
+      met = R_.evalGoal(g, W, mem[key], ctx)
+    end
+    if not met then
+      all = false
+      if g.kind == "at" and SC5R.placeRef(g.at) then at_left = true else return false, false end
+    end
+  end
+  return at_left, all
+end
+function SC5R.skipAhead(cur, ctx)
+  local steps = sc.steps
+  local s = steps[cur]
+  if not (s and readings[cur]) or s.parallel or s.skip == false or s.optional then return false end
+  if not SC5R.waypointish(s, readings[cur]) then return false end
+  local target = nil
+  -- (a later step already met when this one opened says nothing of where
+  -- the player went: a flag planted before, a pump that was running. It
+  -- counts once it has been seen unmet)
+  local base = SC5R.aheadBase
+  local first = not (base and base.id == s.id)
+  if first then base = { id = s.id, met = {} }; SC5R.aheadBase = base end
+  for j = cur + 1, math.min(#steps, cur + SKIP_AHEAD) do
+    local st = steps[j]
+    if not st.optional and not done_tbl()[st.id] then
+      if st.parallel then break end
+      local way, all = SC5R.waypointish(st, nil, ctx)
+      all = all and #(st.goals or {}) > 0
+      if first and all then base.met[st.id] = true elseif not all then base.met[st.id] = nil end
+      if all and not base.met[st.id] then target = j break end
+      if not way or st.checkpoint then break end
+    end
+  end
+  if not target then return false end
+  local d = done_tbl()
+  for j = cur, target - 1 do
+    local st = steps[j]
+    if not st.optional and not d[st.id] then
+      d[st.id] = agency_now(); open_seen[st.id] = true; close_step(st)
+      say_log("step skipped (a later one is met): " .. st.id)
+      if st.on_skip then queue_beats(st.on_skip, st.id) end
+    end
+  end
+  sset("scn.done", d)
+  last_eval = -1
+  bump()
+  return true
+end
+
+-- WAITING (Ty: "missions make me wait and I can't tell whether the game
+-- wants something from me"). When every open step is waiting on a process
+-- the state carries `wait = { label, eta (game s), frac, note }` and the HUD
+-- shows a bar, the time left and "Nothing to do". A step waits when:
+--   * it says so: `wait = { label, secs }` (from the step's opening), or
+--     `wait = { label, var, to = 0 }` (a variable moving to `to`, timed by
+--     its own rate; stalled, it is not a wait), and `note` for the line;
+--   * or every unmet goal is a hold running out (hold = s), or a process
+--     goal (cabin and room air, a reactor running down: scenario.lua
+--     progToward) that has been moving its way for WAIT_SETTLE s; the
+--     step's `waitLabel` names the process ("The stores filling"), else
+--     the goal's label does, and `waitNote` replaces "Nothing to do".
+-- `wait = false` never shows one. When the step latches, a warp the player
+-- put on for it drops back to ×1, and a warp that would overshoot the end
+-- by more than a second steps down first.
+WAIT_SETTLE = 1.5
+WAIT_SPAN = 10.0      -- game s of samples the rate is read over
+WAIT_MAX = 900        -- game s: a process slower than this is not shown as a wait
+SC5R.trk = {}
+SC5R.waitNow = nil
+function SC5R.track(key, p, t)
+  local tr = SC5R.trk[key]
+  if not tr or p < tr.p - 0.02 or t < tr.t then tr = { t = t, p = p, p0 = p, t0 = t, h = { { t, p } } }; SC5R.trk[key] = tr; return tr end
+  -- (the rate over the last WAIT_SPAN s of samples, not sample to sample:
+  -- a warp's uneven steps made the time left jump 22 s → 580 s → 10 s)
+  if t - tr.t >= 0.5 then
+    tr.t, tr.p = t, p
+    local h = tr.h
+    h[#h + 1] = { t, p }
+    while #h > 2 and t - h[2][1] >= WAIT_SPAN do table.remove(h, 1) end
+    if t - h[1][1] >= 1.0 then tr.rate = (p - h[1][2]) / (t - h[1][1]) end
+  end
+  return tr
+end
+function SC5R.stepWait(s, i, t)
+  if s.wait == false then return nil end
+  local a = type(s.wait) == "table" and s.wait or nil
+  -- (a `secs` wait is over when its time is: the story moves then, and the
+  -- step's goals say what is left, a process timed below or a job to do)
+  if a and a.secs and t - (step_t0[s.id] or t) >= a.secs then a = nil end
+  if a then
+    if a.secs then
+      local el = t - (step_t0[s.id] or t)
+      return { label = a.label or s.text, eta = math.max(0, a.secs - el), frac = math.min(1, el / a.secs), note = a.note, id = s.id }
+    end
+    local v = a.var and tonumber(vars()[a.var])
+    if not v then return nil end
+    local to = a.to or 0
+    local tr = SC5R.track("w:" .. s.id, -math.abs(v - to), t)
+    if not (tr.rate and tr.rate > 1e-6 and t - tr.t0 >= WAIT_SETTLE) then return nil end
+    local span = math.abs(tr.p0)
+    return { label = a.label or s.text, eta = math.abs(v - to) / tr.rate, frac = span > 0 and math.min(1, 1 - math.abs(v - to) / span) or 1, note = a.note, id = s.id }
+  end
+  local rows = readings[i]
+  if not rows then return nil end
+  local out = nil
+  for j in ipairs(s.goals or {}) do
+    if not (rows[j] and rows[j].met) then
+      local m = mem[s.id .. ":" .. j] or {}
+      local eta, frac
+      if m.holdLeft then eta, frac = m.holdLeft, m.holdFrac
+      elseif m.prog then
+        local tr = SC5R.track(s.id .. ":" .. j, m.prog, t)
+        -- (moving for real: a percent since it started, and done inside WAIT_MAX;
+        -- a cabin at 0.00 atm creeping on a leak read 20 minutes at 0 %)
+        if tr.rate and tr.rate > 1e-6 and m.prog < 1 and t - tr.t0 >= WAIT_SETTLE and m.prog - tr.p0 >= 0.01
+          and (1 - m.prog) / tr.rate <= WAIT_MAX then
+          eta = (1 - m.prog) / tr.rate
+          frac = tr.p0 < 1 and math.max(0, math.min(1, (m.prog - tr.p0) / (1 - tr.p0))) or 1
+        end
+      end
+      if not eta then return nil end
+      if not out or eta > out.eta then out = { label = s.waitLabel or rows[j].label, eta = eta, frac = frac, id = s.id, note = s.waitNote } end
+    end
+  end
+  return out
+end
+function SC5R.waitTick(open, t)
+  local d = done_tbl()
+  local w = nil
+  for _, i in ipairs(open) do
+    local s = sc.steps[i]
+    if not s.optional and not d[s.id] then
+      local wi = SC5R.stepWait(s, i, t)
+      if not wi then w = nil break end
+      if not w or wi.eta > w.eta then w = wi end
+    end
+  end
+  local wv = (space and space.warp) and space.warp() or 1
+  local was = SC5R.waitNow
+  if was and d[was.id] and SC5R.warped and wv > 1.001 then
+    -- the wait is over: the warp the player put on for it comes off
+    local wc = ref("warp_chip")
+    if wc and wc.request then wc.request(1) else space.warp(1) end
+    if wc and wc.say then wc.say("Warp ×1 · " .. tostring(was.label) .. ": done") end
+    SC5R.warped = false
+  end
+  if w then
+    if wv > 1.001 then
+      SC5R.warped = true
+      -- never overshoot: the rung that still leaves a second and a half
+      if w.eta / wv < 1.5 then
+        local wc = ref("warp_chip")
+        local best = 1
+        for _, r in ipairs((wc and wc.LADDER) or { 1, 5, 10, 50, 100, 1000, 10000 }) do if r < wv and w.eta / r >= 1.5 then best = r end end
+        if wc and wc.request then wc.request(best) else space.warp(best) end
+      end
+    end
+  elseif not (was and d[was.id]) then SC5R.warped = false end
+  -- (re-described as the seconds tick, not every eval)
+  local k = w and string.format("%s|%d|%d", tostring(w.label), math.floor(w.eta), math.floor((w.frac or 0) * 40)) or nil
+  if k ~= SC5R.waitKey then SC5R.waitKey = k; bump() end
+  SC5R.waitNow = w
+end
+
 -- one evaluation of the open steps and the fail list
 local function evaluate()
   local w0 = wall()
@@ -3857,6 +4078,10 @@ local function evaluate()
     end
     if s.hint2 and hint_shown[s.id] == 1 and t - (progress_t[s.id] or t) >= R_.HINT2_SECS then hint_shown[s.id] = 2; bump() end
   end
+  -- (scnfix) a later step already met passes the waypoints before it; a
+  -- step only waiting on a process says so
+  if cur and not done_tbl()[sc.steps[cur].id] then SC5R.skipAhead(cur, ctx) end
+  SC5R.waitTick(open, t)
   call_hook("tick", t)
   SC5R.tick(t)
   meters_models(t, ctx)
@@ -3923,6 +4148,7 @@ local function build_state()
                                       options = choice.options, t0 = choice.t0, timeout = choice.timeout } or nil,
     cutscene = cut ~= nil, letterbox = cut ~= nil, alarm = alarm_on, vars = vars(),
     hintFlash = (now() - (hintFlashT or -100)) < 2.5 or nil, hasHint = (s and s.hint) and true or nil,
+    wait = phase == "running" and SC5R.waitNow or nil,      -- (scnfix) { label, eta, frac, note }
   }
   local ob = sget("scn.obj") or {}
   if s and ob[s.id] then st.stepText = ob[s.id] elseif s and s.objective then st.stepText = s.objective end

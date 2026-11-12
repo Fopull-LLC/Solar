@@ -719,7 +719,7 @@ kind("airlock_cycled", { req = { "struct" }, eval = function(g, W, mem)
   local n = mem.n or 0
   return n >= want, string.format("%d of %d cycles", n, want)
 end })
-kind("room_air", { req = { "struct" }, eval = function(g, W)
+kind("room_air", { req = { "struct" }, eval = function(g, W, mem)
   local sid = sid_of(W, g)
   if not sid then return false, "no " .. tostring(g.struct) end
   local rooms = W.rooms(sid) or {}
@@ -729,6 +729,8 @@ kind("room_air", { req = { "struct" }, eval = function(g, W)
   if not a then return false, "no air yet" end
   local ok = true
   local parts = {}
+  if g.p then progToward(mem, a.p, g.p, true) end
+  if g.o2 then progToward(mem, a.o2, g.o2, true) end
   if g.p then ok = ok and a.p >= g.p; parts[#parts + 1] = string.format("p %.2f of %.2f", a.p, g.p) end
   if g.o2 then ok = ok and a.o2 >= g.o2; parts[#parts + 1] = string.format("O2 %.2f of %.2f", a.o2, g.o2) end
   if g.co2 then ok = ok and a.co2 <= g.co2; parts[#parts + 1] = string.format("CO2 %.3f (max %.3f)", a.co2, g.co2) end
@@ -795,16 +797,36 @@ end })
 -- leaks, reserve } | nil. `module`: "worst" (the default: the lowest
 -- pressure), "crew" (where the most crew sit), an index, or a part id prefix.
 CABIN_MODULES = { worst = true, crew = true }
+-- (scnfix, Ty 2026-11-12: "I can't tell whether the game wants something
+-- from me or I should just wait") a goal a PROCESS brings in (air coming up,
+-- a reactor running down) says how far along it is: mem.prog, 0 .. 1, the
+-- least of its tests. The runner times the rise and shows a bar when every
+-- open goal is such a process, moving (scenario_run SC5R.stepWait).
+-- `above`: v climbs to target (prog v / target); else v falls to it, from
+-- where it was first read.
+function progToward(mem, v, target, above)
+  if type(v) ~= "number" or type(target) ~= "number" or not mem then return end
+  local p
+  if above then p = target > 0 and v / target or 1
+  else
+    mem.v0 = mem.v0 or v
+    p = (mem.v0 > target) and (mem.v0 - v) / (mem.v0 - target) or 1
+  end
+  p = math.max(0, math.min(1, p))
+  mem.prog = mem.prog and math.min(mem.prog, p) or p
+end
 local function cabin_read(g, W)
   local name = type(g.craft) == "string" and g.craft:gsub("^craft:", "") or g.craft
   if W.cabin then return W.cabin(name, g.module) end
   return nil
 end
 -- cabin: { craft, module?, p?, o2?, co2? (at most), breathable?, sealed? (no leak, nothing open) }
-kind("cabin", { req = { "craft" }, eval = function(g, W)
+kind("cabin", { req = { "craft" }, eval = function(g, W, mem)
   local a = cabin_read(g, W)
   if not a then return false, "no cabin air on " .. tostring(g.craft) end
   local ok, parts = true, {}
+  if g.p then progToward(mem, a.p, g.p, true) elseif g.breathable then progToward(mem, a.p, 0.5, true) end
+  if g.o2 then progToward(mem, a.o2, g.o2, true) end
   if g.p then ok = ok and a.p >= g.p; parts[#parts + 1] = string.format("%.2f of %.2f atm", a.p, g.p) end
   if g.o2 then ok = ok and a.o2 >= g.o2; parts[#parts + 1] = string.format("O2 %.2f of %.2f", a.o2, g.o2) end
   if g.co2 then ok = ok and a.co2 <= g.co2; parts[#parts + 1] = string.format("CO2 %.3f (max %.3f)", a.co2, g.co2) end
@@ -864,10 +886,15 @@ kind("piece_ok", { req = { "struct" }, eval = function(g, W)
   if ok == nil then return false, "no such piece" end
   return ok, ok and "working" or "knocked"
 end })
-kind("reactor", { req = { "struct" }, eval = function(g, W)
+kind("reactor", { req = { "struct" }, eval = function(g, W, mem)
   local sid = sid_of(W, g)
   local r = sid and W.reactor and W.reactor(sid)
   if not r then return false, "no reactor" end
+  -- (scnfix) a climb is a process only once the setpoint asks for it: power
+  -- rising to a lower setpoint is still the player's to raise
+  if g.power_above and type(r.setpoint) == "number" and r.setpoint >= g.power_above - 0.005 then progToward(mem, r.power or 0, g.power_above, true) end
+  if g.power_below then progToward(mem, r.power or 0, g.power_below, false) end
+  if g.temp_below then progToward(mem, r.primaryK or 0, g.temp_below, false) end
   local ok, parts = true, { string.format("power %d%%", math.floor((r.power or 0) * 100 + 0.5)) }
   if g.power_above and not ((r.power or 0) >= g.power_above) then ok = false end
   if g.power_below and not ((r.power or 0) <= g.power_below) then ok = false end
@@ -1433,6 +1460,8 @@ end
 function evalGoal(g, W, mem, ctx)
   local K = KINDS[g.kind]
   if not K then return false, "unknown kind " .. tostring(g.kind) end
+  -- (scnfix) a process's progress and a hold's time left, read fresh
+  if mem then mem.prog, mem.holdLeft, mem.holdFrac = nil, nil, nil end
   local ok, met, reading = pcall(K.eval, g, W, mem, ctx)
   if not ok then return false, "error: " .. tostring(met) end
   if g.hold and g.hold > 0 then
@@ -1441,6 +1470,7 @@ function evalGoal(g, W, mem, ctx)
       mem.since = mem.since or now
       local held = now - mem.since
       if held < g.hold then
+        mem.holdLeft, mem.holdFrac = g.hold - held, held / g.hold
         return false, string.format("%s · held %d of %d s", tostring(reading or ""), math.floor(held), math.floor(g.hold))
       end
     else
@@ -1659,6 +1689,7 @@ SC5_BEATS = {
   board = function(val, pk, E, check_ref, check_who)
     check_who(pk .. ".who", val.who)
     if val.who == nil then E(pk .. ".who", "missing") end
+    if val.walk ~= nil and val.walk ~= false then E(pk .. ".walk", "false (seated straight away: the hurt), or leave it out") end
     if val.craft ~= false then sc5_craft(val, pk, E, check_ref) end
   end,
   -- { craft | who, at = ref, offset, yaw }: set down there (a checkpoint's stage)
@@ -2087,7 +2118,7 @@ function validate(sc, ctx)
     end
   end
   pre(sc.on_start); pre(sc.on_fail)
-  for _, s in ipairs(type(sc.steps) == "table" and sc.steps or {}) do pre(s.on_enter); pre(s.on_done) end
+  for _, s in ipairs(type(sc.steps) == "table" and sc.steps or {}) do pre(s.on_enter); pre(s.on_done); pre(s.on_skip) end
   for _, q in pairs(type(sc.sequences) == "table" and sc.sequences or {}) do pre(q) end
   for _, ev in ipairs(type(sc.events) == "table" and sc.events or {}) do pre(ev.beats) end
   for _, md in ipairs(type(sc.models) == "table" and sc.models or {}) do
@@ -2396,6 +2427,17 @@ function validate(sc, ctx)
     else for j, g in ipairs(s.goals) do check_goal(string.format("%s.goals[%d]", p, j), g, false) end end
     check_beats(p .. ".on_enter", s.on_enter)
     check_beats(p .. ".on_done", s.on_done)
+    -- (scnfix) skipping ahead and the wait bar (docs/scenarios.md §4)
+    check_beats(p .. ".on_skip", s.on_skip)
+    if s.skip ~= nil and s.skip ~= false then E(p .. ".skip", "false (never passed over), or leave it out") end
+    if s.wait ~= nil and s.wait ~= false then
+      if type(s.wait) ~= "table" then E(p .. ".wait", "false, or { label, secs } or { label, var, to }")
+      elseif s.wait.secs == nil and s.wait.var == nil then E(p .. ".wait", "secs (from the step's opening) or var (a number moving to `to`)")
+      elseif s.wait.secs ~= nil and (type(s.wait.secs) ~= "number" or s.wait.secs <= 0) then E(p .. ".wait.secs", "seconds, above 0")
+      elseif s.wait.var ~= nil and type(s.wait.var) ~= "string" then E(p .. ".wait.var", "a variable's name") end
+    end
+    if s.waitLabel ~= nil and type(s.waitLabel) ~= "string" then E(p .. ".waitLabel", "the process's name, a string") end
+    if s.waitNote ~= nil and type(s.waitNote) ~= "string" then E(p .. ".waitNote", "a string") end
     if s.teach ~= nil then
       if type(s.teach) ~= "table" then E(p .. ".teach", "a table")
       else

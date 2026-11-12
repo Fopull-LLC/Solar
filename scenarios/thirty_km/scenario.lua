@@ -173,7 +173,7 @@ return {
     get_in = {
       { say = { who = "sunniva", with = "jonah", text = "Right. I'm in the front. Lamps on before you need them, Jonah, it gets dark here like a door shutting." } },
       { look = { who = "sunniva", at = false } },
-      { walk = { who = "Berge", to = "craft:Asha-1", near = 1.6, speed = 1.3, secs = 16, wait = true } },
+      -- (scnfix) the board beat walks her over (no 16 s walk that ran out and seated her)
       { board = { who = "Berge", craft = "Asha-1", seat = 8 } },
     },
     set_off = {
@@ -380,8 +380,12 @@ return {
   steps = {
     -- ACT 1: out
     { id = "board", text = "Get in Asha-1. Sunniva's taking the seat beside you.", act = "Act 1 · out", run = "handover", mark = "craft:Asha-1",
-      goals = { { kind = "at", who = "crew:Priestley", at = "craft:Asha-1", r = 1.0, label = "In Asha-1's driver's seat" } },
-      hint = "Asha-1 is the four-seat rover parked beside you at the pad. Walk up to it and press F to take a seat (the front left drives).",
+      -- (scnfix, Ty 11-12: Sunniva teleported into the rover) she walks to
+      -- it and climbs in (the board beat walks her); you go when she's in
+      goals = { { kind = "at", who = "crew:Priestley", at = "craft:Asha-1", r = 1.0, label = "In Asha-1's driver's seat" },
+                { kind = "at", who = "crew:Berge", at = "craft:Asha-1", r = 1.0, label = "Sunniva aboard" } },
+      skip = false,
+      hint = "Asha-1 is the four-seat rover parked beside you at the pad. Walk up to it and press F to take a seat (the front left drives). Sunniva walks over and takes the seat beside you when she's done talking.",
       hint2 = "The spare traction cell is in Asha-1's rear locker (right-click the locker on the back deck). You'll need it at the wreck.",
       on_done = { { branch = { var = "route", eq = "flats", beats = { { ["goto"] = "f1" } } } }, { run = "set_off" } } },
     { id = "r1", text = "The ridge road. Out past the pad lights to the first relay beacon.", mark = "mark:r1",
@@ -427,7 +431,9 @@ return {
       goals = { { kind = "at", who = "crew:Priestley", at = "craft:Asha-2", r = 24, label = "At Asha-2" },
                 { kind = "hook", fn = "ray_air", label = "Ray's suit" } },
       hint = "Asha-2 is at the marker, low on the far slope. Drive (or walk) up to it.",
-      on_done = { { run = "arrival" }, { run = "meet" } } },
+      -- (scnfix: a route driven past its markers straight here still has
+      -- met Kit, whom the far_side lines would have met)
+      on_done = { { var = { met_kit = true } }, { run = "arrival" }, { run = "meet" } } },
     { id = "medic", text = "Sunniva sees to Ray.", parallel = "repair",
       goals = { { kind = "var", name = "patched", is = true, label = "Ray's suit seal taped" },
                 { kind = "hook", fn = "ray_air", label = "Ray's suit" } },
@@ -466,19 +472,19 @@ return {
           { walk = { who = "Nakamura", to = "craft:Asha-2", near = 1.5, secs = 20, wait = true } },
           { board = { who = "Nakamura", craft = "Asha-2", seat = 6 } },
           { walk = { who = "Berge", to = "craft:Asha-1", near = 1.5, secs = 25 } },
-          { board = { who = "Castellanos", craft = "Asha-1", seat = 9 } },
+          { board = { who = "Castellanos", craft = "Asha-1", seat = 9, walk = false } },
           { board = { who = "Berge", craft = "Asha-1", seat = 8 } },
           { drive = { craft = "Asha-2", follow = "craft:Asha-1", speed = 7, gap = 14 } } } } },
         { branch = { var = "plan", eq = "crawl", beats = {
           { walk = { who = "Nakamura", to = "craft:Asha-2", near = 1.5, secs = 20, wait = true } },
-          { board = { who = "Castellanos", craft = "Asha-2", seat = 7 } },
+          { board = { who = "Castellanos", craft = "Asha-2", seat = 7, walk = false } },
           { board = { who = "Nakamura", craft = "Asha-2", seat = 6 } },
           { walk = { who = "Berge", to = "craft:Asha-1", near = 1.5, secs = 25, wait = true } },
           { board = { who = "Berge", craft = "Asha-1", seat = 8 } },
           { drive = { craft = "Asha-2", follow = "craft:Asha-1", speed = 3.5, gap = 16 } } } } },
         { branch = { var = "plan", eq = "abandon", beats = {
           { walk = { who = "Nakamura", to = "craft:Asha-1", near = 1.5, secs = 25, wait = true } },
-          { board = { who = "Castellanos", craft = "Asha-1", seat = 9 } },
+          { board = { who = "Castellanos", craft = "Asha-1", seat = 9, walk = false } },
           { board = { who = "Nakamura", craft = "Asha-1", seat = 10 } },
           { board = { who = "Berge", craft = "Asha-1", seat = 8 } } } } },
         { hook = "convoy_on" },

@@ -520,7 +520,7 @@ function SOLVE(SP)
   shot_at(SP, "01_pad_dusk")
   cam_off()
   until_(sr, function() return (sr.var("route") or "") ~= "" end, 90, "route chosen")
-  until_(sr, function() local C = findScript("crew"); return C.craftOf(C.idOf and C.idOf("Berge") or (save.get("scn.crew") or {}).Berge) ~= nil end, 30, "Sunniva aboard")
+  until_(sr, function() local C = findScript("crew"); return C.craftOf(C.idOf and C.idOf("Berge") or (save.get("scn.crew") or {}).Berge) ~= nil end, 120, "Sunniva aboard")
   SP.check("route", sr.var("route") == route, "route %s", tostring(sr.var("route")))
   -- Jonah takes the controls; the cell comes along at the wreck
   SP.check("board", board_player(sr, A1), "Jonah boards Asha-1")

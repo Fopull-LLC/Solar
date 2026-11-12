@@ -24,7 +24,7 @@
 -- Pure (luajit, tests/smoke_menu_scenarios.lua): typed(text, n),
 -- charsAt(t, cps), holdFor(text), and the queue (newQueue, push, tick, skip).
 
-CPS = 40            -- characters a second
+CPS = 36            -- characters a second (scnfix 11-12: PAUSE at punctuation too)
 HOLD_MIN = 4.0      -- s a finished line stays up …
 HOLD_PER_CHAR = 0.045 -- … plus this a character (a long line is read slower)
 GAP = 0.6           -- s between a finished line and the next queued one
@@ -81,6 +81,27 @@ end
 -- Characters shown `t` seconds into a line.
 function charsAt(t, cps) return math.max(0, math.floor((t or 0) * (cps or CPS))) end
 
+-- (scnfix, Ty 2026-11-12: typed character by character, "a short pause at
+-- punctuation") the dialogue plate's rule (scenario_stage.pacedChars):
+-- 1/cps a character, and a comma, colon, stop or dash before a space holds
+-- the next one. -> characters shown `t` s into `text`, all shown (bool)
+PAUSE = { [","] = 0.12, [";"] = 0.2, [":"] = 0.2, ["."] = 0.3, ["!"] = 0.3, ["?"] = 0.3, ["—"] = 0.16, ["…"] = 0.3 }
+function pacedChars(text, t, cps)
+  text = tostring(text or "")
+  local step, acc, n, i, L = 1 / (cps or CPS), 0, 0, 1, #text
+  while i <= L do
+    local b = text:byte(i)
+    local w = b < 0x80 and 1 or (b >= 0xF0 and 4 or (b >= 0xE0 and 3 or (b >= 0xC0 and 2 or 1)))
+    acc = acc + step
+    if acc > (t or 0) then return n, false end
+    n = n + 1
+    local p = PAUSE[text:sub(i, i + w - 1)]
+    if p and text:sub(i + w, i + w) == " " then acc = acc + p end
+    i = i + w
+  end
+  return n, true
+end
+
 -- Seconds a finished line stays up.
 function holdFor(text) return HOLD_MIN + HOLD_PER_CHAR * ulen(tostring(text or "")) end
 
@@ -118,7 +139,7 @@ function tick(q, dt, cps)
   if c then
     c.t = c.t + dt
     if not c.typed then
-      local n = math.min(c.len, charsAt(c.t, cps))
+      local n = math.min(c.len, (pacedChars(c.text, c.t, cps)))
       if n >= c.len then
         c.n, c.typed, c.left = c.len, true, holdFor(c.text)
         return "typed"
@@ -500,7 +521,16 @@ function update(node, dt)
       if current then current.shown = s end
       last_n = Q.cur.n
     elseif not line_node then
-      redraw(node)
+      -- (scnfix) ui.make is queued: the node is there once the make is
+      -- applied, a frame on; found then instead of describing the strip
+      -- again every frame
+      line_node = find and find("Ops Strip Line") or nil
+      if line_node and line_node.valid ~= false then
+        local s = typed(Q.cur.text, Q.cur.n) .. "▌"
+        line_node.text = s
+        if current then current.shown = s end
+        last_n = Q.cur.n
+      else line_node = nil; redraw(node) end
     end
   end
 end

@@ -259,10 +259,12 @@ return {
                           { state = { craft = "Ansel", uid = 13, st = { ph = "sealed" } } },
                           { state = { craft = "Ansel", uid = 16, st = { ph = "sealed" } } } } },
       goals = { { kind = "cabin", craft = "Ansel", module = "#14", breathable = true, p = 0.9, label = "The hab breathable again" } },
+      waitLabel = "The hab's bottles filling it",      -- (scnfix) the wait bar, once you're in and it climbs
       hint = "Fly back to the hab, the can between hatch A and hatch B, and press F at its side hatch to board. Boarding seals it; the hab's bottles bring the air back.",
       on_done = { { run = "home" } } },
     { id = "stores", text = "Bring the stores back over 0.85 atm: its own bottles, or the hab's through hatch B.",
       goals = { { kind = "cabin", craft = "Ansel", module = "#10", p = 0.85, label = "Stores back over 0.85 atm" } },
+      waitLabel = "The stores filling",                -- (scnfix) shown only while the air is coming up
       hint = "If the stores' bottles held, its regulator brings it back on its own. If they ran dry, right-click hatch B: \"Shut it, valve open (equalise)\", and when both sides read the same, Open the hatch.",
       hint2 = "Opening hatch B straight away works too: the hab drops while the stores fills." },
     { id = "decide", text = "Kessel, or home.", run = "decide",

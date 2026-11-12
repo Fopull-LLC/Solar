@@ -224,6 +224,34 @@ do
   ok(env.ladderFrom({ node = { id = 8 } }) == env.LADDER_FROM * 4, "a level-2 Pilot aboard: from 4× as far (" .. env.ladderFrom({ node = { id = 8 } }) .. " m)")
 end
 
+-- ── the player's waypoints (scnfix, Ty 2026-11-12) ──────────────────────────
+do
+  local W = env.WPT
+  ok(W ~= nil, "WPT is published")
+  -- a ray from 300 m out straight at a 100 m world meets it at 200 m
+  local t = W.raySphere(300, 0, 0, -1, 0, 0, 0, 0, 0, 100)
+  ok(t and near(t, 200, 1e-9), "the ray meets the near side: " .. tostring(t))
+  ok(W.raySphere(300, 200, 0, -1, 0, 0, 0, 0, 0, 100) == nil, "a ray past the world meets nothing")
+  store["nav.waypoints"] = nil
+  W.list = nil
+  local n1 = W.add("Pebble", 100, 0, 0)
+  local n2 = W.add("Pebble", 0, 100, 0)
+  ok(n1 == 1 and n2 == 2, "numbered from 1")
+  ok(type(store["nav.waypoints"]) == "table" and #store["nav.waypoints"] == 2, "saved in the slot")
+  ok(W.remove(1) and #W.load() == 1, "removed")
+  ok(W.add("Pebble", 0, 0, 100) == 1, "a removed number is used again")
+  W.list = nil
+  local L = W.load()
+  ok(#L == 2 and L[1].n == 1 and L[1].body == "Pebble" and L[2].n == 2, "read back from the save, body-relative")
+  local x, y, z = W.point(L[2], 3)
+  ok(x and near(x, 0) and near(y, 103) and near(z, 0), "drawn against the body, lifted over the ground")
+  for _ = 1, 9 do W.add("Pebble", 100, 0, 0) end
+  local none, why = W.add("Pebble", 100, 0, 0)
+  ok(none == nil and #W.load() == W.MAX and tostring(why):find("most"), "at most MAX")
+  W.clear()
+  ok(#W.load() == 0 and #store["nav.waypoints"] == 0, "cleared")
+end
+
 if #failures > 0 then
   for _, f in ipairs(failures) do print("FAIL " .. f) end
   print(string.format("smoke_targeting: %d/%d checks failed", #failures, checks))

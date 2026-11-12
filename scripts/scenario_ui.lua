@@ -32,7 +32,7 @@
 -- medalOf(st), buttonsFor(st), briefText(lines, n), briefLen(lines).
 
 POLL = 0.25          -- s between state() reads
-CPS = 40             -- the brief types at the Ops strip's rate
+CPS = 36             -- the brief types at the Ops strip's rate (scnfix 11-12: PAUSE at punctuation)
 -- Top centre, in the status chips' row (FUNDS … PACK on the left, the
 -- objectives card and MENU on the right; 1080p shots 2026-11-10): the warp
 -- chip sits under it at y 60 while it shows.
@@ -92,6 +92,19 @@ function failFade(age)
   local w = math.max(0, math.min(1, (age - FAIL_FADE * 0.7) / FAIL_WORDS))
   return black, w
 end
+-- the age at which the fade is `alpha` black (the inverse of failFade's
+-- smoothstep): a fail screen that takes over from a death curtain already
+-- that black starts there, never from the picture again
+function failAgeFor(alpha)
+  alpha = math.max(0, math.min(1, tonumber(alpha) or 0))
+  if alpha <= 0 then return 0 end
+  local lo, hi = 0, 1
+  for _ = 1, 30 do
+    local k = (lo + hi) * 0.5
+    if k * k * (3 - 2 * k) < alpha then lo = k else hi = k end
+  end
+  return hi * FAIL_FADE
+end
 -- the line over the title: where you go back to, and when it happened
 function failKicker(sb)
   if type(sb) ~= "table" then return "" end
@@ -128,6 +141,38 @@ function briefLen(lines)
   local n = 0
   for _, l in ipairs(lines or {}) do n = n + ulen(tostring(l)) end
   return n
+end
+-- (scnfix, Ty 2026-11-12: "a short pause at punctuation") the dialogue
+-- plate's pace (scenario_stage.pacedChars), and a breath between paragraphs
+PAUSE = { [","] = 0.12, [";"] = 0.2, [":"] = 0.2, ["."] = 0.3, ["!"] = 0.3, ["?"] = 0.3, ["—"] = 0.16, ["…"] = 0.3 }
+PARA_PAUSE = 0.45
+local function paced(text, t, cps)
+  local step, acc, n, i, L = 1 / (cps or CPS), 0, 0, 1, #text
+  while i <= L do
+    local b = text:byte(i)
+    local w = b < 0x80 and 1 or (b >= 0xF0 and 4 or (b >= 0xE0 and 3 or (b >= 0xC0 and 2 or 1)))
+    acc = acc + step
+    if t and acc > t then return n, false, acc end
+    n = n + 1
+    local p = PAUSE[text:sub(i, i + w - 1)]
+    if p and text:sub(i + w, i + w) == " " then acc = acc + p end
+    i = i + w
+  end
+  return n, true, acc
+end
+-- → the brief's characters typed `t` s in (briefText's count), all typed
+function briefTypedAt(lines, t)
+  local total, left = 0, t or 0
+  for _, l in ipairs(lines or {}) do
+    l = tostring(l)
+    local n, all = paced(l, left)
+    total = total + n
+    if not all then return total, false end
+    local _, _, secs = paced(l, nil)
+    left = left - secs - PARA_PAUSE
+    if left < 0 then return total, total >= briefLen(lines) end
+  end
+  return total, true
 end
 function briefText(lines, n)
   local out, left = {}, n
@@ -189,9 +234,10 @@ local poll_t = 0
 local shown = nil         -- what is described now: "curtain" | "brief" | "debrief" | "chip" | nil
 local chip_key = nil
 local brief_t, brief_all = 0, false
+local brief_lines = {}      -- (scnfix) the brief being typed (briefTyped, for probes)
 local brief_wall = nil      -- (gy3) the wall clock at the last typed frame
 -- (probes) characters of the brief typed so far (9999: all of it)
-function briefTyped() return brief_all and 9999 or math.floor(brief_t * CPS) end
+function briefTyped() return brief_all and 9999 or (briefTypedAt(brief_lines, brief_t)) end
 local brief_nodes = {}    -- made text nodes of the brief's lines (the typewriter writes them)
 local brief_n = -1
 local paused_by_us = false
@@ -199,6 +245,8 @@ local fail_t0, fail_k, fail_focused, fail_cine = nil, nil, nil, nil   -- (storyp
 
 -- Published for probes: what is up ("curtain" | "brief" | "debrief" | "chip" | nil).
 function showing() return shown end
+-- (scnfix: crew.lua's death curtain asks: the fail screen owns the black now)
+function failScreenUp() return shown == "setback" end
 function stateNow() return st end
 
 -- A probe or an author can show the panels from a made-up state, with no
@@ -286,7 +334,7 @@ local function lines_col(paras)
 end
 local function brief_tree(s)
   local lines = s.brief or {}
-  local shownL = briefText(lines, brief_all and math.huge or math.floor(brief_t * CPS))
+  local shownL = briefText(lines, brief_all and math.huge or (briefTypedAt(lines, brief_t)))
   local paras = {}
   for i, l in ipairs(lines) do
     paras[#paras + 1] = { "text", key = "b" .. i, name = "Scenario Brief " .. i, style = "panel/body", w = "100%", h = "fit",
@@ -401,6 +449,37 @@ end
 HINT_TOAST = 8.0
 hintToast = nil
 local function toast_up() return hintToast ~= nil and ((time or 0) - hintToast.t) < HINT_TOAST end
+-- (scnfix, Ty 2026-11-12: "I can't tell whether the game wants something
+-- from me or I should just wait") THE WAIT BAR, under the chip, while every
+-- open step is only waiting on a process (scenario_run state().wait): what
+-- it is, how far along, the time left, and that there is nothing to do.
+WAIT_W = 420
+WAIT_Y = 124
+WAIT_KEY = "."         -- the time warp's key (warp_chip, vessel_controller)
+function waitLeft(eta)
+  if type(eta) ~= "number" or eta ~= eta then return "" end
+  if eta < 1 then return "any moment" end
+  return clock(math.ceil(eta)) .. " left"
+end
+function waitNote(w)
+  if type(w) == "table" and w.note then return tostring(w.note) end
+  return "Nothing to do — wait, or skip time ( " .. WAIT_KEY .. " )"
+end
+local function wait_tree(w, y)
+  local frac = math.max(0, math.min(1, tonumber(w.frac) or 0))
+  local inner = WAIT_W - 20
+  return { "col", key = "wait", name = "Scenario Wait", style = "hud/chip", pin = "top", x = CHIP_X, y = y, w = WAIT_W, h = "fit",
+    pad = 10, gap = 5, align = "stretch",
+    { "row", key = "r", w = "100%", h = "fit", pad = 0, gap = 8, align = "center",
+      { "text", key = "k", style = "hud/chipLabel", w = "fit", h = "fit", text = "WAITING" },
+      { "text", key = "l", name = "Scenario Wait Label", style = "hud/chipValue", w = "grow", h = "fit", maxLines = 1, overflow = "ellipsis",
+        text = tostring(w.label or "") },
+      { "text", key = "e", name = "Scenario Wait Left", style = "hud/chipValue", w = "fit", h = "fit", textAlign = "end", text = waitLeft(w.eta) } },
+    { "box", key = "bar", style = "ctl/track", w = inner, h = 6, pad = 0,
+      { "box", key = "f", style = "ctl/fill", pin = "left", w = math.max(0, math.floor(inner * frac)), h = 6 } },
+    { "text", key = "n", name = "Scenario Wait Note", style = "hud/chipLabel", w = "100%", h = "fit", wrap = true, text = waitNote(w) } }
+end
+waitTree = wait_tree
 local function chip_tree(s)
   local steps, time, over = chipText(s, elapsed_now())
   return {
@@ -424,6 +503,8 @@ local function chip_tree(s)
       pad = 8, gap = 8, align = "start",
       { "text", key = "hk", style = "hud/chipLabel", w = "fit", h = "fit", text = "HINT" },
       { "text", key = "ht", style = "hud/chipValue", w = "fit", maxW = 430, h = "fit", wrap = true, text = hintToast.text } } or nil,
+    -- (under the warp chip and its notices, and the flight HUD's top strip)
+    s.wait and wait_tree(s.wait, WAIT_Y + (toast_up() and 62 or 0)) or nil,
   }
 end
 
@@ -536,7 +617,16 @@ function update(node, dt)
   local fail_age = 0
   if w == "setback" then
     local wc = (app and app.wallClock) and app.wallClock() or (time or 0)
-    if shown ~= "setback" or not fail_t0 then fail_t0 = wc end
+    -- (scnfix, the physics pass's death curtain in crew.lua: a member's
+    -- death fades the picture to black too) the fail screen takes over from
+    -- the curtain where it stands: its fade starts at the curtain's black,
+    -- and the curtain stands down while this is up (failScreenUp)
+    if shown ~= "setback" or not fail_t0 then
+      local cr = ref("crew")
+      local a0 = 0
+      if cr and cr.curtainAlpha then local ok, a = pcall(cr.curtainAlpha); if ok and type(a) == "number" then a0 = a end end
+      fail_t0 = wc - failAgeFor(a0)
+    end
     fail_age = wc - fail_t0
   else fail_t0 = nil end
   local modal = (w == "brief" or w == "debrief") or (w == "setback" and fail_age >= FAIL_FADE * 0.8) or ((pm and pm.open) and st and
@@ -570,9 +660,10 @@ function update(node, dt)
     brief_wall = wc
     if not brief_all then
       brief_t = brief_t + wdt
-      if brief_t * CPS >= total then brief_all = true; seen_version = nil end
+      brief_lines = st.brief or {}
+      if select(2, briefTypedAt(brief_lines, brief_t)) then brief_all = true; seen_version = nil end
     end
-    local typing = (math.floor(brief_t * CPS) < total) and not brief_all
+    local typing = not brief_all
     if input and input.pressed then
       if input.pressed("enter") then act("go") return end
       if input.pressed("space") then
@@ -585,10 +676,10 @@ function update(node, dt)
       shown, seen_version = "brief", st.version
       brief_nodes = {}
       for i = 1, #(st.brief or {}) do brief_nodes[i] = find and find("Scenario Brief " .. i) or nil end
-      brief_n = brief_all and total or math.floor(brief_t * CPS)
+      brief_n = brief_all and total or (briefTypedAt(st.brief, brief_t))
     elseif typing then
       -- the typewriter: write only the lines that changed
-      local n = math.floor(brief_t * CPS)
+      local n = (briefTypedAt(st.brief, brief_t))
       if n ~= brief_n then
         local a = briefText(st.brief, brief_n)
         local b = briefText(st.brief, n)
@@ -655,6 +746,7 @@ function update(node, dt)
     if hintKey() then act("hint") end
     local a, b, c = chipText(st, elapsed_now())
     local k = a .. b .. (c or "") .. (st.hintFlash and "H" or "") .. (st.hasHint and "h" or "") .. (toast_up() and tostring(hintToast.t) or "")
+      .. (st.wait and string.format("w%s%d%d", tostring(st.wait.label), math.floor(st.wait.eta or 0), math.floor((st.wait.frac or 0) * 60)) or "")
     if k ~= chip_key or shown ~= "chip" then
       ui.make(node, tidy(chip_tree(st)))
       shown, chip_key = "chip", k

@@ -3516,6 +3516,11 @@ end
 local function curtain_draw()
   local a, text = curtainAlpha()
   if a <= 0.001 or not (draw and draw.rect and camera and camera.screenRect) then return end
+  -- (scnfix) a scenario's fail screen owns the black once it is up: it took
+  -- over from this curtain at the curtain's own black (scenario_ui
+  -- failAgeFor), so the two fades never stack
+  local su = ref("scenario_ui")
+  if su and su.failScreenUp and su.failScreenUp() then return end
   local vx, vy, vw, vh = camera.screenRect()
   if not vw then return end
   draw.rect(vx - 2, vy - 2, vw + 4, vh + 4, 0, 0, 0, a)

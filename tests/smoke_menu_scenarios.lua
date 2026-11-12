@@ -63,7 +63,10 @@ do
   local evs, t = {}, 0
   while q.cur and not q.cur.typed do local e = O.tick(q, 1 / 60); t = t + 1 / 60; if e then evs[e] = (evs[e] or 0) + 1 end end
   local n = O.charCount("Sealed. Now split it.")
-  check(evs.typed == 1 and math.abs(t - n / 40) < 0.05, string.format("typed out in %.2f s (%d chars at 40/s)", t, n))
+  -- (scnfix 11-12) CPS a second, and the stop after "Sealed." holds 0.3 s
+  check(evs.typed == 1 and math.abs(t - (n / O.CPS + 0.3)) < 0.05, string.format("typed out in %.2f s (%d chars at %d/s, a pause at the stop)", t, n, O.CPS))
+  check(select(1, O.pacedChars("Yes. No", 5 / O.CPS)) == 4 and select(1, O.pacedChars("Yes. No", 5 / O.CPS + 0.31)) == 5
+    and select(2, O.pacedChars("ab", 1)) == true and select(1, O.pacedChars("3.5 m", 4 / O.CPS + 0.01)) == 4, "a pause after a stop and a space, none inside 3.5")
   -- a queued line cuts the hold after 1.5 s
   local held = 0
   while q.cur and q.cur.text:find("Sealed") do O.tick(q, 1 / 60); held = held + 1 / 60 end
@@ -170,6 +173,9 @@ do
   local b1, w1 = U.failFade(U.FAIL_FADE)
   local b2, w2 = U.failFade(10)
   check(b0 == 0 and w0 == 0 and b1 > 0.9 and w1 > 0 and w1 < 1 and w2 == 1 and b2 > 0.9, "the fail screen fades to black, then the words come up")
+  -- (scnfix) taking over from crew.lua's death curtain at its black
+  check(math.abs(U.failFade(U.failAgeFor(0.5)) - 0.5) < 1e-3 and U.failAgeFor(0) == 0 and math.abs(U.failAgeFor(1) - U.FAIL_FADE) < 1e-6,
+    "the fail screen's fade starts where the death curtain stands")
   local sb = { title = "YOU DIED", text = "Your suit ran out of air.", hint = "Turn back at half.", cause = "Imre Szabo  ·  out of oxygen",
                act = "Act 3 · the seal", to = "gusts", clock = 2467 }
   check(U.failKicker(sb) == "ACT 3 · THE SEAL   ·   41:07", "the kicker: " .. U.failKicker(sb))

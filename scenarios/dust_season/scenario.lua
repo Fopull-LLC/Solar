@@ -546,6 +546,9 @@ return {
     { id = "hold", text = "Hold the base through the front.", act = "Act 2 · the ledger", checkpoint = true, run = "ledger",
       stage = { beats = { { weather = { kind = "duststorm", secs = 5 } }, { var = { storm = true } } } },
       goals = { { kind = "var", name = "front_passed", is = true, label = "The front's core past" } },
+      -- (scnfix, Ty 11-12: a wait with no feedback) the front's core takes
+      -- 1500 s to pass (the `thins` event, from this step's opening)
+      wait = { label = "The front passing over", secs = 1500, note = "Keep the store up and the mast lit — or skip time ( . )" },
       hint = "Keep the POWER page open (E at the console). Time warp (the . key) brings the front through. Shed if the store falls: HTR-1, B-3, the shop heaters, the lights. Keep the mast lit: Beck steers by it.",
       hint2 = "If B-3 trips, the shop run is over its rating: switch a shop heater off on the POWER page before you reset B-3. Turning its dial up only moves the fire into the cable." },
     -- ACT 3: the seal
@@ -569,6 +572,8 @@ return {
                    { light = { time = -9, secs = 90 } } },
       mark = "mark:mast",
       goals = { { kind = "var", name = "act4", is = true, label = "Beck" } },
+      -- (scnfix) while Beck is rolling (beck_km falling); a dark mast stops him, and the bar
+      wait = { label = "Beck driving in", var = "beck_km", to = 0, note = "Keep the mast lit — wait, or skip time ( . )" },
       hint = "Beck drives only while the mast is lit: its floodlights and the tower are on the grid. Keep the battery up (the POWER page) and the mast served. Time warp brings him in.",
       hint2 = "The front left the field caked: walk out to the South Field and wipe its panels (right-click a Solar Array: Wipe the panel, 10 s each), and shed what you can spare. A flat battery puts the mast out." },
     { id = "morning", text = "Morning.", run = "resolution",
