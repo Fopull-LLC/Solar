@@ -930,15 +930,57 @@ end
 
 -- Footstep at each heel strike: the phase crossing 0 (left) or 0.5 (right).
 local vfx_ref = nil   -- the effects director: a dust scuff per footfall
+
+-- WHAT THE FEET ARE ON, for the step's sound (Ty 2026-11-12: every step on
+-- every world was concrete). One ray down: where the terrain's own ray agrees
+-- it is the ground, and the palette says what kind (sfx.surfaceAt: grit, soil,
+-- sand or snow); anything else is built: a timber piece is wood, the rest a
+-- metal deck. Read at most five times a second, at the step, never kept as a
+-- point. → surface (sfx.step's), material class (sfx.impact's).
+local surf = { t = -1, s = "grit", cls = "rock" }
+lastSurface = "grit"   -- published for probes
+local function ground_surface(node)
+  if time - surf.t < 0.2 then return surf.s, surf.cls end
+  surf.t = time
+  local fx = ref("sfx")
+  local ux, uy, uz = node.up_x or 0, node.up_y or 1, node.up_z or 0
+  local s, cls = surf.s, surf.cls
+  local h = raycast and raycast(node.x, node.y, node.z, -ux, -uy, -uz, 2.2, node) or nil
+  local th = nil
+  if terrain and terrain.raycast then
+    local ok, r = pcall(terrain.raycast, vec3(node.x, node.y, node.z), vec3(-ux, -uy, -uz), 2.2)
+    if ok then th = r end
+  end
+  local on_ground = th and th.distance and (not h or math.abs(th.distance - (h.distance or 0)) < 0.3)
+  if on_ground then
+    local d = th.distance + 0.15
+    s = (fx and fx.surfaceAt and fx.surfaceAt(node.x - ux * d, node.y - uy * d, node.z - uz * d)) or "grit"
+    cls = (s == "soil" or s == "sand") and "soil" or "rock"
+  elseif h then
+    local nm = (h.node and h.node.valid ~= false and h.node.name) or ""
+    nm = string.lower(tostring(nm))
+    if nm:find("wood") or nm:find("timber") or nm:find("plank") or nm:find("log") then s, cls = "wood", "wood"
+    else s, cls = "metal", "metal" end
+  end
+  surf.s, surf.cls = s, cls
+  lastSurface = s
+  return s, cls
+end
+
 local function footstep(node, from, to)
   local crossed = math.floor(to * 2) ~= math.floor(from * 2) or to < from
   if not crossed then return end
   if not (vfx_ref and vfx_ref.valid) then vfx_ref = findScript and findScript("vfx") end
   if vfx_ref then vfx_ref.step(node.x, node.y, node.z) end
-  local n = math.floor(time * 137.0) % 5
   -- Crouched, a step is placed, not planted: a third of the sound, carried a
   -- third as far; a heavy pack lands a little harder.
   local q = 1 - 0.68 * crouchAmount
+  local fx = ref("sfx")
+  if fx and fx.step then
+    fx.step((ground_surface(node)), node, q * (1 + 0.25 * encumbrance), q)
+    return
+  end
+  local n = math.floor(time * 137.0) % 5
   audio.play(FOOTSTEPS .. n .. ".ogg", node,
     { track = "SFX", volume = 0.5 * q * (1 + 0.25 * encumbrance), mode = "spatial", falloff = "inverse",
       minDistance = 3.0, maxDistance = 60.0 * q })
@@ -2574,7 +2616,10 @@ function update(node, dt)
       jumped = true
       slope = 0.0
       sliding = false
-      local fx = ref("sfx"); if fx and fx.playAt then fx.playAt("jump", node) end
+      -- the push-off is a boot on what is underfoot
+      local fx = ref("sfx")
+      if fx and fx.step then fx.step((ground_surface(node)), node, 0.9)
+      elseif fx and fx.playAt then fx.playAt("jump", node) end
     else
       -- THE KERB'S POP, only for a kerb. A contact's climb is kept (up to
       -- step_pop) so the body can walk up a step; but on level ground the
@@ -2715,8 +2760,16 @@ function update(node, dt)
     -- stand; this is what shows it while a gait owns the legs.
     land_dip_t = math.min(0.12, math.max(0.0, impact) * 0.012 + 0.03)
     -- (Not on the jump's own frame, which also reads as `landed` here.)
+    -- Both boots on what is underfoot, and from a real drop the body and pack
+    -- coming down on it too (sfx.impact: the suit on soil, rock or a deck).
     local fx = not jumped and ref("sfx")
-    if fx and fx.playAt then fx.playAt("land", node, math.min(1.0, 0.3 + math.max(0.0, impact) * 0.07)) end
+    if fx and fx.step and fx.impact then
+      local s, cls = ground_surface(node)
+      fx.step(s, node, math.min(1.4, 0.8 + math.max(0.0, impact) * 0.08))
+      if impact > 3.0 then
+        fx.impact({ a = "suit", b = cls, speed = impact, mass = 100 + 60 * encumbrance, node = node, event = "land" })
+      end
+    elseif fx and fx.playAt then fx.playAt("land", node, math.min(1.0, 0.3 + math.max(0.0, impact) * 0.07)) end
   end
   -- (builderperf: the dip eases DOWN to its depth over a few frames, then springs
   -- back; it was the whole depth on the landing's frame. walkclips: softer

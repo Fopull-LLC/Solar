@@ -96,11 +96,14 @@ local WORLD = {
               0.38, 2, 25 },
   wade    = { { "audio/water/splash_1.ogg", "audio/water/splash_2.ogg", "audio/water/splash_3.ogg" },
               0.22, 3, 50 },
-  -- scripts/vehicle_fx.lua: a torn-up part shorting out, a hard knock on the
-  -- hull, a fast tyre meeting the ground
-  zap     = { { F .. "radio_crackle.ogg" }, 0.16, 2, 25 },
-  knock   = { { F .. "steel_drop.ogg" }, 0.35, 4, 60 },
-  tyre    = { seq(K .. "impactSoft_heavy_", 0, 4), 0.35, 3, 50 },
+  -- Older hooks, kept for callers that name them: a torn-up part shorting out
+  -- (a real arc, not the radio crackle it was), a knock on the hull (a light
+  -- metal knock, not the steel bar dropped on a path that was every hit), a
+  -- tyre meeting the ground. vehicle_fx asks `impact` and `fail` now.
+  zap     = { { "audio/impact/zap_1.ogg", "audio/impact/zap_2.ogg", "audio/impact/zap_5.ogg" }, 0.30, 2, 30 },
+  knock   = { { "audio/impact/metal_light_1.ogg", "audio/impact/metal_light_2.ogg",
+                "audio/impact/metal_light_3.ogg" }, 0.45, 4, 60 },
+  tyre    = { { "audio/impact/tyre_1.ogg", "audio/impact/tyre_2.ogg", "audio/impact/tyre_3.ogg" }, 0.45, 3, 50 },
 }
 
 -- A sale that also pays a discovery premium is two ledger entries in one
@@ -169,6 +172,271 @@ local function ref(kind)
   r = findScript and findScript(kind) or nil
   refs[kind], missed[kind] = r, (r == nil) and now or nil
   return r
+end
+
+-- ── IMPACTS, FAILURES AND FOOTSTEPS: what met what ─────────────────────────
+--
+-- Ty, 2026-11-12: "impacts and damage sound odd because the same sound effect
+-- gets reused and doesn't fit the context". A hull knocking the ground was one
+-- sheet steel bar dropped on a path whatever it hit, a part grinding along the
+-- ground was a bird scarer's gunshot, a torn part shorting out was radio
+-- interference, and every footstep on every world was concrete. Now a sound is
+-- picked by WHAT MET WHAT (metal, rock, soil, sand, ice, glass, plastic, wood,
+-- the suit, a tyre), HOW HEAVY and HOW FAST, out of banks of real recordings
+-- (audio/impact, tools/build_impact_audio.py, audio/SOURCES.md), several takes
+-- each, never the same take twice running, with pitch and level jitter.
+--
+--     local s = findScript("sfx")
+--     s.impact{ a = "metal", b = "terrain", speed = 9, mass = 2400, x = .., y = .., z = .. }
+--     s.fail("part_break", { node = part })          -- see FAIL for the kinds
+--     s.step(s.surfaceAt(x, y, z), node, vol, maxd)  -- planet_walker
+--
+-- `b = "terrain"` (or a = ...) asks the ground at the point what it is made of
+-- (terrain.slotAt → materials.ofSlot). Everything lands in `history` (newest
+-- last) and, with `sfxLog = true`, in the Console as "SFX <event> <bank> <clip>"
+-- — so probes check which sound played by log, never by listening.
+
+local IM = "audio/impact/"
+local function takes(name, n, dir)
+  local t = {}
+  for i = 1, n do t[i] = (dir or IM) .. name .. "_" .. i .. ".ogg" end
+  return t
+end
+local function kenney(name, from, to) return seq(K .. name .. "_", from, to) end
+
+-- bank → { clips, volume, minDistance, maxDistance, pitch jitter (±) }
+BANKS = {
+  metal_light = { takes("metal_light", 4), 0.60, 3, 70, 0.06 },
+  metal_dull  = { takes("metal_dull", 6), 0.85, 4, 140, 0.05 },
+  metal_rock  = { takes("metal_rock", 3), 0.85, 4, 160, 0.06 },
+  metal_metal = { takes("metal_metal", 4), 0.80, 4, 140, 0.06 },
+  metal_heavy = { takes("metal_heavy", 4), 1.00, 6, 320, 0.05 },
+  crash       = { takes("crash", 3), 1.00, 8, 500, 0.05 },
+  part_break  = { takes("part_break", 5), 0.95, 5, 260, 0.06 },
+  scrape      = { takes("scrape", 5), 0.55, 3, 90, 0.08 },
+  explode     = { takes("explode", 1), 1.00, 10, 2500, 0.10 },
+  blast       = { { F .. "pyro_bang.ogg" }, 0.70, 6, 900, 0.06 },
+  soil_light  = { takes("soil_light", 4), 0.60, 3, 50, 0.06 },
+  soil_heavy  = { takes("soil_heavy", 3), 0.85, 4, 120, 0.05 },
+  rock_light  = { takes("rock_light", 6), 0.55, 3, 50, 0.07 },
+  rock_soil   = { takes("rock_soil", 4), 0.75, 3, 90, 0.06 },
+  rock_heavy  = { { "audio/ambience/cave_slab_hit_1.ogg", "audio/ambience/cave_slab_hit_2.ogg" }, 0.9, 5, 200, 0.06 },
+  suit_fall   = { { IM .. "suit_fall_1.ogg", IM .. "soil_light_2.ogg", IM .. "soil_light_3.ogg" }, 0.70, 3, 50, 0.05 },
+  glass_knock = { { IM .. "glass_knock_1.ogg", K .. "impactGlass_light_000.ogg", K .. "impactGlass_light_002.ogg" }, 0.50, 2, 40, 0.06 },
+  glass_break = { takes("glass_break", 2), 0.85, 3, 90, 0.05 },
+  visor_crack = { takes("visor_crack", 1), 0.80, 1, 15, 0.05 },
+  plastic     = { takes("plastic", 5), 0.50, 2, 40, 0.07 },
+  tyre        = { takes("tyre", 5), 0.60, 3, 60, 0.06 },
+  wood_light  = { kenney("impactWood_light", 0, 4), 0.50, 2, 40, 0.05 },
+  wood_heavy  = { kenney("impactWood_heavy", 0, 4), 0.75, 3, 80, 0.05 },
+  zap         = { takes("zap", 5), 0.30, 2, 30, 0.08 },
+  fire_flare  = { { IM .. "fire_flare.ogg" }, 0.70, 3, 60, 0.05 },
+  breach      = { takes("breach", 2), 0.90, 4, 120, 0.05 },
+  hiss        = { { F .. "hiss_short.ogg", F .. "hiss_cylinder.ogg" }, 0.50, 2, 30, 0.06 },
+  relay       = { { F .. "latch_clunk.ogg", F .. "clamp_clunk.ogg" }, 0.70, 3, 40, 0.04 },
+  step_grit   = { takes("step_grit", 6), 0.50, 3, 60, 0.05 },
+  step_soil   = { takes("step_soil", 6), 0.50, 3, 60, 0.05 },
+  step_sand   = { takes("step_sand", 6), 0.45, 3, 55, 0.05 },
+  step_snow   = { takes("step_snow", 6), 0.45, 3, 55, 0.05 },
+  step_metal  = { takes("step_metal", 6), 0.45, 3, 60, 0.04 },
+  step_wood   = { kenney("footstep_wood", 0, 4), 0.50, 3, 60, 0.05 },
+  step_grass  = { kenney("footstep_grass", 0, 4), 0.50, 3, 60, 0.05 },
+  step_concrete = { kenney("footstep_concrete", 0, 4), 0.50, 3, 60, 0.05 },
+}
+
+-- What the ground is made of → (surface for a foot, class for an impact).
+local ROCKY = { regolith = 1, gravel = 1, rustrock = 1, basalt = 1, slate = 1, granite = 1, onyx = 1,
+  veinstone = 1, magma = 1, crystal = 1, shale = 1, hematite = 1, limestone = 1, sandstone = 1,
+  sulfur = 1, obsidian = 1 }
+local SANDY = { sand = 1, ash = 1, salt = 1 }
+local SOFT = { soil = 1, clay = 1 }
+local ICY = { ice = 1, ammonia_ice = 1, clathrate = 1 }
+function groundOf(mat)
+  if SOFT[mat] then return "soil", "soil" end
+  if SANDY[mat] then return "sand", "sand" end
+  if ICY[mat] then return "snow", "ice" end
+  return "grit", "rock"                      -- the rock and regolith of most worlds
+end
+-- The palette slot under a world point → its material name (nil: no terrain).
+function materialAt(x, y, z)
+  if not (terrain and terrain.slotAt and x) then return nil end
+  local ok, s = pcall(terrain.slotAt, x, y, z)
+  if not ok or type(s) ~= "number" or s <= 0 or s == 255 then return "regolith" end
+  local m = ref("materials")
+  return (m and m.ofSlot and m.ofSlot(s)) or "regolith"
+end
+-- The ground at a world point, as a foot hears it: "grit" | "soil" | "sand" | "snow".
+function surfaceAt(x, y, z)
+  local s = groundOf(materialAt(x, y, z) or "regolith")
+  return s
+end
+
+-- An impact's two materials → a bank, by energy (J): light, medium, heavy.
+-- Order does not matter. Unknown materials read as metal (most things built).
+local NORM = { terrain = "rock", ground = "rock", sand = "soil", snow = "soil", ice = "rock",
+  crew = "suit", body = "suit", rubber = "tyre", steel = "metal", aluminium = "metal", hull = "metal",
+  timber = "wood", stone = "rock", dirt = "soil" }
+local function norm(m) m = m or "metal"; return NORM[m] or m end
+local KNOWN = { metal = 1, rock = 1, soil = 1, glass = 1, plastic = 1, wood = 1, suit = 1, tyre = 1 }
+local FAMILY = {
+  -- family → { light, medium, heavy } banks
+  glass       = { "glass_knock", "glass_break", "glass_break" },
+  suit_hard   = { "metal_light", "suit_fall", "suit_fall" },
+  suit        = { "soil_light", "suit_fall", "suit_fall" },
+  tyre        = { "tyre", "tyre", "tyre" },
+  plastic     = { "plastic", "plastic", "plastic" },
+  wood        = { "wood_light", "wood_heavy", "wood_heavy" },
+  metal_metal = { "metal_light", "metal_metal", "metal_heavy" },
+  metal_rock  = { "metal_light", "metal_rock", "metal_heavy" },
+  metal_soil  = { "metal_light", "metal_dull", "metal_dull" },
+  rock_rock   = { "rock_light", "rock_soil", "rock_heavy" },
+  rock_soil   = { "rock_light", "rock_soil", "rock_heavy" },
+  soil        = { "soil_light", "soil_heavy", "soil_heavy" },
+}
+function familyOf(a, b)
+  a, b = norm(a), norm(b)
+  if not KNOWN[a] then a = "metal" end
+  if not KNOWN[b] then b = "metal" end
+  local has = function(m) return a == m or b == m end
+  if has("glass") then return "glass" end
+  if has("suit") then return (has("metal") or has("plastic") or has("wood") or a == b) and "suit_hard" or "suit" end
+  if has("tyre") then return "tyre" end
+  if has("plastic") then return "plastic" end
+  if has("wood") then return "wood" end
+  if a == "metal" and b == "metal" then return "metal_metal" end
+  if has("metal") then return has("rock") and "metal_rock" or "metal_soil" end
+  if has("rock") then return (a == b) and "rock_rock" or "rock_soil" end
+  return "soil"
+end
+-- Energy tiers (J): a crew member stepping off a ledge (100 kg at 3 m/s) is
+-- 450 J, a rover bouncing (2 t at 4 m/s) 16 kJ, a lander coming down hard
+-- (6 t at 12 m/s) 430 kJ.
+-- Glass gives way long before a hull notices (a visor, a window: 50 J).
+TIER_J = { 3000, 120000 }
+FAMILY_J = { glass = { 50, 2000 } }
+function tierOf(speed, mass, fam)
+  local e = 0.5 * math.max(1, mass or 100) * (speed or 0) ^ 2
+  local J = (fam and FAMILY_J[fam]) or TIER_J
+  return (e < J[1] and 1) or (e < J[2] and 2) or 3, e
+end
+function bankFor(a, b, speed, mass)
+  local fam = familyOf(a, b)
+  local tier, e = tierOf(speed, mass, fam)
+  return FAMILY[fam][tier], fam, tier, e
+end
+
+-- Published for probes and tests: the last sounds picked, newest last.
+history = {}
+sfxLog = false
+local HISTORY_N = 48
+local bank_last = {}
+local bank_t = {}
+
+-- Play one take of `bank` at `where` (a node, or x,y,z): never the take it
+-- played last, the volume and pitch jittered. `o`: vol (×), pitch (×), event
+-- (the name history and the log give it), maxd (×), lowpass, gap (s: the
+-- shortest time between two of this bank, default 0.05).
+function playBank(bank, node, x, y, z, o)
+  local B = BANKS[bank]
+  if not B then return nil end
+  o = o or {}
+  local now = time or 0
+  if bank_t[bank] and now - bank_t[bank] < (o.gap or 0.05) then return nil end
+  bank_t[bank] = now
+  local list = B[1]
+  local i = math.random(1, #list)
+  if #list > 1 and i == bank_last[bank] then i = i % #list + 1 end
+  bank_last[bank] = i
+  local clip = list[i]
+  count(bank)
+  local ev = o.event or bank
+  history[#history + 1] = { t = now, event = ev, bank = bank, clip = clip }
+  while #history > HISTORY_N do table.remove(history, 1) end
+  if sfxLog and log then log(string.format("SFX %s %s %s", ev, bank, clip)) end
+  if not (audio and audio.play) then return clip end
+  local j = B[5] or 0.05
+  local opts = { track = "SFX", volume = math.min(1.0, B[2] * (o.vol or 1.0) * (0.9 + math.random() * 0.2)),
+                 pitch = (o.pitch or 1.0) * (1 - j + math.random() * 2 * j),
+                 mode = "Spatial", falloff = "Inverse",
+                 minDistance = B[3], maxDistance = B[4] * (o.maxd or 1.0), lowpass = o.lowpass }
+  if node and node.valid ~= false then pcall(audio.play, clip, node, opts)
+  elseif x then pcall(audio.play, clip, x, y, z, opts)
+  else
+    opts.mode, opts.minDistance, opts.maxDistance = "Flat", nil, nil
+    pcall(audio.play, clip, opts)
+  end
+  return clip
+end
+
+-- An impact. `s`: a, b (materials; "terrain" asks the ground at the point),
+-- speed (m/s, closing), mass (kg), node or x,y,z, vol (×), event (a name for
+-- the log). → the bank it played. Louder and lower the more energy it carried;
+-- past a megajoule a crash rides on top.
+function impact(s)
+  if type(s) ~= "table" then return nil end
+  local a, b = s.a, s.b
+  if (a == "terrain" or b == "terrain") and s.x then
+    local _, cls = groundOf(materialAt(s.x, s.y, s.z) or "regolith")
+    if a == "terrain" then a = cls end
+    if b == "terrain" then b = cls end
+  end
+  local bank, fam, tier, e = bankFor(a, b, s.speed, s.mass)
+  local m = math.max(1, s.mass or 100)
+  local lg = math.log(math.max(e, 10)) / math.log(10)            -- log10 J: 2 (a tap) .. 7 (a crash)
+  local vol = math.max(0.25, math.min(1.0, 0.25 + 0.15 * (lg - 2))) * (s.vol or 1.0)
+  local pitch = math.max(0.72, math.min(1.18, 1.10 - 0.06 * (math.log(m / 100) / math.log(10))))
+  local maxd = 0.7 + 0.3 * tier
+  local o = { vol = vol, pitch = pitch, maxd = maxd, event = s.event or ("impact " .. fam), gap = s.gap }
+  playBank(bank, s.node, s.x, s.y, s.z, o)
+  if e > 1e6 and tier == 3 and fam ~= "soil" and fam ~= "suit" then
+    playBank("crash", s.node, s.x, s.y, s.z, { vol = vol, pitch = pitch, event = o.event })
+  end
+  return bank
+end
+
+-- Failures and alarms: each its own sound, never a dropped can.
+--   part_break   a part giving way (metal bending, tearing, crunching)
+--   explode      an explosive part going off (a real blast, a close bang on it)
+--   crash        the whole airframe failing
+--   scrape       a part grinding along the ground
+--   short        a torn part shorting out (an electric arc)
+--   battery_fire a battery or cell catching fire (a flare of flame and an arc)
+--   hull_breach  a pressure hull bursting (a plate going, a blast of air)
+--   suit_damage  the suit or visor taking a hit (a crack and a hiss)
+--   breaker_trip a breaker opening under fault (a heavy clack and a snap)
+--   scram        a reactor's protection dropping the rods (the big contactor)
+FAIL = {
+  part_break   = { { "part_break", 1.0 }, { "metal_rock", 0.55 } },
+  explode      = { { "explode", 1.0 }, { "blast", 0.8 } },
+  crash        = { { "crash", 1.0 }, { "metal_heavy", 0.9 } },
+  scrape       = { { "scrape", 1.0 } },
+  short        = { { "zap", 1.0 } },
+  battery_fire = { { "fire_flare", 1.0 }, { "zap", 0.8 } },
+  hull_breach  = { { "breach", 1.0 }, { "hiss", 0.9 } },
+  suit_damage  = { { "visor_crack", 1.0 }, { "hiss", 0.6 } },
+  breaker_trip = { { "relay", 0.9 }, { "zap", 0.5 } },
+  scram        = { { "relay", 1.0 } },
+}
+-- `s`: node or x,y,z, vol (×), pitch (×). → the first bank played.
+function fail(kind, s)
+  local L = FAIL[kind]
+  if not L then return nil end
+  s = s or {}
+  local first = nil
+  for _, layer in ipairs(L) do
+    local clip = playBank(layer[1], s.node, s.x, s.y, s.z,
+      { vol = layer[2] * (s.vol or 1.0), pitch = s.pitch, event = kind, gap = s.gap, maxd = s.maxd })
+    first = first or (clip and layer[1])
+  end
+  return first
+end
+
+-- A footstep on `surface` ("grit" | "soil" | "sand" | "snow" | "metal" |
+-- "wood" | "grass" | "concrete"), following `node`.
+function step(surface, node, vol, maxd)
+  local bank = "step_" .. (surface or "grit")
+  if not BANKS[bank] then bank = "step_grit" end
+  return playBank(bank, node, nil, nil, nil, { vol = vol, maxd = maxd, event = "step " .. (surface or "grit"), gap = 0.12 })
 end
 
 -- flight_ops, after a flight actually ended: which of the three ways out.
@@ -309,6 +577,12 @@ function start(node)
   local list = {}
   for _, c in pairs(CLIPS) do list[#list + 1] = c[1] end
   for _, w in pairs(WORLD) do for _, c in ipairs(w[1]) do list[#list + 1] = c end end
+  -- the banks heard every few seconds; the rare ones (a crash, a breach) load
+  -- on their first play, a frame late
+  for _, b in ipairs({ "step_grit", "step_soil", "step_sand", "step_snow", "step_metal",
+                       "metal_light", "soil_light", "tyre", "zap" }) do
+    for _, c in ipairs(BANKS[b][1]) do list[#list + 1] = c end
+  end
   if audio and audio.preload then audio.preload(list) end
 end
 

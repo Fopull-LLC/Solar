@@ -3225,6 +3225,13 @@ function hurt(id, amount, cause, detail, opts)
   lastHit[id] = { t = now(), amount = amount, cause = cause or "shot", by = opts.by, hp = hp }
   log_(string.format("crew: #%d hit (%s%s): -%.2f, hp %.2f", id, tostring(cause or "shot"),
     detail and (", " .. detail) or "", amount, hp))
+  -- the suit taking it: a visor crack and a hiss where it happened (sfx), on
+  -- top of the HUD's HIT warning
+  local fx = amount >= 0.05 and ref("sfx")
+  if fx and fx.fail then
+    local a = (id == activeId()) and astro() or nil
+    pcall(fx.fail, "suit_damage", { node = (not opts.x) and a or nil, x = opts.x, y = opts.y, z = opts.z })
+  end
   bump()
   if hp <= 1e-6 then
     local o = {}

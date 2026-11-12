@@ -2492,7 +2492,13 @@ function ventBurst(sid, s, uid)
   local scale = 0.5 + math.min(1.5, dp)
   if V and V.emit then pcall(V.emit, "VentBurst", x, y, z, { normal = vec3(dx, dy, dz), scale = scale, intensity = math.min(1, dp) })
   elseif spawnEffect then pcall(spawnEffect, "VentBurst", vec3(x, y, z), { normal = vec3(dx, dy, dz), scale = scale }) end
-  if audio and audio.play then
+  -- A room's air going at once through a seal that failed or a door forced
+  -- against it is a hull breach (sfx: a plate bursting under a blast of air),
+  -- not a pneumatic cylinder; a small difference stays a hiss and a clunk.
+  local fx = ref("sfx")
+  if fx and fx.fail and dp >= 0.3 then
+    pcall(fx.fail, "hull_breach", { x = x, y = y, z = z, vol = math.min(1, 0.55 + 0.45 * dp) })
+  elseif audio and audio.play then
     pcall(audio.play, "audio/foley/hiss_cylinder.ogg", x, y, z, { maxDistance = 40, track = "SFX", volume = math.min(1, 0.5 + dp) })
     pcall(audio.play, "audio/foley/latch_clunk.ogg", x, y, z, { maxDistance = 25, track = "SFX", volume = 0.7 })
   end

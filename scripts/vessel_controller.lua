@@ -480,6 +480,20 @@ local function sfx3(clip, x, y, z, vol, pitch)
   })
 end
 
+-- Damage and landings through sfx.lua, which picks the sound by what happened
+-- and what met what (a part tearing is not a gunshot, a hull grinding on rock
+-- is not a decoupler). Without sfx (a harness), the old one-shot. (Fields of
+-- SFX, not locals: this chunk is at Lua's 200-local limit.)
+function SFX.sfxd()
+  if not (SFX.sfxd_ref and SFX.sfxd_ref.valid) then SFX.sfxd_ref = findScript and findScript("sfx") or nil end
+  return SFX.sfxd_ref
+end
+function SFX.fail(kind, x, y, z, vol, clip, pitch)
+  local s = SFX.sfxd()
+  if s and s.fail then pcall(s.fail, kind, { x = x, y = y, z = z, vol = vol, pitch = pitch }); return end
+  if clip then sfx3(clip, x, y, z, vol, pitch) end
+end
+
 -- Blast a crater where an explosion meets the ground: a real gouge PLUS a wide
 -- scorched scuff so the scar reads even on a glancing blast. `sd < r * 2` widens the
 -- proximity gate (a blast a little above the surface still leaves a mark), and the
@@ -6813,8 +6827,8 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
   add_shake(is_explosive and 0.8 or 0.45)
   -- A boom at the break, spatial through the SFX bus; explosive parts go off
   -- deeper and louder. Slight per-part pitch spread so a chain doesn't machine-gun.
-  sfx3(is_explosive and SFX.boom or SFX.explode, hx, hy, hz,
-    is_explosive and 1.0 or 0.8, 0.92 + (uid % 5) * 0.03)
+  SFX.fail(is_explosive and "explode" or "part_break", hx, hy, hz,
+    is_explosive and 1.0 or 0.8, is_explosive and SFX.boom or SFX.explode, 0.92 + (uid % 5) * 0.03)
   drop_part(uid)
   crewPartBroken(node, uid, hx, hy, hz)
   -- A destroyed chute stops dragging (it stayed in the pool and kept pulling,
@@ -6995,8 +7009,13 @@ local function shatter(node, hx, hy, hz, spd, info)
     spawnEffect("Explosion", hx + 0.8, hy + 0.6, hz - 0.5)
     spawnEffect("Explosion", hx - 0.6, hy + 0.3, hz + 0.7)
   end
-  sfx3(SFX.boom, hx, hy, hz, 1.0, 0.85)
-  sfx3(SFX.explode, hx, hy, hz, 0.9, 1.05)
+  if SFX.sfxd() then
+    SFX.fail("crash", hx, hy, hz, 1.0)
+    SFX.fail("explode", hx, hy, hz, 0.9, nil, 0.85)
+  else
+    sfx3(SFX.boom, hx, hy, hz, 1.0, 0.85)
+    sfx3(SFX.explode, hx, hy, hz, 0.9, 1.05)
+  end
   -- CAPTIONS. The engine draws these only while a player has them on, so they
   -- are written beside the sound with no `if` around them (v0.33.0). Only the
   -- sounds that CARRY something go here — the ones a player who cannot hear
@@ -7331,7 +7350,7 @@ local function damage_tick(node, info, dt)
             spawnEffect("ScrapeDust", h.x, h.y, h.z)
           end
           add_shake(math.min(0.4, 0.1 + over * 0.3))
-          sfx3(SFX.stage, h.x, h.y, h.z, math.min(0.6, 0.25 + over * 0.4), 1.2)
+          SFX.fail("scrape", h.x, h.y, h.z, math.min(1.0, 0.45 + over * 0.6), SFX.stage)
         end
         -- TERRAIN DEFORMATION: a hull biting the ground GOUGES it — you can't
         -- grind or ram the surface without carving a scar (and that scar is why
@@ -16296,7 +16315,14 @@ function fixedUpdate(node, dt)
     if sp > 1.5 then
       local fx = fxd()
       if fx then fx.touchdown(bx, by, bz, sp) else spawnEffect("TouchDust", bx, by, bz) end
-      sfx3(SFX.thump, bx, by, bz, math.min(0.9, 0.3 + sp * 0.05), 1.0)
+      -- the thump by the ground it came down on and the craft's weight
+      local s_ = SFX.sfxd()
+      if s_ and s_.impact then
+        pcall(s_.impact, { a = "metal", b = "terrain", speed = sp, mass = (info.mass or 1) * 1000,
+          x = bx, y = by, z = bz, event = "touchdown" })
+      else
+        sfx3(SFX.thump, bx, by, bz, math.min(0.9, 0.3 + sp * 0.05), 1.0)
+      end
       add_shake(math.min(0.5, sp * 0.03)) -- a firm touchdown thuds the view
     end
   end

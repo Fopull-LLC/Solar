@@ -391,6 +391,17 @@ local function play(path, sid, uid, vol, dist)
     pcall(audio.play, path, { track = "SFX", volume = (vol or 0.7) * 0.6 })
   end
 end
+-- A take of one of sfx's banks at the part (a lock wrenched open is metal
+-- tearing, a stripped part a clatter of metal on metal), or `path` without sfx.
+local function play_bank(bank, path, sid, uid, vol, dist)
+  local fx = ref("sfx")
+  if not (fx and fx.playBank) then return play(path, sid, uid, vol, dist) end
+  local ST = ref("structures")
+  local n = ST and ST.nodeOf and ST.nodeOf(sid, uid)
+  local w = n and n.valid ~= false and n.worldPos
+  if w then pcall(fx.playBank, bank, nil, w.x, w.y, w.z, { vol = vol, event = bank })
+  else pcall(fx.playBank, bank, nil, nil, nil, nil, { vol = (vol or 0.7) * 0.6, event = bank }) end
+end
 version = 0
 local function bump() version = version + 1 end
 stats = { fills = 0, strips = 0, forced = 0, spills = 0, last_fill_ms = 0 }
@@ -801,7 +812,7 @@ function forceLock(sid, uid, who, tool)
     local ST = ref("structures")
     if ST and ST.put then ST.put(rec) end
   end
-  play("audio/foley/steel_drop.ogg", sid, uid, 1.0, 60)
+  play_bank("part_break", "audio/foley/steel_drop.ogg", sid, uid, 1.0, 60)
   if who ~= false then feat("lock_opened", { key = tostring(sid) .. ":" .. tostring(uid) }) end   -- (P1: forced counts too)
   lastNoise = { sid = sid, uid = uid, what = "forced", t = now(), loud = 60 }
   stats.forced = stats.forced + 1
@@ -1004,7 +1015,7 @@ function strip(sid, uid, ctx)
   for _, u in ipairs(q.uids) do t[cidOf(sid, u)] = nil end
   sset("loot.cids", t)
   if #(q.vents or {}) > 0 then play("audio/foley/hiss_cylinder.ogg", sid, uid, 1.0, 40) end
-  play("audio/foley/steel_drop.ogg", sid, uid, 0.8, 35)
+  play_bank("metal_metal", "audio/foley/steel_drop.ogg", sid, uid, 0.8, 35)
   lastNoise = { sid = sid, uid = uid, what = "stripped", t = now(), loud = 35 }
   lastStrip = { sid = sid, uids = q.uids, item = q.item, mats = mats, into = into, salvage = salv, vented = #(q.vents or {}), warn = warn }
   stats.strips = stats.strips + 1

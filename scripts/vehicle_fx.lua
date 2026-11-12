@@ -90,9 +90,25 @@ end
 -- A one-shot through vfx.lua (its frame rules and dust tint), or plain.
 -- A world sound through sfx.lua (hooks: zap, knock, tyre), riding `node`.
 local sfx_ref = nil
-local function sound(key, node, vol)
+local function sfx()
   if not (sfx_ref and sfx_ref.valid) then sfx_ref = findScript("sfx") end
-  if sfx_ref and sfx_ref.playAt then pcall(sfx_ref.playAt, key, node, vol) end
+  return sfx_ref
+end
+local function sound(key, node, vol)
+  local s = sfx()
+  if s and s.playAt then pcall(s.playAt, key, node, vol) end
+end
+-- What a craft part met, for the impact's sound: the ground ("terrain": sfx
+-- asks the palette what it is made of), a person ("suit"), anything else built
+-- (metal). nil is static geometry that is no node's: a rock face.
+local function met(other)
+  if other == "terrain" then return "terrain" end
+  if type(other) == "table" or type(other) == "userdata" then
+    local nm = (other.valid ~= false) and other.name or nil
+    if type(nm) == "string" and (nm:find("Astronaut") or nm:find("Crew")) then return "suit" end
+    return "metal"
+  end
+  return "rock"
 end
 
 local function emit(key, x, y, z, o)
@@ -759,7 +775,10 @@ local function tyre_one(vc, w, name, b, dt, hardbrake)
     if W.hard then
       emit("TyreTouch", cx + nx * 0.1, cy + ny * 0.1, cz + nz * 0.1, { vel = vec3(gvx, gvy, gvz), intensity = clamp(spd / 30, 0.4, 1.4) })
       W.touch = now
-      sound("tyre", t, clamp(spd / 25, 0.3, 1.0))
+      local fx = sfx()
+      if fx and fx.impact then
+        pcall(fx.impact, { a = "tyre", b = "terrain", speed = spd, mass = 300, node = t, event = "tyre" })
+      else sound("tyre", t, clamp(spd / 25, 0.3, 1.0)) end
     else
       emit("TyreDust", cx + nx * 0.1, cy + ny * 0.1, cz + nz * 0.1, { vel = vec3(gvx, gvy, gvz), intensity = 1.6, dust = true })
     end
@@ -879,7 +898,16 @@ local function impacts_tick(vc)
   local v = i and i.vel or { x = 0, y = 0, z = 0 }
   emit("ImpactSparks", best.x, best.y, best.z, { vel = vec3(v.x, v.y, v.z),
     intensity = clamp(s / 10, 0.4, 1.8) * Q.sparks })
-  sound("knock", (pn and pn.valid) and pn or n, clamp(s / 12, 0.3, 1.0))
+  -- the hit's sound by what met what, how heavy and how fast (sfx.impact):
+  -- a hull on rock, on soil, on another craft, on a person
+  local fx = sfx()
+  if fx and fx.impact then
+    local mass = (i and i.mass or 1) * 1000          -- tonnes → kg
+    pcall(fx.impact, { a = "metal", b = met(best.other), speed = s, mass = mass,
+      x = best.x, y = best.y, z = best.z, event = "knock" })
+  else
+    sound("knock", (pn and pn.valid) and pn or n, clamp(s / 12, 0.3, 1.0))
+  end
   stat.sparks = stat.sparks + 1
 end
 
@@ -903,7 +931,9 @@ local function shorts_tick(vc)
         emit("ShortSpark", w.x + ox, w.y + oy, w.z + oz, { vel = vec3(v.x, v.y, v.z) })
         local fx = vfx()
         if fx and fx.flash and math.random() < 0.5 then fx.flash(w.x + ox, w.y + oy, w.z + oz, 0.65, 0.75, 1.0, 3.5, 6, 0.1) end
-        sound("zap", p, 0.7 + 0.3 * math.random())
+        local fx2 = sfx()
+        if fx2 and fx2.fail then pcall(fx2.fail, "short", { node = p, vol = 0.7 + 0.3 * math.random() })
+        else sound("zap", p, 0.7 + 0.3 * math.random()) end
         fired = fired + 1
         stat.shorts = stat.shorts + 1
       end

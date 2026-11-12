@@ -29,3 +29,6 @@ __pycache__/
 /textures/env_local/
 # Terrain textures the engine has processed, kept so they load fast.
 .floptle/cache/
+
+# royalty-free sounds that may not be redistributed (Sonniss GDC and the like): local only
+audio/incoming/local/

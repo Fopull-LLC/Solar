@@ -408,7 +408,11 @@ local function take(n, e, mass, wx, wy, wz)
   if fx and fx.oreBreak then pcall(fx.oreBreak, wx, wy, wz) end
   local sfx = ref("sfx")
   if sfx and sfx.play then pcall(sfx.play, e.kind == "stock" and "place" or "pickup") end
-  if audio and audio.play then
+  -- rock going into a steel hopper: a real stone-on-metal hit at the intake
+  -- (sfx's metal_rock bank), not a game's plate tap pitched down
+  if sfx and sfx.playBank then
+    pcall(sfx.playBank, "metal_rock", nil, wx, wy, wz, { vol = 0.6, pitch = 0.9, event = "intake" })
+  elseif audio and audio.play then
     pcall(audio.play, "audio/kenney/impact/impactPlate_heavy_00" .. tostring(math.random(0, 4)) .. ".ogg",
       { track = "SFX", volume = 0.45, pitch = 0.6 + math.random() * 0.15 })
   end

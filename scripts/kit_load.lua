@@ -692,7 +692,11 @@ local function break_piece(rec, e)
   PROF.broke = PROF.broke + 1
   if x then
     local wood = e.d.mat == "wood"
-    play(SNAPS, x, y, z, 1.0, wood and 0.85 or 0.55, 220)
+    -- a steel piece tears like steel (sfx "part_break", real metal bending and
+    -- crunching), not a wood crack pitched down
+    local fx = not wood and ref("sfx")
+    if fx and fx.fail then pcall(fx.fail, "part_break", { x = x, y = y, z = z })
+    else play(SNAPS, x, y, z, 1.0, wood and 0.85 or 0.55, 220) end
     play(wood and CREAKS or GROANS, x, y, z, 0.9, wood and 0.5 or 0.6, 160)
     local LZ = ref("lasers")
     if LZ and LZ.throwChunks then
@@ -904,7 +908,12 @@ function evaluateNow()
               local wood = R.e.d.mat == "wood"
               play(wood and CREAKS or GROANS, x, y, z, vol, (wood and 0.62 or 0.5) + math.random() * 0.12, 70)
               PROF.creaks = PROF.creaks + 1
-              if (s.over or 0) >= BREAK_HOLD then play(TICKS, x, y, z, 0.5 + 0.3 * math.random(), 0.8 + math.random() * 0.3, 40) end
+              -- giving way: timber splinters tick; steel pings (a light metal knock, high)
+              if (s.over or 0) >= BREAK_HOLD then
+                local fx = not wood and ref("sfx")
+                if fx and fx.playBank then pcall(fx.playBank, "metal_light", nil, x, y, z, { vol = 0.35, pitch = 1.5, event = "kit_strain" })
+                else play(TICKS, x, y, z, 0.5 + 0.3 * math.random(), 0.8 + math.random() * 0.3, 40) end
+              end
             end
             snd = snd + 1
             s.next = t + iv * (0.8 + 0.4 * math.random())

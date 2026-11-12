@@ -21,6 +21,7 @@
 | `sfx/` | `breath_calm`, `breath_heavy`, `suit_hum` (seamless loops): the suit, soundscape.lua | real recordings, `tools/build_grit_audio.py` (table below) | CC0 (freesound.org) |
 | `foley/` | `leak_hiss` (a seamless mono loop: a 3D source on a craft part with a hole, cabin_air.lua, G1) | a real recording, cut by hand with ffmpeg (section below) | CC0 (freesound.org) |
 | `plant/` | `alarm_klaxon`, `alarm_buzzer`, `pump_motor`, `pump_whine`, `turbine_whine`, `transformer_hum`, `steam_leak`, `bearing_rattle`, `fan_loop`, `crusher_loop`, `furnace_roar`, `vent_roar` (seamless mono loops), `relief_valve`, `airlock_chime` (mono one-shots): airlocks, alarms and machinery, 3D sources in the base | real recordings, cut and levelled by `tools/build_plant_audio.py` (section below) | CC0 (freesound.org) |
+| `impact/` | impacts by material pair and weight (`metal_light/dull/rock/metal/heavy`, `crash`, `soil_light/heavy`, `rock_light/soil`, `glass_knock/break`, `plastic`, `tyre`, `suit_fall`), failures (`part_break`, `scrape`, `explode`, `zap`, `fire_flare`, `breach`, `visor_crack`), footsteps by surface (`step_grit/soil/sand/snow/metal`), loops `fire_loop`, `arc_loop`: scripts/sfx.lua's banks | real recordings, cut and levelled by `tools/build_impact_audio.py` (section at the end) | CC0 (freesound.org) |
 
 Levels (from `python3 tools/gen_soundscape_audio.py --stats`, confirmed with ffmpeg's
 `ebur128`): music ≈ −24 LUFS with peaks near −12 dBFS; ambience −25 to −29 LUFS
@@ -250,3 +251,66 @@ throughout); furnaces — "Furnace.WAV" #173991 (a gas bronze furnace, mostly it
 Extinguisher Spraying" #750166 (AI-generated, as its page says); chimes — "SILENCYO_DESKBELL" #148844
 (room noise before the strike), "220516 desk bell rings" #717564. BigSoundBank's search page
 refused the automated fetch, so nothing came from there this time.
+
+## audio/impact — impacts, failures and footsteps (2026-11-12)
+
+Ty, 2026-11-12: "impacts and damage sound odd because the same sound effect gets reused and doesn't
+fit the context ... when something goes wrong it plays something like a can-drop sound." scripts/sfx.lua
+picks a bank by what met what, the energy and the event (`impact`, `fail`, `step`); these are the banks.
+Every source is a field or foley recording, CC0 1.0: the licence was read on each sound's page on
+2026-11-12 (every page links creativecommons.org/publicdomain/zero/1.0/). The originals need a login,
+so `tools/build_impact_audio.py` cuts from the HQ previews (the same recordings, 128 kb/s; the curl
+line and the user ids are in its docstring). Mono 44.1 kHz Ogg Vorbis. The takes of a bank are set
+to one level (loudest 50 ms RMS at the bank's peak − 9 dB, the peak held under it); checked by
+numbers (`--stats`), never played aloud. Rebuild: `python3 tools/build_impact_audio.py <folder> --stats`.
+
+| file(s) | source (freesound.org/s/<id>) | what it was | processing |
+|---|---|---|---|
+| `metal_light_1..2` | #669693 "deep knocks on metal" by vestibule-door | knuckle-deep knocks on a metal door | 0.42 s, above 50 Hz |
+| `metal_light_3` | #640204 "Heavy Metal Thud on Ground" by 7of9Designs | a metal object thudding onto the ground | 0.55 s |
+| `metal_light_4` | #489924 "MetalImpactAgainstRock07" by falcospizaetus | a small metal piece struck against rock | 0.25 s, above 80 Hz |
+| `metal_dull_1..5` | #568816 "200822 Metallic thud, boom, dull, mono PEC" by TRP | dull heavy metal thuds and booms (takes at 7.3, 11.1, 18.2, 19.7, 24.4 s) | 1.5 s, above 35 Hz |
+| `metal_dull_6` | #637988 "wheelbarrow put down on concrete floor metal hits impacts thuds" by kyles | a steel wheelbarrow set down hard (7.1 s) | 1.0 s |
+| `metal_rock_1..3` | #675461 "S10-14 Heavy metal objets crashing on stone floor; 3 takes" by craigsmith | heavy metal objects crashing on a stone floor | 1.0 s each take |
+| `metal_metal_1` | #859154 "Loud Bang Crashing Metal Chunk Dropped in Metal Dumpster" by qubodup | a metal chunk dropped into a steel dumpster | 1.0 s |
+| `metal_metal_2..3` | #587442 "Dropping sheet metal" by SamsterBirdies | a sheet of steel dropped on concrete (2.9, 5.1 s) | 1.6 s |
+| `metal_metal_4` | #109358 "rock lands on metal.aiff" by SoundCollectah | a rock landing on a metal sheet | 1.0 s |
+| `metal_heavy_1..4`, `crash_3` | #587443 "Scrap metal dropping / crashing" by SamsterBirdies | a pile of scrap metal dropped onto concrete (6 takes) | 2.0–2.2 s |
+| `crash_1`, `crash_2` | #703247 "Big falling debris (crash)", #703248 "Fall debris (crash)" by xkeril | tiles, stone and metal crashing onto concrete at a building site | 2.6 s |
+| `part_break_1..5` | #451665 "school bus truck destroy crush smash ... metal bend wreck crunch with forklift" by kyles | a school bus wrecked by a forklift: metal bending, tearing and crunching (1.4, 7.6, 16.5, 49.2, 60.4 s; the low, bending crunches, not the window breaks) | 1.4 s, above 50 Hz |
+| `scrape_1..5` | #383794 "Metal Scraping on Concrete" by deleted_user_7146007 | a metal piece dragged over concrete | 1.1 s, above 80 Hz |
+| `explode_1` | #251401 "Dynamite explosion in the mountain" by felix.blume | a mining charge in the Bolivian mountains, the valley's echo after | 4.5 s, above 25 Hz; played at 0.9–1.1× under `foley/pyro_bang` |
+| `soil_light_1..4` | #392008 "HEAVY BAG DROP DIRT.wav" by burbujafilms | a heavy bag dropped on dirt | 0.6 s |
+| `soil_heavy_1..2` | #584891 "big log on dirt throwing.wav" by KrystianPawlowski | a big log thrown down on dirt | 0.9 s |
+| `soil_heavy_3`, `suit_fall_1` | #504626 "BODY FALL - V HVY - DIRT" by leonelmail | a body falling heavily on dirt | 1.2 s |
+| `rock_soil_1..4` | #369981 "Stone dropping to ground_northern87" by northern87 | stones dropped on the ground | 0.8 s |
+| `rock_light_1..6` | #179365 "Small Rock and Stone Hits.wav" by lolamadeus | small rocks knocked together and dropped | 0.35 s, above 80 Hz |
+| `glass_knock_1` | #418194 "Hard Glass Impact" by deleted_user_3656686 | a hard knock on glass | 0.45 s, above 120 Hz |
+| `glass_break_1` | #212698 "Breaking a glass bottle" by dasebr | a bottle breaking | 1.0 s, above 150 Hz |
+| `glass_break_2`, `visor_crack_1` | #806423 "Car windshield crack" by Sanderboah | a windscreen cracking | 1.3 s / 0.7 s (above 300 Hz) |
+| `plastic_1..2` | #272065 "Thrown Object" by Bexhillcollege | a cassette and its case thrown at a wall | 0.25 s |
+| `plastic_3..4` | #133978 "Item Falling (Plastic).mp3" by EchoCinematics | a plastic item falling | 0.5 s |
+| `plastic_5` | #401773 "Plastic cup dropping" by oztrum | a plastic cup dropped | 0.5 s |
+| `tyre_1..3` | #267921 "tire_thump.wav" by ChemiCatz | a tyre thumped on the ground | 0.7 s |
+| `tyre_4..5` | #674021 "230104-013_normalized_tire_hit.wav" by mmmtoop | a tyre hit | 0.3 s |
+| `zap_1..5`, `arc_loop` | #776446 "ELECArc_Electric arc hum and buzz" by pryanic | an electric arc buzzing; cuts where it strikes (77.5, 170.6 s), where it dies (75.2, 166.0 s) and a short burst (40 s); the loop from 120–124 s | above 200 Hz; the loop 0.5 s crossfade |
+| `fire_flare`, `fire_loop` | #563765 "Fire Auto - car on fire" by florianreichelt | a car burning in Frankfurt | the flare 0–3 s (0.25 s in); the loop 2–14 s, 1.5 s crossfade |
+| `breach_1..2` | #568816 (above) at 11.1 and 19.7 s, with #138477 "Air Burst" by JustInvoke under it at −3 dB | a hull plate going and a burst of air | 1.8 / 1.4 s |
+| `step_grit_1..6` | #384082 "Foot_Step_grit_Sand.wav" by savataivanov | slow steps on grit | 0.36 s |
+| `step_soil_1..6` | #352870 "Footsteps Dirt Gravel" by PotatokingXII | steps on dirt and fine gravel | 0.36 s |
+| `step_sand_1..6` | #249933 "walking slow, walking fast and running on sand" by launemax | slow steps on sand | 0.40 s |
+| `step_snow_1..6` | #453168 "footsteps in fresh snow" by florianreichelt | steps in fresh snow | 0.40 s |
+| `step_metal_1..6` | #698697 "Footsteps on Metal" by IENBA | single boot steps on metal stairs | 0.45 s |
+
+Reused, not new: wood impacts and wood, grass and concrete steps are Kenney's (`kenney/impact`, CC0);
+`rock_heavy` is the cave's `cave_slab_hit_1..2`; the breach's and the suit's hiss are `foley/hiss_short`
+and `hiss_cylinder`; a breaker's clack and a SCRAM's contactor are `foley/latch_clunk` and `clamp_clunk`.
+
+Seen and not used: "Car accident. Real. Interior." #449062 (softwalls: real, but clipped hard), "Impact
+on metal" #726486 (a −20 dB noise floor), "Metal & concrete.wav" #166118 (one long rumble), "Amp short
+circuit 1.wav" #205879 (the amp's hum under every pop), "Electric zap.wav" #512471 (0.2 s of noise),
+"Welding_Electric Sparks.wav" #396240 (welding, not a fault), "Cracking, snapping, and clanging (metal
+can)" #518731 (a can: the very sound being replaced), "Scraping Stone" #321488 (an axe on a slab,
+thin), "Metal Pipe Scraped on Concrete" #104361 (one scrape, mostly room), "footsteps on dirt" #264469
+(sneakers, all above 5 kHz), "Footsteps On Metal" #834029 (light shoes on a thin plate: too small for
+a suit's boot), "Gravel road walk" #274832 (steps overlap), "fire crackles" #563766 (a campfire).

@@ -446,7 +446,13 @@ function setBreaker(sid, uid, closed, by)
   ST.setPartState(sid, uid, next(t) and t or nil)
   local state = breakerState(sid, uid)
   for _, fn in ipairs(onBreaker) do pcall(fn, sid, uid, state, by or "hand") end
-  if by ~= "logic" and audio and audio.play then
+  -- A trip is a fault: the breaker's own heavy clack and the arc's snap, heard
+  -- where it hangs (sfx "breaker_trip"), not the hand's switch click.
+  local fx = by == "trip" and ref("sfx")
+  if fx and fx.fail then
+    local n = ST.nodeOf and ST.nodeOf(sid, uid)
+    pcall(fx.fail, "breaker_trip", { node = n })
+  elseif by ~= "logic" and audio and audio.play then
     pcall(audio.play, by == "trip" and "audio/foley/switch_3.ogg" or "audio/foley/switch_2.ogg", { track = "UI", volume = by == "trip" and 0.7 or 0.45 })
   end
   return true

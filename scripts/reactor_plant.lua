@@ -403,8 +403,14 @@ local function tick(e, tnow)
     e.dirty_save = true
     lastEvents[#lastEvents + 1] = { key = e.key, t = ev.t, text = ev.text, kind = ev.kind, cause = ev.cause }
     while #lastEvents > 20 do table.remove(lastEvents, 1) end
-    if audio and audio.play and now() > 2 then
-      pcall(audio.play, ev.kind == "trip" and "audio/foley/switch_3.ogg" or "audio/foley/switch_3.ogg", { track = "UI", volume = 0.7 })
+    -- a SCRAM is the plant's big contactor dropping the rods (sfx "scram"),
+    -- not a desk switch's click; a prompt-critical burst is a blast and a
+    -- meltdown the core giving way
+    local fx = now() > 2 and ref("sfx")
+    if fx and fx.fail then
+      pcall(fx.fail, (ev.kind == "prompt" and "explode") or (ev.kind == "melt" and "part_break") or "scram", {})
+    elseif audio and audio.play and now() > 2 then
+      pcall(audio.play, "audio/foley/switch_3.ogg", { track = "UI", volume = 0.7 })
     end
   end
   -- burnt rods into the save now and then
