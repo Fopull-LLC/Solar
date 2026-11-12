@@ -557,7 +557,7 @@ function KIT.run()
 end
 
 -- ── kitperf: pieces in view ──────────────────────────────────────────────────
-function KIT.block(ST, spot, k, live)
+function KIT.block(ST, spot, k, live, mat)
   local b = home()
   local U = spot.dir
   local Rt = unit(cross(spot.t, U))
@@ -573,9 +573,17 @@ function KIT.block(ST, spot, k, live)
   for i = 0, k - 1 do
     for j = 0, k - 1 do
       local x, z = (i - k / 2) * 2, j * 2
-      add(((i + j) % 5 == 0) and "floor.concrete" or "floor.steel", x, 0, z)
-      add(((i * 7 + j) % 4 == 0) and "windowWall.steel" or "wall.steel", x, 0.2, z + 1, 0)
-      add(((i + j * 3) % 6 == 0) and "doorWall.steel" or "wall.concrete", x + 1, 0.2, z, math.pi / 2)
+      if mat == "wood" then
+        -- timber: plank floors and fences (Steel + Timber, two picture sets of one size),
+        -- plain timber floors and walls (one set) and door walls (three slots)
+        add(((i + j) % 2 == 0) and "plankFloor.wood" or "floor.wood", x, 0, z)
+        add(((i * 7 + j) % 3 == 0) and "fence.wood" or "wall.wood", x, 0.2, z + 1, 0)
+        add(((i + j * 3) % 6 == 0) and "doorWall.wood" or "fence.wood", x + 1, 0.2, z, math.pi / 2)
+      else
+        add(((i + j) % 5 == 0) and "floor.concrete" or "floor.steel", x, 0, z)
+        add(((i * 7 + j) % 4 == 0) and "windowWall.steel" or "wall.steel", x, 0.2, z + 1, 0)
+        add(((i + j * 3) % 6 == 0) and "doorWall.steel" or "wall.concrete", x + 1, 0.2, z, math.pi / 2)
+      end
     end
   end
   for n = 1, (live or 0) do add("vab.locker", ((n % 6) - 3) * 2, 0.2, (math.floor(n / 6)) * 2 + 0.4) end
@@ -616,16 +624,22 @@ function KIT.run_perf()
     VP.cam_off()
   end
   KIT.pc_take("boot + no block")
-  for _, case in ipairs({ { 13, 0, "kit_500" }, { 13, 30, "kit_500_live30" }, { 26, 0, "kit_2000" }, { 45, 0, "kit_6000" } }) do
-    local rec = KIT.block(ST, spot, case[1], case[2])
+  local cases = { { 13, 0, "kit_500" }, { 13, 30, "kit_500_live30" }, { 26, 0, "kit_2000" }, { 45, 0, "kit_6000" }, { 26, 0, "kit_wood_2000", "wood" } }
+  -- kwoodonly=1: the timber block alone (a quick look at the texture-array merge)
+  if (params.kwoodonly or 0) > 0 then cases = { cases[5] } end
+  for _, case in ipairs(cases) do
+    local rec = KIT.block(ST, spot, case[1], case[2], case[4])
     local t0 = W()
     -- (walkclips) ksample=1: the script sampler on from the block's add to the
     -- case's end, so the bench's worst-hitch lines name the hot lines (it slows
     -- tight loops: not for the table)
     if (params.ksample or 0) > 0 and perf.sampleScripts then perf.sampleScripts(true) end
     local id = ST.add(rec)
+    -- the spawn is a recording too: its frames, hitches and their parts
+    sc_begin("spawn_" .. case[3])
     ST.spawnNow(id)
     wait_for(function() return spawnPending() == 0 and #(ST.nodesOf(id) or {}) >= #rec.bp - case[2] - 2 end, 240, "the block's pieces")
+    sc_end("spawn_" .. case[3])
     local tsp = W() - t0
     wait(3)
     -- a camera over the crew's shoulder, the whole block ahead of it

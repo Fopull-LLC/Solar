@@ -803,6 +803,37 @@ function WD.run_look()
   v("wl2_20m", lit, 20.0, 2.5)
   v("wl3_60m", lit, 60.0, 4.0)
   v("wl4_shade20", sb + math.pi, 20.0, 2.5)
+  -- paint at runtime (engine 1505: a merged model's look changed in place): every timber
+  -- wall and the hut door painted orange, seen as wl1_5m saw them bare, then repainted
+  -- green; the instances in view must not grow with the paint
+  local uids = {}
+  for _, p in ipairs(ST.get(sid).bp) do
+    if p.id == "wall.wood" or p.id == "hutDoor.wood" or p.id == "windowWall.wood" or p.id == "fence.wood" or p.id == "plankFloor.wood" then uids[#uids + 1] = p.uid end
+  end
+  local e1 = clear_eye(lit, 6.0, 1.7)
+  -- one fixed camera for the three: counts read while it looks
+  do
+    local bh = home()
+    local e, t = KIT.w(rec2, e1[1], e1[2], e1[3]), KIT.w(rec2, hx0, p1.y + 1.3, hz0)
+    VP.cam_fixed(sub(e, bh), sub(t, bh))
+  end
+  local function shotc(nm)
+    wait(1.2)
+    BK.shot(nm, false)
+    local c = perf.counts()
+    return c.instances or -1, c.draws or -1
+  end
+  local i0, d0 = shotc("wl6_bare_again")
+  local np = fb.paintParts and fb.paintParts(sid, uids, "orange", "both")
+  local i1, d1 = shotc("wl7_paint_orange")
+  local np2 = fb.paintParts and fb.paintParts(sid, uids, "habgreen", "both")
+  local i2, d2 = shotc("wl8_paint_green")
+  VP.cam_off()
+  local pk = {}
+  for _, p in ipairs(ST.get(sid).bp) do if p.id == "wall.wood" then pk[#pk + 1] = tostring(p.paint) end end
+  BK.check("repaint", np ~= nil and np2 ~= nil and pk[1] == "habgreen",
+    "timber painted orange (%s) then green (%s) at runtime: walls now %s; instances/draws in view bare %d/%d, orange %d/%d, green %d/%d",
+    tostring(np), tostring(np2), table.concat(pk, ","), i0, d0, i1, d1, i2, d2)
   if ff and ff.params then ff.params.enabled = 1 end
   BK.result()
 end

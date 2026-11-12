@@ -474,4 +474,11 @@
     "textures/kit/wallkit_albedo.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/kit/wallkit_normal.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/kit/wallkit_orm.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/timber_albedo.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/timber_board_albedo.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/timber_board_normal.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/kit/timber_board_orm.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/env/sets/Bark016/albedo.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/env/sets/Bark016/normal.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/env/sets/Bark016/orm.png": (filter: SmoothMipmaps, wrap: Repeat),
 }
