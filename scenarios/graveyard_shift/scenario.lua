@@ -35,7 +35,7 @@ return {
 
   vars = { diag = false, woke = false, prot_ok = false, prot_at_break = true, loca = false, peak_k = 0, dose_msv = 0,
            kwh = 0, brg = 39, seized = false, dana_mu = false, welded_by = "", debriefed = false, read_log = false,
-           handover = false, setback_first = true, wake_go = false },
+           handover = false, setback_first = true, wake_go = false, dana_bed = false },
   hooks = "scn_graveyard_shift_hooks",       -- scripts/scn_graveyard_shift_hooks.lua on its prefab
   -- (FW-C, docs/scenarios.md §4.2) FW-2's bearing, which the hooks keep in
   -- `tick`, written as DATA, a model a mod could ship (not used here; the hook
@@ -163,9 +163,9 @@ return {
       { gesture = { who = "Anand", clip = false } },
       { turn = { who = "Anand", to = "crew:Halloran" } },
       { look = { who = "priya", at = "crew:Halloran" } },
-      { say = { who = "priya", text = "And she means slowly. My strainmeter hears every load step through the rock. Last Tuesday it heard Dana sneeze.", with = "dana" } },
+      { say = { who = "priya", text = "And she means slowly. My strainmeter hears every load step through the rock. Last Tuesday it heard Dana sneeze.", with = "me" } },
       { look = { who = "dana", at = "crew:Anand" } },
-      { say = { who = "dana", text = "Priya's measuring the ridge breathing. Forty-hour run, she's on hour thirty-one. Don't be the reason she starts again.", with = "priya" } },
+      { say = { who = "dana", text = "Priya's measuring the ridge breathing. Forty-hour run, she's on hour thirty-one. Don't be the reason she starts again.", with = "me" } },
       { turn = { who = "Anand", to = "mark:priyabench" } },
       { look = { who = "priya", at = false } },
       { gesture = { who = "Anand", clip = "lean_console" } },
@@ -193,12 +193,14 @@ return {
       { say = { who = "dana", text = "Bed. Yes. That word." } },
       { run = "q_end" },
     },
+    -- (gy3, Ty 2026-11-11: "she doesn't go to the bedroom to sleep when she
+    -- hands things over and says she's gonna sleep") she goes when she says it
     q_end = {
-      { say = { who = "dana", text = "Console's yours. Two to thirty, turbine on line, thirty to sixty. Watch the period. Wake me if something's on fire, and mean it.", with = "me" } },
+      { say = { who = "dana", text = "Console's yours. Two to thirty, turbine on line, thirty to sixty. Watch the period.", with = "me" } },
+      { say = { who = "dana", text = "Wake me if something's on fire. And mean it. Bunk room, ten metres. Don't make it nine.", with = "me" } },
       { var = { handover = true } },
-      -- (she steps back out of your way and watches you bring her up)
       { look = { who = "dana", at = false } },
-      { walk = { who = "Kowalczyk", to = "mark:danawatch", face = "mark:console", speed = 1.0 } },
+      { run = "dana_off" },
     },
     read_log = {
       { var = { read_log = true } },
@@ -210,10 +212,16 @@ return {
     -- (graveyard2: she walks to the bunk room, through its door, and lies
     -- down on her bunk; she stays there until someone wakes her)
     dana_off = {
-      { say = { who = "dana", text = "Sixty, and steady. That's a plant. Right. I'm horizontal. Bunk room, ten metres. Don't make it nine." } },
       { walk = { who = "Kowalczyk", to = "mark:bunk", speed = 1.0, secs = 40,
                  pose = { kind = "lie", struct = "Kerne Station", spot = { -5.55, 0.68, 8.45 }, toward = { -6.6, 0.68, 8.45 }, stand = "mark:bunk" } } },
+      { var = { dana_bed = true } },
+      { wait = 2.5 },
       { say = { who = "priya", text = "She says that every night. She's asleep before the door closes." } },
+    },
+    -- (gy3) the climb, with Dana in her bunk: Priya has the board's other half
+    at_sixty = {
+      { say = { who = "priya", text = "Sixty. Dana would say that's a plant. She'd also say don't touch anything else." } },
+      { say = { who = "priya", text = "Held like that, my strainmeter can't tell you're there. That's the nicest thing I know how to say to an engineer." } },
     },
     -- ── ACT 2 ──────────────────────────────────────────────────────────────
     hum = {
@@ -354,7 +362,7 @@ return {
   events = {
     { id = "readlog", when = { kind = "at", who = "crew:Halloran", at = "mark:logdesk", r = 1.4 }, run = "read_log" },
     { id = "prot_seen", when = { kind = "var", name = "prot_ok", is = true }, after = "console",
-      beats = { { say = { who = "dana", text = "Protection's back in. Good. That's the one I'd have forgotten." } } } },
+      beats = { { say = { who = "priya", text = "Your board just went from BYPASS to ARMED. That was Dana's item two, wasn't it? She'll be pleased. Tomorrow." } } } },
     { id = "hum", when = { kind = "timer", secs = 35, from = "step:diagnose" }, run = "hum" },
     { id = "seized", when = { kind = "var", name = "seized", is = true }, run = "seized" },
     { id = "cold", when = { kind = "at", who = "crew:Halloran", at = "mark:lockout", r = 3 }, during = "skid",
@@ -382,18 +390,21 @@ return {
     -- ACT 1: the hand-over and the climb
     { id = "handover", text = "Hand-over. Hear Dana out.", run = "handover", act = "Act 1 · the hand-over",
       goals = { { kind = "var", name = "handover", is = true, label = "Dana's hand-over" } },
-      hint = "Dana is coming over to you. Let her talk; when she asks, pick a question with the number keys (or the mouse)." },
+      hint = "Dana is coming over to you. Let her talk; when she asks, pick a question with the number keys (or the mouse). Then she goes to bed." },
     { id = "log", optional = true, text = "(optional) Read the shift log on the desk terminal (E at the monitor: its LOG page).", mark = "mark:logdesk",
       goals = { { kind = "var", name = "read_log", is = true, label = "The shift log" } },
       hint = "The desk is under the porthole on the control room's west wall. Walk up to it: the log reads itself out." },
     { id = "console", text = "Take the console.", mark = "mark:console",
-      goals = { { kind = "at", who = "crew:Halloran", at = "mark:console", r = 1.6, label = "At the reactor console" } },
+      -- (gy3, Ty: "told to go to the reactor console while already using it")
+      goals = { { kind = "any", label = "At the reactor console",
+                  goals = { { kind = "at", who = "crew:Halloran", at = "mark:console", r = 1.8 },
+                            { kind = "using", struct = "Kerne Station", part = "reactorConsole" } } } },
       hint = "The console stands at the windows onto the hall, by the bulkhead door (east side of the control room). Walk right up to it and press E: its REACTOR page has every reading and control. Right-click still opens its menu.",
-      hint2 = "Item 2 of Dana's log: the console's PROTECTION toggle is bypassed. Restoring it is not a step, but it matters later." },
+      hint2 = "Item 2 of Dana's log: the PROTECTION toggle on the console's REACTOR page. If it reads BYPASS, set it to ARMED. Not a step, but it matters later." },
     { id = "p30", text = "Raise the reactor from 2 % to 30 %. Console: Setpoint +10 %, three times. Watch the period.",
       goals = { { kind = "reactor", struct = "Kerne Station", power_above = 0.28, label = "Reactor at 30 %" } },
       hint = "At the console press E: on the REACTOR page, Setpoint + steps it 5 % (its right-click menu: Setpoint +10 %). The automatic controller walks the rods out for you.",
-      on_done = { { say = { who = "dana", text = "Thirty. Now the turbine." } } } },
+      on_done = { { say = { who = "priya", text = "Thirty on your board. Dana's note says the turbine next. She underlined it twice." } } } },
     { id = "turbine", text = "Put the turbine on line (console: Turbine online).",
       goals = { { kind = "hook", fn = "turbine_on", label = "Turbine on line, making power" } },
       hint = "The console's REACTOR page (E) has a Turbine online key, so does its menu. It needs steam: 10 % of its rating to spin.",
@@ -402,7 +413,7 @@ return {
       goals = { { kind = "reactor", struct = "Kerne Station", power_above = 0.57, label = "Reactor at 60 %", hold = 60 },
                 { kind = "reactor", struct = "Kerne Station", power_below = 0.64, label = "Not over 60 % (the PL-7 clamp)" } },
       hint = "Setpoint +10 % three more times. The turbine follows the steam.",
-      on_done = { { run = "dana_off" } } },
+      on_done = { { run = "at_sixty" } } },
     -- ACT 2: the bearing
     { id = "diagnose", text = "Hold 60 %. Log the restart. Night shift.", act = "Act 2 · the bearing", checkpoint = true,
       -- (a setback here: the plant restaged at 60 % on line, as the climb left it)

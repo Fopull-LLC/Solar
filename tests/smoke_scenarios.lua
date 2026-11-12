@@ -810,5 +810,76 @@ do
   SCN.forget()
 end
 
+-- (gy3, Ty 2026-11-11) goals that read the world whatever the player does,
+-- cast members who are not playable, names that agree
+do
+  local P = { me = { body = "H", x = 0, y = 600, z = 0 } }
+  local using = false
+  local W = {
+    pos = function(r)
+      if r == "crew:A" then return P.me end
+      if r == "mark:c" then return { body = "H", x = 0, y = 598.5, z = 1.2 } end   -- the console's mark: terrain 1.5 m under the capsule's centre
+      return nil
+    end,
+    using = function(g) if using then return true, "at its terminal" end return false, "not in use" end,
+  }
+  local function ev(g, mem) return SCN.evalGoal(g, W, mem or {}, { now = 0 }) end
+  local m, r = ev({ kind = "at", who = "crew:A", at = "mark:c", r = 1.6 })
+  check("gy3 at: along the ground (1.2 m), not through the floor (1.9 m)", m, r)
+  P.me = { body = "H", x = 0, y = 605, z = 1.2 }
+  m, r = ev({ kind = "at", who = "crew:A", at = "mark:c", r = 1.6 })
+  check("gy3 at: a storey up is not there (dy 3)", not m and r:find("above", 1, true), r)
+  m = ev({ kind = "at", who = "crew:A", at = "mark:c", r = 1.6, dy = 8 })
+  check("gy3 at: dy widens it", m)
+  P.me = { body = "H", x = 4, y = 600, z = 0 }
+  local anyG = { kind = "any", goals = { { kind = "at", who = "crew:A", at = "mark:c", r = 1.8 }, { kind = "using", struct = "S", part = "reactorConsole" } } }
+  local mem = {}
+  m = ev(anyG, mem)
+  check("gy3 any: neither (4 m off, not using it)", not m)
+  using = true
+  m, r = ev(anyG, mem)
+  check("gy3 any: using the console from across the room", m and r == "at its terminal", r)
+  using = false
+  m, r = ev(anyG, mem)
+  check("gy3 using: once used while the step is open it stays met", m, r)
+  check("gy3 labels", SCN.goalLabel({ kind = "using", part = "reactorConsole" }) == "Use reactorConsole" and SCN.goalLabel(anyG) == "Reach c")
+  -- playable and names
+  local gs = SCN.load("graveyard_shift", true)
+  local byName = {}
+  for _, c in ipairs(gs.start.crew) do byName[c.name] = c end
+  check("gy3 playable: the one you control", SCN.playableOf(gs, byName.Halloran))
+  check("gy3 playable: Dana and Priya are not (cast, default false)", not SCN.playableOf(gs, byName.Kowalczyk) and not SCN.playableOf(gs, byName.Anand))
+  local g2 = SCN.load("graveyard_shift", true)
+  g2.cast.dana.playable = true
+  check("gy3 playable: cast playable = true", SCN.playableOf(g2, byName.Kowalczyk))
+  check("gy3 playable: start.crew playable wins", not SCN.playableOf(g2, { name = "Kowalczyk", playable = false }))
+  check("gy3 names: the record wears the cast's name", SCN.crewDisplayName(gs, "Kowalczyk") == "Dana Kowalczyk" and SCN.crewDisplayName(gs, "Anand") == "Dr Priya Anand"
+    and SCN.crewDisplayName(gs, "Halloran") == "Halloran" and SCN.crewDisplayName(gs, "Nobody") == "Nobody")
+  local tk = SCN.load("thirty_km", true)
+  local kk = SCN.castOfCrew(tk, "Nakamura")
+  check("gy3 names: of three voices the one in person", kk == "kit", tostring(kk))
+  -- validation
+  g2.cast.dana.playable = "yes"
+  g2.cast.ops.playable = true
+  g2.steps[3].goals = { { kind = "any", goals = {} } }
+  g2.steps[4].goals = { { kind = "using", struct = "Kerne Station" } }
+  g2.sequences.q_bed[1] = { say = { who = "dana", text = "Bed.", look = "mark:nowhere" } }
+  local okv, errs = SCN.validate(g2, CTX)
+  local te = table.concat(errs or {}, "\n")
+  for _, want in ipairs({ "cast.dana.playable", "cast.ops.playable", "steps[3].goals[1].goals", "steps[4].goals[1]", "q_bed[1].say.look" }) do
+    check("gy3 validation names " .. want, not okv and te:find(want, 1, true) ~= nil, te:sub(1, 400))
+  end
+  -- Graveyard: she goes to bed when she says so; the console ticks on use
+  local qe = false
+  for _, b in ipairs(gs.sequences.q_end or {}) do if b.run == "dana_off" then qe = true end end
+  check("gy3 Graveyard: the hand-over ends with Dana going to her bunk", qe)
+  local cg = nil
+  for _, s in ipairs(gs.steps) do if s.id == "console" then cg = s.goals[1] end end
+  local hasUse = false
+  for _, g in ipairs((cg and cg.goals) or {}) do if g.kind == "using" then hasUse = true end end
+  check("gy3 Graveyard: the console step ticks on walking up to it OR using it", cg and cg.kind == "any" and hasUse)
+  SCN.forget()
+end
+
 print(string.format("smoke_scenarios: %d checks, %d failed", count, failed))
 os.exit(failed == 0 and 0 or 1)

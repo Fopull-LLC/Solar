@@ -51,6 +51,8 @@ defaults = {
 }
 local function P(k) return (params and params[k]) or defaults[k] end
 gaze = nil
+-- (gy3) a conversation's look (scenario_run's talk gaze), over `gaze` while set
+talkGaze = nil
 
 -- @face-rig BEGIN (tools/gen_faces.py writes this block; don't edit it by hand)
 RIG = {
@@ -494,9 +496,35 @@ function lateUpdate(node, dt)
   -- an owner's look (scientist.lua): the eyes to its point, asked now so it
   -- is this frame's (docs/positions-and-frames.md, rule 1)
   local cx, cy, cz = nil, nil, nil
-  if gaze then
-    local okg, gx, gy, gzz, gw = pcall(gaze)
+  local gz = talkGaze or gaze
+  if gz then
+    local okg, gx, gy, gzz, gw = pcall(gz)
     if okg and gx and not dead and (gw or 0) > 0.01 then
+      -- (gy3) the eyes keep their life on a held look: the saccades and the
+      -- glances (face_life's gx/gy, the units the bones take) move the point
+      -- looked at across the view, so a look at you is never a stare fixed
+      -- on one spot; a glance away lets the look go a little
+      local ex, ey, ez = node.x, node.y, node.z
+      local dx, dy, dz = gx - ex, gy - ey, gzz - ez
+      local L = math.sqrt(dx * dx + dy * dy + dz * dz)
+      if L > 0.05 and not still then
+        dx, dy, dz = dx / L, dy / L, dz / L
+        local bn = space and space.dominant and space.dominant(ex, ey, ez)
+        local b = bn and space.body(bn)
+        if b then
+          local ux, uy, uz = ex - b.x, ey - b.y, ez - b.z
+          local ul = math.sqrt(ux * ux + uy * uy + uz * uz)
+          ux, uy, uz = ux / ul, uy / ul, uz / ul
+          local rx, ry, rz = dy * uz - dz * uy, dz * ux - dx * uz, dx * uy - dy * ux
+          local rl = math.sqrt(rx * rx + ry * ry + rz * rz)
+          if rl > 1e-4 then
+            rx, ry, rz = rx / rl, ry / rl, rz / rl
+            local ox, oy = (life.gx or 0) * 0.35 * L, (life.gy or 0) * 0.35 * L
+            gx, gy, gzz = gx + rx * ox + ux * oy, gy + ry * ox + uy * oy, gzz + rz * ox + uz * oy
+          end
+        end
+        if (life.gl_left or 0) > 0 then gw = gw * 0.35 end
+      end
       pcall(anim.lookAt, anim, { "EyeL" }, vec3(gx, gy, gzz), { limit = 30, weight = gw })
       pcall(anim.lookAt, anim, { "EyeR" }, vec3(gx, gy, gzz), { limit = 30, weight = gw })
     end

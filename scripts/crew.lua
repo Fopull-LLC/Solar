@@ -681,7 +681,7 @@ end
 -- `version`). `nil` can't be merged, so a field is cleared with `false`.
 local CLEAR = { task = true, hand = true, craft = true, died = true, body = true, x = true, y = true, z = true,
                 yaw = true, anchor = true, face = true, downed = true, retrain = true, leftAt = true, blackout = true,
-                pose = true, title = true, gesture = true }
+                pose = true, title = true, gesture = true, npc = true }
 function patch(id, fields)
   local r = get(id)
   if not r then return false end
@@ -1944,11 +1944,21 @@ end
 -- a moving world stands a rails carry from where it was put).
 local queue = {}
 
+-- (gy3, Ty 2026-11-11: "I can control Dana as one of the crew members") a
+-- record with `npc` (a scenario's cast member the player does not play) is
+-- never taken: not by a click, a key, a picker, a quick swap or a craft.
+NOT_YOURS = "not yours to play"
+function playable(id)
+  local r = type(id) == "table" and id or get(id)
+  return r ~= nil and not r.npc
+end
+
 -- TAKE CONTROL of member `id` (§4.1).
 function control(id)
   drop_focus()
   local r = get(id)
   if not r then return false, "no such crew member" end
+  if r.npc and id ~= activeId() then return false, r.name .. " is " .. NOT_YOURS end
   if r.status == "dead" then return false, r.name .. " is dead" end
   if r.status == "base" then return false, r.name .. " is at the base" end
   if r.downed then return false, r.name .. " is down — bring a Medkit" end
@@ -1970,7 +1980,12 @@ function takeCraft(v, id)
   if not (v and v.node and v.node.valid ~= false) then return false, "no craft" end
   local seated = aboard(v)
   if #seated == 0 then return false, "nobody aboard" end
-  if not id then id = seated[1].id end
+  if not id then
+    -- (gy3) the first one aboard the player may play
+    for _, s in ipairs(seated) do if playable(s.id) then id = s.id break end end
+    if not id then return false, "nobody aboard is yours to play" end
+  end
+  if not playable(id) and id ~= activeId() then return false, NOT_YOURS end
   local found = false
   for _, s in ipairs(seated) do if s.id == id then found = true end end
   if not found then return false, "not aboard that craft" end
@@ -2061,7 +2076,7 @@ function switchList(range)
       local d = cx and len(b.x - cx, b.y - cy, b.z - cz) or 0
       -- (not the downed: control() refuses them, so the strip's CONTROL chip
       -- and [ ] would offer what can't be done; the DOWN chip lists them)
-      if r and r.status == "afoot" and not r.downed and d <= range then
+      if r and r.status == "afoot" and not r.downed and not r.npc and d <= range then
         out[#out + 1] = { kind = "crew", id = id, name = r.name, dist = d }
       end
     end
@@ -2201,6 +2216,7 @@ function canSwitch(id)
     return false, "that's you"
   end
   if r.downed then return false, r.name .. " is down — bring a Medkit" end
+  if r.npc then return false, NOT_YOURS end
   local b = busy(r)
   if b then return false, b end
   if r.status == "aboard" then
@@ -2300,7 +2316,8 @@ end
 function switchTargets()
   local out = {}
   for _, r in ipairs(roster()) do
-    if r.status ~= "dead" then
+    -- (gy3) a scenario's cast member you don't play is not on the picker
+    if r.status ~= "dead" and not r.npc then
       local ok, why, mode, detail = canSwitch(r.id)
       local label
       if r.id == activeId() and not ok then label = "YOU"

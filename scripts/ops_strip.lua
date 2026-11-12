@@ -237,7 +237,24 @@ local function chirp(key)
   if fx and fx.play then fx.play(key) end
 end
 
-function say(text, who, done)
+-- (gy3, Ty 2026-11-11: "Logged. The Depot ships Battery Bank and Solar
+-- Array now." during Graveyard Shift) while a scenario runs, only its own
+-- lines speak (`opts.scenario`, scenario_ui's): the game's progression,
+-- feats, milestones and ruin pointers stay silent (logged, never shown).
+-- After the run (freeplay) the game speaks again.
+function inScenario()
+  local sr = findScript and findScript("scenario_run") or nil
+  if not (sr and sr.isActive and sr.isActive()) then return false end
+  local ph = sr.phaseNow and sr.phaseNow() or nil
+  return ph ~= "freeplay" and ph ~= nil
+end
+silenced = 0      -- (probes) lines kept quiet in a scenario
+function say(text, who, done, opts)
+  if not (opts and opts.scenario) and inScenario() then
+    silenced = silenced + 1
+    if log then log("ops_strip: quiet in a scenario: " .. tostring(text)) end
+    return false
+  end
   return push(Q, text, who, done)
 end
 
@@ -354,6 +371,7 @@ local function hidden()
 end
 
 local was_hidden = false
+local last_wall = nil
 function update(node, dt)
   if not Q.cur and #Q.waiting == 0 and #Q.hist == 0 and not drawn then return end
   local hide = hidden()
@@ -363,7 +381,12 @@ function update(node, dt)
     was_hidden = true
     return   -- the line waits: nothing is said to nobody
   end
-  local ev = tick(Q, dt or 0)
+  -- (gy3) the wall clock, not the frame's dt: a choice or a brief pauses the
+  -- world, and a paused frame's dt froze the typewriter at its first letter
+  local wc = app and app.wallClock and app.wallClock() or nil
+  local wdt = (wc and last_wall) and math.max(0, math.min(0.1, wc - last_wall)) or (dt or 0)
+  last_wall = wc
+  local ev = tick(Q, wdt)
   if ev == "start" then chirp("card") end
   if ev == "typed" then chirp("chime") end
   if el and not el.visible then el.visible = true end

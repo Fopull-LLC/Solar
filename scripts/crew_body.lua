@@ -396,6 +396,9 @@ end
 local stop_now = false
 function steerStop() if steer then stop_now = true end end
 function arrived() return arrived_ end
+-- (gy3) the route again from where it stands (a walker that stopped closing
+-- on its target: something moved into the way, or the first plan failed)
+function replan() plan = nil; wait_t = 0 end
 function walking() return steer ~= nil end
 function planning() return plan ~= nil and plan.state == "run" end
 -- the walking point, body-relative (nil when standing: the record's is right)
@@ -419,6 +422,38 @@ end
 -- world space, read when posed), nil lets go
 function lookSelf(fn) look_fn = fn end
 function lookNow() return look_fn end
+-- (gy3, Ty 2026-11-11: "Dana doesn't look at me when I talk") a conversation's
+-- look, laid over everything else while it is set: the speaker at whoever
+-- the line is to, a listener at the speaker (scenario_run's talk gaze).
+-- fn() → x, y, z, weight in world space THIS frame (never kept); `mode` is
+-- "speak" | "listen" | "glance" (how often the head looks away and back).
+local talk_fn, talk_mode = nil, nil
+function talkSelf(fn, mode) talk_fn, talk_mode = fn, fn and (mode or "listen") or nil end
+function talkNow() return talk_fn, talk_mode end
+-- The head's point this frame (drawn pose: the Head bone, a little up to the
+-- eyes), else the capsule's centre + 0.68 m up. For the talk gaze.
+function headPoint()
+  local n = self_node
+  if not (n and n.valid ~= false) then return nil end
+  local m = model
+  if m and m.valid ~= false and m.bonePos then
+    local ok, p = pcall(m.bonePos, m, "Head")
+    if ok and p and p.x then
+      local d = space and space.dominant and space.dominant(p.x, p.y, p.z)
+      local b = d and space.body(d)
+      if b then
+        local ux, uy, uz = norm3(p.x - b.x, p.y - b.y, p.z - b.z)
+        return p.x + ux * 0.1, p.y + uy * 0.1, p.z + uz * 0.1
+      end
+      return p.x, p.y, p.z
+    end
+  end
+  local d = space and space.dominant and space.dominant(n.x, n.y, n.z)
+  local b = d and space.body(d)
+  if not b then return n.x, n.y, n.z end
+  local ux, uy, uz = norm3(n.x - b.x, n.y - b.y, n.z - b.z)
+  return n.x + ux * 0.68, n.y + uy * 0.68, n.z + uz * 0.68
+end
 
 local function gait(on, dt, speed)
   if not anim and model and model.valid ~= false and model.animator then anim = model:animator() end
@@ -981,6 +1016,77 @@ local function head_to_player(node, dt, b)
   end
 end
 
+-- (gy3) THE HEAD'S LOOK, smoothed (frames doc rule 7). The point is asked
+-- this frame and only a DIRECTION is kept (a planet only translates, so a
+-- direction holds across frames where a point would not). The head turns to
+-- it at ~5/s, its weight eases in and out, and a person in a conversation
+-- looks away now and then (down, aside: thinking, listening) and back.
+local hd, hd_w = nil, 0
+local gl = { t = 2 + math.random() * 4, left = 0, yaw = 0, pitch = 0 }
+local function head_look(node, dt, b)
+  local tx, ty, tz, tw = nil, nil, nil, 0
+  local talking = false
+  if talk_fn then
+    local ok, x, y, z, w = pcall(talk_fn)
+    if ok and x then tx, ty, tz, tw = x, y, z, w or 1; talking = true end
+  end
+  if not tx and look_fn then
+    local ok, x, y, z, w = pcall(look_fn)
+    if ok and x then tx, ty, tz, tw = x, y, z, w or 1 end
+  end
+  local hx, hy, hz = headPoint()
+  if not hx then return end
+  local ux, uy, uz = 0, 1, 0
+  if b then ux, uy, uz = norm3(hx - b.x, hy - b.y, hz - b.z) end
+  local dist = 2.0
+  if tx then
+    local dx, dy, dz = tx - hx, ty - hy, tz - hz
+    local L = sqrt(dx * dx + dy * dy + dz * dz)
+    if L > 0.2 then
+      dist = L
+      dx, dy, dz = dx / L, dy / L, dz / L
+      -- now and then a look away (talk only): yaw about the vertical, a dip
+      if talking then
+        gl.t = gl.t - dt
+        if gl.t <= 0 and gl.left <= 0 then
+          gl.left = 0.5 + math.random() * (talk_mode == "speak" and 1.1 or 0.8)
+          gl.yaw = (math.random() < 0.5 and -1 or 1) * (0.25 + math.random() * 0.3)
+          gl.pitch = -(0.08 + math.random() * 0.2)
+          gl.t = (talk_mode == "speak" and 3.5 or 5.0) + math.random() * 5.0
+        end
+        if gl.left > 0 then
+          gl.left = gl.left - dt
+          local rx, ry, rz = norm3(dy * uz - dz * uy, dz * ux - dx * uz, dx * uy - dy * ux)
+          local c, s_ = math.cos(gl.yaw), math.sin(gl.yaw)
+          dx, dy, dz = dx * c + rx * s_, dy * c + ry * s_, dz * c + rz * s_
+          dx, dy, dz = norm3(dx + ux * gl.pitch, dy + uy * gl.pitch, dz + uz * gl.pitch)
+        end
+      end
+      if not hd then hd = { x = dx, y = dy, z = dz }
+      else
+        local k = 1 - math.exp(-5.0 * dt)
+        local nx, ny, nz = norm3(hd.x + (dx - hd.x) * k, hd.y + (dy - hd.y) * k, hd.z + (dz - hd.z) * k)
+        -- (straight behind: a lerp through zero would flip; turn by a side step)
+        if nx * dx + ny * dy + nz * dz < -0.9 then nx, ny, nz = norm3(hd.x + (dy * uz - dz * uy) * 0.3, hd.y + (dz * ux - dx * uz) * 0.3, hd.z + (dx * uy - dy * ux) * 0.3) end
+        hd.x, hd.y, hd.z = nx, ny, nz
+      end
+    else tw = 0 end
+  end
+  local kw = 1 - math.exp(-(tw > hd_w and 4.0 or 2.5) * dt)
+  hd_w = hd_w + (tw - hd_w) * kw
+  if hd_w < 0.01 and tw == 0 then hd_w = 0; hd = nil; return end
+  if hd then
+    pcall(anim.lookAt, anim, { "Head" }, vec3(hx + hd.x * dist, hy + hd.y * dist, hz + hd.z * dist), { limit = 65, weight = math.min(1, hd_w) })
+  end
+end
+-- where the head looks now (probes): → world point 2 m out, weight | nil
+function headLookNow()
+  if not hd then return nil end
+  local hx, hy, hz = headPoint()
+  if not hx then return nil end
+  return hx + hd.x * 2, hy + hd.y * 2, hz + hd.z * 2, hd_w
+end
+
 function lateUpdate(node, dt)
   if retired then return end
   if not bound(node) then return end
@@ -990,10 +1096,10 @@ function lateUpdate(node, dt)
     local r = last_rec or (c and c.get and memberId and c.get(memberId))
     local b = r and r.body and space.body(r.body)
     pose_anim(r, dt or 0)
-    -- a scenario's `look`: the head to this frame's point (asked now, never kept)
-    if look_fn and anim then
-      local ok, x, y, z, w = pcall(look_fn)
-      if ok and x then pcall(anim.lookAt, anim, { "Head" }, vec3(x, y, z), { limit = 60, weight = w or 1 }) end
+    -- a conversation's look (gy3), else a scenario's `look`: the head to this
+    -- frame's point (asked now, never kept), turned there smoothly
+    if (talk_fn or look_fn or hd_w > 0.01) and anim then
+      head_look(node, dt or 0, b)
     elseif not steer and not (r and type(r.pose) == "table") then
       head_to_player(node, dt or 0, b)
     end

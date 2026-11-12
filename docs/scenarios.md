@@ -72,7 +72,7 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 | `funds`, `rp`, `research = { techId… }` | The balance (career money rules: `game.mode = "scenario"`), research points, and unlocked tech (research.lua TECH ids). |
 | `safety` | `rescue`, `death` or `invincible`. |
 | `contracts = false`, `programme = false` | The Ops Board and the programme stand down until freeplay. |
-| `crew = { { name, role, title, control, where = { body, site, dist, offset }, post = ref, face = ref, pack = { {item}, {part, n}, {mat, kg} } } }` | The starters are renamed and given these roles, and more are hired free. The `control = true` member is the player, placed at the site. `post` sets a member down at a mark once the buildings exist: crew at their stations, facing `face`. `title`: what they are, in words, everywhere their name shows. |
+| `crew = { { name, role, title, control, playable, where = { body, site, dist, offset }, post = ref, face = ref, pack = { {item}, {part, n}, {mat, kg} } } }` | The starters are renamed and given these roles, and more are hired free. The `control = true` member is the player, placed at the site. `post` sets a member down at a mark once the buildings exist: crew at their stations, facing `face`; the player's post stands them on the FLOOR there (a ray down from inside the room), never 1 m over the terrain point under a raised slab. `title`: what they are, in words, everywhere their name shows. **Who you can play:** only the `control = true` member, unless the scenario says so: `playable = true` here, or on their cast entry (§5.6). Anyone else is no one the crew switcher offers (no [ ] cycling, no CONTROL chip, not on the picker, `crew.control` refuses). **Names:** a member a cast entry speaks for (`cast.x.crew = name`) wears the cast's full name on their record ("Dana Kowalczyk"), so the plate, the crew strip, the picker, the tag over them and the portrait agree; refs keep the start name (`crew:Kowalczyk`). |
 | `marks = { name = { at = ref, offset } }` | Named points that steps and beats refer to. A mark may sit on a crew spot or on a structure. (SC-5) `{ along = { refA, refB }, frac = 0.4, offset }`: `frac` of the way along the ground from A to B, the offset in the ROUTE's frame there (front toward B): route marks, a beacon line. |
 | `structures = { { bp = "<id>/x.bp.txt", name, at, offset, yaw, air = true, powered = true } }` | A SOLBP1 blueprint code, from the Build Kit's BLUEPRINTS tab or Shift+F12, built as a structure. `air = true`: every sealed room starts at 1 atm. `powered = true`: its grid's batteries start full; `powered = 0.71`: at that share. A later entry may stand `at = "struct:<an earlier one>"`. |
 | `crates = { { at, offset, parts = { ["wall.steel"] = 6 }, items = { repairkit = 1 }, name } }` | A "Supply drop" crate of crated parts that an Engineer builds from. |
@@ -107,10 +107,13 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 - Each goal shows a reading on the card and in the Ctrl+F10 overlay, for example "p 0.71 of 0.95".
 - **Hints.** `hint` shows on its own after 90 s without progress, `hint2` later. The player asks for one with **F1** or **?** (the HUD chip "HINT F1" too; F1 is the Build Kit's ROOMS overlay while the builder is open). Every press answers: the hint as a toast and on the objectives card (in a seat too), the second press `hint2`, and "no hint for this step" with the step's text when it has none. Write a hint for every step: where the thing is and which control does it.
 - A checkpoint's `stage` may carry `beats`, run at once over the restaged world (Graveyard puts Dana back in her bunk).
+- **Goals read the world, whatever the player did to get there** (gy3, Ty 2026-11-11: "told to go to the console while already using it"). `at` measures along the ground (a mark is a terrain point; a person is a capsule's centre a metre over a floor that may stand half a metre higher), with the height between them within `dy` (default 3 m). A step that means "be at the machine" should also accept using it: `{ kind = "any", goals = { { kind = "at", … }, { kind = "using", struct, part } } }`.
 
 | kind | fields |
 |---|---|
-| at | who, at, r |
+| at | who, at, r, dy = 3: within r along the ground, and dy up or down |
+| any | goals = { … }: met when one of them is (each keeps its own hold and memory) |
+| using | struct, part \| uid: the player has the piece's terminal (E) or its menu (right-click) open, or has since the step opened |
 | in_room | who, struct, room = any \| largest \| airlock \| n |
 | helmet | who, off |
 | rooms | struct, sealed |
@@ -207,7 +210,7 @@ A beat is a table with one key. Beats run in order from a queue. A line of dialo
 
 | beat | shape |
 |---|---|
-| say | `{ who, text, secs, wait = true, with, delay }`. `who` is a cast key, a crew name, or `ops`. `with` puts a listener beside the speaker, dimmed on the right of the plate. `delay` overrides the cast's (§5.7). |
+| say | `{ who, text, secs, wait = true, with, delay, look }`. `who` is a cast key, a crew name, or `ops`. `with` puts a listener beside the speaker, dimmed on the right of the plate, and is who the speaker looks at (§5.10). `look = ref` (or `false`) sends the speaker's eyes somewhere else for that line. `delay` overrides the cast's (§5.7). |
 | ops | `"text"` |
 | choice | `{ who, prompt, options = { { text, var = {…}, run = seq, step = id, beats = {…} } }, default, timeout }` |
 | run | `"sequence"`: runs a named sequence inline. |
@@ -298,7 +301,8 @@ events = {
 - The game's Ops strip and panels replace those through `listen("say" | "choice" | "cutscene" | "alarm" | "phase" | "setback", fn)` and read `scenario_run.state()`. See the API in work/scn_fwa/API.md.
 - A line carries `with` (the listener: name, tag, portrait), `radio` and `garbled` for the plate (scenario_stage.lua).
 - The plate follows the runner. The runner's line is the one shown: a new line replaces the one up, and a line the runner has finished closes.
-  - Typing runs on the wall clock, so a choice that pauses the world still types.
+  - Typing runs on the wall clock, so a choice that pauses the world still types. So does the BRIEFING's typewriter and the Ops strip's (gy3: the paused world behind the brief froze it at "K").
+- **Quiet in a run.** While a scenario runs (not its freeplay after), only its own lines reach the Ops strip: the game's progression, feat unlocks ("Logged. The Depot ships…"), milestones and ruin pointers are logged and kept silent.
   - Outside a cutscene a plain line leaves the mouse to the camera. Only a choice takes the pointer, and only a cutscene takes the camera.
 
 ### 5.5 Walking
@@ -325,6 +329,7 @@ Ty, 2026-11-10: "captured since every human should be random."
 - `expression = "tired"` is the face they wear for the picture.
 - The fallback is `scenarios/<id>/<key>.png`, baked by `tools/perf/portraitbooth.sh <engine> <id>` with the same rig. It is used for anyone who never spawns (a voice off the roster, the dead: give them a `look` seed and the booth borrows a body for the shot) and before the live picture is taken.
 - `portrait = "<id>/x.png"` is still a plain picture.
+- `playable = true` lets the player take this member (crew switcher, CONTROL chips, [ ]). The default is false: a cast member with `crew =` is a person in the story, not a body to steer (gy3, Ty: "I can control Dana as one of the crew members").
 
 ### 5.7 Radio
 
@@ -362,6 +367,19 @@ What Hollis Left (`scenarios/hollis/`) is the worked example.
   - A core reads only when it physically can, otherwise E refuses with `why`. `power`: its structure's grid has power. `air = true`: there is breathable air at it; `air = "sealed"`: a sealed room round it, whatever the room holds (on a thin-air world a sealed room is never breathable without an O2 source). `needs`: any goal (the block lifted off it).
   - Its state is the variable `core_<id>` = "read" | "sealed": a checkpoint keeps it, and branches and score rows read it. The `core_read` goal reads it.
   - The career Data Core (pulled at a ruin's terminal and read in the Research Lab) is unchanged.
+
+### 5.10 Who looks at whom (the talk gaze)
+
+Ty, 2026-11-11: "All NPCs when talking to me should look at me, and if they're speaking to someone else they should look at them." The runner does it for every line said in person; a scenario writes nothing for it.
+
+- **The speaker** turns their head and eyes to whoever the line is said to: `say.with` (a cast key or a crew name), else the player. A line to the player while they are more than 12 m away (along the ground), in a craft or on another world is said to nobody in particular. `say.look = ref | false` overrides it for one line.
+- **The listener** (a crew body named by `with`) looks back at the speaker.
+- **Bystanders** within 6 m of the speaker turn to them after a beat (0.3–0.9 s) and go back to what they were doing a few seconds later. Someone lying down does not.
+- **A choice** is a line to the player: the one who asks looks at them.
+- **Radio voices** (`radio = true`, a garbled link) and voices with no body (Ops, a log) look at no one.
+- **Natural, not robotic.** The head turns at about 5/s with its weight eased in and out (crew_body `talkSelf`); the speaker looks away now and then (every 3.5–8.5 s, half a second to a second and a half, down and to the side), a listener less often; the eyes keep their saccades and glances on the held look (face `talkGaze`). The look is held 1.4 s after the line, so nobody snaps away at the full stop.
+- It lies over a scenario's own `look` beat while a line is up; between lines the `look` beat rules again. A runtime portrait suspends it for its picture.
+- Every point is asked the frame it is drawn (the head's bone, the Astronaut's node), and only a direction is kept (docs/positions-and-frames.md).
 
 ## 6. Hooks (shipped scenarios only)
 

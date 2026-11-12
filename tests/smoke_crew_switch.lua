@@ -195,6 +195,25 @@ check(by[D] and by[D].you and by[D].label == "YOU", "you: YOU")
 check(by[B] and by[B].ok and by[B].label:find("^GO TO") or (by[B] and by[B].label:find("^SWITCH")), "the one left on Home: GO TO / SWITCH")
 check(by[A] == nil, "the dead are not offered")
 
+-- (gy3, Ty 2026-11-11: "I can control Dana as one of the crew members") a
+-- scenario's cast member the player does not play (`npc`) is refused by every
+-- switching verb and is on no list; clearing it gives them back
+C.patch(B, { npc = true })
+local okn, whyn = C.canSwitch(B)
+check(not okn and whyn == C.NOT_YOURS, "npc: canSwitch refuses (" .. tostring(whyn) .. ")")
+local okc, whyc = C.control(B)
+check(not okc and tostring(whyc):find(C.NOT_YOURS, 1, true), "npc: control refuses (" .. tostring(whyc) .. ")")
+check(not C.switchToMember(B), "npc: switchToMember refuses")
+local onPick = false
+for _, r in ipairs(C.switchTargets()) do if r.id == B then onPick = true end end
+check(not onPick, "npc: not on the picker")
+local onList = false
+for _, e in ipairs((C.switchList(1e9))) do if e.id == B then onList = true end end
+check(not onList, "npc: not on the [ ] list")
+check(C.playable(B) == false and C.playable(D) == true, "playable(): the npc no, you yes")
+C.patch(B, { npc = false })
+check(C.get(B).npc == nil and C.playable(B), "npc = false clears it")
+
 if #failures == 0 then
   print(string.format("CREW SWITCH SMOKE OK — %d checks passed", passed))
   os.exit(0)

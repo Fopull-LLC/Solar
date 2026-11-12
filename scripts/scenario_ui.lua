@@ -162,6 +162,9 @@ local poll_t = 0
 local shown = nil         -- what is described now: "curtain" | "brief" | "debrief" | "chip" | nil
 local chip_key = nil
 local brief_t, brief_all = 0, false
+local brief_wall = nil      -- (gy3) the wall clock at the last typed frame
+-- (probes) characters of the brief typed so far (9999: all of it)
+function briefTyped() return brief_all and 9999 or math.floor(brief_t * CPS) end
 local brief_nodes = {}    -- made text nodes of the brief's lines (the typewriter writes them)
 local brief_n = -1
 local paused_by_us = false
@@ -243,6 +246,14 @@ local function curtain_tree(s)
   }
 end
 
+-- (gy3) the brief's paragraphs as plain children: made through an `items`
+-- list their names never reached the nodes, find() came back empty and the
+-- typewriter wrote nowhere (the brief stayed at what the first make typed)
+local function lines_col(paras)
+  local c = { "col", key = "lines", w = "100%", h = "fit", pad = 0, gap = 8 }
+  for _, p in ipairs(paras) do c[#c + 1] = p end
+  return c
+end
 local function brief_tree(s)
   local lines = s.brief or {}
   local shownL = briefText(lines, brief_all and math.huge or math.floor(brief_t * CPS))
@@ -264,7 +275,7 @@ local function brief_tree(s)
       { "button", key = "ops", w = "100%", h = "fit", pad = 0, gap = 6, dir = "column", align = "start", focusable = false,
         onClicked = function() brief_all = true; seen_version = nil end,
         { "text", key = "who", style = "panel/label", w = "100%", h = "fit", text = "OPS  ›" },
-        { "col", key = "lines", w = "100%", h = "fit", pad = 0, gap = 8, items = paras, function(p) return p end } },
+        lines_col(paras) },
       { "box", key = "r2", style = "panel/rule", w = "100%", h = 1 },
       s.stepText and { "row", key = "first", w = "100%", h = "fit", pad = 0, gap = 10, align = "start",
         { "text", key = "l", style = "panel/label", w = 64, h = "fit", text = "FIRST" },
@@ -365,7 +376,7 @@ local function hook(r)
   if r.listen then
     pcall(r.listen, "ops", function(text, who)
       local s = ref("ops_strip")
-      if s and s.say then s.say(text, who, function() if r.lineDone then pcall(r.lineDone) end end) end
+      if s and s.say then s.say(text, who, function() if r.lineDone then pcall(r.lineDone) end end, { scenario = true }) end
     end)
     pcall(r.listen, "phase", function() seen_version = nil; poll_t = POLL end)
     -- the story (scenario_stage.lua): dialogue lines, choices, cutscenes
@@ -376,7 +387,7 @@ local function hook(r)
       if type(line) == "table" and (line.who == "ops" or line.who == nil) and not (stage() and stage().cutsceneOn and stage().cutsceneOn()) then
         local os_ = ref("ops_strip")
         if os_ and os_.say then
-          os_.say(line.text, line.name or "Ops", function() if r.lineDone then pcall(r.lineDone) end end)
+          os_.say(line.text, line.name or "Ops", function() if r.lineDone then pcall(r.lineDone) end end, { scenario = true })
           return
         end
       end
@@ -462,7 +473,7 @@ function update(node, dt)
     hold_world(false)
   end
   if w ~= shown then
-    if w == "brief" and shown ~= "brief" then brief_t, brief_all = 0, false end
+    if w == "brief" and shown ~= "brief" then brief_t, brief_all, brief_wall = 0, false, nil end
     if w == "debrief" or w == "brief" then sfx("card") end
     clear(node)
     seen_version = nil
@@ -474,8 +485,14 @@ function update(node, dt)
   end
   if w == "brief" then
     local total = briefLen(st.brief)
+    -- (gy3, Ty 2026-11-11: the brief's OPS text showed only "K") the world
+    -- is paused behind the brief, and a paused frame's dt is 0: the
+    -- typewriter runs on the wall clock, as the dialogue plate's does (FW-C)
+    local wc = app and app.wallClock and app.wallClock() or nil
+    local wdt = (wc and brief_wall) and math.max(0, math.min(0.1, wc - brief_wall)) or (dt or 0)
+    brief_wall = wc
     if not brief_all then
-      brief_t = brief_t + dt
+      brief_t = brief_t + wdt
       if brief_t * CPS >= total then brief_all = true; seen_version = nil end
     end
     local typing = (math.floor(brief_t * CPS) < total) and not brief_all
@@ -499,6 +516,8 @@ function update(node, dt)
         local a = briefText(st.brief, brief_n)
         local b = briefText(st.brief, n)
         for i = 1, #b do
+          -- (gy3) a node not found right after the make is looked for again
+          if a[i] ~= b[i] and not (brief_nodes[i] and brief_nodes[i].valid ~= false) and find then brief_nodes[i] = find("Scenario Brief " .. i) end
           if a[i] ~= b[i] and brief_nodes[i] and brief_nodes[i].valid ~= false then brief_nodes[i].text = b[i] ~= "" and b[i] or " " end
         end
         brief_n = n

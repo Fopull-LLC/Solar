@@ -68,6 +68,9 @@ function tick(api, t)
       T = 40 + (T - 40) * math.exp(-dt / 300)
     end
     api.setVar("brg", math.floor(T * 10 + 0.5) / 10)
+    -- (playtest 11-11) the bearing heard at the skid: plant_av's rattle on FW-2,
+    -- from a whisper at 61 °C to a grinding knock near seizing, while it turns
+    if api.stress then api.stress(S, FW2, "bearing", (not p.knocked and p.pumpOn ~= false) and math.max(0, math.min(1, (T - 50) / (SEIZE - 50))) or 0) end
     if api.var("knocked_seen") and not p.knocked then api.setVar("brg_fixed", true); api.setVar("brg", 38) end
     if p.knocked then api.setVar("knocked_seen", true) end
   end

@@ -284,7 +284,20 @@ function SP.run()
   local ph = SP.wait_phase({ "running", "briefing" }, 240)
   SP.check("staged", ph ~= nil, "staged in %.1f s from PLAY (staging %.0f ms): %s", W() - t0, sr.lastStage and sr.lastStage.ms or -1,
     table.concat((sr.lastStage or {}).records or { tostring((sr.lastStage or {}).error) }, "; "))
-  if ph == "briefing" then sr.go() end
+  if ph == "briefing" then
+    -- (gy3, Ty: the brief's OPS text stuck at "K") the world is paused behind
+    -- the brief: its typewriter runs on the wall clock, so it has typed on
+    local su = findScript("scenario_ui")
+    wait(1.6)
+    SP.shot("00_briefing_typing", true)
+    wait(2.5)
+    SP.shot("00_briefing", true)
+    local bt = su and su.briefTyped and su.briefTyped() or nil
+    local bn = find("Scenario Brief 1")
+    local shown = bn and bn.valid ~= false and tostring(bn.text or "") or ""
+    SP.check("brief_types_paused", bt == nil or (bt > 40 and #shown > 20), "the brief typed %s characters in 4 s of a paused world; on screen: '%s'", tostring(bt), shown:sub(1, 40))
+    sr.go()
+  end
   local gm = findScript("game_manager")
   wait_for(function() return gm and not gm.curtain end, 60, "the reveal")
   clear_weather()

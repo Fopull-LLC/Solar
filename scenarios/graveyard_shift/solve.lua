@@ -10,6 +10,15 @@
 --   (a picture), and in the alt branch you walk to her bunk to wake her. At
 --   the end: ten crew switches inside the base, none into a wall, none
 --   leaving a button focused (Space would switch again).
+--   gy3 (Ty 2026-11-11): you start ON the floor; Dana looks at you while she
+--   talks to you, and Priya and Dana at each other's lines; she walks to bed
+--   when she says she will (after the hand-over); she and Priya are no one
+--   the switcher offers and their records wear the cast's names; the console
+--   step ticks on USE (its terminal) from across the room, or standing at it
+--   for real (not on its mark); protection ticks on the toggle. Pictures:
+--   a1_gaze_side, a1_gaze_listeners. BENCH_STRS='("airlock", "1")': the
+--   way out through the airlock walked a step at a time, its doors logged
+--   (GS AIRLOCK lines, for the airlock owner; never a fail here).
 --   BENCH_STRS='("setback", "1")': as the book, plus a SETBACK at the act 3
 --   checkpoint (FW-C, docs/scenarios.md §4.3): a fail as PL-7's act opens,
 --   the card, the restage back to `loca` with the story's variables kept.
@@ -150,59 +159,233 @@ local function look_at(sr, nm, who, secs)
   end
   if nm then SP.shot(nm, true) end
 end
--- ten switches inside the base: the body left behind and the one taken are
--- never inside a wall, and no button is left focused after a switch
-local function switch_test(sr)
-  local C = findScript("crew")
-  local names = { "Anand", "Halloran", "Anand", "Halloran", "Kowalczyk", "Halloran", "Anand", "Halloran", "Anand", "Halloran" }
-  local bad, focus, n = 0, 0, 0
-  for i, nm in ipairs(names) do
-    local r, id = rec_of(nm)
-    local prev = C.activeId()
-    if r and id ~= prev then
-      local ok, why = C.control(id)
-      if not ok then P("GS SWITCH %d → %s refused: %s", i, nm, tostring(why)) else
-        wait_for(function() return C.activeId() == id end, 5, "switch " .. nm)
-        wait(0.6)
+-- (gy3) the player stood at a point of the station's own frame (x east, y up
+-- over its origin: the floor's top is 0.2, so a capsule centre is 1.23), held
+-- a few frames: a mark is a TERRAIN point and SP.stand put the capsule's
+-- centre 1 m over it, inside the slab where the floor stands higher
+local function stand_st(lx, ly, lz, frames_)
+  local a = find("Astronaut")
+  for _ = 1, frames_ or 20 do
+    local q = sl(lx, ly, lz)
+    if q and a then a.x, a.y, a.z = q.x, q.y, q.z; a.vx, a.vy, a.vz = 0, 0, 0 end
+    yield()
+  end
+end
+-- the Astronaut's capsule centre over the station's origin, now
+local function astro_h()
+  local ST = findScript("structures")
+  local r = srec()
+  local a = find("Astronaut")
+  if not (r and a and ST) then return nil end
+  local ux, uy, uz = ST.frame(r)
+  local b = space.body(r.b)
+  local p = a.worldPos or a
+  return (p.x - b.x - r.x) * ux + (p.y - b.y - r.y) * uy + (p.z - b.z - r.z) * uz
+end
+-- (gy3) where member `who`'s head looks, against where member `at`'s head is,
+-- sampled every frame for `secs` (all read in the same frame: drawn poses)
+-- → samples, on target (< 20 deg, weight > 0.6, the talk look's target is them), worst deg
+local function gaze_samples(sr, who, at, secs, t_skip)
+  local _, wid = rec_of(who)
+  local _, aid = rec_of(at)
+  local n, good, worst, eyes, aimed = 0, 0, 0, 0, 0
+  local t0 = W()
+  while W() - t0 < secs do
+    talk(sr, true)
+    if W() - t0 >= (t_skip or 0) then
+      local x, y, z, w, tg = sr.talkLook(wid)
+      local cb = body_of(who)
+      local hx, hy, hz = nil, nil, nil
+      if cb and cb.headPoint then hx, hy, hz = cb.headPoint() end
+      local px, py, pz = sr.talkHead(aid)
+      if x and hx and px then
+        local ax, ay, az = x - hx, y - hy, z - hz
+        local bx, by, bz = px - hx, py - hy, pz - hz
+        local la, lb = math.sqrt(ax * ax + ay * ay + az * az), math.sqrt(bx * bx + by * by + bz * bz)
+        local deg = math.deg(math.acos(math.max(-1, math.min(1, (ax * bx + ay * by + az * bz) / (la * lb)))))
         n = n + 1
-        local pr = C.get(prev)
-        local wx, wy, wz = nil, nil, nil
-        local b = pr and pr.body and space.body(pr.body)
-        if b then wx, wy, wz = b.x + pr.x, b.y + pr.y, b.z + pr.z end
-        local _, _, _, freeL = C.freeSpot(wx or 0, wy or 0, wz or 0)
-        local a = find("Astronaut")
-        local _, _, _, freeA = C.freeSpot(a.x, a.y, a.z)
-        local f = ui and ui.focused and ui.focused()
-        if not (freeL and freeA) then
-          bad = bad + 1
-          -- what is there: the struct-frame point and what the spheres touch
-          local ST = findScript("structures")
-          local r = srec()
-          local ux, uy, uz, fx, fy, fz, rx, ry, rz = ST.frame(r)
-          local sb = space.body(r.b)
-          for _, q in ipairs({ { "left", wx, wy, wz }, { "taken", a.x, a.y, a.z } }) do
-            if q[2] then
-              local dx, dy, dz = q[2] - (sb.x + r.x), q[3] - (sb.y + r.y), q[4] - (sb.z + r.z)
-              local names = {}
-              for _, hh in ipairs({ -0.33, 0.35 }) do
-                local okh, hits = pcall(overlapSphere, vec3(q[2] + ux * hh, q[3] + uy * hh, q[4] + uz * hh), 0.28)
-                for _, ht in ipairs(okh and hits or {}) do names[#names + 1] = tostring(ht.node and ht.node.name or "terrain") end
-              end
-              P("GS SWITCH DIAG %s at station (%.2f, %.2f, %.2f): %s", q[1], dx * rx + dy * ry + dz * rz, dx * ux + dy * uy + dz * uz,
-                dx * fx + dy * fy + dz * fz, table.concat(names, ", "))
-            end
-          end
-        end
-        if f then focus = focus + 1 end
-        P("GS SWITCH %d → %s: left %s free %s, taken free %s, focus %s", i, nm, tostring(pr and pr.name), tostring(freeL), tostring(freeA), tostring(f and f.name))
+        if deg < 20 and (w or 0) > 0.6 and tg == aid then good = good + 1 end
+        if (w or 0) > 0.5 and tg == aid then aimed = aimed + 1 end
+        if deg > worst then worst = deg end
+        local fc = nil
+        for _, f in ipairs(findScripts("face")) do if f.memberId == wid then fc = f end end
+        if fc and fc.talkGaze then eyes = eyes + 1 end
       end
     end
+    yield()
   end
-  SP.check("switch_ten", n >= 9 and bad == 0 and focus == 0, "%d switches in the base: %d into geometry, %d left a focus", n, bad, focus)
-  -- (Dana back to bed: she got up when you took her)
-  sr.runBeat({ pose = { who = "Kowalczyk", kind = "lie", struct = "Kerne Station", spot = { -5.55, 0.68, 8.45 }, toward = { -6.6, 0.68, 8.45 }, stand = "mark:bunk" } })
+  return n, good, worst, eyes, aimed
+end
+-- a picture from the side of two people talking, re-placed every frame
+local function side_view(sr, nm, a, b)
+  GS.camw = function()
+    local p, q = sr.posOf(a), sr.posOf(b)
+    if not (p and q and p.body == q.body) then return nil end
+    local bd = space.body(p.body)
+    local l = math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z)
+    local ux, uy, uz = p.x / l, p.y / l, p.z / l
+    local dx, dy, dz = q.x - p.x, q.y - p.y, q.z - p.z
+    local du = dx * ux + dy * uy + dz * uz
+    dx, dy, dz = dx - ux * du, dy - uy * du, dz - uz * du
+    local m = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if m < 1e-3 then return nil end
+    dx, dy, dz = dx / m, dy / m, dz / m
+    local rx, ry, rz = dy * uz - dz * uy, dz * ux - dx * uz, dx * uy - dy * ux
+    local mx, my, mz = bd.x + (p.x + q.x) / 2, bd.y + (p.y + q.y) / 2, bd.z + (p.z + q.z) / 2
+    return { x = mx + rx * 2.1 + ux * 0.65, y = my + ry * 2.1 + uy * 0.65, z = mz + rz * 2.1 + uz * 0.65 },
+           { x = mx + ux * 0.55, y = my + uy * 0.55, z = mz + uz * 0.55 }
+  end
+  local t0 = W()
+  while W() - t0 < 1.0 do talk(sr, true); yield() end
+  SP.shot(nm, true)
+  GS.camw = nil
+  local pc = findScript("planet_camera")
+  if pc and pc.setFreecam then pc.setFreecam(false) end
+end
+-- (gy3, Ty: "I can control Dana as one of the crew members") the cast
+-- members you don't play: refused by every switching verb, on no list
+local function npc_test(sr, tg)
+  local C = findScript("crew")
+  local r, id = rec_of("Kowalczyk")
+  local rp, idp = rec_of("Anand")
+  local me, idm = rec_of("Halloran")
+  local ok1, why1 = C.control(id)
+  local ok2 = C.control(idp)
+  local ok3 = C.canSwitch(id)
+  local ok4 = C.switchToMember(id)
+  local inList, inPick = false, false
+  for _, e in ipairs(C.switchList() or {}) do if e.id == id or e.id == idp then inList = true end end
+  for _, m in ipairs(C.switchTargets() or {}) do if m.id == id or m.id == idp then inPick = true end end
+  wait(0.6)
+  SP.check("dana_not_playable", not ok1 and not ok2 and not ok3 and not ok4 and not inList and not inPick and C.activeId() == idm,
+    "control %s (%s), Priya %s, canSwitch %s, switchToMember %s, on the [ ] list %s, on the picker %s, still Halloran %s",
+    tostring(ok1), tostring(why1), tostring(ok2), tostring(ok3), tostring(ok4), tostring(inList), tostring(inPick), tostring(C.activeId() == idm))
+  SP.check("names_agree", r and r.name == "Dana Kowalczyk" and rp and rp.name == "Dr Priya Anand" and me and me.name == "Halloran"
+    and tg ~= nil and tg.name == "Dana Kowalczyk" and tostring(tg.rec) == "Dana Kowalczyk",
+    "records %s / %s / %s; the tag over her %s (record %s)", tostring(r and r.name), tostring(rp and rp.name), tostring(me and me.name),
+    tostring(tg and tg.name), tostring(tg and tg.rec))
+end
+-- (gy3, the airlock owner's repro: Ty "the first door opened and the second
+-- one wouldn't") the way out walked a step at a time: to the inner door,
+-- into the chamber, to the outer door, out; at each door the walker waits
+-- for it (up to 25 s) as a person would, and every 0.5 s the chamber is
+-- logged: which door it allows, its target, the pressures, each door's open
+-- fraction, the gate's answer. Helmet on. Never a check: GS AIRLOCK lines.
+local function airlock_walk(sr, sid)
+  local RA, KL, ST = findScript("room_air"), findScript("kit_live"), findScript("structures")
+  local S_ = RA and RA.state and RA.state(sid)
+  if not (S_ and S_.cham and KL and ST) then P("GS AIRLOCK no chamber state") return end
+  local C, rid = nil, nil
+  for r_, c in pairs(S_.cham) do C, rid = c, r_ end
+  if not C then P("GS AIRLOCK no airlock") return end
+  local r = srec()
+  local ux, uy, uz, fx, fy, fz, rx, ry, rz = ST.frame(r)
+  local function local_of(n)
+    if not (n and n.valid ~= false) then return nil end
+    local b = space.body(r.b)
+    local p = n.worldPos or n
+    local dx, dy, dz = p.x - b.x - r.x, p.y - b.y - r.y, p.z - b.z - r.z
+    return dx * rx + dy * ry + dz * rz, dx * ux + dy * uy + dz * uz, dx * fx + dy * fy + dz * fz
+  end
+  local doors = {}
+  for _, u in ipairs(C.doors or {}) do
+    local e = (KL.entries() or {})[sid .. ":" .. u]
+    if not e then for _, ee in pairs(KL.entries() or {}) do if ee.sid == sid and ee.uid == u then e = ee end end end
+    local x, _, z = local_of(e and e.node)
+    doors[#doors + 1] = { uid = u, x = x, z = z }
+    P("GS AIRLOCK door %s at station (%.2f, %.2f) label %s", tostring(u), x or -99, z or -99, tostring(e and e.def and e.def.label))
+  end
+  local function dump(tag)
+    local s2 = RA.state(sid)
+    local c = s2 and s2.cham[rid] or C
+    local A = s2 and s2.air and s2.air[rid]
+    local rr = s2 and s2.R and s2.R.byId and s2.R.byId[rid]
+    local pc = (A and rr and rr.m3 and rr.m3 > 0) and ((A.N + A.x + A.c) / rr.m3) or -1
+    local parts = {}
+    for _, d in ipairs(doors) do parts[#parts + 1] = string.format("%s open %.2f", tostring(d.uid), KL.doorOpen(sid, d.uid) or -1) end
+    local csid, crid = RA.crewRoom()
+    P("GS AIRLOCK %s: crew room %s/%s (chamber %s) allow %s target %s entered %s cyc %s dir %s pc %.3f atm · %s · said %s · suit %s",
+      tag, tostring(csid), tostring(crid), tostring(rid), tostring(c.allow), tostring(c.target), tostring(c.entered), tostring(c.cyc),
+      tostring(c.dir), pc, table.concat(parts, ", "), tostring(RA.lastCycle), tostring(RA.lastSuitRefusal and RA.lastSuitRefusal.uid))
+  end
+  if #doors < 2 or not doors[1].x then dump("no doors placed") return end
+  -- inner = the door nearer the control room's middle (-5, 2)
+  table.sort(doors, function(p_, q_) return ((p_.x + 5) ^ 2 + (p_.z - 2) ^ 2) < ((q_.x + 5) ^ 2 + (q_.z - 2) ^ 2) end)
+  local inn, out = doors[1], doors[#doors]
+  local cx, cz = (inn.x + out.x) / 2, (inn.z + out.z) / 2
+  local ix, iz = inn.x + (inn.x - cx) * 0.9, inn.z + (inn.z - cz) * 0.9       -- before the inner door, inside
+  local ox, oz = out.x + (out.x - cx) * 0.9, out.z + (out.z - cz) * 0.9       -- past the outer door, outside
+  local path = { { ix, iz, nil }, { inn.x, inn.z, inn.uid }, { cx, cz, nil }, { out.x, out.z, out.uid }, { ox, oz, nil } }
+  local px, pz = ix, iz
+  stand_st(px, 1.23, pz, 10)
+  local t_log = 0
+  for k, wp in ipairs(path) do
+    local tx, tz, du = wp[1], wp[2], wp[3]
+    local tw0 = W()
+    while true do
+      local dx, dz = tx - px, tz - pz
+      local d = math.sqrt(dx * dx + dz * dz)
+      if d < 0.05 then break end
+      -- before a door: wait for it to be open
+      local wait_door = du and d < 0.7 and (KL.doorOpen(sid, du) or 0) < 0.8
+      if wait_door then
+        if W() - tw0 > 25 then dump(string.format("GAVE UP at door %s after 25 s", tostring(du))) return false end
+      else
+        local st = math.min(d, 0.04)
+        px, pz = px + dx / d * st, pz + dz / d * st
+      end
+      stand_st(px, 1.23, pz, 1)
+      if W() - t_log > 0.5 then t_log = W(); dump(string.format("leg %d (%.2f, %.2f)%s", k, px, pz, wait_door and " WAITING" or "")) end
+    end
+    dump(string.format("reached leg %d in %.1f s", k, W() - tw0))
+  end
+  return true
 end
 local function step(sr, id, tmo) local ok = until_(sr, function() return done(id) end, tmo or 60, id); SP.check("step_" .. id, ok, "%s latched", id); return ok end
+
+-- (graveyard2) Dana walks to the bunk room, through its door, and lies down
+-- (gy3: after the hand-over, when she says she is going)
+function dana_bed(sr)
+  do
+    space.warp(1)
+    local cb = body_of("Kowalczyk")
+    local w0 = cb and cb.walkStats and { plans = cb.walkStats.plans, paths = cb.walkStats.paths } or { plans = 0, paths = 0 }
+    local mind, t0b = 99, W()
+    local laid = until_(sr, function()
+      talk(sr)
+      local d = apart(sr, "crew:Kowalczyk", "mark:bunkdoor")
+      if d and d < mind then mind = d end
+      local r = rec_of("Kowalczyk")
+      return r and type(r.pose) == "table" and r.pose.kind == "lie"
+    end, 60, "Dana lies down")
+    cb = body_of("Kowalczyk")
+    local ws = cb and cb.walkStats or {}
+    local db = apart(sr, "crew:Kowalczyk", "mark:bunk") or -1
+    P("GS WALK Dana: ticks %s metres %.1f game %.1f s waits %s stops %s plans %s straight %s",
+      tostring(ws.ticks), ws.metres or -1, ws.game or -1, tostring(ws.waits), tostring(ws.stops), tostring(ws.plans), tostring(ws.straight))
+    SP.check("dana_to_bed", laid and mind < 0.9 and db < 0.8 and (ws.paths or 0) + (ws.straight or 0) > (w0.paths or 0),
+      "Dana in her bunk in %.0f s: through the door (%.2f m from it at the nearest), %.2f m from her bunk side, %d paths planned (%d cells asked)",
+      W() - t0b, mind, db, (ws.paths or 0) - (w0.paths or 0), ws.evals or -1)
+    wait(1.5)
+    view("a1_dana_resting", { -3.0, 1.55, 6.3 }, { -5.6, 0.75, 8.4 }, false)
+    -- (fix) on the lower mattress, not the floor: the pose's surface in the
+    -- station's frame is the mattress top (0.68 over the frame's origin), and
+    -- a low picture from the bunk's side
+    do
+      local r = rec_of("Kowalczyk")
+      local ST = findScript("structures")
+      local s = srec()
+      local h = -9
+      if r and type(r.pose) == "table" and s and ST then
+        local ux, uy, uz = ST.frame(s)
+        h = (r.pose.x - s.x) * ux + (r.pose.y - s.y) * uy + (r.pose.z - s.z) * uz
+      end
+      SP.check("dana_on_mattress", math.abs(h - 0.68) < 0.03, "her pose's surface %.2f m over the station's origin (the lower mattress's top 0.68; the slab's 0.2)", h)
+      view("a1_dana_on_bunk", { -4.25, 0.95, 7.5 }, { -5.7, 0.8, 8.45 }, false)
+    end
+    view("a1_control_room_wide", { -8.4, 1.9, 4.3 }, { -2.0, 0.9, 0.0 }, false)
+  end
+end
 
 function SOLVE(SP)
   local sr = SP.run_()
@@ -235,6 +418,11 @@ function SOLVE(SP)
       tostring(sr.var("peak_k")), tostring(sr.var("dose_msv")), sr.var("kwh") or 0, tostring(sr.var("brg")))
   end
   line("staged")
+  -- (gy3, Ty: "graveyard shift spawned me in the ground") on the floor, not in the slab
+  do
+    local h = astro_h() or -9
+    SP.check("spawn_on_floor", h - 0.95 >= 0.17 and h - 0.95 <= 0.40, "the capsule's centre %.2f m over the station's origin: feet at %.2f (the floor's top 0.20; the suit capsule stands 0.95 m)", h, h - 0.95)
+  end
   -- portraits: each named crew member's face, from a metre in front, toward the console
   local function face(nm, who)
     local p = sr.posOf(who)
@@ -286,17 +474,80 @@ function SOLVE(SP)
   for _ = 1, 8 do if tg then break end; look_at(sr, nil, "crew:Kowalczyk", 0.25); tg = hud and hud.tagNow end
   P("GS TAG ray met %s", tostring(hud and hud.tagRay))
   look_at(sr, "a1_role_tag", "crew:Kowalczyk", 0.3)
-  SP.check("role_tag", tg ~= nil and tostring(tg.rec) == "Kowalczyk" and tg.title ~= nil, "looking at Dana: %s · %s", tostring(tg and tg.name), tostring(tg and tg.title))
+  SP.check("role_tag", tg ~= nil and tostring(tg.rec) == "Dana Kowalczyk" and tg.title ~= nil, "looking at Dana: %s · %s", tostring(tg and tg.name), tostring(tg and tg.title))
   over_shoulder(sr, "a1_dana_face_to_face", "crew:Kowalczyk")
   SP.shot("a1_handover_dialogue", true)
+  -- (gy3) Dana's head and eyes on you while she talks to you
+  do
+    local st = sr.state()
+    local n, good, worst, eyes = gaze_samples(sr, "Kowalczyk", "Halloran", 2.5, 0.0)
+    SP.check("dana_gaze_at_you", n > 20 and good >= 0.6 * n and eyes >= 0.9 * n,
+      "on '%s…' (with %s): her head on yours %d of %d frames (worst %.0f deg, the looks away), her eyes' look set %d",
+      tostring(st.line and st.line.text or "?"):sub(1, 30), tostring(st.line and st.line.with and st.line.with.who), good, n, worst, eyes)
+    side_view(sr, "a1_gaze_side", "crew:Kowalczyk", "crew:Halloran")
+  end
+  -- (gy3) Priya's line to you: she looks at you, Dana turns to her
+  do
+    until_(sr, function() local st = sr.state(); return st.line and st.line.who == "priya" end, 60, "Priya speaks")
+    -- (Dana is a bystander here: her HEAD turns to Priya, her body stays on
+    -- you, so Priya behind her is reached as far as a neck goes: the check
+    -- is that her look is Priya's; the angle is reported)
+    local n2, g2, w2, _, a2 = gaze_samples(sr, "Kowalczyk", "Anand", 1.6, 1.0)
+    local n1, g1, w1 = gaze_samples(sr, "Anand", "Halloran", 1.2, 0.3)
+    SP.check("priya_gaze_and_listener", n1 > 15 and g1 >= 0.6 * n1 and n2 > 10 and a2 >= 0.8 * n2,
+      "Priya's head on yours %d of %d (worst %.0f deg); Dana's look on Priya %d of %d, within 20 deg %d (worst %.0f deg)", g1, n1, w1, a2, n2, g2, w2)
+    side_view(sr, "a1_gaze_listeners", "crew:Anand", "crew:Kowalczyk")
+  end
   step(sr, "handover", 120)
+  -- (gy3, Ty: "she doesn't go to the bedroom to sleep when she says she's gonna sleep")
+  dana_bed(sr)
+  npc_test(sr, tg)
+  local _, cuid = sr.pieceOf({ struct = S, part = "reactorConsole" })
   if not alt then
-    SP.stand("mark:logdesk", 30)
+    stand_st(-6.6, 1.23, 2.6, 30)
     until_(sr, function() return sr.var("read_log") end, 20, "the log")
     wait(1.0); SP.shot("a1_shift_log", true)
     until_(sr, function() return not sr.state().line end, 60, "log read")
+    -- (gy3, Ty: "told to go to the reactor console while already using it")
+    -- from the log desk: not yet; then its menu (a right-click) from there,
+    -- 5 m off, ticks it; and its terminal (E) from 1.9 m off its mark, past
+    -- the step's r 1.8 but within the terminal's reach, reads as in use
+    wait(1.0)
+    local before = done("console")
+    local CM, ST2 = findScript("context_menu"), findScript("structures")
+    local cn = ST2.nodeOf and ST2.nodeOf(sid, cuid)
+    local okM = cn and CM and CM.openFor and CM.openFor({ kind = "prop", node = cn, label = "Reactor Console" }, CM.actorNow and CM.actorNow() or nil)
+    local t0c = W()
+    local ok = until_(sr, function() return done("console") end, 5, "console on its menu")
+    SP.check("console_on_use", not before and okM and ok, "not by distance from the desk (%s); its menu open from there (%s) latched it in %.1f s",
+      tostring(not before), tostring(okM), W() - t0c)
+    if CM and CM.close then CM.close() end
+    local T = findScript("terminal")
+    stand_st(-5.2, 1.23, 1.2, 20)
+    local okT = T and T.openAt and T.openAt(sid, cuid, "REACTOR")
+    wait(0.5)
+    local u, how = sr.worldAdapter.using({ struct = S, part = "reactorConsole" })
+    local m2, rd2 = findScript("scenario").evalGoal({ kind = "at", who = "crew:Halloran", at = "mark:console", r = 1.8 }, sr.worldAdapter, {}, { now = 0 })
+    SP.check("console_terminal_use", okT and u == true and not m2, "its terminal open (%s) reads as in use (%s: %s) from %s off its mark (the at goal alone: %s)",
+      tostring(okT), tostring(u), tostring(how), tostring(rd2), tostring(m2))
+    -- (gy3) protection: the REACTOR page's toggle, as its row does it; the
+    -- story's reading of it (prot_ok, Priya's line) follows at once
+    local p0 = sr.var("prot_ok")
+    local t0p = W()
+    RP.setProtection(key, false, "hand"); wait(0.4)
+    RP.setProtection(key, true, "hand")
+    local okp = until_(sr, function() return sr.var("prot_ok") == true end, 3, "protection read")
+    local evp = until_(sr, function() return (save.get("scn.ev") or {}).prot_seen ~= nil end, 3, "protection noticed")
+    SP.check("protection_on_toggle", p0 ~= true and okp and evp, "off then ARMED on the toggle: prot_ok %s in %.1f s, its event %s",
+      tostring(sr.var("prot_ok")), W() - t0p, tostring(evp))
+    if T and T.close then T.close() end
+    stand_st(-3.05, 1.23, 0.0, 20)
+  else
+    -- standing at the console as a player does (0.75 m off its middle), not on its mark
+    stand_st(-3.05, 1.23, 0.0, 20)
+    local ok = until_(sr, function() return done("console") end, 5, "console by standing")
+    SP.check("console_at_real_spot", ok, "standing in front of it (%.2f m along the ground from its mark) latched it", apart(sr, "crew:Halloran", "mark:console") or -1)
   end
-  SP.stand("mark:console", 30)
   step(sr, "console", 20)
   -- (graveyard2, S7) the HINT key: F1 shows the step's hint as a toast
   do
@@ -314,7 +565,6 @@ function SOLVE(SP)
     local ok2, why2 = sr.hint()
     SP.check("hint_again", ok2 == true, "a second press answers too (%s)", tostring(why2))
   end
-  if not alt then RP.setProtection(key, true) end
   space.warp(5)
   RP.setPoint(key, 0.3)
   view("a1_console_close", { -3.25, 1.75, 0.0 }, { -2.3, 1.15, 0.0 }, false)
@@ -325,46 +575,6 @@ function SOLVE(SP)
   RP.setPoint(key, 0.6)
   step(sr, "p60", 240)
   line("60 %")
-  -- (graveyard2) Dana walks to the bunk room, through its door, and lies down
-  do
-    space.warp(1)
-    local cb = body_of("Kowalczyk")
-    local w0 = cb and cb.walkStats and { plans = cb.walkStats.plans, paths = cb.walkStats.paths } or { plans = 0, paths = 0 }
-    local mind, t0b = 99, W()
-    local laid = until_(sr, function()
-      local d = apart(sr, "crew:Kowalczyk", "mark:bunkdoor")
-      if d and d < mind then mind = d end
-      local r = rec_of("Kowalczyk")
-      return r and type(r.pose) == "table" and r.pose.kind == "lie"
-    end, 60, "Dana lies down")
-    cb = body_of("Kowalczyk")
-    local ws = cb and cb.walkStats or {}
-    local db = apart(sr, "crew:Kowalczyk", "mark:bunk") or -1
-    P("GS WALK Dana: ticks %s metres %.1f game %.1f s waits %s stops %s plans %s straight %s",
-      tostring(ws.ticks), ws.metres or -1, ws.game or -1, tostring(ws.waits), tostring(ws.stops), tostring(ws.plans), tostring(ws.straight))
-    SP.check("dana_to_bed", laid and mind < 0.9 and db < 0.8 and (ws.paths or 0) > (w0.paths or 0),
-      "Dana in her bunk in %.0f s: through the door (%.2f m from it at the nearest), %.2f m from her bunk side, %d paths planned (%d cells asked)",
-      W() - t0b, mind, db, (ws.paths or 0) - (w0.paths or 0), ws.evals or -1)
-    wait(1.5)
-    view("a1_dana_resting", { -3.0, 1.55, 6.3 }, { -5.6, 0.75, 8.4 }, false)
-    -- (fix) on the lower mattress, not the floor: the pose's surface in the
-    -- station's frame is the mattress top (0.68 over the frame's origin), and
-    -- a low picture from the bunk's side
-    do
-      local r = rec_of("Kowalczyk")
-      local ST = findScript("structures")
-      local s = srec()
-      local h = -9
-      if r and type(r.pose) == "table" and s and ST then
-        local ux, uy, uz = ST.frame(s)
-        h = (r.pose.x - s.x) * ux + (r.pose.y - s.y) * uy + (r.pose.z - s.z) * uz
-      end
-      SP.check("dana_on_mattress", math.abs(h - 0.68) < 0.03, "her pose's surface %.2f m over the station's origin (the lower mattress's top 0.68; the slab's 0.2)", h)
-      view("a1_dana_on_bunk", { -4.25, 0.95, 7.5 }, { -5.7, 0.8, 8.45 }, false)
-    end
-    view("a1_control_room_wide", { -8.4, 1.9, 4.3 }, { -2.0, 0.9, 0.0 }, false)
-    if tostring(params.switch or "1") == "1" then switch_test(sr) end
-  end
   -- (holding the shift at 60 %: ten game minutes at 10x, as a player waits
   -- for the night; the hum comes in it: its question on screen for the picture)
   space.warp(10)
@@ -410,6 +620,10 @@ function SOLVE(SP)
   space.warp(1)
   local su = findScript("suit")
   if su and su.setHelmet then pcall(su.setHelmet, true) end
+  if tostring(params.airlock or "") == "1" then
+    local okA = airlock_walk(sr, sid)
+    P("GS AIRLOCK walked out: %s", tostring(okA))
+  end
   SP.stand("mark:lockout", 40)
   step(sr, "suit", 30)
   wait(1.0); SP.shot("a2_outside_dark", true)
@@ -427,7 +641,7 @@ function SOLVE(SP)
   step(sr, "swap", 30)
   RP.setPump(sid, 147, true)
   step(sr, "restore", 30)
-  SP.stand("mark:console", 30)
+  stand_st(-3.05, 1.23, 0.0, 30)
   if su and su.setHelmet then pcall(su.setHelmet, false) end
   RP.setPoint(key, 0.6)
   space.warp(4)
@@ -461,7 +675,7 @@ function SOLVE(SP)
     key = RP.keyOf(e.sid, e.uid)
     local o = e.o or {}
     SP.check("setback_plant", (o.P or 0) > 0.5, "the plant restaged at %.0f %% (turbine %s)", (o.P or 0) * 100, tostring(e.turbOn))
-    SP.stand("mark:console", 30)
+    stand_st(-3.05, 1.23, 0.0, 30)
     line("after the setback")
   end
   -- ── ACT 3 ──
@@ -485,7 +699,7 @@ function SOLVE(SP)
     local woke = until_(sr, function() return sr.var("woke") == true end, 40, "Dana woken")
     local gone = until_(sr, function() local d = apart(sr, "crew:Kowalczyk", "mark:danaboard"); return d and d < 1.0 end, 40, "Dana at the board")
     SP.check("wake_dana", up and woke and gone, "woken by her bunk (sat up %s, woke %s), at the board %s", tostring(up), tostring(woke), tostring(gone))
-    SP.stand("mark:console", 30)
+    stand_st(-3.05, 1.23, 0.0, 30)
   end
   view("a3_hall_alarm", { 11.8, 3.6, -6.2 }, { 4.0, 1.2, 0.5 }, true)
   if not alt then
@@ -504,7 +718,7 @@ function SOLVE(SP)
   SP.shot("a3_weld_at_pl7", true)
   RP.breakPipe(sid, 109, 0)
   line("welded")
-  SP.stand("mark:console", 30)
+  stand_st(-3.05, 1.23, 0.0, 30)
   space.warp(10)
   step(sr, "stabilise", 300)
   space.warp(1)

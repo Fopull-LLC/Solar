@@ -645,13 +645,28 @@ pickRoom = pick_room
 KINDS = {}
 local function kind(name, def) KINDS[name] = def end
 
+-- (gy3, Ty 2026-11-11: "told to go to the reactor console while already
+-- using it") the distance is ALONG THE GROUND: a mark is a terrain point and
+-- a person is a capsule's centre a metre over a floor that may stand half a
+-- metre over that terrain, so a straight 3-D distance put a player at the
+-- console 1.62 m from its mark (r 1.6) and the step never ticked. The height
+-- between them only has to be within `dy` (default 3 m, a storey).
+function groundApart(a, b)
+  local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
+  local l = len(b.x, b.y, b.z)
+  if l < 1e-6 then return len(dx, dy, dz), 0 end
+  local du = (dx * b.x + dy * b.y + dz * b.z) / l
+  return math.sqrt(math.max(0, dx * dx + dy * dy + dz * dz - du * du)), du
+end
 kind("at", { req = { "who", "at" }, eval = function(g, W)
   local a, b = W.pos(g.who), W.pos(g.at)
   if not a then return false, "no " .. tostring(g.who) end
   if not b then return false, "no " .. tostring(g.at) end
   if a.body ~= b.body then return false, string.format("on %s, not %s", tostring(a.body), tostring(b.body)) end
-  local d = len(a.x - b.x, a.y - b.y, a.z - b.z)
+  local d, du = groundApart(a, b)
   local r = g.r or 20
+  local dyMax = g.dy or math.max(3, r)
+  if d <= r and math.abs(du) > dyMax then return false, string.format("%s %s", fmt_m(math.abs(du)), du > 0 and "above" or "below") end
   return d <= r, d <= r and string.format("there (%s)", fmt_m(d)) or string.format("%s to go", fmt_m(d - r))
 end })
 kind("in_room", { req = { "who", "struct" }, eval = function(g, W)
@@ -874,6 +889,30 @@ end })
 kind("hook", { req = { "fn" }, eval = function(g, W)
   if not W.hookGoal then return false, "no hooks" end
   return W.hookGoal(g.fn, g)
+end })
+-- (gy3) using: the player has that piece's terminal or its menu open now, or
+-- has used it since the step opened (a press, a page: anything the console
+-- did for them): { struct, part (id prefix) | uid }. "Take the console"
+-- ticks whether you walked up to it, pressed E at it or right-clicked it.
+kind("using", { req = { "struct" }, eval = function(g, W, mem, ctx)
+  local u, how = nil, nil
+  if W.using then u, how = W.using(g, ctx) end
+  if u then mem.used = how or "in use" end
+  if mem.used then return true, u and (how or "in use") or ("used · " .. tostring(mem.used)) end
+  return false, how or "not yet"
+end })
+-- (gy3) any: met when one of its goals is (`goals = { … }`): "walk up to the
+-- console OR use it". Each sub-goal keeps its own memory (holds, events).
+kind("any", { req = { "goals" }, eval = function(g, W, mem, ctx)
+  local best = nil
+  mem.sub = mem.sub or {}
+  for i, sg in ipairs(g.goals or {}) do
+    mem.sub[i] = mem.sub[i] or {}
+    local met, reading = evalGoal(sg, W, mem.sub[i], ctx)
+    if met then return true, reading end
+    best = best or reading
+  end
+  return false, best or "not yet"
 end })
 
 -- ── FW-C: reads a mod can write without hooks (PLAN §2 F6, F7) ──────────────
@@ -1228,6 +1267,42 @@ function portraitOf(sc, key, c)
   return c.portrait
 end
 
+-- (gy3) The cast entry that IS start crew member `name` (cast.crew = name):
+-- → key, entry | nil. Several entries may voice one person (thirty_km's Kit
+-- in person, on the suit radio, over the rover's link): the one in person
+-- (no radio, no link) wins, then the first by key, so it is always the same.
+function castOfCrew(sc, name)
+  local bk, bc, bscore = nil, nil, nil
+  for k, c in pairs((sc and sc.cast) or {}) do
+    if type(c) == "table" and c.crew == name then
+      local score = ((c.radio or c.link) and 1 or 0)
+      if not bk or score < bscore or (score == bscore and tostring(k) < tostring(bk)) then bk, bc, bscore = k, c, score end
+    end
+  end
+  return bk, bc
+end
+-- (gy3, Ty 2026-11-11: "I can control Dana as one of the crew members")
+-- May the player take start crew member `c`? The one with control = true
+-- always; anyone else only when the scenario says so: their start.crew
+-- `playable`, else their cast entry's `playable` (default false).
+function playableOf(sc, c)
+  if type(c) ~= "table" then return false end
+  if c.control then return true end
+  if c.playable ~= nil then return c.playable == true end
+  local _, cc = castOfCrew(sc, c.name)
+  if cc and cc.playable ~= nil then return cc.playable == true end
+  return false
+end
+-- (gy3, Ty: "Dana's name doesn't match the crew member she counts as") the
+-- name the crew record wears: the cast's full name ("Dana Kowalczyk") when a
+-- cast entry is this member, so the plate, the crew strip, the switcher, the
+-- tag over them and the portrait's name row all say the same.
+function crewDisplayName(sc, name)
+  local _, cc = castOfCrew(sc, name)
+  if cc and type(cc.name) == "string" and cc.name ~= "" and #cc.name <= 32 then return cc.name end
+  return name
+end
+
 -- ── FW-C: the checkpoint snapshot (PLAN §2 F5) ──────────────────────────────
 -- What a RETRY from a checkpoint keeps of the story: the variables, the
 -- events already fired, the objective texts, the clock so far.
@@ -1279,6 +1354,8 @@ function goalLabel(g)
   if k == "core_read" then return g.sealed and "Seal the Data Core" or "Read the Data Core" end
   if k == "ruin" then return g.claimed and "Claim the site" or (g.restored and "Restore it" or "The ruin") end
   if k == "feat" then return (tostring(g.id or "feat"):gsub("_", " ")) end
+  if k == "using" then return string.format("Use %s", tostring(g.part or g.uid or "it")) end
+  if k == "any" then return (g.goals and g.goals[1]) and goalLabel(g.goals[1]) or "Any of these" end
   return k
 end
 
@@ -1555,7 +1632,7 @@ GESTURES = { stand_talk = true, point = true, wave = true, lean_console = true, 
 POSES = { lie = true, sit = true, stand = true }
 -- FW-C cast fields (the rest is refused, so a typo is caught)
 CAST_FIELDS = { name = true, tag = true, color = true, crew = true, portrait = true, expression = true, look = true,
-                radio = true, delay = true, link = true }
+                radio = true, delay = true, link = true, playable = true }
 TEACH = { overlay = true, catalogue = true, ghost = true, at = true, mark = true, marker = true }
 WEATHERS = { clear = true, overcast = true, rain = true, storm = true, thunderstorm = true, hail = true, snow = true,
              blizzard = true, dust = true, duststorm = true, ash = true, ashstorm = true, calm = true }
@@ -1615,6 +1692,7 @@ function validate(sc, ctx)
     -- graveyard2: what they are, in words ("Night engineer"), shown on the
     -- strip, the picker, the tag over them and the plate
     if c.title ~= nil and type(c.title) ~= "string" then E(p .. ".title", "a few words (\"Night engineer\")") end
+    if c.playable ~= nil and type(c.playable) ~= "boolean" then E(p .. ".playable", "true or false (default: only the member with control = true)") end
   end
   local marks = {}
   for k in pairs(st.marks or {}) do marks[k] = true end
@@ -1992,6 +2070,8 @@ function validate(sc, ctx)
             if val.with ~= nil then check_who(pk .. ".with", val.with) end
             if val.delay ~= nil and (type(val.delay) ~= "number" or val.delay < 0) then E(pk .. ".delay", "seconds, 0 or more") end
             if val.cross ~= nil and type(val.cross) ~= "boolean" then E(pk .. ".cross", "true: the next line cuts in a second early") end
+            -- (gy3) where the speaker looks while saying it (default: at whoever it is said to)
+            if val.look ~= nil and val.look ~= false then check_ref(pk .. ".look", val.look) end
           elseif key == "face" then
             check_who(pk .. ".who", val.who)
             if val.who == nil then E(pk .. ".who", "missing") end
@@ -2159,7 +2239,8 @@ function validate(sc, ctx)
       if c.open ~= nil then check_seq(p .. ".open", c.open) end
     end
   end
-  local function check_goal(path, g, failList)
+  local check_goal
+  check_goal = function(path, g, failList)
     if type(g) ~= "table" then E(path, "a table") return end
     local K = KINDS[g.kind]
     if not K then E(path .. ".kind", "unknown kind '" .. tostring(g.kind) .. "'") return end
@@ -2170,6 +2251,13 @@ function validate(sc, ctx)
     end
     if g.hold ~= nil and type(g.hold) ~= "number" then E(path .. ".hold", "seconds") end
     -- S6: the new kinds' fields
+    -- (gy3) any = { goals = { … } }: each checked as a goal of its own
+    if g.kind == "any" then
+      if type(g.goals) ~= "table" or #g.goals == 0 then E(path .. ".goals", "at least one goal")
+      else for j, sg in ipairs(g.goals) do check_goal(string.format("%s.goals[%d]", path, j), sg, failList) end end
+    end
+    if g.kind == "using" and g.part == nil and g.uid == nil then E(path, "part (an id prefix) or uid") end
+    if g.kind == "at" and g.dy ~= nil and (type(g.dy) ~= "number" or g.dy <= 0) then E(path .. ".dy", "metres, above 0") end
     if g.kind == "part_state" or g.kind == "switched" or g.kind == "looted" then
       if g.part == nil and g.uid == nil then E(path, "part (an id prefix) or uid") end
     end
@@ -2274,7 +2362,11 @@ function validate(sc, ctx)
     else
       if c.crew and not names[c.crew] then E(pc .. ".crew", "no crew member named " .. tostring(c.crew)) end
       -- FW-C (PLAN §2 F1, F3)
-      for f in pairs(c) do if not CAST_FIELDS[f] then E(pc .. "." .. tostring(f), "unknown cast field (name, tag, color, crew, portrait, expression, look, radio, delay, link)") end end
+      for f in pairs(c) do if not CAST_FIELDS[f] then E(pc .. "." .. tostring(f), "unknown cast field (name, tag, color, crew, portrait, expression, look, radio, delay, link, playable)") end end
+      -- (gy3, Ty: "I can control Dana as one of the crew members") a cast
+      -- member the player does not play is no one the switcher offers
+      if c.playable ~= nil and type(c.playable) ~= "boolean" then E(pc .. ".playable", "true or false (default false: the crew switcher never offers them)") end
+      if c.playable ~= nil and not c.crew then E(pc .. ".playable", "only a cast member with crew = <name> can be played") end
       if c.portrait ~= nil and type(c.portrait) ~= "string" then E(pc .. ".portrait", "\"auto\" (the booth's picture) or a file under scenarios/") end
       if c.portrait == "auto" and not c.crew and type(c.look) ~= "number" then E(pc .. ".portrait", "\"auto\" needs crew = <name> or look = <seed>") end
       -- (a missing picture is not an error: the plate draws the role letter)

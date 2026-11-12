@@ -33,6 +33,10 @@ return {
   -- fallback scenarios/<id>/<key>.png is baked by tools/perf/portraitbooth.sh.
   -- radio = true: heard over the set; delay = secs: each line heard that long
   -- after its beat (light-time); link = "craft:<name>": garbled with no path.
+  -- playable = true: the player may switch to them (default false: only the
+  -- start.crew member with control = true is played; the rest are people).
+  -- A crew-tied cast member's record wears the cast's name. Whoever speaks in
+  -- person looks at who the line is to (say.with, else the player).
   cast = {
     okafor = { name = "Dele Okafor", tag = "ENGINEER", crew = "Okafor", portrait = "auto", expression = "focus" },
     ops    = { name = "Harrow Ops", tag = "OPS · 3 S DELAY", radio = true, delay = 3 },

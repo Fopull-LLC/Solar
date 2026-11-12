@@ -434,6 +434,8 @@ local function show_line(who, text, secs, opts)
   s.t0 = now()
   s.secs = secs or (1.5 + 0.06 * #s.text)
   line = s
+  -- (gy3) the speaker looks at whoever it is said to, they look back
+  if talkBegin then pcall(talkBegin, s, opts and opts.with, opts and opts.look) end
   say_log(s.name .. ": " .. s.text)
   bump()
   if not emit("say", s) then
@@ -672,6 +674,22 @@ local function knock(t)
   emit("knock", sid, uid, p)
 end
 W.pieceOk = function(t) local sid, uid, p = piece_of(t); if not sid then return nil end return not p.wr end
+-- (gy3) is the player using piece { struct, part | uid } now: its terminal
+-- open (E at it), or its menu open (a right-click)? → true, how | false, why
+W.using = function(g)
+  local sid, uid = piece_of(g)
+  if not sid then return false, "no such piece" end
+  local T = ref("terminal")
+  local ts = T and T.state and T.state()
+  if ts and ts.sid == sid and ts.uid == uid then return true, "at its terminal" .. (ts.page and (" · " .. tostring(ts.page)) or "") end
+  local CM, ST = ref("context_menu"), ref("structures")
+  local t = CM and CM.open and CM.target
+  if t and t.node and ST and ST.partOfNode then
+    local ok, rec, p = pcall(ST.partOfNode, t.node)
+    if ok and rec and p and rec.id == sid and p.uid == uid then return true, "its menu is open" end
+  end
+  return false, (ts and "at another console") or "not in use"
+end
 
 -- (flagship) a `reactor` beat: { struct, scram, reset, startup = set, setpoint,
 -- protection, turbine, cooldown, pump = { part|uid, on } } on the plant of struct
@@ -828,6 +846,200 @@ local function turn_member(id, to)
   return true
 end
 local function turn_beat(v) return turn_member(who_id(v.who), v.to) end
+
+-- ── TALK GAZE (gy3, Ty 2026-11-11) ──────────────────────────────────────────
+-- "Dana doesn't look at me when I talk. All NPCs when talking to me should
+-- look at me, and if they're speaking to someone else they should look at
+-- them." Every line a crew member says in person (never a radio voice):
+--   the SPEAKER's head and eyes go to whoever it is said to: say.with (a
+--     cast key or crew name), else the player; say.look = ref | false
+--     overrides it for one line
+--   the LISTENER (a crew body) looks back at the speaker
+--   BYSTANDERS within TALK_SIDE_R of the speaker turn to them after a beat
+--     (0.3-0.9 s) and drift back to what they were doing after a few seconds
+-- A choice is a line to the player. Laid over a scenario's `look` while it
+-- holds (crew_body.talkSelf, face.talkGaze), kept a moment after the line
+-- (people do not snap away at the full stop), re-asserted at 4 Hz so a body
+-- that respawned keeps it. Every point is asked the frame it is drawn (the
+-- head's bone, the Astronaut's node): nothing is kept (frames doc rules 1-2);
+-- crew_body smooths the turn and adds the looks away, face the saccades.
+TALK_R = 12.0          -- m along the ground: past this the player is not who a line is said to
+TALK_SIDE_R = 6.0      -- m: bystanders this close to a speaker turn to them
+TALK_LINGER = 1.4      -- s a look is held after its line
+local talk = { set = {}, astro = nil, chk = 0, live = false }
+talkState = talk       -- (probes)
+local function talk_astro()
+  local a = talk.astro
+  if not (a and a.valid ~= false) then a = find and find("Astronaut") or nil; talk.astro = a end
+  return a
+end
+-- body-relative point of member id now (the player's node, a body's record)
+local function talk_pos(id)
+  local C = ref("crew")
+  if not (C and id) then return nil end
+  if id == (C.activeId and C.activeId()) then
+    local pw = ref("planet_walker")
+    if pw and pw.onFoot == false then return nil end
+    return node_rel(talk_astro())
+  end
+  local r = C.get(id)
+  if r and r.status == "afoot" and r.body and r.x then return { body = r.body, x = r.x, y = r.y, z = r.z } end
+  return nil
+end
+local function talk_near(a, b, rr)
+  local p, q = talk_pos(a), talk_pos(b)
+  if not (p and q and p.body == q.body) then return false end
+  local d = rulebook().groundApart(p, q)
+  return d <= rr
+end
+-- the eyes of member id, world, THIS frame (drawn poses)
+local function talk_head(id)
+  local C = ref("crew")
+  if not (C and id) then return nil end
+  if id == (C.activeId and C.activeId()) then
+    local pw = ref("planet_walker")
+    if pw and pw.onFoot == false then return nil end
+    local a = talk_astro()
+    if not a then return nil end
+    local x, y, z = a.x, a.y, a.z
+    local wp = a.worldPos
+    if wp and wp.x then x, y, z = wp.x, wp.y, wp.z end
+    local d = space.dominant(x, y, z)
+    local b = d and space.body(d)
+    if not b then return nil end
+    local ux, uy, uz = x - b.x, y - b.y, z - b.z
+    local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+    return x + ux / l * 0.68, y + uy / l * 0.68, z + uz / l * 0.68
+  end
+  local cb = body_script("crew_body", id)
+  if cb and cb.headPoint then
+    local ok, x, y, z = pcall(cb.headPoint)
+    if ok and x then return x, y, z end
+  end
+  return nil
+end
+-- a look at member `tid` (or at ref `tref`), weight w, from wall time t0 to t1
+local function talk_fn(tid, tref, w, t0, t1)
+  return function()
+    if t0 or t1 then
+      local tw = wall()
+      if (t0 and tw < t0) or (t1 and tw > t1) then return nil end
+    end
+    local x, y, z
+    if tref then x, y, z = pointOf(tref); if x then local p = pos_of(tref); local l = math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z); x, y, z = x + p.x / l * 1.2, y + p.y / l * 1.2, z + p.z / l * 1.2 end
+    else x, y, z = talk_head(tid) end
+    if not x then return nil end
+    return x, y, z, w
+  end
+end
+local function talk_apply(id, e)
+  if portraitBusy == id then e = nil end
+  local cb = body_script("crew_body", id)
+  if cb and cb.talkSelf then pcall(cb.talkSelf, e and e.fn or nil, e and e.mode or nil) end
+  local fc = body_script("face", id)
+  if fc then fc.talkGaze = e and e.fn or nil end
+  return cb
+end
+local function talk_release(id)
+  talk_apply(id, nil)
+  talk.set[id] = nil
+end
+-- s: the line's speaker (show_line's), withKey: say.with, lookRef: say.look
+function talkBegin(s, withKey, lookRef)
+  local C = ref("crew")
+  if not (C and s) then return end
+  local act = C.activeId and C.activeId()
+  local spk = (not s.radio and not s.garbled) and who_id(s.who) or nil
+  local new = {}
+  if spk then
+    local lid = withKey and who_id(withKey) or nil
+    if not lid and not withKey then lid = act end
+    if lid == spk then lid = nil end
+    if lid and not talk_near(spk, lid, TALK_R) then lid = nil end
+    if spk ~= act then
+      if lookRef ~= nil then
+        if lookRef then new[spk] = { tgt = "ref:" .. tostring(lookRef), fn = talk_fn(nil, lookRef, 1), mode = "speak" } end
+      elseif lid then new[spk] = { tgt = lid, fn = talk_fn(lid, nil, 1), mode = "speak" } end
+    end
+    if lid and lid ~= act then new[lid] = { tgt = spk, fn = talk_fn(spk, nil, 1), mode = "listen" } end
+    -- the two in the conversation square up to each other: someone more
+    -- than 50 deg off (past where the head alone goes) turns to face them
+    -- (a standing body, not walking, not lying or sitting)
+    local function square(id, tid)
+      if not (id and tid) or id == act or walks[id] then return end
+      local r, rt = C.get(id), C.get(tid)
+      if not (r and rt and r.status == "afoot" and r.x and type(r.pose) ~= "table") then return end
+      local q = talk_pos(tid)
+      if not (q and q.body == r.body) then return end
+      local f = type(r.face) == "table" and r.face or nil
+      if f then
+        local l = math.sqrt(r.x * r.x + r.y * r.y + r.z * r.z)
+        local ux, uy, uz = r.x / l, r.y / l, r.z / l
+        local dx, dy, dz = q.x - r.x, q.y - r.y, q.z - r.z
+        local du = dx * ux + dy * uy + dz * uz
+        dx, dy, dz = dx - ux * du, dy - uy * du, dz - uz * du
+        local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if d < 0.3 or (f.x * dx + f.y * dy + f.z * dz) / d > 0.64 then return end
+      end
+      turn_member(id, "crew:" .. tostring(rt.name))
+    end
+    if lookRef == nil then square(spk, lid) end
+    square(lid, spk)
+    -- bystanders: on foot near the speaker, not lying down, not busy talking
+    local nodes = C.bodyNodes and C.bodyNodes() or {}
+    for id in pairs(nodes) do
+      if id ~= spk and id ~= lid and id ~= act and not new[id] and talk_near(spk, id, TALK_SIDE_R) then
+        local r = C.get(id)
+        if not (r and type(r.pose) == "table" and r.pose.kind == "lie") then
+          local t0 = wall() + 0.3 + math.random() * 0.6
+          new[id] = { tgt = spk, fn = talk_fn(spk, nil, 0.75, t0, t0 + 3.0 + math.random() * 3.0), mode = "glance" }
+        end
+      end
+    end
+  end
+  -- those not in this line let go after a moment; a look at the same person carries on
+  for id, e in pairs(talk.set) do
+    local n = new[id]
+    if n and n.tgt == e.tgt and (e.mode ~= "glance" or n.mode == "glance") then
+      local changed = n.mode ~= e.mode
+      e.t1, e.mode = nil, n.mode
+      if changed then e.cb = talk_apply(id, e) end
+      new[id] = nil
+    elseif not n then e.t1 = e.t1 or (wall() + TALK_LINGER) end
+  end
+  for id, e in pairs(new) do talk.set[id] = e; e.cb = talk_apply(id, e) end
+  talk.live = true
+end
+-- per frame while a look is held: the line's end lets them go; 4 Hz, a
+-- respawned body gets its look back
+local function talk_tick()
+  if not talk.live then return end
+  local tw = wall()
+  if not line and not choice then
+    for _, e in pairs(talk.set) do if not e.t1 then e.t1 = tw + TALK_LINGER end end
+  end
+  if tw - talk.chk < 0.25 then return end
+  talk.chk = tw
+  local any = false
+  for id, e in pairs(talk.set) do
+    if e.t1 and tw >= e.t1 then talk_release(id)
+    else
+      any = true
+      local cb = e.cb
+      if not (cb and cb.valid ~= false and cb.memberId == id and cb.talkNow and cb.talkNow() == e.fn) then e.cb = talk_apply(id, e) end
+    end
+  end
+  talk.live = any
+end
+-- (probes) where member id's head looks now, and at whom: → x, y, z, w, tgt
+function talkLook(id)
+  local cb = body_script("crew_body", id)
+  local e = talk.set[id]
+  if not (cb and cb.headLookNow) then return nil end
+  local x, y, z, w = cb.headLookNow()
+  return x, y, z, w, e and e.tgt or nil
+end
+talkHead = talk_head
 turnMember = turn_member
 -- (graveyard2) POSE: { who, kind = "lie" | "sit" | "stand", at = ref,
 -- offset, height (m over the ref's ground: a bunk's mattress), head = ref
@@ -1582,6 +1794,8 @@ local function run_beat(b, e)
                prompt = v.prompt, options = texts, opts = v.options or {},
                t0 = now(), timeout = v.timeout, default = v.default or 1 }
     say_log("choice up: " .. tostring(v.prompt))
+    -- (gy3) a question is put to the player: asked looking at them
+    if talkBegin then pcall(talkBegin, { who = v.who, radio = s.radio }, nil, nil) end
     bump()
     emit("choice", choice)
     beat_busy = { kind = "choice", t1 = v.timeout and (now() + v.timeout) or math.huge }
@@ -1703,6 +1917,7 @@ runBeat = run_beat
 -- a walking crew member: a CrewBody is set down at the mark when the walk
 -- ends (crew_body has no path steering yet); the controlled one, in a
 -- cutscene, is steered there by planet_walker.steer
+WALK_STUCK = 6.0      -- s a walk may go without getting 0.4 m nearer before it plans again
 local function walks_tick()
   for id, w in pairs(walks) do
     local C = ref("crew")
@@ -1737,7 +1952,12 @@ local function walks_tick()
         -- (the body's script found once a walk, not a scene walk a frame)
         if not (w.cb and w.cb.valid ~= false and w.cb.memberId == id) and now() >= (w.look_t or 0) then
           w.cb = body_script("crew_body", id)
-          if not w.cb then w.look_t = now() + 0.5 end
+          if not w.cb then
+            w.look_t = now() + 0.5
+            -- (gy3) no body to walk (out of range, between spawns) for 3 s: set down now
+            w.nob = w.nob or now()
+            if now() - w.nob > 3.0 then w.t1 = math.min(w.t1, now()); w.instant = true end
+          else w.nob = nil end
         end
         local cb = (not w.instant and now() <= w.t1) and w.cb or nil
         -- (graveyard2) arrived is asked BEFORE the target is handed over again:
@@ -1749,6 +1969,21 @@ local function walks_tick()
           if w.pose then local pz = {}; for k2, x2 in pairs(w.pose) do pz[k2] = x2 end; pz.who = w.who; pose_beat(pz) end
         elseif cb and cb.steerSelf and cb.steerSelf(p.body, x - b.x, y - b.y, z - b.z, { speed = w.speed, arrive = w.near }) then
           w.steered = true
+          -- (gy3, Ty: "she still doesn't go to the bedroom") a walk that stops
+          -- closing on its target for WALK_STUCK s plans its route again from
+          -- where it stands; after two of those it is set down there and goes
+          -- on with its pose: a crew member never stands idle after their line
+          if cb.walkDist then
+            local d = cb.walkDist(p.body, x - b.x, y - b.y, z - b.z)
+            local tn = now()
+            if d and (not w.best or d < w.best - 0.4) then w.best, w.best_t = d, tn
+            elseif d and w.best_t and tn - w.best_t > WALK_STUCK and not (cb.planning and cb.planning()) then
+              w.replans = (w.replans or 0) + 1
+              w.best_t = tn
+              say_log(string.format("walk %s: stuck %.1f m short, %s", tostring(w.who), d, w.replans <= 2 and "a new route" or "set down there"))
+              if w.replans <= 2 and cb.replan then cb.replan() else w.t1 = tn; w.instant = true; w.stuck = true end
+            end
+          end
         elseif now() > w.t1 - (w.instant and w.t1 or 0) then
           local cb2 = w.steered and w.cb or nil
           if cb2 and cb2.steerStop then cb2.steerStop() end
@@ -2033,7 +2268,13 @@ local function stage_crew(list, out)
     if id then
       used[id] = true
       map[c.name] = id
-      C.rename(id, c.name)
+      -- (gy3, Ty 2026-11-11) the record wears the cast's full name ("Dana
+      -- Kowalczyk", not "Kowalczyk"), and a cast member the player does not
+      -- play is no one the switcher offers (crew.lua's `npc`); refs keep the
+      -- start.crew name (`crew:Kowalczyk`, through scn.crew)
+      local R_ = rulebook()
+      C.rename(id, R_.crewDisplayName and R_.crewDisplayName(sc, c.name) or c.name)
+      C.patch(id, { npc = not (R_.playableOf and R_.playableOf(sc, c) or c.control) })
       if c.role then C.patch(id, { role = c.role }) end
       -- (graveyard2) what they are, in words: the strip, the picker, the tag
       C.patch(id, { title = type(c.title) == "string" and c.title or false })
@@ -2196,6 +2437,7 @@ local function stage_lived_in(out)
 end
 
 -- crew at their posts (`post = ref`, after the marks and structures exist)
+POST_STAND = 1.03      -- the Astronaut's capsule centre over the floor it stands on (2.0 m tall) + a hair
 local function stage_posts(list, out)
   local C = ref("crew")
   local map = crew_ids()
@@ -2208,13 +2450,36 @@ local function stage_posts(list, out)
       local k = (l + 1.0) / l
       if C and id == C.activeId() then
         local a = find("Astronaut")
-        for _ = 1, 30 do
+        -- (gy3, Ty 2026-11-11: "graveyard shift spawned me in the ground")
+        -- a post is a TERRAIN point, and the capsule's centre was put 1 m
+        -- over it: on a station floor that stands 0.2-0.7 m over the
+        -- terrain the legs were in the slab and stayed there (a switch
+        -- freed them). The floor under the post is found by a ray down from
+        -- inside the room (1.3 m over the terrain: over any slab, under any
+        -- ceiling) and the capsule stands on it; only the ray's DISTANCE is
+        -- kept (frames doc rule 2), as a height over the terrain point.
+        -- (asked again every frame of the hold: a structure's colliders can
+        -- come in a few frames after its record, and a first ray then met
+        -- only the terrain; the highest floor found wins)
+        local lift = 1.0
+        local ux, uy, uz = g.x / l, g.y / l, g.z / l
+        local function floor_lift()
+          b = space.body(g.body)
+          if not (a and b and raycast) then return end
+          local o = 1.3
+          local ok, h = pcall(raycast, b.x + g.x + ux * o, b.y + g.y + uy * o, b.z + g.z + uz * o, -ux, -uy, -uz, 3.0, a)
+          if ok and h and h.distance and h.distance < 2.9 then lift = math.max(lift, o - h.distance + POST_STAND) end
+        end
+        for _ = 1, 60 do
+          floor_lift()
+          k = (l + lift) / l
           b = space.body(g.body)
           if not (a and b) then break end
           a.x, a.y, a.z = b.x + g.x * k, b.y + g.y * k, b.z + g.z * k
           a.vx, a.vy, a.vz = 0, 0, 0
           coroutine.yield()
         end
+        out[#out + 1] = string.format("post %s: stands %.2f m over the terrain point", c.name, lift)
         -- (graveyard2) the player's view turned to their post's `face` (a
         -- direction: planet_camera flattens it onto the ground next frame)
         local fp = c.face and pos_of(c.face)
@@ -3099,6 +3364,14 @@ hooks_api = function()
       if RP and RP.plantOfPart and RP.plantOfPart(sid, uid) and RP.pumpOn then c.pumpOn = RP.pumpOn(sid, uid) end
       return c
     end,
+    -- (playtest 11-11, plant_av) a piece under stress a hook models (a bearing
+    -- going, 0..1): heard and felt at the piece; renewed each tick, it lapses
+    -- 10 s after the hook stops saying so
+    stress = function(struct, part, kind, v)
+      local sid, uid = piece_of({ struct = struct, part = type(part) == "string" and part or nil, uid = type(part) == "number" and part or nil })
+      local PA = ref("plant_av")
+      if sid and PA and PA.stress then PA.stress(sid, uid, kind or "bearing", v) end
+    end,
     dose = function(who)
       local C = ref("crew")
       local id = member_id(tostring(who or ""):gsub("^crew:", ""))
@@ -3916,6 +4189,10 @@ function capturePortrait(id, opts, cb)
   local fcl = body_script("face", id)
   local prev_gaze = fcl and fcl.gaze or nil
   if fcl then fcl.gaze = at_cam end
+  -- (gy3) a conversation's look stands aside for the picture (talk_tick puts it back)
+  portraitBusy = id
+  if cbl and cbl.talkSelf then pcall(cbl.talkSelf, nil) end
+  if fcl then fcl.talkGaze = nil end
   -- the player's own gold visor up (suit.lua keeps the Astronaut's helmet parts)
   local su, visor0 = ref("suit"), nil
   local C_ = ref("crew")
@@ -3957,6 +4234,7 @@ function capturePortrait(id, opts, cb)
       if visor0 then pcall(su.setVisor, true) end
       if cbl and cbl.lookSelf then pcall(cbl.lookSelf, prev_look) end
       if fcl then fcl.gaze = prev_gaze end
+      portraitBusy = nil
       if cn.valid ~= false then pcall(cn.destroy, cn) end
       PROF.portrait_ms = PROF.portrait_ms + (wall() - c.w0) * 1000
       PROF.portraits = PROF.portraits + 1
@@ -3995,11 +4273,25 @@ local function portrait_job(only)
         and not (cb and cb.facingSettled and not cb.facingSettled()) then break end
       coroutine.yield()
     end
+    -- (gy3) a gesture (Priya bent over her bench) is set aside for the
+    -- picture, the body given a moment to straighten, and put back after:
+    -- the plate showed the back of her head
+    local gest = id and C_ and C_.get and C_.get(id)
+    gest = gest and type(gest.gesture) == "table" and gest.gesture or nil
+    if gest then
+      C_.patch(id, { gesture = false })
+      local tg = wall() + 0.9
+      while wall() < tg do coroutine.yield() end
+    end
     local got = false
     local ok = id and capturePortrait(id, { expression = c.expression }, function(tex) if tex then portraits[k] = tex; bump() end got = true end)
     if ok then
       local t1 = wall() + 5
       while not got and wall() < t1 do coroutine.yield() end
+    end
+    if gest then
+      local r2 = C_.get(id)
+      if r2 and r2.gesture == nil then C_.patch(id, { gesture = gest }) end
     end
     coroutine.yield()
   end
@@ -4129,6 +4421,7 @@ function update(node, dt)
     if delayed and #delayed > 0 then delays_tick() elseif delayed == nil and phase == "running" then dl_list() end
     if LT.elE or LT.ambE then light_tick(true) end
     if next(walks) then walks_tick() end
+    if talk.live then talk_tick() end
     if #jobs > 0 then jobs_tick() end
     input_tick()
   end

@@ -155,6 +155,9 @@ local function tell_grants(id)
   if #g == 0 then return end
   local line = string.format("Logged. The Depot ships %s now.", table.concat(g, " and "))
   if log then log("FEAT: " .. id .. " unlocks " .. table.concat(g, ", ")) end
+  -- (gy3) a scenario's run is its own story: the Depot's news waits (silent)
+  local sr = ref("scenario_run")
+  if sr and sr.isActive and sr.isActive() and not (sr.phaseNow and sr.phaseNow() == "freeplay") then return end
   local strip = ref("ops_strip")
   if strip and strip.say then pcall(strip.say, line, "Ops")
   elseif caption then pcall(caption, "Ops: " .. line) end
