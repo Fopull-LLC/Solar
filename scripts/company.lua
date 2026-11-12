@@ -222,6 +222,53 @@ function refund(amount, why)
   log(string.format("company: +$%d  (%s)   balance $%d", amount, why or "—", funds))
 end
 
+-- MONEY OWED BACK (a contract's advance on signing, returned when the contract
+-- is abandoned: missions.lua). What the balance covers is taken now; the rest
+-- goes on the books as an advance owed (`co.loan`), repaid from a share of
+-- income like Mission Control's. → the shortfall that went on the books (0
+-- when it was all paid).
+function clawBack(amount, why)
+  amount = math.max(0, math.floor(amount or 0))
+  if amount == 0 then return 0 end
+  if unlimited() then spend(amount, why) return 0 end
+  local b = balance()
+  local pay = math.max(0, math.min(b, amount))
+  local short = amount - pay
+  save.set("co.funds", b - pay)
+  funds = b - pay
+  record(-pay, short > 0 and string.format("%s (%s owed, repaid from income)", why or "—", money(short)) or why)
+  if short > 0 then
+    local owe = (save.get("co.loan") or 0) + short
+    save.set("co.loan", owe)
+    loan = owe
+  end
+  log(string.format("company: −$%d  (%s)%s   balance $%d", pay, why or "—",
+    short > 0 and string.format(", $%d still owed", short) or "", balance()))
+  return short
+end
+
+-- HULL INSURANCE (career missions E1, PLAN §6.7): a craft lost (not recovered)
+-- refunds a share of its parts' cost, once, by standing: nothing while the
+-- company is Unknown, 20 % from Contractor, 35 % Trusted, 50 % Prime and up.
+-- A crash stays a setback, not a wall. Not in a sandbox (money is no object)
+-- or a scenario (its budget is the story's). "The insurer pays out on the
+-- telemetry."
+INSURANCE = { [2] = 0.20, [3] = 0.35, [4] = 0.50, [5] = 0.50 }
+function insuranceRate(r)
+  if isSandbox() or isScenario() then return 0 end
+  return INSURANCE[standing(r).level] or 0
+end
+
+-- Pay out on a lost craft worth `cost` in parts (vessel_controller calls it
+-- once per craft). → the amount paid.
+function insureLoss(cost, name)
+  local rate = insuranceRate()
+  local pay = math.floor((cost or 0) * rate)
+  if pay <= 0 then return 0 end
+  refund(pay, string.format("hull insurance: %s (%d%%)", name or "craft", math.floor(rate * 100 + 0.5)))
+  return pay
+end
+
 -- ── THE ADVANCE: nobody is ever stuck ──────────────────────────────────────
 -- Playtest 2026-10-26: "it's very hard to make money back up to where you were
 -- and progress again". Three rockets in a crater could leave a company with
@@ -235,9 +282,18 @@ end
 -- takes `share` of everything earned afterwards until it is paid back. It is
 -- a loan, not a gift: no reputation, no interest, and never a second one while
 -- the first is owed — so it can't be farmed, only leaned on.
+--
+-- Career missions E1 (work/missions/PLAN.md §6.5; Ty 2026-11-11: "I get stuck
+-- in loops of needing money to make the next contract's craft"): it was sized
+-- to a starter rocket ($1,500 under $300). Now it steps in under $600 and is
+-- sized to the work: at least `amount`, or half the craft the cheapest open
+-- contract needs (missions.openCraftCost: what is on the books, else what is
+-- on the board), so a company broke with Rendezvous signed gets enough to
+-- start on a docking pair.
 ADVANCE = {
-  below = 300,      -- the balance under which the company counts as broke
-  amount = 1500,    -- what Mission Control advances
+  below = 600,      -- the balance under which the company counts as broke
+  amount = 2500,    -- the least Mission Control advances
+  craftShare = 0.5, -- …or this share of the cheapest open contract's craft
   share = 0.25,     -- of every later credit, until it is repaid
   wait = 4.0,       -- seconds broke before it steps in (a purchase mid-click isn't "broke")
 }
@@ -262,11 +318,24 @@ function advanceReady()
   return true, nil
 end
 
+-- What the advance would be right now: ADVANCE.amount, or half the craft the
+-- cheapest open contract needs, rounded to $100.
+function advanceAmount()
+  local a = ADVANCE.amount
+  local mi = findScript and findScript("missions")
+  local ok, est = false, nil
+  if mi and mi.openCraftCost then ok, est = pcall(mi.openCraftCost) end
+  if ok and type(est) == "number" and est > 0 then
+    a = math.max(a, math.floor(est * ADVANCE.craftShare / 100 + 0.5) * 100)
+  end
+  return a
+end
+
 -- Take the advance now (the update below calls it; so can a harness). Returns
 -- the amount credited, or 0.
 function advance()
   if not advanceReady() then return 0 end
-  local a = ADVANCE.amount
+  local a = advanceAmount()
   local b = balance()
   save.set("co.funds", b + a)
   save.set("co.loan", a)
@@ -305,12 +374,19 @@ end
 
 -- Reputation moves slowly and clamps: it gates contracts and the catalogue, so
 -- it must never run away on a lucky streak or bottom out unrecoverably.
-function addRep(d, why)
+-- `opts.cap`: a gain that may not lift reputation past this (ground work earns
+-- standing up to Trusted and no further: missions.lua GROUND_REP_CAP).
+function addRep(d, why, opts)
   if isSandbox() then
     if d and d ~= 0 then log(string.format("company: reputation %+d  (%s)   [sandbox: stays at the top]", d, why or "—")) end
     return
   end
   local before = rep()
+  local cap = type(opts) == "table" and opts.cap or nil
+  if cap and d and d > 0 then
+    d = math.max(0, math.min(d, cap - before))
+    if d == 0 then return end
+  end
   local r = math.max(REP_MIN, math.min(REP_MAX, before + (d or 0)))
   save.set("co.rep", r)
   reputation = r

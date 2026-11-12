@@ -109,7 +109,11 @@ do
   check(bg.kg > 90, "a bulk haul is more than a suit carries", bg.kg)
   check(bulk.reward / bg.kg > order.reward / og.kg * 0.9 and bulk.reward > 3 * depot_worth(bg),
     "a bulk haul pays a rover's worth", bulk.reward)
-  check(order.rep == 0 and bulk.rep == 0, "ground work pays money, not standing")
+  -- (career missions E1) a bulk haul and a survey drive earn +1 standing up
+  -- to Trusted; a supply order stays money only
+  check(order.rep == 0 and bulk.rep == 1 and bulk.repCap == 8, "a bulk haul earns a point of standing (to Trusted), an order none")
+  check(mi.advanceFor(bulk) == math.floor(bulk.reward * 0.3 / 10 + 0.5) * 10, "signing ground work advances 30 %",
+    mi.advanceFor(bulk))
   -- sign the bulk haul; deliver it; the buyer TAKES the goods
   local mat = bg.mat or "iron"
   local units = math.ceil(bg.kg / mats.kg(mat)) + 5
@@ -218,7 +222,8 @@ do
   at(0, 30)
   mi.update(node, dt)
   mi.update(node, dt)
-  check(mi.active == nil and co.balance() == bal2 + trek.reward,
+  -- (the 30 % advance was paid when it was signed: completion pays the rest)
+  check(mi.active == nil and co.balance() == bal2 + trek.reward - mi.advanceFor(trek),
     "parking at the base pays the survey drive", co.balance() - bal2)
   W.scripts.vessel_controller = nil
 end

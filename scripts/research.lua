@@ -79,9 +79,12 @@ TECH = {
   solar      = { cost = 2200, label = "Solar Panel",    mat = "silica",  after = "battery" },
   -- (P2) the Cargo Bay after a kilometre on wheels (a rover's first job)
   cargo      = { cost = 500,  label = "Cargo Bay",      mat = "iron", feat = "drive_km", featN = 1000 },
-  rcs        = { cost = 2600, label = "RCS Block",      after = "engineM", rep = 3 },
-  skipper    = { cost = 4500, label = "Skipper",        mat = "iron",    after = "engineM", rep = 8 },
-  dockPort   = { cost = 3800, label = "Docking Port",   mat = "copper",  rep = 6, after = "rcs" },
+  -- (career missions E1, PLAN §6.4) the mid-game was priced like the late
+  -- game: RCS $2,600 + Docking Port $3,800 behind rep 3 and 6 for one $24,000
+  -- rung. Now $1,800 and $2,400 at rep 4, and the Skipper at rep 6.
+  rcs        = { cost = 1800, label = "RCS Block",      after = "engineM", rep = 3 },
+  skipper    = { cost = 4500, label = "Skipper",        mat = "iron",    after = "engineM", rep = 6 },
+  dockPort   = { cost = 2400, label = "Docking Port",   mat = "copper",  rep = 4, after = "rcs" },
   -- THE NUCLEAR TIER (deep-space G1; scripts/parts_nuclear.lua). The Isotope
   -- Cell wants uranium ore held: the deep band the Deep Core contract sends
   -- you to. Radiators come with it; the Ember wants standing and the panel

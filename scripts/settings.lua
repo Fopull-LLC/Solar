@@ -1199,6 +1199,15 @@ local function agency_rows(out)
     out[#out + 1] = hint("csh", (sandbox and "A Sandbox save: unlimited funds, top reputation, every part unlocked. "
       or "A Career save. ") .. "Crew safety applies to this save only: Permadeath can lose an astronaut, "
       .. "Rescue brings them home hurt, for a fee, Invincible means nothing hurts them.")
+    -- DEATHS COST REPUTATION (crew.lua `deathRep`, career missions PLAN §5):
+    -- not shown while nothing can die (Invincible)
+    if cr.deathRep and cr.setDeathRep and cr.safety() ~= "invincible" then
+      out[#out + 1] = choice("dr", "Deaths cost rep", {
+        { label = "On", value = true }, { label = "Off", value = false },
+      }, cr.deathRep(), function(v) cr.setDeathRep(v) end)
+      out[#out + 1] = hint("drh", "On: an astronaut lost costs the agency 2 reputation. Off: permadeath "
+        .. "still applies; only the company's standing is spared.")
+    end
   end
   -- CABIN AIR, per save (cabin_air.lua, G1): the craft's modules hold air
   -- that leaks, vents and runs out, or the cabin is simply air

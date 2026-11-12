@@ -560,6 +560,8 @@ local REVERT_KEYS = {
   "mission.active", "mission.activeSpec", "mission.board", "mission.seen", "mission.perm",
   "mission.gdone", "mission.gcount", "mission.done", "mission.flags", "mission.visited",
   "mission.recovered", "mission.charterPaid", "mission.genSeq",
+  -- (career missions E1) the second place on the books and the advances
+  "mission.active2", "mission.activeSpec2", "mission.seen2", "mission.perm2", "mission.adv", "mission.adv2",
   "prog.done", "prog.perm",
   "inv.cap", "inv.seen", "depot.sold", "depot.freight", "names.n",
   -- the crew (scripts/crew.lua): the roster's own keys; each member's record

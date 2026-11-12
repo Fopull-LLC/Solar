@@ -247,7 +247,8 @@ check("a survey is not met from home's sky", mi.active == s.id)
 put(craft.node, "Ryethos", 100)
 local bal = co.balance()
 tick(3)
-check("flying into the moon's SOI pays the survey", paid(s) and co.balance() == bal + s.reward,
+check("flying into the moon's SOI pays the survey (the rest after the advance)",
+  paid(s) and co.balance() == bal + s.reward - mi.advanceFor(s),
   tostring(mi.active))
 
 -- orbit around a named body: an orbit of HOME at the same height doesn't count
@@ -624,6 +625,202 @@ do
   envs.ops_strip, envs.research, envs.feats, API.caption = nil, nil, nil, nil
   clear({})
   for k, v in pairs(keep) do store[k] = v end
+end
+
+-- ── (career missions E1) the economy fix: work/missions/PLAN.md §6 ─────────
+-- Ty, 2026-11-11: "I get stuck in loops of needing money to make the next
+-- contract's craft requirements." An advance on signing (clawed back on
+-- abandon), two contracts on the books (one flight, one ground or client),
+-- ground work that earns standing up to Trusted, cheaper mid-game research and
+-- machines, hull insurance by standing, and Mission Control's advance sized to
+-- the work. Then an old one-contract save: its contract is slot one.
+do
+  local keep = {}
+  for k, v in pairs(store) do keep[k] = v end
+  local base_keys = { ["system.home"] = true, ["base.body"] = true }
+  for _, b in ipairs(ROSTER.bodies) do base_keys["world." .. b.name] = true end
+  for k in pairs(store) do if not base_keys[k] then store[k] = nil end end
+  store["co.booted"], store["co.funds"], store["co.rep"], store["co.ledger"] = true, 20000, 3, {}
+  store["mission.done"] = { firstflight = true, highroad = true }
+  store["prog.done"] = { first_steps = true }
+  store["system.home"] = ROSTER
+  envs.missions = nil
+  mi = load_script("solar/scripts/missions.lua", "missions")
+  mi.start({})
+  craft.piloting, walker.onFoot = false, true
+  put(astro, "Umunquo", 1)
+  second()
+  local function board_add(s)
+    local b = store["mission.board"] or {}
+    b[#b + 1] = s
+    store["mission.board"] = b
+    return s
+  end
+  local function deliver_all(s)
+    local g = s.goals[1]
+    local mat = g.mat or "iron"
+    inv.add("base", mat, math.ceil(g.kg / mats.kg(mat)) + 2)
+  end
+
+  -- 1. the advance on signing
+  local fl = board_add(mi.genSpec("survey", "Ryethos", 501))
+  local adv = mi.advanceFor(fl)
+  check("E1: a generated contract advances 30 % of its reward", adv > 0
+    and adv == math.floor(fl.reward * 0.3 / 10 + 0.5) * 10, adv .. " of " .. fl.reward)
+  check("E1: the ladder advances from the High Road up, not before", mi.advanceFor(mi.byId("orbit")) == 3300
+    and mi.advanceFor(mi.byId("highroad")) == 1500 and mi.advanceFor(mi.byId("firstflight")) == 0
+    and mi.advanceFor(mi.byId("botany")) == 0)
+  local b0 = co.balance()
+  check("E1: signing a flight contract", mi.accept(fl.id) == true)
+  check("E1: …pays the advance into the account at once", co.balance() == b0 + adv, co.balance() - b0)
+  check("E1: …and remembers it for the books", mi.advancePaid(fl.id) == adv, mi.advancePaid(fl.id))
+
+  -- 2. two contracts on the books: one flight, one ground or client
+  local fl2 = board_add(mi.genSpec("orbit", "Ryethos", 502))
+  local ok2, why2 = mi.accept(fl2.id)
+  check("E1: a second flight contract is refused", ok2 == false and tostring(why2):find("One flight contract", 1, true) ~= nil,
+    tostring(why2))
+  check("E1: …and the board can say why before you press", (mi.signBlock(fl2) or ""):find(fl.title, 1, true) ~= nil,
+    mi.signBlock(fl2))
+  local bulk = board_add(mi.genSpec("bulk", "Umunquo", 503))
+  check("E1: a bulk haul is ground work", mi.slotGroup(bulk) == "ground" and mi.slotGroup(fl) == "flight")
+  check("E1: …and a client job and an on-foot rung share its place", mi.slotGroup({ client = true }) == "ground"
+    and mi.slotGroup(mi.byId("prospect")) == "ground" and mi.slotGroup(mi.byId("orbit")) == "flight")
+  local b1 = co.balance()
+  check("E1: a ground job signs beside the flight", mi.accept(bulk.id) == true)
+  check("E1: …with its own advance", co.balance() == b1 + mi.advanceFor(bulk), co.balance() - b1)
+  local act = mi.actives()
+  check("E1: both are on the books, the flight first", #act == 2 and act[1] == fl.id and act[2] == bulk.id
+    and mi.active == fl.id, table.concat(act, ","))
+  check("E1: each has its own goal lines", (mi.goalLines(bulk.id)[1] or ""):find("warehouse", 1, true) ~= nil
+    and (mi.goalLines(fl.id)[1] or ""):find("Ryethos", 1, true) ~= nil and mi.goalLines()[1] == mi.goalLines(fl.id)[1],
+    tostring(mi.goalLines(bulk.id)[1]))
+  check("E1: …and its own one-line summary", (mi.activeLine(bulk.id) or ""):find("0/1", 1, true) ~= nil, mi.activeLine(bulk.id))
+  local ok3, why3 = mi.accept("prospect")
+  check("E1: a second ground job is refused", ok3 == false and tostring(why3):find("ground or client", 1, true) ~= nil, tostring(why3))
+  local offered = {}
+  for _, m in ipairs(mi.offers()) do offered[m.id] = true end
+  check("E1: neither contract on the books is offered again", not offered[fl.id] and not offered[bulk.id])
+  check("E1: the depot keeps back what the SECOND contract needs too", mi.reserves(bulk.goals[1].mat or "iron"))
+
+  -- 3. abandoning hands the advance back
+  local r0, b2 = co.rep(), co.balance()
+  check("E1: abandoning the ground job", mi.abandon(bulk.id) == true)
+  check("E1: …claws its advance back", co.balance() == b2 - mi.advanceFor(bulk), b2 - co.balance())
+  check("E1: …costs 1 reputation", co.rep() == r0 - 1, co.rep())
+  check("E1: …and leaves the flight on the books", mi.active == fl.id and #mi.actives() == 1)
+  -- an advance the balance can't cover: the rest is owed, and it costs 2
+  local bulk2 = board_add(mi.genSpec("bulk", "Umunquo", 504))
+  mi.accept(bulk2.id)
+  local adv2 = mi.advancePaid(bulk2.id)
+  store["co.funds"] = 100
+  local r1 = co.rep()
+  mi.abandon(bulk2.id)
+  check("E1: an advance already spent: the balance goes to it…", co.balance() == 0, co.balance())
+  check("E1: …the rest is owed, repaid from income", co.owed() == adv2 - 100, co.owed())
+  check("E1: …and walking away costs 2 reputation", co.rep() == r1 - 2, co.rep())
+  co.earn(100000, "test: settle")
+  store["co.funds"], store["co.rep"] = 20000, 3
+
+  -- 4. completing pays the rest
+  craft.piloting, walker.onFoot = true, false
+  put(craft.node, "Ryethos", 100)
+  local b3 = co.balance()
+  tick(3)
+  check("E1: completing pays the reward less the advance", mi.active == nil and co.balance() == b3 + fl.reward - adv,
+    co.balance() - b3)
+  check("E1: …and the card is told both", mi.lastPaid and mi.lastPaid.reward == fl.reward - adv and mi.lastPaid.adv == adv)
+  craft.piloting, walker.onFoot = false, true
+  put(craft.node, "Umunquo", 0)
+
+  -- 5. ground work earns standing, to Trusted
+  local function haul(seq)
+    local s = board_add(mi.genSpec("bulk", "Umunquo", seq))
+    mi.accept(s.id)
+    deliver_all(s)
+    second()
+    return s
+  end
+  local rA = co.rep()
+  local h1 = haul(505)
+  check("E1: a bulk haul delivered completes", mi.lastPaid and mi.lastPaid.id == h1.id)
+  check("E1: …and earns a point of standing", co.rep() == rA + 1, rA .. " → " .. co.rep())
+  local tr = mi.genSpec("trek", "Umunquo", 506)
+  local rp, cap = mi.repOf(tr)
+  check("E1: a survey drive earns one too, an order none", rp == 1 and cap == 8 and mi.repOf(mi.genSpec("order", "Umunquo", 507)) == 0)
+  local old = mi.genSpec("bulk", "Umunquo", 508); old.rep, old.repCap = 0, nil
+  check("E1: a haul rolled before E1 (rep 0 on the board) earns its point too", (mi.repOf(old)) == 1)
+  store["co.rep"] = 7
+  haul(509)
+  check("E1: ground work lifts standing to Trusted…", co.rep() == 8, co.rep())
+  haul(510)
+  check("E1: …and no further", co.rep() == 8, co.rep())
+  store["co.rep"] = 3
+
+  -- 6. prices
+  local rs = load_script("solar/scripts/research.lua", "research")
+  check("E1: RCS research $1,800 (was $2,600)", rs.TECH.rcs.cost == 1800, rs.TECH.rcs.cost)
+  check("E1: Docking Port $2,400 at Contractor+ rep 4 (was $3,800, rep 6)", rs.TECH.dockPort.cost == 2400
+    and rs.TECH.dockPort.rep == 4, rs.TECH.dockPort.cost .. " rep " .. rs.TECH.dockPort.rep)
+  check("E1: the Skipper at rep 6 (was 8)", rs.TECH.skipper.rep == 6, rs.TECH.skipper.rep)
+  envs.research = nil
+  local kit = io.open("solar/scripts/parts_kit.lua"):read("*a")
+  check("E1: the Crusher halved to $9,000", kit:find("mcCrusher = {[^\n]*\n[^\n]*cost = 9000,") ~= nil)
+  check("E1: the Furnace halved to $16,000", kit:find("mcFurnace = {[^\n]*\n[^\n]*cost = 16000,") ~= nil)
+
+  -- 7. hull insurance by standing
+  check("E1: no insurance while Unknown", co.insuranceRate(2) == 0)
+  check("E1: 20 % at Contractor, 35 % Trusted, 50 % Prime", co.insuranceRate(3) == 0.20
+    and co.insuranceRate(8) == 0.35 and co.insuranceRate(15) == 0.50 and co.insuranceRate(25) == 0.50)
+  store["co.rep"] = 8
+  local b4 = co.balance()
+  local paidI = co.insureLoss(10000, "Kestrel")
+  check("E1: a lost craft pays out on the telemetry", paidI == 3500 and co.balance() == b4 + 3500, co.balance() - b4)
+  store["game.mode"] = "scenario"
+  check("E1: …never in a scenario (its budget is the story's)", co.insuranceRate() == 0)
+  store["game.mode"] = nil
+  store["co.rep"] = 3
+
+  -- 8. Mission Control's advance is sized to the open work
+  check("E1: Mission Control steps in under $600 now", co.ADVANCE.below == 600)
+  store["mission.done"] = { firstflight = true, highroad = true, orbit = true }
+  mi.accept("rendezvous")
+  check("E1: …with half the craft the open contract needs ($8,000 docking pair → $4,000)",
+    co.advanceAmount() == 4000, co.advanceAmount())
+  mi.abandon("rendezvous")
+  co.earn(100000, "test: settle")
+
+  -- 9. an old one-contract save: its contract is slot one, nothing lost
+  for k in pairs(store) do if k:sub(1, 8) == "mission." and k ~= "mission.done" and k ~= "mission.board" then store[k] = nil end end
+  store["mission.active"] = "orbit"
+  store["mission.perm"] = {}
+  store["mission.seen"] = { true }
+  envs.missions = nil
+  mi = load_script("solar/scripts/missions.lua", "missions")
+  mi.start({})
+  check("E1: an old save's contract is on the books as slot one", mi.active == "orbit" and #mi.actives() == 1)
+  check("E1: …its flight latches kept", (mi.goalLines()[1] or ""):sub(1, 3) == "✓", mi.goalLines()[1])
+  check("E1: …and signed before the advance, it pays in full", mi.advancePaid("orbit") == 0)
+  local gb = board_add(mi.genSpec("bulk", "Umunquo", 511))
+  check("E1: …and a ground job signs beside it", mi.accept(gb.id) == true and store["mission.active2"] == gb.id
+    and mi.active == "orbit")
+  local b5 = co.balance()
+  mi.forceComplete("orbit")
+  check("E1: …which completes for its full reward", co.balance() >= b5 + 11000 * 0.75 and mi.lastPaid.reward == 11000,
+    mi.lastPaid and mi.lastPaid.reward)
+  check("E1: …leaving the ground job primary", mi.active == gb.id and #mi.actives() == 1)
+  -- a reload keeps the second slot
+  envs.missions = nil
+  mi = load_script("solar/scripts/missions.lua", "missions")
+  mi.start({})
+  check("E1: a reload keeps the second place on the books", mi.active == gb.id and mi.advancePaid(gb.id) == mi.advanceFor(gb))
+
+  -- restore
+  envs.missions = nil
+  for k in pairs(store) do store[k] = nil end
+  for k, v in pairs(keep) do store[k] = v end
+  mi = load_script("solar/scripts/missions.lua", "missions")
+  mi.start({})
 end
 
 -- ── report ──────────────────────────────────────────────────────────────────

@@ -1344,6 +1344,22 @@ end
 -- THE one check every harm path asks.
 function invincible() return safety() == "invincible" end
 
+-- DEATHS COST REPUTATION (career missions PLAN §5; Ty 2026-11-11: "it's really
+-- easy to kill astronauts which sucks for reputation, so let's make a setting
+-- for whether killing astronauts reduces your reputation"). Per save, default
+-- ON (a save without the key costs, as every save did). Off spares the
+-- company's standing only: permadeath, the memorial and the lost pack stand.
+-- Governs every death `kill` records, our crew's and a client's (a rescue's
+-- survivor). Abandoning a contract is not a life and stays outside it.
+function deathRep()
+  return save.get("crew.deathRep") ~= false
+end
+
+function setDeathRep(on)
+  save.set("crew.deathRep", on ~= false)
+  bump()
+end
+
 function deathOn() return safety() == "death" end
 
 function setDeath(on) setSafety(on and "death" or "rescue") end
@@ -3099,6 +3115,7 @@ function kill(id, cause, detail, opts)
   local dep = ref("deployables")
   local date = dep and dep.dateOf and dep.dateOf(st) or nil
   r = get(id)
+  local was_client = r.status == "client" or r.client ~= nil
   r.status = "dead"
   r.task = nil
   r.died = { st = st, date = date, cause = cause, detail = detail, body = d,
@@ -3108,8 +3125,11 @@ function kill(id, cause, detail, opts)
     if b then r.died.x, r.died.y, r.died.z = x - b.x, y - b.y, z - b.z end
   end
   put(r)
+  -- (the setting: Settings ▸ Agency / the new-save panel, `deathRep`)
   local co = ref("company")
-  if co and co.addRep then pcall(co.addRep, -2, "astronaut lost: " .. r.name) end
+  if deathRep() and co and co.addRep then
+    pcall(co.addRep, -2, (was_client and "client lost: " or "astronaut lost: ") .. r.name)
+  end
   -- (a detail that names who did it reads on: "shot by Dana Okafor, 30 m")
   local text = string.format("%s was killed: %s%s", r.name, CAUSE_TEXT[cause] or cause,
     detail and ((tostring(detail):sub(1, 3) == "by " and " " or ", ") .. detail) or "")

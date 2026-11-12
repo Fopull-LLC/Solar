@@ -1,10 +1,13 @@
 -- MISSIONS — the contracts that turn a sandbox into a company.
 --
--- One accepted contract at a time. Its goals are watched live against the craft
--- you're actually flying; every goal that latches stays latched for the flight,
--- so "reach 2,000 m AND land intact" is a thing you do in one trip rather than
--- two states that can never be true at once. Complete them all and Ops pays out
--- the moment you're home.
+-- Two contracts on the books at once: one FLIGHT contract and one GROUND or
+-- CLIENT job (career missions E1, below `slotGroup`). Each one's goals are
+-- watched live against the craft you're actually flying; every goal that
+-- latches stays latched for the flight, so "reach 2,000 m AND land intact" is
+-- a thing you do in one trip rather than two states that can never be true at
+-- once. Complete them all and Ops pays out the moment you're home. Signing
+-- pays an ADVANCE (30 % of the reward, `ADVANCE_SHARE`) and the rest comes on
+-- completion; abandoning hands the advance back.
 --
 -- Two sources of work:
 --
@@ -107,12 +110,18 @@
 -- orders, bulk hauls and survey drives on the home world, open from the First
 -- Steps milestone, so a company that just lost a rocket always has paid work
 -- it can do on foot or by rover.
+--
+-- (Career missions E1) Three fields more per rung: `craft`, about what the
+-- craft it needs costs (company's Mission Control advance is sized to it);
+-- `advance = true`, signing pays ADVANCE_SHARE of the reward up front (High
+-- Road and up: the rungs whose craft costs real money); `slot = "ground"`, a
+-- rung done on foot (deliveries, a discovery) shares the books with a flight.
 local CATALOGUE = {
   {
     id = "firstflight", title = "First Flight",
     brief = "Get something off the pad and bring the pod back in one piece.\n" ..
             "Ops isn't asking for elegance.",
-    reward = 2500, rep = 1,
+    reward = 2500, rep = 1, craft = 1040,
     goals = {
       { kind = "altitude", frac = 0.15, label = "Reach %s" },
       { kind = "land", label = "Land with the pod intact" },
@@ -122,7 +131,7 @@ local CATALOGUE = {
     id = "recovery", title = "Bring It Home",
     brief = "Ops is tired of writing off hulls. Land near the base and RECOVER\n" ..
             "the craft — you get most of the hardware's value back.",
-    reward = 1800, rep = 1, requires = "firstflight",
+    reward = 1800, rep = 1, requires = "firstflight", craft = 1040,
     goals = {
       { kind = "recover", label = "Recover a craft at the base" },
     },
@@ -131,7 +140,7 @@ local CATALOGUE = {
     id = "botany", title = "Field Botany",
     brief = "Cut samples of whatever grows down there — the labs will take any\n" ..
             "plant matter, and the stranger it is the better they like it.",
-    reward = 2200, rep = 1, requires = "firstflight",
+    reward = 2200, rep = 1, requires = "firstflight", slot = "ground",
     goals = {
       { kind = "deliver", class = "flora", value = 20,
         label = "20 units of plant matter in the warehouse" },
@@ -141,7 +150,7 @@ local CATALOGUE = {
     id = "prospect", title = "Prospector",
     brief = "The board wants to know the rock is worth landing on. Mine ore,\n" ..
             "fly it home and put 30 units through the depot.",
-    reward = 2800, rep = 1, requires = "firstflight",
+    reward = 2800, rep = 1, requires = "firstflight", slot = "ground",
     goals = {
       { kind = "deliver", class = "ore", value = 30,
         label = "30 units of ore in the warehouse" },
@@ -152,7 +161,7 @@ local CATALOGUE = {
     brief = "Most of the way to the edge of this world's pull. The air is thin\n" ..
             "enough up there that the board wants to see the telemetry before\n" ..
             "they sign anything bigger.",
-    reward = 5000, rep = 2, requires = "firstflight",
+    reward = 5000, rep = 2, requires = "firstflight", craft = 4800, advance = true,
     goals = {
       { kind = "altitude", frac = 0.55, label = "Reach %s" },
       { kind = "land", label = "Land intact" },
@@ -162,7 +171,7 @@ local CATALOGUE = {
     id = "deepcore", title = "Deep Core",
     brief = "Resonant crystal only forms twenty metres down and it does not\n" ..
             "come up with a shovel. Take the laser and dig.",
-    reward = 6500, rep = 2, requires = "prospect",
+    reward = 6500, rep = 2, requires = "prospect", slot = "ground", advance = true,
     goals = {
       { kind = "sample", mat = "crystal", label = "Find resonant crystal" },
       { kind = "deliver", mat = "crystal", value = 5,
@@ -173,7 +182,7 @@ local CATALOGUE = {
     id = "orbit", title = "Made Orbit",
     brief = "Not a lob — an ORBIT. Get your periapsis clear of the atmosphere\n" ..
             "so the craft comes back around on its own.",
-    reward = 11000, rep = 2, requires = "highroad",
+    reward = 11000, rep = 2, requires = "highroad", craft = 3500, advance = true,
     goals = {
       { kind = "orbit", frac = 0.10, label = "Periapsis above %s" },
     },
@@ -182,7 +191,7 @@ local CATALOGUE = {
     id = "rendezvous", title = "Rendezvous",
     brief = "Two craft, one seam. Undock a module in flight and latch it back\n" ..
             "on — the manoeuvre every station and every return trip is built of.",
-    reward = 24000, rep = 3, requires = "orbit",
+    reward = 24000, rep = 3, requires = "orbit", craft = 8000, advance = true,
     goals = {
       { kind = "dock", label = "Dock two craft in flight" },
       { kind = "land", label = "Bring the stack home intact" },
@@ -467,8 +476,8 @@ PROGRAMME = {
 progNet = { api = false, ground = 0, sky = 0, orbit = 0, linked = {}, t = -1 }
 
 -- Published for the panels.
-active = nil       -- the accepted contract's id
-progress = ""      -- one-line summary of the active contract
+active = nil       -- the PRIMARY contract on the books (the flight one, else the other)
+progress = ""      -- one-line summary of the primary contract
 
 -- The contract that just paid, for the card to announce. `log` writes to the
 -- Console and the Console is not on screen, so a contract that pays itself
@@ -481,6 +490,78 @@ local perm = {}          -- goal index → true once done, for good (see PERMANE
 local best = {}          -- goal index → the closest this flight has come
 local odo = { d = 0.0, id = nil, body = nil, x = nil, y = nil, z = nil }  -- `drive` goals
 local last_piloting = false
+
+-- ── TWO CONTRACTS ON THE BOOKS (career missions E1, PLAN §6.3) ─────────────
+-- Ty, 2026-11-11: "I get stuck in loops of needing money to make the next
+-- contract's craft requirements, so I end up doing repetitive simple and
+-- boring missions." With one contract at a time a bulk haul and a flight could
+-- not run together, so the ground work meant as the safety net was also a
+-- throttle on everything else. Now the books hold two: one FLIGHT contract
+-- and one GROUND or CLIENT job (`slotGroup`: generated ground work, the
+-- ladder's on-foot rungs, and later the client families: rescues, salvage).
+--
+-- Each slot keeps exactly the state one contract always had: its id, its spec
+-- (a generated one), its per-flight and permanent latches, its high-water
+-- marks, its odometer and its advance. Slot 1 is the save keys as they always
+-- were (`mission.active`, `.activeSpec`, `.seen`, `.perm`, `.odo`), slot 2 the
+-- same names with a "2" — so an older save's one contract simply IS slot 1,
+-- whatever kind it is, and nothing needs migrating. The tracker below runs
+-- once per slot with that slot's state swapped in (`with_slot`); between
+-- calls the PRIMARY slot is the one swapped in, so `active`, `odometer()` and
+-- every published reader see the flight contract first.
+local SLOT_SUFFIX = { [1] = "", [2] = "2" }
+local cur_slot = 1
+local slot_ids = {}                 -- slot → contract id
+local function new_ctx()
+  return { seen = {}, perm = {}, best = {}, lp = false,
+           odo = { d = 0.0, id = nil, body = nil, x = nil, y = nil, z = nil } }
+end
+local slot_ctx = { [1] = new_ctx(), [2] = new_ctx() }
+-- The save key `name` for slot k (the current slot when k is nil).
+local function KS(k, name) return name .. SLOT_SUFFIX[k or cur_slot] end
+local function K(name) return name .. SLOT_SUFFIX[cur_slot] end
+
+local function stash()
+  local c = slot_ctx[cur_slot]
+  slot_ids[cur_slot] = active
+  c.seen, c.perm, c.best, c.odo, c.lp = flight_seen, perm, best, odo, last_piloting
+end
+local function unstash(k)
+  cur_slot = k
+  local c = slot_ctx[k]
+  active = slot_ids[k]
+  flight_seen, perm, best, odo, last_piloting = c.seen, c.perm, c.best, c.odo, c.lp
+end
+-- The slot shown first: the flight contract's, else whichever is filled.
+local function primary_slot()
+  local first = nil
+  for k = 1, 2 do
+    local id = slot_ids[k]
+    if id then
+      local m = byId(id)
+      if m and slotGroup(m) == "flight" then return k end
+      first = first or k
+    end
+  end
+  return first or 1
+end
+-- Run fn with slot k's contract swapped in; the primary goes back after.
+local function with_slot(k, fn, ...)
+  stash()
+  unstash(k)
+  local ok, a, b = pcall(fn, ...)
+  stash()
+  unstash(primary_slot())
+  if not ok then error(a, 0) end
+  return a, b
+end
+-- The slot holding contract `which` (an id or a slot number; nil = primary).
+local function slot_of(which)
+  if which == nil then return slot_ids[primary_slot()] and primary_slot() or nil end
+  if which == 1 or which == 2 then return which end
+  for k = 1, 2 do if slot_ids[k] == which then return k end end
+  return nil
+end
 
 -- Cross-script singletons, resolved once and kept: `findScript` walks the whole
 -- scene (floptle/0063). `goalLines` is now read every frame by the objectives
@@ -731,6 +812,15 @@ TIERS = {
 -- How many generated contracts the board holds, by standing level.
 local SLOTS = { [0] = 0, [1] = 0, [2] = 2, [3] = 3, [4] = 4, [5] = 5 }
 
+-- ── CLIENT WORK (career missions PLAN §2.0; E1 leaves the slot ready) ──────
+-- Other companies' rescues and salvage runs: a third group on the board
+-- beside flight and ground work, CLIENT_SLOTS of it by standing level. A
+-- generated kind with `client = true` in GEN_KINDS rolls into it (none yet:
+-- the families land with R1 and X1), takes the second place on the books
+-- like ground work does, and may carry `expires` (agency seconds), after
+-- which the board drops it and rolls again.
+local CLIENT_SLOTS = { [0] = 1, [1] = 1, [2] = 2, [3] = 2, [4] = 3, [5] = 3 }
+
 -- ── GROUND WORK ─────────────────────────────────────────────────────────────
 -- Playtest 2026-10-26: "it's very hard to make money back up to where you were
 -- and progress again". Contracts were all flights, and a company with no
@@ -752,6 +842,14 @@ local SLOTS = { [0] = 0, [1] = 0, [2] = 2, [3] = 3, [4] = 4, [5] = 5 }
 -- opening — mine, sell, launch the first rocket with money you earned — is
 -- what it was. The board keeps GROUND_SLOTS of it beside the flight work, one
 -- of each kind at most, and a finished one is replaced by a fresh roll.
+--
+-- (Career missions E1, PLAN §6.2) It used to pay money and never standing, so
+-- a company grinding bulk hauls was earning toward a wall it could not see
+-- move. A bulk haul and a survey drive now earn +1 reputation, up to Trusted
+-- (GROUND_REP_CAP) and never past it: ground work can open the local and
+-- interplanetary tiers, not the Prime ones. A supply order stays money only.
+GROUND_REP = { order = 0, bulk = 1, trek = 1 }
+GROUND_REP_CAP = 8
 GROUND = {
   name = "Ground work",
   needs = "first_steps",
@@ -1037,8 +1135,8 @@ local function ground_spec(kind, home, seq)
   if not g then return nil end
   return { id = string.format("g%d-%s-%s", seq or 0, kind, X), gen = true, ground = true,
            key = kind .. ":" .. X, kind = kind, body = X,
-           title = title, brief = brief, reward = reward, rep = 0,
-           goals = g, dv = 0, diff = 1.0 }
+           title = title, brief = brief, reward = reward, rep = GROUND_REP[kind] or 0,
+           repCap = GROUND_REP_CAP, goals = g, dv = 0, diff = 1.0 }
 end
 
 -- ── ORE HAULS: a world's own ores ──────────────────────────────────────────
@@ -1465,40 +1563,55 @@ local function board()
   return (type(b) == "table") and b or {}
 end
 
-local function active_spec()
-  local s = save.get("mission.activeSpec")
+-- The generated spec on the books in slot k (the current slot when nil).
+local function active_spec(k)
+  local s = save.get(KS(k, "mission.activeSpec"))
   return (type(s) == "table") and s or nil
 end
 
 -- Bring the board up to its slot count; drop anything that no longer applies.
--- Cheap and idempotent, so `update` calls it once a second. Flight work and
--- ground work fill their own slots, so a board full of cheap ground jobs never
--- crowds out the next world to fly to (or the other way round).
-local function is_ground(kind)
+-- Cheap and idempotent, so `update` calls it once a second. Flight work,
+-- ground work and client work fill their own slots, so a board full of cheap
+-- ground jobs never crowds out the next world to fly to (or the other way
+-- round).
+local function group_of(kind)
   local K = GEN_KINDS[kind]
-  return K ~= nil and K.ground == true
+  if K and K.client then return "client" end
+  if K and K.ground then return "ground" end
+  return "flight"
+end
+
+-- Agency seconds (the clock warp moves), for client offers' `expires`.
+local function agency_now()
+  return (space and space.time and space.time()) or (time or 0)
 end
 
 local function refill()
   local R = roster()
   if not R then return end
   local lvl = standing_level()
-  local cap = { [false] = SLOTS[lvl] or 0,
-                [true] = ground_open() and (GROUND_SLOTS[lvl] or 2) or 0 }
+  local cap = { flight = SLOTS[lvl] or 0,
+                ground = ground_open() and (GROUND_SLOTS[lvl] or 2) or 0,
+                client = CLIENT_SLOTS[lvl] or 0 }
   local cands = candidates()
   local ok = {}
   for _, c in ipairs(cands) do ok[c.key] = true end
   local cur, keep, used = board(), {}, {}
-  local count = { [false] = 0, [true] = 0 }
-  local act = active_spec()
-  if act then used[act.key] = true end
+  local count = { flight = 0, ground = 0, client = 0 }
+  for k = 1, 2 do
+    local act = active_spec(k)
+    if act and act.key then used[act.key] = true end
+  end
   local changed = false
+  local now = agency_now()
   for _, s in ipairs(cur) do
     -- Repeatable kinds stay; a one-shot whose body is done (or now beaconed)
     -- does not. A board from another system (a re-rolled save) is cleared.
+    -- A client offer past its `expires` goes.
     local K = GEN_KINDS[s.kind]
-    local grp = is_ground(s.kind)
+    local grp = group_of(s.kind)
     if K and R.by[s.body] and (ok[s.key] or not K.once) and not used[s.key]
+       and not (type(s.expires) == "number" and now > s.expires)
        and count[grp] < math.max(cap[grp], 0) then
       keep[#keep + 1] = s
       used[s.key] = true
@@ -1510,13 +1623,13 @@ local function refill()
   local seq = save.get("mission.genSeq") or 0
   local he = home_entry(R)
   local base = name_hash((R.star or "") .. ((he and he.name) or ""))
-  for _, grp in ipairs({ false, true }) do
+  for _, grp in ipairs({ "flight", "ground", "client" }) do
     local guard = 0
     while count[grp] < cap[grp] and guard < 8 do
       guard = guard + 1
       local free = {}
       for _, c in ipairs(cands) do
-        if not used[c.key] and (c.ground == true) == grp then free[#free + 1] = c end
+        if not used[c.key] and group_of(c.kind) == grp then free[#free + 1] = c end
       end
       if #free == 0 then break end
       seq = seq + 1
@@ -2192,29 +2305,132 @@ function byId(id)
   for _, m in ipairs(CATALOGUE) do
     if m.id == id then return m end
   end
-  local a = active_spec()
-  if a and a.id == id then return a end
+  for k = 1, 2 do
+    local a = active_spec(k)
+    if a and a.id == id then return a end
+  end
   for _, s in ipairs(board()) do
     if s.id == id then return s end
   end
   return nil
 end
 
+-- Which place on the books a contract takes: "flight", or "ground" for ground
+-- work, the ladder's on-foot rungs (`slot = "ground"`) and client jobs. One
+-- of each may be signed at a time.
+function slotGroup(m)
+  if type(m) ~= "table" then return "flight" end
+  if m.slot == "ground" or m.ground or m.client then return "ground" end
+  local grp = m.kind and group_of(m.kind) or "flight"
+  return (grp == "flight") and "flight" or "ground"
+end
+
+-- The contracts on the books, primary (flight) first: { id, id }.
+function actives()
+  local out, p = {}, primary_slot()
+  if slot_ids[p] then out[#out + 1] = slot_ids[p] end
+  local o = (p == 1) and 2 or 1
+  if slot_ids[o] then out[#out + 1] = slot_ids[o] end
+  return out
+end
+
+-- Is contract `id` on the books?
+function isActive(id)
+  return id ~= nil and (slot_ids[1] == id or slot_ids[2] == id)
+end
+
+-- ── THE ADVANCE ON SIGNING (career missions E1, PLAN §6.1) ──────────────────
+-- A contract paid only on completion left the player holding the whole outlay
+-- of the next rung in cash: the hull is bought at rollout, the reward comes
+-- after the landing. Signing now pays ADVANCE_SHARE of the reward at once,
+-- for every generated contract (ground work too) and the ladder from the High
+-- Road up (`advance = true`); completion pays the rest. Abandoning hands it
+-- back (company.clawBack): what the balance cannot cover goes on the books as
+-- money owed, repaid from income, and the walk-away costs 2 reputation instead
+-- of 1. A contract signed before this has no advance (`mission.adv` absent):
+-- it pays in full on completion, exactly as signed.
+ADVANCE_SHARE = 0.30
+
+-- What signing `m` would advance (0 for none).
+function advanceFor(m)
+  if type(m) ~= "table" or not (m.gen or m.advance) then return 0 end
+  return math.floor((m.reward or 0) * ADVANCE_SHARE / 10 + 0.5) * 10
+end
+
+-- What was advanced on contract `id` when it was signed (0 if none or not on
+-- the books).
+function advancePaid(id)
+  local k = slot_of(id)
+  if not k or (id ~= nil and slot_ids[k] ~= id) then return 0 end
+  return tonumber(save.get(KS(k, "mission.adv"))) or 0
+end
+
+-- Why `m` cannot be signed right now (nil when it can): the place on the
+-- books it needs is taken.
+function signBlock(m)
+  if type(m) ~= "table" then return "no such contract" end
+  if isActive(m.id) then return "already on the books" end
+  local grp = slotGroup(m)
+  for k = 1, 2 do
+    local o = slot_ids[k] and byId(slot_ids[k])
+    if o and slotGroup(o) == grp then
+      return string.format(grp == "flight"
+        and "One flight contract at a time: finish or abandon %s first."
+        or  "One ground or client job at a time: finish or abandon %s first.", o.title)
+    end
+  end
+  if slot_ids[1] and slot_ids[2] then return "The books are full: finish or abandon a contract first." end
+  return nil
+end
+
+-- ── what the work's craft costs (company's Mission Control advance) ─────────
+-- About what the craft a contract needs costs: the ladder says (`craft`); a
+-- generated flight scales a starter orbiter by the trip; ground work wants a
+-- suit (an order), a rover with a hold (a bulk haul) or any wheels (a drive).
+-- A spec's `req` priced from the registry replaces this when the client
+-- families bring one (PLAN §2.0).
+local CRAFT_GROUND = { order = 0, bulk = 650, trek = 600 }
+function craftCost(m)
+  if type(m) ~= "table" then return 0 end
+  if type(m.craftCost) == "number" then return m.craftCost end
+  if type(m.craft) == "number" then return m.craft end
+  if m.ground then return CRAFT_GROUND[m.kind] or 0 end
+  if m.gen then return math.floor(2600 * math.max(1.0, m.diff or 1.0) ^ 0.8 / 100 + 0.5) * 100 end
+  return 0
+end
+
+-- The cheapest craft any open contract needs (nil when none needs one): the
+-- contracts on the books, else what the board offers.
+function openCraftCost()
+  local function cheapest(list)
+    local lo = nil
+    for _, m in ipairs(list) do
+      local c = craftCost(m)
+      if c > 0 and (not lo or c < lo) then lo = c end
+    end
+    return lo
+  end
+  local booked = {}
+  for _, id in ipairs(actives()) do booked[#booked + 1] = byId(id) end
+  return cheapest(booked) or cheapest(offers())
+end
+
 -- Every contract you could take right now: not already flown, prerequisite met,
--- and not the one already on the books — the ladder first, then the generated
--- board.
+-- and not one already on the books — the ladder first, then the generated
+-- board. (One the books have no room for is still offered: the board greys
+-- its SIGN button and says why, `signBlock`.)
 function offers()
   local done = done_set()
   local out = {}
   if stoodDown and stoodDown("contracts") then return out end
   for _, m in ipairs(CATALOGUE) do
-    if not done[m.id] and m.id ~= active
+    if not done[m.id] and not isActive(m.id)
       and (not m.requires or done[m.requires]) then
       out[#out + 1] = m
     end
   end
   for _, s in ipairs(board()) do
-    if s.id ~= active then out[#out + 1] = s end
+    if not isActive(s.id) then out[#out + 1] = s end
   end
   return out
 end
@@ -2229,7 +2445,7 @@ function upcoming()
   local done = done_set()
   local out = {}
   for _, m in ipairs(CATALOGUE) do
-    if not done[m.id] and m.id ~= active and m.requires and not done[m.requires] then
+    if not done[m.id] and not isActive(m.id) and m.requires and not done[m.requires] then
       local r = byId(m.requires)
       out[#out + 1] = { m = m, needs = r and r.title or m.requires }
     end
@@ -2295,7 +2511,7 @@ end
 -- Does the contract on the books still need this material in the warehouse?
 -- The depot keeps it back instead of selling it: selling the ore a Prospector
 -- contract is waiting for is a sale that quietly un-does the job.
-function reserves(mat)
+local function reserves_here(mat)
   local m = active and byId(active)
   if not m then return false end
   local mats = ref("materials")
@@ -2304,6 +2520,13 @@ function reserves(mat)
       if g.mat == mat then return true end
       if not g.mat and (not g.class or (mats and mats.class(mat) == g.class)) then return true end
     end
+  end
+  return false
+end
+-- (either contract on the books)
+function reserves(mat)
+  for k = 1, 2 do
+    if slot_ids[k] and with_slot(k, reserves_here, mat) then return true end
   end
   return false
 end
@@ -2323,13 +2546,17 @@ end
 
 local function clear_progress()
   flight_seen, perm, best = {}, {}, {}
-  save.set("mission.seen", {})
-  save.set("mission.perm", {})
+  save.set(K("mission.seen"), {})
+  save.set(K("mission.perm"), {})
 end
 
-function accept(id)
-  local m = byId(id)
-  if not m or active == id or m.tier or m.charter then return false end
+local function has_goal(m, kind)
+  for _, g in ipairs(m.goals or {}) do if g.kind == kind then return true end end
+  return false
+end
+
+-- (runs with the empty slot swapped in: `accept` below)
+local function accept_here(m, id)
   -- Signing a generated contract takes it off the board (the board refills).
   if m.gen then
     local keep = {}
@@ -2341,32 +2568,65 @@ function accept(id)
       if g.kind == "supply" then g.b0 = (br and br.stockOf and br.stockOf(g.base, g.mat)) or 0 end
       if g.kind == "pipeline" then g.c0 = (br and br.cyclesOf and br.cyclesOf(g.base)) or 0 end
     end
-    save.set("mission.activeSpec", m)
+    save.set(K("mission.activeSpec"), m)
   else
-    save.set("mission.activeSpec", false)
+    save.set(K("mission.activeSpec"), false)
   end
   active = id
   clear_progress()
-  save.set("mission.active", id)
+  save.set(K("mission.active"), id)
   -- A recovery done BEFORE signing is not this contract's recovery. The flag
   -- was set by vessel_controller and never cleared, so "Bring It Home" paid on
-  -- the spot for anyone who had ever recovered a craft.
-  save.set("mission.recovered", false)
+  -- the spot for anyone who had ever recovered a craft. (A ground job signed
+  -- beside a flight leaves it alone: it is the flight's.)
+  if slotGroup(m) == "flight" or has_goal(m, "recover") then
+    save.set("mission.recovered", false)
+  end
+  odo.id, odo.key, odo.x, odo.d = nil, nil, nil, 0.0
+  -- The advance on signing.
+  local adv = advanceFor(m)
+  save.set(K("mission.adv"), adv > 0 and adv or false)
   log("CONTRACT ACCEPTED — " .. m.title)
+  local c = company()
+  if adv > 0 and c and c.earn then c.earn(adv, "advance: " .. m.title) end
   return true
 end
 
-function abandon()
+-- Sign contract `id`. → true, or false and why not (signBlock's sentence).
+function accept(id)
+  local m = byId(id)
+  if not m or m.tier or m.charter then return false, "no such contract" end
+  local why = signBlock(m)
+  if why then return false, why end
+  local k = slot_ids[1] and 2 or 1
+  return with_slot(k, accept_here, m, id)
+end
+
+local function abandon_here()
   if not active then return false end
   local m = byId(active)
+  local adv = tonumber(save.get(K("mission.adv"))) or 0
   active = nil
   clear_progress()
-  save.set("mission.active", false)
-  save.set("mission.activeSpec", false)
-  -- Walking away from a signed contract costs standing, not money.
+  save.set(K("mission.active"), false)
+  save.set(K("mission.activeSpec"), false)
+  save.set(K("mission.adv"), false)
   local c = company()
-  if c and c.addRep then c.addRep(-1, "abandoned " .. ((m and m.title) or "contract")) end
+  local title = (m and m.title) or "contract"
+  -- The advance goes back; what the balance can't cover is owed, and then
+  -- walking away costs 2 reputation instead of 1.
+  local short = 0
+  if adv > 0 and c and c.clawBack then short = c.clawBack(adv, "advance returned: " .. title) or 0 end
+  if c and c.addRep then c.addRep(short > 0 and -2 or -1, "abandoned " .. title) end
   return true
+end
+
+-- Abandon a contract on the books: `which` is its id (or slot); nil = the
+-- primary one.
+function abandon(which)
+  local k = slot_of(which)
+  if not k or not slot_ids[k] then return false end
+  return with_slot(k, abandon_here)
 end
 
 -- The craft the player is actually flying, if any.
@@ -2558,10 +2818,10 @@ local function craft_key(v, n)
 end
 
 local function trips()
-  local t = save.get("mission.odo")
+  local t = save.get(K("mission.odo"))
   if type(t) ~= "table" or t.id ~= active then
     t = { id = active, by = {} }
-    save.set("mission.odo", t)
+    save.set(K("mission.odo"), t)
   end
   if type(t.by) ~= "table" then t.by = {} end
   return t
@@ -2573,7 +2833,7 @@ local function odo_store(force)
   if moved == 0 or (not force and moved < 1.0) then return end
   local t = trips()
   t.by[odo.key] = odo.d
-  save.set("mission.odo", t)
+  save.set(K("mission.odo"), t)
   odo.saved = odo.d
 end
 
@@ -2802,8 +3062,9 @@ local function tail(i, g)
   return string.format("   (best this flight %s)", fmt_of(g)(b))
 end
 
--- One line per goal, ✓ once met.
-function goalLines()
+-- One line per goal, ✓ once met. `id`: a contract on the books (nil = the
+-- primary one).
+local function goal_lines_here()
   local m = active and byId(active)
   if not m then return {} end
   local out = {}
@@ -2813,8 +3074,14 @@ function goalLines()
   end
   return out
 end
+function goalLines(id)
+  if id == nil or id == active then return goal_lines_here() end
+  local k = slot_of(id)
+  if not k or slot_ids[k] ~= id then return {} end
+  return with_slot(k, goal_lines_here)
+end
 
-function activeLine()
+local function active_line_here()
   local m = active and byId(active)
   if not m then return nil end
   local n, total = 0, #m.goals
@@ -2823,15 +3090,22 @@ function activeLine()
   end
   return string.format("%s  %d/%d", m.title, n, total)
 end
+function activeLine(id)
+  if id == nil or id == active then return active_line_here() end
+  local k = slot_of(id)
+  if not k or slot_ids[k] ~= id then return nil end
+  return with_slot(k, active_line_here)
+end
 
-local function announce(id, title, reward)
+local function announce(id, title, reward, adv)
   -- SAY IT ON SCREEN. The money moves the instant the last goal ticks — there
   -- is no counter to walk to, no Ops clerk to see — and the only announcement
   -- was a Console line, which the player is not looking at. The objectives
   -- card picks `lastPaid` up and holds a banner for a few seconds, including
   -- mid-flight, because the last goal of a flight contract ticks while you are
-  -- still in the seat.
-  lastPaid = { id = id, title = title, reward = reward, at = time }
+  -- still in the seat. `reward` is what was paid NOW; `adv`, what the
+  -- advance on signing already paid.
+  lastPaid = { id = id, title = title, reward = reward, adv = adv, at = time }
   log(string.format("CONTRACT COMPLETE — %s   +$%d", title, reward))
 end
 
@@ -2881,14 +3155,27 @@ local function consume(m)
   if type(fr) == "table" then save.set("depot.freight", fr) end
 end
 
+-- What completing `m` adds to reputation, and the ceiling it may lift it to
+-- (nil = none). Ground work goes by GROUND_REP whatever its spec says, so a
+-- haul rolled before E1 (rep 0 on the board) earns its point too.
+function repOf(m)
+  if type(m) ~= "table" then return 0, nil end
+  if m.ground and GROUND_REP[m.kind] then return GROUND_REP[m.kind], GROUND_REP_CAP end
+  return m.rep or 0, m.repCap
+end
+
 local function payout(m)
   -- The jingle goes first: the ledger's cash clink under it is swallowed.
   local fx = ref("sfx")
   if fx and fx.play then fx.play("jingle") end
   local c = company()
+  -- What the advance on signing already paid comes off the completion.
+  local adv = tonumber(save.get(K("mission.adv"))) or 0
+  local pay = math.max(0, (m.reward or 0) - adv)
   if c then
-    if c.earn then c.earn(m.reward, "contract: " .. m.title) end
-    if c.addRep then c.addRep(m.rep or 0, "completed " .. m.title) end
+    if c.earn then c.earn(pay, "contract: " .. m.title) end
+    local r, cap = repOf(m)
+    if c.addRep then c.addRep(r, "completed " .. m.title, cap and { cap = cap } or nil) end
   end
   consume(m)
   if m.gen and m.kind == "bulk" then local FT = ref("feats"); if FT and FT.mark then pcall(FT.mark, "bulk_hauled") end end   -- (P2)
@@ -2906,9 +3193,11 @@ local function payout(m)
   end
   active = nil
   clear_progress()
-  save.set("mission.active", false)
-  save.set("mission.activeSpec", false)
-  announce(m.id, m.title, m.reward)
+  save.set(K("mission.active"), false)
+  save.set(K("mission.activeSpec"), false)
+  save.set(K("mission.adv"), false)
+  slot_ids[cur_slot] = nil
+  announce(m.id, m.title, pay, adv > 0 and adv or nil)
   refill()
 end
 
@@ -2917,7 +3206,13 @@ end
 -- save directly, so the ledger entry, the reputation and the done-set all move
 -- exactly the way a real completion moves them — a cheat that took a different
 -- code path would be testing the cheat instead of the game.
-function forceComplete()
+local force_complete_here
+function forceComplete(which)
+  local k = slot_of(which)
+  if not k or not slot_ids[k] then return false end
+  return with_slot(k, force_complete_here)
+end
+force_complete_here = function()
   local m = active and byId(active)
   if not m then return false end
   -- A forced beacon is still a beacon: the charter counts it.
@@ -2943,27 +3238,39 @@ function start(node)
   -- the flags' store (scripts/deployables.lua): spawned here when the scene
   -- carries none, as the salvage library is
   if spawn and findScript and not findScript("deployables") then pcall(spawn, "DeployLib", vec3(0, 0, 0)) end
-  local a = save.get("mission.active")
-  active = (type(a) == "string") and a or nil
-  local seen = save.get("mission.seen")
-  flight_seen = (type(seen) == "table") and seen or {}
-  local pm = save.get("mission.perm")
-  perm = (type(pm) == "table") and pm or {}
+  -- Both places on the books (slot 1 is the keys a one-contract save always
+  -- had, so its contract is simply slot 1's).
+  for k = 1, 2 do
+    local a = save.get(KS(k, "mission.active"))
+    slot_ids[k] = (type(a) == "string") and a or nil
+    local c = new_ctx()
+    local seen = save.get(KS(k, "mission.seen"))
+    c.seen = (type(seen) == "table") and seen or {}
+    local pm = save.get(KS(k, "mission.perm"))
+    c.perm = (type(pm) == "table") and pm or {}
+    slot_ctx[k] = c
+  end
   -- A generated contract on the books whose spec went missing (a save from
   -- before the generator) can't be tracked: let it go rather than strand it.
-  if active and not byId(active) then
-    active = nil
-    save.set("mission.active", false)
+  for k = 1, 2 do
+    if slot_ids[k] and not byId(slot_ids[k]) then
+      slot_ids[k] = nil
+      save.set(KS(k, "mission.active"), false)
+    end
   end
+  if slot_ids[1] and slot_ids[1] == slot_ids[2] then
+    slot_ids[2] = nil
+    save.set(KS(2, "mission.active"), false)
+  end
+  unstash(primary_slot())
 end
 
 -- Read the contract state again from the save: a revert to launch
 -- (vessel_spawner) has put mission.* back as they were at the launch. The
--- flight's high-water marks go with the flight.
+-- flight's high-water marks go with the flight (`start` builds both slots'
+-- state afresh: no marks, and the trips come back from the save).
 function reloadFromSave()
   start(nil)
-  best, last_piloting = {}, false
-  odo.id, odo.key, odo.x = nil, nil, nil   -- the trips come back from the save too
   lastPaid = nil
 end
 
@@ -3023,6 +3330,7 @@ local function wheel_odo()
   if FT and FT.addAmount then pcall(FT.addAmount, "drive_km", sp * gdt, { quiet = true }) end
 end
 
+local track_here
 function update(node, dt)
   here_name = space.dominant(node.x, node.y, node.z) or here_name
   wheel_odo()
@@ -3033,11 +3341,20 @@ function update(node, dt)
     charter_tick()
     prog_tick()
   end
-  local m = active and byId(active)
-  if not m then
-    progress = ""
-    return
+  -- Each contract on the books, with its own state swapped in.
+  local v = nil
+  if slot_ids[1] or slot_ids[2] then v = piloted() end
+  for k = 1, 2 do
+    if slot_ids[k] then with_slot(k, track_here, node, dt, v) end
   end
+  progress = active_line_here() or ""
+end
+
+-- One contract's tick (`update`, with its slot swapped in). `v`: the craft
+-- being piloted, or nil.
+track_here = function(node, dt, v)
+  local m = active and byId(active)
+  if not m then return end
   -- The goals you can meet with both feet on the ground — a warehouse delivery,
   -- a discovery, a recovery, a beacon — are checked every tick whether or not
   -- anyone is flying, and once true they stay true for the rest of the contract.
@@ -3045,7 +3362,7 @@ function update(node, dt)
     if PERMANENT[g.kind] and not perm[i] and (not g.after or met(g.after))
        and goal_now(g, { node = node }, nil) then
       perm[i] = true
-      save.set("mission.perm", perm)
+      save.set(K("mission.perm"), perm)
       log("  ✓ " .. goalLabel(g))
       -- (a haul's "set foot on X" is not a flag: only a flag contract's
       -- goal records one, or the board stops offering the flag there)
@@ -3057,7 +3374,6 @@ function update(node, dt)
     end
   end
 
-  local v = piloted()
   if v then odo_tick(v, assembly.info(v.node), dt) else odo_reset() end
   -- Leaving the craft (or losing it) ends the flight's latches: goals have to
   -- be met on ONE trip, which is what makes "get high AND land intact" a flight
@@ -3065,10 +3381,9 @@ function update(node, dt)
   if not v then
     if last_piloting and not save.get("mission.recovered") then
       flight_seen, best = {}, {}
-      save.set("mission.seen", {})
+      save.set(K("mission.seen"), {})
     end
     last_piloting = false
-    progress = activeLine() or ""
   else
     last_piloting = true
     local info = assembly.info(v.node)
@@ -3076,7 +3391,7 @@ function update(node, dt)
       if not PERMANENT[g.kind] and not flight_seen[i] and (not g.after or met(g.after))
          and goal_now(g, v, info) then
         flight_seen[i] = true
-        save.set("mission.seen", flight_seen)
+        save.set(K("mission.seen"), flight_seen)
         log("  ✓ " .. goalLabel(g))
       end
       -- The high-water mark, whether or not the goal is met, so the card can
@@ -3084,7 +3399,6 @@ function update(node, dt)
       local now = measure(g, v, info)
       if now and (not best[i] or now > best[i]) then best[i] = now end
     end
-    progress = activeLine() or ""
   end
   -- All goals met → pay out.
   local all = true

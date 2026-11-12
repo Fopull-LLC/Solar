@@ -18,6 +18,7 @@
 --   GAME MODE    Career (today's rules) / Sandbox (unlimited funds, top
 --                reputation, every part unlocked: company.lua, `game.mode`)
 --   CREW SAFETY  Permadeath / Rescue / Invincible (crew.lua's `crew.safety`)
+--   LOSSES       Deaths cost rep / Standing spared (crew.lua's `crew.deathRep`)
 -- and a third, HOME WORLD: Earth-like (the default, the intended game) or an
 -- Alien world rolled from the whole geology catalogue (system_generator
 -- homeKindFor / alienHomeWorld), with a seed of its own to type (blank = a
@@ -57,10 +58,11 @@ local seed_str = ""
 
 -- The agency column.
 local AG_X, AG_W, PANEL_W, GAL_W = 604, 336, 960, 600
-local PANEL_H = 672        -- (X2) the scene's 612 + the AIR row
+local PANEL_H = 694        -- (X2) the scene's 612 + the AIR row; + the LOSSES row (career missions D1)
 local ed = nil             -- scripts/emblem.lua's editor state
 local mode = "career"      -- GAME MODE: "career" | "sandbox"
 local safety = "death"     -- CREW SAFETY: "death" | "rescue" | "invincible"
+local deathrep = "on"      -- DEATHS COST REPUTATION: "on" | "off" (crew.lua deathRep)
 local home = "earth"       -- HOME WORLD: "earth" | "alien"
 local hseed_str = ""       -- the alien world's seed as typed ("" = random)
 local air = "earth"        -- AIR: "earth" | "rich" | "thin" | "alien" | "random"
@@ -74,6 +76,10 @@ local SAFETIES = {
   { "death", "Permadeath", "Astronauts can be lost: every danger is warned of first, and the roster keeps a memorial" },
   { "rescue", "Rescue", "A crew member who would die is knocked out and brought home hurt instead, for a fee" },
   { "invincible", "Invincible", "Nothing hurts the crew: no falls, shots, crushes, heat or running out of air" },
+}
+local DEATHREPS = {
+  { "on", "Deaths cost rep", "An astronaut lost costs the agency 2 reputation" },
+  { "off", "Standing spared", "Permadeath still applies; only the company's standing is spared" },
 }
 local HOMES = {
   { "earth", "Earth-like", "Recommended: the mild, living world built for the colony" },
@@ -97,6 +103,9 @@ function setOptions(m, s)
   if m == "career" or m == "sandbox" then mode = m end
   if s == "death" or s == "rescue" or s == "invincible" then safety = s end
 end
+-- …and whether deaths cost reputation ("on" | "off": CREATE writes crew.deathRep).
+function deathRepOption() return deathrep end
+function setDeathRep(v) if v == "on" or v == "off" then deathrep = v end end
 -- …and the home world: kind ("earth" | "alien") and its seed as typed.
 function homeOptions() return home, hseed_str end
 function setHome(k, seedText)
@@ -172,7 +181,7 @@ function openFor(n)
   slot_n = n
   seed_str = ""
   open = true
-  mode, safety = "career", "death"
+  mode, safety, deathrep = "career", "death", "on"
   home, hseed_str = "earth", ""
   air, air_set = "earth", false
   local e = emblem_lib()
@@ -250,6 +259,7 @@ function press(role)
     save.set("game.mode", mode)
     save.set("crew.safety", safety)
     save.set("crew.death", safety == "death")
+    save.set("crew.deathRep", deathrep ~= "off")
     -- HOME WORLD: only an alien start writes anything (an Earth-like save is
     -- exactly the save it always was). A blank seed is a random one, kept.
     if home == "alien" then
@@ -278,7 +288,7 @@ local function describe_agency(e)
   local rows = e.editorRows(ed, AG_W, sfx)
   rows[#rows + 1] = { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 }
   -- a labelled segmented choice and, under it, one line on what is picked
-  local function pick(key, text, list, cur, set)
+  local function pick(key, text, list, cur, set, nohint)
     local row = { "row", key = key, w = "100%", h = 28, gap = 6, pad = 0, align = "center",
       { "text", key = "l", style = "panel/label", w = 74, h = "fit", text = text } }
     for _, o in ipairs(list) do
@@ -287,11 +297,17 @@ local function describe_agency(e)
         onClicked = function() if o[1] ~= cur then sfx("click") end; set(o[1]) end }
     end
     rows[#rows + 1] = row
+    if nohint then return end
     rows[#rows + 1] = { "text", key = key .. "_h", style = "panel/hint", w = "100%", h = "fit", wrap = true,
                         text = blurb(list, cur) }
   end
   pick("mode", "Mode", MODES, mode, function(v) mode = v end)
   pick("safety", "Crew", SAFETIES, safety, function(v) safety = v end)
+  -- DEATHS COST REPUTATION (crew.lua deathRep): beside Crew safety, so it is
+  -- seen before the first loss (career missions PLAN §5, Q3)
+  -- (no hint line: the keys say it and the tooltips explain; the column has
+  -- no room for one more line at a 720-high screen)
+  pick("deathrep", "Losses", DEATHREPS, deathrep, function(v) deathrep = v end, true)
   -- HOME WORLD: the same segmented keys, and for an alien start its seed in a
   -- small CRT field on the same row (blank = random). One line under it.
   do

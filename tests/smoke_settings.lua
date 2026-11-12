@@ -550,6 +550,36 @@ _G.ui = nil
 local st10 = load_settings({ screen = { 1920, 1080 } })
 ok(pcall(st10.start, {}) and pcall(st10.update, {}, 1 / 60), "no ui.setScale (an older engine): no error")
 
+-- ── AGENCY: "Deaths cost rep" (crew.lua deathRep, career missions PLAN §5) ──
+do
+  local cstore = { safety = "death", dr = true }
+  envs.crew = { valid = true, safety = function() return cstore.safety end, setSafety = function(v) cstore.safety = v end,
+                deathRep = function() return cstore.dr end, setDeathRep = function(v) cstore.dr = v end }
+  local sa = load_settings()
+  sa.start({})
+  local function agency_row()
+    sa.showTab("agency")
+    local row, hintRow
+    for _, r in ipairs(sa.rows(580)) do
+      walk(r, function(e)
+        if e.key == "dr" then row = e end
+        if e.key == "drh" then hintRow = e end
+      end)
+    end
+    return row, hintRow
+  end
+  local row, h = agency_row()
+  ok(row ~= nil and h ~= nil, "the Agency tab has a 'Deaths cost rep' row with its hint")
+  local off
+  if row then walk(row, function(e) if e[1] == "button" and e.text == "Off" then off = e end end) end
+  ok(off ~= nil and off.selected == false, "…On lit by default")
+  if off then off.onClicked() end
+  ok(cstore.dr == false, "…Off reaches crew.setDeathRep")
+  cstore.safety = "invincible"
+  ok(agency_row() == nil, "…and it is not shown while the crew are Invincible")
+  envs.crew = nil
+end
+
 if #failures == 0 then
   print(string.format("SETTINGS SMOKE OK — %d checks passed", checks))
   os.exit(0)

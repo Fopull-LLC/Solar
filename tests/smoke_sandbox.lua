@@ -107,6 +107,22 @@ check(st["game.mode"] == "sandbox" and st["crew.safety"] == "invincible" and st[
   "CREATE: Sandbox + Invincible stored")
 st = create("career", "rescue")
 check(st["crew.safety"] == "rescue" and st["crew.death"] == false, "CREATE: Rescue keeps the old boolean off")
+check(st["crew.deathRep"] == true, "CREATE: deaths cost reputation by default")
+do
+  local store = {}
+  local ns = load("solar/scripts/menu_newsave.lua", store, {}, {
+    find = function() return nil end,
+    terrain = { saveDir = function() return "" end, deleteSaveDir = function() end },
+    scene = { load = function() end },
+    app = { version = function() return "0.117.0-rc38" end },
+  })
+  ns.save.slot = function() end
+  ns.openFor(3)
+  check(ns.deathRepOption() == "on", "the panel opens with deaths costing reputation")
+  ns.setDeathRep("off")
+  ns.press("create")
+  check(store["crew.deathRep"] == false, "CREATE: 'Standing spared' stores crew.deathRep = false")
+end
 
 if #failures > 0 then
   for _, m in ipairs(failures) do print("FAIL: " .. m) end

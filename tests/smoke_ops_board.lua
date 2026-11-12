@@ -158,6 +158,49 @@ tick()
 ok(el.visible == false, "Esc closes the board")
 ok(env.escTakenAt == at, "…and publishes the frame it spent the Esc on")
 
+-- 5. (career missions E1) TWO ON THE BOOKS: a flight and a ground job, both
+-- listed; the advance on the detail; a blocked offer says why; abandoning
+-- names the advance going back and abandons THAT contract.
+do
+  CAT.bulk = { id = "bulk", title = "Bulk haul: 160 kg of Iron Ore", reward = 2200, rep = 1, ground = true, kind = "bulk", brief = "Haul." }
+  CAT.survey = { id = "survey", title = "Survey: Ryethos", reward = 8000, rep = 2, gen = true, brief = "Fly by." }
+  local booked = { "firstflight", "bulk" }
+  mi.active = "firstflight"
+  mi.actives = function() return booked end
+  mi.slotGroup = function(m) return m.ground and "ground" or "flight" end
+  mi.advanceFor = function(m) return (m.gen or m.ground) and math.floor(m.reward * 0.3) or 0 end
+  mi.advancePaid = function(id) return id == "bulk" and 660 or 0 end
+  mi.repOf = function(m) if m.ground then return 1, 8 end return m.rep or 0, nil end
+  mi.signBlock = function(m) if m.id == "survey" then return "One flight contract at a time: finish or abandon First Flight first." end end
+  co.standing = function(r) return { name = (r or 0) >= 8 and "Trusted" or "Unknown" } end
+  local gid
+  mi.goalLines = function(id) gid = id; return { "○ 160 kg of Iron Ore in the warehouse" } end
+  local ab
+  mi.abandon = function(id) ab = id; return true end
+  local of = mi.offers
+  mi.offers = function() return { CAT.survey } end
+  env.openBoard()
+  tick()
+  ok(button("firstflight") ~= nil and button("bulk") ~= nil, "both contracts on the books are listed")
+  ok(says("On the books · 2 of 2"), "…under 'On the books · 2 of 2'")
+  button("bulk").onClicked()
+  tick()
+  ok(gid == "bulk", "the detail asks for THAT contract's goals")
+  ok(says("ground job"), "…says it is the ground job")
+  ok(says("Advance $660 paid at signing") and says("$1540 on completion"), "…shows the advance and what completion pays")
+  ok(says("+1 reputation (up to Trusted)"), "…and that ground work's point stops at Trusted")
+  button("abandon").onClicked(); tick()
+  ok(says("returns the $660 advance"), "the armed abandon says the advance goes back")
+  button("abandon").onClicked(); tick()
+  ok(ab == "bulk", "…and abandons that contract, not the flight")
+  button("survey").onClicked()
+  tick()
+  ok(button("sign") and button("sign").disabled == true and says("One flight contract at a time"),
+    "an offer whose place is taken: SIGN greyed, the reason under it")
+  ok(says("Advance $2400 on signing"), "…and its advance on signing is shown before you sign")
+  mi.offers = of
+end
+
 if #failures == 0 then
   print(string.format("OPS BOARD SMOKE OK — %d checks passed", checks))
   os.exit(0)

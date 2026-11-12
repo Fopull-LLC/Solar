@@ -13,6 +13,12 @@
 -- click on the row, and abandoning a second click on the same row — a hidden
 -- double-click that nothing on screen admitted to.)
 --
+-- (Career missions E1) The books hold two contracts, one flight and one
+-- ground or client job, both listed first; an offer whose place is taken is
+-- still listed, its SIGN greyed with the reason under it. The detail shows
+-- the advance on signing and what completion pays after it, and the abandon
+-- line says the advance goes back.
+--
 -- THE SCREEN IS DESCRIBED, NOT AUTHORED. It was six fixed row nodes carrying an
 -- `ops_row` script each, which meant the board could show at most five offers
 -- and a sixth contract was simply invisible — a silent cap on the mission
@@ -120,8 +126,13 @@ end
 local function entries(mi)
   local out = {}
   if not mi then return out end
-  local active = mi.active and mi.byId(mi.active) or nil
-  if active then out[#out + 1] = { m = active, state = "active" } end
+  -- The contracts on the books: one flight, one ground or client job
+  -- (missions.lua `actives`, career missions E1), the flight first.
+  local ids = (mi.actives and mi.actives()) or { mi.active }
+  for _, id in ipairs(ids) do
+    local m = id and mi.byId(id)
+    if m then out[#out + 1] = { m = m, state = "active" } end
+  end
   -- The programme (missions.lua PROGRAMME): the milestones in progress, then
   -- the next one still waiting on another. Done ones are a line at the foot.
   if mi.programme then
@@ -185,7 +196,7 @@ end
 -- as plain labels for the rest.
 local function goal_lines(mi, c)
   if c.prog and mi.progGoalLines then return mi.progGoalLines(c.m.id) end
-  if c.state == "active" and mi.goalLines then return mi.goalLines() end
+  if c.state == "active" and mi.goalLines then return mi.goalLines(c.m.id) end
   local out = {}
   for _, g in ipairs(c.m.goals or {}) do
     local label = (mi.goalLabel and mi.goalLabel(g)) or g.label or g.kind
@@ -202,9 +213,11 @@ local function detail(mi, co, c)
     return rows
   end
   local m = c.m
+  -- which place on the books it takes (career missions E1: one of each)
+  local kind = (mi.slotGroup and (mi.slotGroup(m) == "ground" and " · ground job" or " · flight contract")) or ""
   local status = ({
-    active = "On the books",
-    offer = "Available to sign",
+    active = "On the books" .. kind,
+    offer = "Available to sign" .. kind,
     locked = "Unlocks after " .. tostring(c.needs or "?"),
     prog = "Programme milestone · in progress",
     proglocked = "Programme milestone · after " .. tostring(c.needs or "?"),
@@ -238,29 +251,48 @@ local function detail(mi, co, c)
     end
     return rows
   end
+  -- The reputation it earns: ground work's point stops at Trusted
+  -- (missions.repOf / GROUND_REP_CAP, career missions E1).
+  local rp, rcap = 0, nil
+  if mi.repOf then rp, rcap = mi.repOf(m) else rp = m.rep or 0 end
+  local cap_st = rcap and co and co.standing and co.standing(rcap)
+  local reptext = (rp > 0 and string.format("%+d reputation", rp) or "money, not standing")
+    .. ((rp > 0 and cap_st) and (" (up to " .. cap_st.name .. ")") or "")
+  if m.ground then reptext = "repeatable · " .. reptext end
   rows[#rows + 1] = { "row", key = "pays", w = "100%", h = "fit", gap = 10, pad = 0, align = "center",
     { "text", key = "payL", style = "panel/label", w = "fit", h = "fit", text = "Pays" },
     { "text", key = "pay", style = "panel/figure", w = "fit", h = "fit", text = money_of(co, m.reward) },
-    { "text", key = "rep", style = "panel/cellMuted", w = "grow", h = "fit",
-      text = m.ground and "ground work · repeatable · money, not standing"
-        or string.format("%+d reputation", m.rep or 0) } }
+    { "text", key = "rep", style = "panel/cellMuted", w = "grow", h = "fit", wrap = true, text = reptext } }
+  -- THE ADVANCE: what signing pays now and what is left for completion.
+  local adv = 0
+  if c.state == "active" and mi.advancePaid then adv = mi.advancePaid(m.id)
+  elseif mi.advanceFor then adv = mi.advanceFor(m) end
+  if adv > 0 then
+    rows[#rows + 1] = wrapped("adv", "panel/body", string.format(c.state == "active"
+      and "Advance %s paid at signing  ·  %s on completion"
+      or  "Advance %s on signing  ·  %s on completion",
+      money_of(co, adv), money_of(co, math.max(0, (m.reward or 0) - adv))))
+  end
   rows[#rows + 1] = { "box", key = "drule", style = "panel/rule", w = "100%", h = 1 }
 
   if c.state == "offer" then
-    local busy = mi.active and mi.byId(mi.active) or nil
+    -- why it can't be signed now (missions.signBlock: its place on the books
+    -- is taken); an older missions without it: one contract at a time
+    local function sign_block()
+      if mi.signBlock then return mi.signBlock(m) end
+      return mi.active and "One contract at a time: finish or abandon the one on the books first." or nil
+    end
+    local block = sign_block()
     rows[#rows + 1] = { "button", key = "sign", style = "panel/action", w = "100%", h = 38,
-      textAlign = "center", disabled = busy ~= nil, text = "Sign contract",
+      textAlign = "center", disabled = block ~= nil, text = "Sign contract",
       onClicked = function()
-        if mi.active then return end
+        if sign_block() then return end
         if mi.accept(m.id) then
           selected = m.id
           sfx("sign")
         end
       end }
-    if busy then
-      rows[#rows + 1] = wrapped("busy", "panel/hintWarn", string.format(
-        "One contract at a time — finish or abandon %s first.", busy.title))
-    end
+    if block then rows[#rows + 1] = wrapped("busy", "panel/hintWarn", block) end
   elseif c.state == "active" then
     local armed = time < abandon_armed_until
     rows[#rows + 1] = { "button", key = "abandon", style = "panel/danger", w = "100%", h = 34,
@@ -269,7 +301,7 @@ local function detail(mi, co, c)
       onClicked = function()
         if time < abandon_armed_until then
           abandon_armed_until = -1
-          mi.abandon()
+          mi.abandon(m.id)
           selected = nil
           sfx("close")
         else
@@ -277,9 +309,16 @@ local function detail(mi, co, c)
           sfx("arm")
         end
       end }
+    -- what walking away costs: the advance back (what the balance can't
+    -- cover is owed, and then it costs 2 reputation)
+    local short = (adv > 0 and co and co.balance) and math.max(0, adv - co.balance()) or 0
+    local cost = (adv > 0) and string.format("It returns the %s advance%s and costs %d reputation.",
+        money_of(co, adv), short > 0 and string.format(" (%s of it owed, repaid from income)", money_of(co, short)) or "",
+        short > 0 and 2 or 1)
+      or "It costs 1 reputation."
     rows[#rows + 1] = wrapped("cost", armed and "panel/hintWarn" or "panel/hint", armed
-      and "Press again to abandon. It costs 1 reputation, and its progress is lost."
-      or  "Abandoning costs 1 reputation.")
+      and ("Press again to abandon. " .. cost .. " Its progress is lost.")
+      or  ("Abandoning: " .. cost:sub(1, 1):lower() .. cost:sub(2)))
   else
     rows[#rows + 1] = wrapped("lockedH", "panel/hint",
       "Complete " .. tostring(c.needs or "the contract before it") .. " to unlock this one.")
@@ -314,13 +353,16 @@ local function describe()
                           text = empty }
     end
   end
-  group("active", "On the books", nil)
+  -- two places on the books (one flight, one ground or client job)
+  local booked = 0
+  for _, c in ipairs(list) do if c.state == "active" then booked = booked + 1 end end
+  group("active", (mi and mi.actives) and string.format("On the books · %d of 2", booked) or "On the books", nil)
   group("prog", "Programme", nil)
   group("proglocked", (function()
     for _, c in ipairs(list) do if c.state == "prog" then return "Programme · next" end end
     return "Programme"
   end)(), nil)
-  group("offer", "Available", (mi and mi.active) and "Nothing else to sign yet." or "None right now.")
+  group("offer", "Available", booked > 0 and "Nothing else to sign yet." or "None right now.")
   group("locked", "Coming up", nil)
   if mi and mi.programme then
     local done = {}
@@ -362,8 +404,11 @@ local function describe()
         end } },
     { "box", key = "rule", style = "panel/rule", w = "100%", h = 1 },
     { "row", key = "panes", w = "100%", h = "fit", gap = 24, pad = 0, align = "start",
-      { "col", key = "list", w = LIST_W, h = "fit", gap = 4, pad = 0, align = "start",
-        items = left, function(x) return x end },
+      -- (a scroll view under the screen's height: with two contracts on the
+      -- books, the programme and the board's offers the list outgrew a
+      -- 720-high screen and pushed the heading off the top)
+      { "scroll", key = "list", w = LIST_W, h = "fit", maxH = math.max(240, uiDesignH() - 190), dir = "col",
+        gap = 4, pad = 0, align = "start", scrollFade = 16, items = left, function(x) return x end },
       { "col", key = "detail", w = "grow", h = "fit", gap = 8, pad = 0, align = "start",
         items = detail(mi, co, sel), function(x) return x end } },
     { "box", key = "rule2", style = "panel/rule", w = "100%", h = 1 },

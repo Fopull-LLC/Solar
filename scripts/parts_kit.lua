@@ -1194,11 +1194,11 @@ do
   end
   for k, t in pairs({
     mcCrusher = { label = "Crusher", order = 1, snap = "block", box = B(-1, 1, 0, 2.4, -1, 1), tech = "refinery",
-                mass = { steel = 2.8 }, cost = 18000, vol = 1.6, kw = 4, it = { kind = "machine", m = "crusher" },
+                mass = { steel = 2.8 }, cost = 9000, vol = 1.6, kw = 4, it = { kind = "machine", m = "crusher" },
                 ports = { bp("in", 0, -1, 0, -1, "in"), bp("out", 0, 1, 0, 1, "out"), bp("spoil", 1, 0, 1, 0, "out"), tp("tin", -1, 0, -1, 0, "in") },
                 desc = "a jaw crusher over a magnetic drum and a jig: bulk rock and ore in at its hopper (−Z), iron ore, copper ore, silica and regolith out (+Z, +X) · 2 kg/s at 4 kW · the furnace's line takes its ore first, a line to a hopper the rest" },
     mcFurnace = { label = "Furnace", order = 2, snap = "block", box = B(-1, 1, 0, 3.0, -1, 1), tech = "refinery",
-                mass = { steel = 4.5 }, cost = 32000, vol = 2.4, kw = 12, it = { kind = "machine", m = "furnace" },
+                mass = { steel = 4.5 }, cost = 16000, vol = 2.4, kw = 12, it = { kind = "machine", m = "furnace" },
                 ports = { bp("in", 0, -1, 0, -1, "in"), bp("out", 0, 1, 0, 1, "out"), bp("out2", 1, 0, 1, 0, "out"), hp("heat", -1, 0.5, -1, 0) },
                 desc = "an induction furnace with its ladle and caster: iron ore → Steel (65 %), kamacite → Alloy Steel, copper ore → Copper Wire · 12 kW, and 10 kW of heat to shed through its heat port (−X): chain radiators to it or it runs at 20 %" },
     mcKiln    = { label = "Kiln", order = 3, snap = "block", box = B(-1, 1, 0, 2.4, -1, 1), tech = "ceramics",

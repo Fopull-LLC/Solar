@@ -643,9 +643,11 @@ function objectiveList()
     out[#out + 1] = { key = "scn", kind = "scn", id = ss.key, name = ss.label, step = ss }
   end
   local mi = ref("missions")
-  if mi and mi.active then
-    local m = mi.byId and mi.byId(mi.active)
-    out[#out + 1] = { key = "contract:" .. tostring(mi.active), kind = "contract", id = mi.active,
+  -- the contracts on the books: one flight, one ground or client job
+  -- (missions.lua actives, career missions E1), the flight first
+  for _, id in ipairs((mi and mi.actives and mi.actives()) or { mi and mi.active or nil }) do
+    local m = mi.byId and mi.byId(id)
+    out[#out + 1] = { key = "contract:" .. tostring(id), kind = "contract", id = id,
                       name = (m and m.title) or "Contract" }
   end
   if mi and mi.progActive and mi.progNextGoal then
@@ -753,13 +755,39 @@ local function current_step(astro, o)
       if st then return st end
     end
   end
-  local st = current_step_inner(astro)
+  -- (a contract pick: that contract, when two are on the books)
+  local st = current_step_inner(astro, o and o.kind == "contract" and o.id or nil)
   if st and not st.prog and st.key ~= "siting" then st.progBrief = prog_brief() end
   return st
 end
 
+-- What a contract on the books pays, for the card: with an advance on
+-- signing (career missions E1) the line says what is left for completion.
+local function contract_pay(mi, co, m)
+  if not (m and co) then return nil end
+  local adv = (mi and mi.advancePaid and mi.advancePaid(m.id)) or 0
+  if adv > 0 then
+    return string.format("%s on completion (%s advance paid)", co.money(math.max(0, (m.reward or 0) - adv)), co.money(adv))
+  end
+  return "Pays " .. co.money(m.reward)
+end
+
+-- With two contracts on the books, a one-line pointer to the other (the
+-- switcher steps to it).
+local function other_contract(mi, id)
+  local ids = mi and mi.actives and mi.actives() or {}
+  for _, o in ipairs(ids) do
+    if o ~= id then
+      local m = mi.byId(o)
+      if m then return "Also on the books: " .. m.title .. "  (/ to switch)" end
+    end
+  end
+  return nil
+end
+
 local agency_seen = nil
-current_step_inner = function(astro)
+local contract_step
+current_step_inner = function(astro, cid)
   local bf = ref("base_facilities")
   local mi = ref("missions")
   local co = ref("company")
@@ -788,7 +816,7 @@ current_step_inner = function(astro)
     end
   end
 
-  local m = mi and mi.active and mi.byId(mi.active) or nil
+  local m = mi and (cid or mi.active) and mi.byId(cid or mi.active) or nil
 
   -- Something in the pack the depot would pay for. It takes the card over
   -- only when there is no contract to follow, or the pack is most of the way
@@ -808,8 +836,31 @@ current_step_inner = function(astro)
   end
 
   if m then
-    local goals = mi.goalLines()
-    local pays = co and ("Pays " .. co.money(m.reward)) or nil
+    local st = contract_step(astro, mi, co, m, carried)
+    if st and not st.foot then st.foot = other_contract(mi, m.id) end
+    return st
+  end
+
+  -- No contract on the books: the programme's next milestone, if it has one.
+  local ps = prog_step(astro)
+  if ps then return ps end
+
+  -- No contract and no milestone open. The first contract is the whole point
+  -- of the game's opening; every later one is just "go and sign the next".
+  local first = not (mi and #mi.completed() > 0)
+  return { key = first and "first" or "next", label = "Ops", at = "FacCommand",
+           task = first and "Sign your first contract."
+                        or  "Sign your next contract.",
+           hint = first
+             and "Press E at the Command Centre to open the Ops Board."
+             or  "The Ops Board in the Command Centre has more work." }
+end
+
+-- The step for contract `m` on the books.
+contract_step = function(astro, mi, co, m, carried)
+  do
+    local goals = mi.goalLines(m.id)
+    local pays = contract_pay(mi, co, m)
     local label = "Contract · " .. m.title
     if names_a_world(m) then
       local st = offworld_step(m, goals, astro, label, pays)
@@ -864,20 +915,6 @@ current_step_inner = function(astro)
              hint = first_sentence(m.brief),
              goals = goals, pay = pays }
   end
-
-  -- No contract on the books: the programme's next milestone, if it has one.
-  local ps = prog_step(astro)
-  if ps then return ps end
-
-  -- No contract and no milestone open. The first contract is the whole point
-  -- of the game's opening; every later one is just "go and sign the next".
-  local first = not (mi and #mi.completed() > 0)
-  return { key = first and "first" or "next", label = "Ops", at = "FacCommand",
-           task = first and "Sign your first contract."
-                        or  "Sign your next contract.",
-           hint = first
-             and "Press E at the Command Centre to open the Ops Board."
-             or  "The Ops Board in the Command Centre has more work." }
 end
 
 -- ── the contract that just paid ─────────────────────────────────────────────
@@ -900,10 +937,11 @@ local function banner()
   if time - p.at > BANNER_TIME then return nil end
   local co = ref("company")
   local prog = p.id == "prog"
+  local adv = (co and (p.adv or 0) > 0) and (" (with the " .. co.money(p.adv) .. " advance)") or ""
   return {
     key = "paid", label = p.label or "CONTRACT COMPLETE",
     task = p.title or "Contract",
-    pay = co and ("+" .. co.money(p.reward or 0) .. " paid into the company account")
+    pay = co and ("+" .. co.money(p.reward or 0) .. " paid into the company account" .. adv)
       or string.format("+$%d paid into the company account", p.reward or 0),
     hint = prog and "The programme's next step is on this card." or "Sign the next one at the Ops Board.",
   }
@@ -1095,11 +1133,12 @@ local function flight_step(o)
     local ps = prog_step(find("Astronaut"), true)
     if ps then ps.hint = nil; return ps end
   end
-  local m = mi and mi.byId and mi.byId(mi.active)
+  local cid = (o and o.kind == "contract" and o.id) or (mi and mi.active)
+  local m = mi and mi.byId and mi.byId(cid)
   return { key = "flight", label = "Contract",
            task = m and m.title or (mi and mi.activeLine and mi.activeLine()) or "",
-           goals = mi and mi.goalLines() or {},
-           pay = (m and co) and ("Pays " .. co.money(m.reward)) or nil }
+           goals = mi and mi.goalLines(cid) or {},
+           pay = contract_pay(mi, co, m) }
 end
 
 -- The switcher's key. Not a letter (every one is taken on foot or in the

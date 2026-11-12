@@ -532,4 +532,38 @@ KEYS["/"] = false
 ok(says("Sign your next contract"), "/ with nothing open changes nothing: " .. table.concat(lines(), " | "))
 fleet = {}
 
+-- (career missions E1) TWO CONTRACTS ON THE BOOKS: the flight first, a line
+-- pointing at the other, the advance on the pay line, and / steps to it.
+do
+  local gl = missions.goalLines
+  missions.active = "firstflight"
+  missions.actives = function() return { "firstflight", "prospect" } end
+  missions.advancePaid = function(id) return id == "prospect" and 2400 or 0 end
+  missions.goalLines = function(id)
+    local m = missions.byId(id or missions.active)
+    local out = {}
+    for _, g in ipairs(m and m.goals or {}) do out[#out + 1] = "○ " .. g.label end
+    return out
+  end
+  pack = 0
+  fleet = { { node = { valid = true, x = astro.x, y = astro.y, z = astro.z } } }
+  STORE["objectives.pick"] = nil
+  chunk(); REFRESH = 0; _G.params = { enabled = 1, arrived = 24.0 }; start(card)
+  update(card, 1 / 60)
+  ok(says("First Flight") and says("Also on the books: Prospector"),
+    "two on the books: the flight, and a line naming the other: " .. table.concat(lines(), " | "))
+  ok(el_of("pickText") and el_of("pickText").text:find("1 of 2", 1, true), "…both are on the switcher")
+  KEYS["/"] = true
+  update(card, 1 / 60)
+  KEYS["/"] = false
+  update(card, 1 / 60)
+  ok(says("30 units of ore") and says("Also on the books: First Flight"),
+    "/ steps to the second contract, its goals and a line back: " .. table.concat(lines(), " | "))
+  ok(says("$5600 on completion ($2400 advance paid)"), "…its pay line says the advance: " .. table.concat(lines(), " | "))
+  missions.actives, missions.advancePaid, missions.goalLines = nil, nil, gl
+  missions.active = nil
+  STORE["objectives.pick"] = nil
+  fleet = {}
+end
+
 print(string.format("OBJECTIVES SMOKE OK — %d checks passed", checks))

@@ -891,6 +891,7 @@ local function load_bp(override)
   end
   integ.gone, integ.box, integ.strain, integ.lost = {}, {}, {}, {}
   integ.gen = integ.gen + 1
+  integ.insured = nil   -- (hull insurance: this craft has not been paid out on)
   -- (elecRescan above already sorted THIS part set — the same records, none
   -- gone, all whole — so the new generation needs no second pass: at 1,000
   -- parts that pass is ~15 ms, on the rollout's busiest frame)
@@ -5265,6 +5266,21 @@ function recoverValue()
   return math.floor(v)
 end
 
+-- HULL INSURANCE (career missions E1, company.insureLoss): a craft LOST (its
+-- pod gone, or the airframe failing) refunds a share of its parts' list cost
+-- by standing, once. Only a flown craft with a command part (a pod or probe
+-- core): a spent stage falling away is not a hull, a structure is not a craft.
+-- (latched in `integ`, which a rebuilt craft resets; not a local: the main
+-- chunk is at LuaJIT's 200-local limit)
+function insureHull()
+  if integ.insured or structureMode or hasFlown == false or not pod_uid then return end
+  integ.insured = true
+  local cost = 0
+  for _, d in pairs(bp_by_uid) do cost = cost + (d.cost or 0) end
+  local co = findScript("company")
+  if co and co.insureLoss and cost > 0 then pcall(co.insureLoss, cost, craftName) end
+end
+
 -- Can we recover here? Returns (ok, why-not).
 function recoverReady()
   local node = dock.node
@@ -6796,6 +6812,7 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
     -- (A PROBE core is the ship too; its crew, if any, were never in it — they
     -- stay where they are and the controls go back to them.)
     destroyed = true
+    insureHull()
     silence_loops()
     local was_piloting = piloting
     crewEvacuate(node, hx, hy, hz)
@@ -6885,6 +6902,7 @@ end
 local function shatter(node, hx, hy, hz, spd, info)
   if destroyed then return end
   destroyed = true
+  insureHull()
   log("CATASTROPHIC BREAKUP")
   add_shake(1.4) -- the whole airframe failing is a hard jolt
   local evx, evy, evz = 0.0, 0.0, 0.0

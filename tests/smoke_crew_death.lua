@@ -265,6 +265,19 @@ check(L5.rep == 0 and L5.spent == 0, "...no reputation lost, no fee")
 C5.setSafety("death")
 check(C5.deathOn() and s5["crew.death"] == true, "back to Permadeath")
 
+-- ── DEATHS COST REPUTATION: the setting (career missions PLAN §5) ──────────
+check(C5.deathRep() == true, "a save without the key: deaths cost reputation (default on)")
+C5.setDeathRep(false)
+check(C5.deathRep() == false and s5["crew.deathRep"] == false, "the switch is kept in the save")
+L5.rep = 0
+C5.time = C5.time + 4
+check(C5.kill(3, "oxygen") ~= false and C5.get(3).status == "dead", "with it off, permadeath still applies")
+check(L5.rep == 0, "…and the company's standing is spared (" .. tostring(L5.rep) .. ")")
+C5.setDeathRep(true)
+C5.patch(2, { status = "client", client = "g9-rescue" })
+C5.kill(2, "oxygen")
+check(L5.rep == -2, "on: a client's death costs 2 as well (" .. tostring(L5.rep) .. ")")
+
 -- ── the walker's impact (playtest 2026-11-05) ──────────────────────────────
 -- With a walker that measures impacts (planet_walker impactSeq/impactSpeed:
 -- the speed INTO the ground met), only those are judged: a long fast slide

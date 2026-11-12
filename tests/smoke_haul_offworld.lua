@@ -295,7 +295,7 @@ local bal = co.balance()
 mine("Ryethos", units)
 inv.transferAll("astro", "base")
 second()
-check("ore mined on moon B itself pays", paid(s) and co.balance() == bal + s.reward, tostring(mi.active))
+check("ore mined on moon B itself pays", paid(s) and co.balance() == bal + s.reward - mi.advanceFor(s), tostring(mi.active))
 local need = math.ceil(kg / mats.kg(mat) - 1e-6)
 check("…and the buyer takes B's lot only: A's is all still there",
   inv.count("base", mat, "Oskal") == units + 2 and inv.count("base", mat, "Ryethos") == units + 1 - need,
@@ -317,7 +317,7 @@ store["ore.minedOn"] = { [mat] = { Oskal = true, Ryethos = true } }
 bal = co.balance()
 second()
 check("old save mined on the moon too: the untagged ore falls back to the record and pays",
-  paid(s) and co.balance() == bal + s.reward, tostring(mi.active) .. " " .. tostring(mi.goalLines()[2]))
+  paid(s) and co.balance() == bal + s.reward - mi.advanceFor(s), tostring(mi.active) .. " " .. tostring(mi.goalLines()[2]))
 check("…and the buyer takes it", inv.count("base", mat) * mats.kg(mat) < kg, inv.count("base", mat))
 -- …and once that old save tags a lot, its record stands as it was before
 store["inv.base"] = { [mat] = units }
