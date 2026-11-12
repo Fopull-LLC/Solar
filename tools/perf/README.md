@@ -595,6 +595,9 @@ params `night` (star elevation to warp to, 1.0 = stay in the day), `shadowmap=0`
 `secs`), `lights` (the rover parked at night, lamps off/on/in mist, four camera
 angles), `rocks` (floating scatter rocks and rock nodes round the spawn and three
 spots out on the land, with mineral_field's audit counters), `catch` (a slab held
-over a stone while it is re-rolled, then taken away). Pictures in
+over a stone while it is re-rolled, then taken away), `camclip` (the crew stood in front of
+the nearest trunks and boulders with the third-person view backed into them: camera distance from
+the prop's axis against its radius and planet_camera.propClipStats; `noclip=1` turns PROP_CLIP off
+for a before run, and holds in flick too). Pictures in
 `$WORK/rf/<TAG>/shots/`. PATCHES= applies diffs to the copied tree (a reverse
 diff gives a before run). Results 2026-11-12: renderfix report to main.

@@ -172,7 +172,11 @@ defaults = {
   --- a ceiling on what it scatters, in multiples of the haze's colour
   --- (0 = none). The ceiling is what keeps a fog bank toward the sun, or a
   --- lamp's glow, from washing out to white; with it the lit share can stay
-  --- higher (mistLightClamped).
+  --- higher (mistLightClamped). Measured on engine .1520 (renderfix
+  --- sw_clamp_1520, daytime forced mist): the share 0.45 / 0.75 / 1.0 read
+  --- the same (0 % of the picture at 255, mean 140-170) because the ceiling
+  --- holds it, so a bank keeps all of its light and the ceiling owns the
+  --- brightness. The old values on .1520 put 24-60 % of it at 255.
   --@range 0 2
   fogSun = 0.7,
   --@range 0 2
@@ -182,7 +186,7 @@ defaults = {
   --@range 0 8
   fogClamp = 1.35,
   --@range 0 1
-  mistLightClamped = 0.45,
+  mistLightClamped = 1.0,
   --- How fast the haze follows the world, per second. The altitude curve is
   --- already continuous; this smooths the jumps that are not — the camera
   --- cutting to the map and back, an SOI hand-off to a world of another colour.
@@ -843,7 +847,7 @@ function follow(dt)
     -- A fog bank likewise: lit by the whole sky, read at about its colour.
     local knobs = fog_knobs(l)
     local mk2 = smooth(0.0, 0.6, cur.mist)
-    local ml = knobs and (params.mistLightClamped or 0.45) or (params.mistLight or 0.15)
+    local ml = knobs and (params.mistLightClamped or 1.0) or (params.mistLight or 0.15)
     l.fogLight = (params.fogLight or 0.75) * (1 - 0.5 * ovc) * (1 - 0.6 * enc) * (1 - (1 - ml) * mk2)
     l.fogShafts = (params.shafts ~= false) and gx_shafts and ovc < 0.3
   else

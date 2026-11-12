@@ -423,7 +423,10 @@ local function frame_watch(secs, vc)
     -- a weave: steer one way 3 s, the other 3 s
     local el = time - t0
     local want = (math.floor(el / 3) % 2 == 0) and "a" or "d"
-    if not HELD.w then key_down("w") end
+    -- (held to ~10 m/s: at 19 m/s the weave crashed the rover into the base, renderfix cam_after3)
+    local iv = assembly.info(vc.node)
+    local spd = iv and len(iv.vel.x, iv.vel.y, iv.vel.z) or 0
+    if spd < (params.vmax or 10) then if not HELD.w then key_down("w") end elseif HELD.w then key_up("w") end
     for _, k in ipairs({ "a", "d" }) do
       if k == want and not HELD[k] then key_down(k) elseif k ~= want and HELD[k] then key_up(k) end
     end
@@ -454,6 +457,9 @@ local function frame_watch(secs, vc)
     end
   end
   release_all()
+  local pcs = findScript("planet_camera")
+  local st = pcs and pcs.propClipStats
+  P("PROPCLIP asks %s, props near the view now %s (most %s), frames pulled in %s", tostring(st and st.asks), tostring(st and st.props), tostring(st and st.most), tostring(st and st.pulls))
   P("WATCH %d frames, mean dt %.1f ms, max %.1f ms; light changes >15%% on %d frames; frames with fog cut %d; frames with lightsDropped %d; lights %d..%d",
     n, 1000 * sumdt / math.max(n, 1), maxdt * 1000, changes, cuts, dropped_frames, lmin, lmax)
 end
@@ -676,6 +682,81 @@ local function count_near(tag, q, R)
   return survey(tag, p.x, p.y, p.z, R)
 end
 
+-- ── camclip: the view backed into a tree trunk / a boulder on purpose ──────
+-- The crew stands `gap` m in front of the nearest trunk (then boulder), the
+-- view faced away from it (planet_camera.face), so the third-person camera
+-- backs out along the line through the prop: a picture, how far the camera
+-- ends up from the prop's axis against its radius, and planet_camera's
+-- propClipStats. Run before (PATCHES reverting the clip) and after.
+local function run_camclip()
+  if (params.noclip or 0) > 0 then local pc0 = findScript("planet_camera"); if pc0 and pc0.PROP_CLIP then pc0.PROP_CLIP.off = true end end
+  wait(3)
+  local ff = findScript("flora_field")
+  local pc = findScript("planet_camera")
+  local bx, by, bz = save.get("base.x"), save.get("base.y"), save.get("base.z")
+  local base = { x = bx, y = by, z = bz }
+  local done = { trunk = 0, rock = 0 }
+  for _, dist in ipairs({ 200, 260, 320, 380, 440 }) do
+    for k = 0, 7 do
+      if done.trunk >= 2 and done.rock >= 2 then break end
+      local q = offset(base, dist, k * math.pi / 4)
+      put_crew(q, 1.2)
+      wait(3.0)
+      local p = world_pt(q)
+      local list = ff.cameraObstacles(p.x, p.y, p.z, 40) or {}
+      for _, kind in ipairs({ "trunk", "rock" }) do
+        if done[kind] < 2 then
+          local best = nil
+          for _, o in ipairs(list) do
+            local ok = (kind == "trunk" and o.h > 0) or (kind == "rock" and o.h == 0 and o.r >= 0.7)
+            if ok then
+              local d = len(o.x - q.x, o.y - q.y, o.z - q.z)
+              if not best or d < best.d then best = { o = o, d = d } end
+            end
+          end
+          if best then
+            done[kind] = done[kind] + 1
+            local o = best.o
+            local U = { x = o.ux, y = o.uy, z = o.uz }
+            -- away from the prop along the ground, from a direction of its own
+            local a = math.abs(U.y) > 0.9 and { x = 1, y = 0, z = 0 } or { x = 0, y = 1, z = 0 }
+            local T = unit(cross(U, a))
+            local gap = o.r + (params.gap or 2.4)
+            local stand = ground_at({ x = o.x + T.x * gap, y = o.y + T.y * gap, z = o.z + T.z * gap })
+            local pulls0 = pc.propClipStats and pc.propClipStats.pulls or 0
+            local tag = string.format("%s%d", kind, done[kind])
+            local t0 = time
+            -- third person (first person is the default since 11-11), the
+            -- orbit just long enough to end in the prop
+            if pc.setFootFirstPerson then pc.setFootFirstPerson(false) else pc.firstPerson = false end
+            pc.params.distance = gap
+            while time - t0 < 2.5 do
+              put_crew(stand, 1.2)
+              pc.face(T.x, T.y, T.z, -0.12)
+              yield()
+            end
+            local cn = pc.node
+            local cp = cn and cn.worldPos
+            local bb = home()
+            local cq = cp and { x = cp.x - bb.x, y = cp.y - bb.y, z = cp.z - bb.z }
+            local axd = -1
+            if cq then
+              local qx, qy, qz = cq.x - o.x, cq.y - o.y, cq.z - o.z
+              local al = clamp(qx * o.ux + qy * o.uy + qz * o.uz, 0, o.h)
+              axd = len(qx - o.ux * al, qy - o.uy * al, qz - o.uz * al)
+            end
+            P("CAMCLIP %s: prop r %.2f h %.1f, crew %.1f m off its axis; camera %.2f m from its axis (%s); pulls +%d",
+              tag, o.r, o.h, gap, axd, axd >= 0 and (axd < o.r and "INSIDE" or "outside") or "?",
+              (pc.propClipStats and pc.propClipStats.pulls or 0) - pulls0)
+            shot("camclip_" .. tag)
+          end
+        end
+      end
+    end
+  end
+  P("CAMCLIP done: trunks %d rocks %d", done.trunk, done.rock)
+end
+
 local function run_catch()
   wait(3)
   local mf = findScript("mineral_field")
@@ -760,12 +841,15 @@ end
 local function main()
   MODE = params.mode or "fog"
   boot()
+  -- noclip=1: the chase view's scatter-prop clip off (a before run); set again after a launch reload
+  NOCLIP = (params.noclip or 0) > 0
   if MODE == "fog" then run_fog()
   elseif MODE == "flick" then run_flick()
   elseif MODE == "lights" then run_lights()
   elseif MODE == "rocks" then run_rocks()
   elseif MODE == "fogsweep" then run_fogsweep()
   elseif MODE == "catch" then run_catch()
+  elseif MODE == "camclip" then run_camclip()
   end
   wait_for(function() return WPEND <= 0 end, 60, "the pictures on disk")
   P("DONE")
@@ -780,6 +864,7 @@ FRAME = 0
 function update(node, dt_)
   dt = dt_
   FRAME = FRAME + 1
+  if NOCLIP and FRAME % 30 == 0 then local pc0 = findScript("planet_camera"); if pc0 and pc0.PROP_CLIP then pc0.PROP_CLIP.off = true end end
   if not CO then return end
   if coroutine.status(CO) == "dead" then
     CO = nil

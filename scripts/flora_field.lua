@@ -1954,11 +1954,9 @@ end
 -- them itself, the way it already owns its own up axis.)
 obstacles = {}
 obstaclesBody = nil
-local function touch_obstacles(astro, body)
+local function obstacles_near(ax, ay, az, body, R)
   local want = {}
-  local ax, ay, az = astro.x, astro.y, astro.z
   local rx, ry, rz = ax - body.x, ay - body.y, az - body.z
-  local R = params.touch_reach
   local nt, nr = 0, 0
   for id, s in pairs(srcs) do
     if s.part == "bark" then
@@ -1986,8 +1984,59 @@ local function touch_obstacles(astro, body)
       nr = nr + 1
     end
   end
+  return want, nt, nr
+end
+local function touch_obstacles(astro, body)
+  local want, nt, nr = obstacles_near(astro.x, astro.y, astro.z, body, params.touch_reach)
   obstacles, obstaclesBody = want, cur_body
   touchStats.obstacles, touchStats.trunks, touchStats.rocks = #want, nt, nr
+end
+-- The same trunks and rocks round any WORLD point, for planet_camera: a
+-- scatter prop has no collider its sphere sweep could meet, so the chase
+-- view drove straight through tree trunks and boulders (renderfix flick:
+-- every one-frame dark flash in a daytime drive was the camera inside one).
+-- Returns the list (body-relative, as `obstacles`) and the body's name.
+-- Besides the trunks and rocks the walker bumps, the tall plants that are
+-- one mesh with no trunk source (fungi, spires, coral, crystal stands: no
+-- `twin`), each as its stalk and, for a fungus, a ball at its cap: a parasol
+-- passing the lens was a black frame too (renderfix cam_before 1997).
+-- CAM_FORMS: form -> { stalk radius, cap height, cap radius } as shares of
+-- the plant's height.
+CAM_FORMS = { fungus = { 0.10, 0.82, 0.30 }, spire = { 0.14 }, tree = { 0.22 } }
+CAM_MIN_H = 1.8
+function cameraObstacles(x, y, z, R)
+  local body = cur_body and space.body(cur_body)
+  if not (body and scatter and scatter.near) then return {}, nil end
+  local want = obstacles_near(x, y, z, body, R)
+  local rx, ry, rz = x - body.x, y - body.y, z - body.z
+  for id, s in pairs(srcs) do
+    local sp = s.sp
+    local f = sp and s.part ~= "bark" and not sp.twin and CAM_FORMS[sp.form]
+    -- (the library mesh's own height: the species' height over its middle
+    -- scale; an instance stands that times its own scatter scale)
+    local smid = sp and sp.scaleMin and sp.scaleMax and (sp.scaleMin / 0.81 + sp.scaleMax / 1.215) * 0.5
+    local lh = f and smid and smid > 0 and (sp.height or 0) / smid or 0
+    if f and (sp.height or 0) >= CAM_MIN_H * 0.6 then
+      local p = patches[s.patch]
+      if p and patch_dist(p, rx, ry, rz) <= R + 2 then
+        for _, h in ipairs(scatter.near(id, vec3(x, y, z), R) or {}) do
+          local ht = lh * (h.scale or 1)
+          if h.settled ~= false and ht >= CAM_MIN_H then
+            local u = h.up or vec3(p.ey[1], p.ey[2], p.ey[3])
+            local gx, gy, gz = h.pos.x - body.x, h.pos.y - body.y, h.pos.z - body.z
+            want[#want + 1] = { key = "c" .. id .. ":" .. tostring(h.id), x = gx, y = gy, z = gz,
+                                ux = u.x, uy = u.y, uz = u.z, r = math.max(0.12, f[1] * ht), h = ht }
+            if f[2] then
+              local ch = f[2] * ht
+              want[#want + 1] = { key = "k" .. id .. ":" .. tostring(h.id), x = gx + u.x * ch, y = gy + u.y * ch,
+                                  z = gz + u.z * ch, ux = u.x, uy = u.y, uz = u.z, r = f[3] * ht, h = 0, cap = true }
+            end
+          end
+        end
+      end
+    end
+  end
+  return want, cur_body
 end
 
 local touch_engine_due = false

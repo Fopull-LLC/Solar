@@ -92,6 +92,12 @@ shiftlock = false
 -- and on foot again the view goes back to that choice.
 firstPerson = true
 local foot_fp = true
+-- The on-foot choice set from a script (a probe, a scripted view), as one
+-- wheel click past the eyes or out of them would.
+function setFootFirstPerson(on)
+  foot_fp = on == true
+  firstPerson = foot_fp
+end
 -- Published: the mouse is grabbed to turn the view this frame (first person,
 -- shift lock, a held right button). While it is not, the cursor is the aim.
 mouseLooking = false
@@ -1218,6 +1224,90 @@ function feel_tick(node, dt, shake_k, on_foot)
   return dip, yaw, pitch, roll
 end
 
+-- ── SCATTER PROPS THE VIEW MUST NOT ENTER ───────────────────────────────────
+-- Tree trunks and rocks are GPU scatter with no collider, so the sweeps above
+-- never meet them: the chase view drove straight through a trunk or a
+-- boulder, and the frame it spent inside one was black (renderfix flick,
+-- 2026-11-12: all four one-frame dark flashes in ~1,650 frames of a daytime
+-- drive). flora_field.cameraObstacles lists the trunks (capsules from the
+-- ground up `h`) and the stones, boulders and crystals (balls) round the
+-- view, body-relative, a few times a second (PROP_CLIP.every, or sooner when
+-- the view has moved PROP_CLIP.move m); every frame the line from the pivot
+-- back to the camera is tested against them, placed on the body as read this
+-- frame (docs/positions-and-frames.md rule 1), and the view stops
+-- PROP_CLIP.pad short of the first one it would enter. A prop the pivot
+-- itself is in or against is passed (the subject's own ground, as the wall
+-- sweep's ignore). The answer goes through the same SNAP IN, EASE OUT as a
+-- wall, so a trunk sliding past pulls the view in for those frames and it
+-- glides back out.
+PROP_CLIP = { every = 0.2, move = 3.0, reach = 4.0, most = 30.0, pad = 0.35, rock_k = 1.25, step = 0.25 }
+propClipStats = { props = 0, most = 0, asks = 0, pulls = 0 }
+local pc_cache = { t = -10.0, body = nil, list = {}, cx = 0, cy = 0, cz = 0 }
+local function prop_clip(head, dir, back)
+  if back <= 0.05 or PROP_CLIP.off then return back end
+  local ff = script_ref("flora_field")
+  if not (ff and ff.cameraObstacles) then return back end
+  local b = pc_cache.body and space.body(pc_cache.body)
+  local mx, my, mz = head.x + dir.x * back * 0.5, head.y + dir.y * back * 0.5, head.z + dir.z * back * 0.5
+  local moved = b and math.sqrt((mx - b.x - pc_cache.cx) ^ 2 + (my - b.y - pc_cache.cy) ^ 2 + (mz - b.z - pc_cache.cz) ^ 2) or math.huge
+  if time - pc_cache.t > PROP_CLIP.every or moved > PROP_CLIP.move or time < pc_cache.t then
+    local R = math.min(back * 0.5 + PROP_CLIP.reach, PROP_CLIP.most)
+    local ok, list, bname = pcall(ff.cameraObstacles, mx, my, mz, R)
+    pc_cache.t = time
+    pc_cache.list = (ok and list) or {}
+    pc_cache.body = ok and bname or nil
+    b = pc_cache.body and space.body(pc_cache.body)
+    if b then pc_cache.cx, pc_cache.cy, pc_cache.cz = mx - b.x, my - b.y, mz - b.z end
+    propClipStats.props = #pc_cache.list
+    propClipStats.asks = propClipStats.asks + 1
+    if #pc_cache.list > propClipStats.most then propClipStats.most = #pc_cache.list end
+  end
+  if not b or #pc_cache.list == 0 then return back end
+  -- the head, body-relative (both from this frame's drawn read)
+  local hx, hy, hz = head.x - b.x, head.y - b.y, head.z - b.z
+  local dx, dy, dz = dir.x, dir.y, dir.z
+  local best = back
+  for _, o in ipairs(pc_cache.list) do
+    local rr = (o.h > 0 and o.r or o.r * PROP_CLIP.rock_k) + PROP_CLIP.pad
+    local h = o.h or 0
+    -- distance from a point (body-relative) to the prop's axis segment
+    local function dist(px, py, pz)
+      local qx, qy, qz = px - o.x, py - o.y, pz - o.z
+      local a = qx * o.ux + qy * o.uy + qz * o.uz
+      if a < 0 then a = 0 elseif a > h then a = h end
+      local ex, ey, ez = qx - o.ux * a, qy - o.uy * a, qz - o.uz * a
+      return math.sqrt(ex * ex + ey * ey + ez * ez)
+    end
+    -- the pivot in or against it: passed
+    if dist(hx, hy, hz) > rr then
+      -- quick reject: the prop's centre against the line
+      local cxo, cyo, czo = o.x + o.ux * h * 0.5 - hx, o.y + o.uy * h * 0.5 - hy, o.z + o.uz * h * 0.5 - hz
+      local along = cxo * dx + cyo * dy + czo * dz
+      if along > -rr - h and along < best + rr + h then
+        local px, py, pz = cxo - dx * along, cyo - dy * along, czo - dz * along
+        if math.sqrt(px * px + py * py + pz * pz) < rr + h * 0.5 + 0.01 then
+          -- march out along the line, then halve the step to the surface
+          local t, hit = 0.0, nil
+          while t <= best do
+            if dist(hx + dx * t, hy + dy * t, hz + dz * t) < rr then hit = t break end
+            t = t + PROP_CLIP.step
+          end
+          if hit then
+            local lo, hi = math.max(0, hit - PROP_CLIP.step), hit
+            for _ = 1, 5 do
+              local mid = (lo + hi) * 0.5
+              if dist(hx + dx * mid, hy + dy * mid, hz + dz * mid) < rr then hi = mid else lo = mid end
+            end
+            if lo < best then best = lo end
+          end
+        end
+      end
+    end
+  end
+  if best < back then propClipStats.pulls = propClipStats.pulls + 1 end
+  return best
+end
+
 local function place_camera(node, dt)
   -- Map mode: the orbit map owns the camera while it's open — orbiting the
   -- focused body, not the player. Stand down entirely.
@@ -1634,6 +1724,9 @@ local function place_camera(node, dt)
       back = math.max(0.0, hit.distance - 0.05)
     end
   end
+
+  -- the scatter trunks and rocks no sweep meets (PROP_CLIP above)
+  if not firstPerson and back > 0.05 then back = prop_clip(head, fwd * -1, back) end
 
   -- SNAP IN, EASE OUT. A camera may never spend a frame inside a wall, so a
   -- closer answer is taken immediately — but popping back to full orbit the
