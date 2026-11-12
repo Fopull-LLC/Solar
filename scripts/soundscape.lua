@@ -353,8 +353,33 @@ function update(node, dt)
   loop_to("wind", WIND, wind, underwater and 500 or 0, dt)
   loop_to("gust", GUST, gust, 0, dt)
   loop_to("sea", SEA, sea, 0, dt)
+  -- Under water the suit's exhaust bubbles away (a scuba loop, quiet), with
+  -- an exhale every few seconds in the breath's rhythm (the water pass, V1:
+  -- audio/water/bubbles_loop, exhale_1..2, CC0).
+  loop_to("bubbles", "audio/water/bubbles_loop.ogg", underwater and 0.22 * scale or 0, 0, dt)
+  if underwater then
+    exhale_t = (exhale_t or 2.0) - dt
+    if exhale_t <= 0 then
+      -- (timed off the clock, not math.random: the music's quiet between
+      -- pieces is rolled from the same stream and the test pins it)
+      exhale_n = (exhale_n or 0) + 1
+      exhale_t = 3.4 + 0.9 * (1 + math.sin(exhale_n * 1.7))
+      audio.play("audio/water/exhale_" .. (1 + exhale_n % 2) .. ".ogg", { track = "Ambient", volume = 0.28 * scale, mode = "Flat" })
+    end
+  else
+    exhale_t = 1.5
+  end
   loop_to("rain_l", RAIN_L, rain_l, muffle, dt)
   loop_to("rain_h", RAIN_H, rain_h, muffle, dt)
+  -- Rain on water: beside standing water (the sea's reach, a lake, a pool
+  -- within ~25 m: climate.waterNearEye) the rain patters on it.
+  local onwater = 0
+  local clw = ref("climate")
+  if rain_l + rain_h > 0.02 and not underwater and clw and clw.waterNearEye then
+    local d = clw.waterNearEye()
+    if d and d < 25 then onwater = (rain_l + rain_h) * (1 - d / 25) * 0.7 * scale end
+  end
+  loop_to("rain_water", "audio/water/rain_water_loop.ogg", onwater, muffle, dt)
   loop_to("hail", HAIL, hail, muffle, dt)
   loop_to("dust", DUST, dust, muffle, dt)
 

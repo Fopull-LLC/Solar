@@ -1,0 +1,28 @@
+// A sheet of standing water drawn by a script-built mesh: the sea's near cap
+// (scripts/ocean.lua), a lake or a pool (scripts/climate.lua). The MATERIAL is
+// authored here: a node's own Material supersedes its parts', and a shader can
+// only be put on a node this way (setMaterial takes no `shader` key, and a
+// mesh.build model has no parts to address) — a Lake made with createNode and
+// dressed from the script drew in the plain default material for months. The
+// script sets `node.model` to its mesh and drives the shader's uniforms.
+[
+    (
+        name: "WaterSheet",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        // Empty: the script gives it `node.model` (a mesh.build mesh); a Mesh
+        // matter kept drawing its own asset and the sheet never showed.
+        matter: Empty,
+        material: Some((
+            color: (1.0, 1.0, 1.0),
+            alpha: 0.999,
+            shader: Some("shaders/ocean.flsl"),
+        )),
+        cast_shadow: false,
+        scripts: [],
+        tags: ["genbody"],
+    ),
+]

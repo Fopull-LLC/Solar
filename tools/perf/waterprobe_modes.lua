@@ -465,3 +465,276 @@ local function run_water()
   P("POOLS final: pits %s sumps %s dry %s rebuilt %s breaches %s searches %s", tostring(ps.pits), tostring(ps.sumps),
     tostring(ps.dry), tostring(ps.rebuilt), tostring(ps.breaches), tostring(ps.searches))
 end
+
+-- ── sea look (waterprobe.sh sealook): the sea's rendering, R1 ──────────────
+-- Shots of the home world's sea from the shore, skimming the surface, from
+-- 12 m, 150 m and 700 m up, and after a fly along the shore (the cap re-aims
+-- under the eye); the frame's buckets and GPU passes with the sea filling the
+-- screen (scenario b_sea), ocean.lua's cost and the cap's build stats.
+local function run_sealook()
+  wait_ready(90)
+  local b = home()
+  local cl = findScript("climate")
+  local oc = findScript("ocean")
+  local R = cl and cl.seaRadius(b.name) or 0
+  local WR = (cl and cl.worldOf and cl.worldOf(b.name) or {}).radius or b.radius
+  P("SEALOOK world %s radius %.1f sea radius %.1f", b.name, WR, R)
+  if R <= 0 then P("SEALOOK RESULT: no sea on the home world"); return end
+  perf.enable(true)
+  local a0 = astro()
+  local u, g, t = w_find_beach(home(), R, unit({ x = a0.x - b.x, y = a0.y - b.y, z = a0.z - b.z }), 420)
+  if not u then
+    local h0 = cl.hydroOf and cl.hydroOf(b.name)
+    for _, rv in ipairs(h0 and h0.rivers or {}) do
+      if u then break end
+      if rv.river and #rv.points >= 6 then
+        local n = #rv.points
+        local e = unit({ x = rv.points[n - 2], y = rv.points[n - 1], z = rv.points[n] })
+        w_stream_to(e, R + 40, "a river's mouth")
+        u, g, t = w_find_beach(home(), R, e, 420)
+      end
+    end
+  end
+  if not u then P("SEALOOK RESULT: no beach found"); return end
+  local A = astro()
+  b = home()
+  A.x, A.y, A.z = b.x + u.x * (g + 1.2), b.y + u.y * (g + 1.2), b.z + u.z * (g + 1.2)
+  A.vx, A.vy, A.vz = 0, 0, 0
+  wait(3)
+  -- (every sea's script: findScript("ocean") answers another world's)
+  local function caps()
+    local out = { builds = 0, reads = 0, frames = 0 }
+    local list = findScripts and findScripts("ocean") or (oc and { oc } or {})
+    for _, o in ipairs(list) do
+      local cs = o and o.capStats
+      if cs then out.builds, out.reads, out.frames = out.builds + (cs.builds or 0), out.reads + (cs.reads or 0), out.frames + (cs.frames or 0) end
+    end
+    return out
+  end
+  local function stats(tag)
+    local cs = caps()
+    local sc = find and find("SeaCap")
+    if sc then
+      local okm, m = pcall(sc.material, sc)
+      local okp, parts = pcall(sc.materials, sc)
+      P("SEALOOK cap node: valid %s visible %s model %s shader %s parts %s parent %s", tostring(sc.valid), tostring(sc.visible), tostring(sc.model),
+        tostring(okm and m and m.shader), tostring(okp and parts and #parts), tostring(sc.parent and sc.parent.name))
+    else
+      P("SEALOOK cap node: none")
+    end
+    for _, o in ipairs(findScripts and findScripts("ocean") or {}) do
+      if o.waveNow then P("SEALOOK swell: U %.1f amp %.3f lam %.2f g %.2f R %.1f", o.waveNow.U, o.waveNow.amp, o.waveNow.lam, o.waveNow.g, o.waveNow.R) end
+    end
+    P("SEALOOK %s: ocean %.3f ms (worst %.2f) climate %.3f ms; cap builds %s reads %s frames %s; gpu %s ms", tag,
+      perf.scriptMs and perf.scriptMs("ocean") or -1, perf.scriptWorstMs and perf.scriptWorstMs("ocean") or -1,
+      perf.scriptMs and perf.scriptMs("climate") or -1, tostring(cs.builds), tostring(cs.reads), tostring(cs.frames),
+      tostring((function() local ok, gg = pcall(perf.gpu); return ok and gg and gg.total or "?" end)()))
+  end
+  -- a: the shore at eye level, looking out to sea
+  local eye = w_along(u, t, 10, R)
+  if not w_cam(home(), { x = eye.x * (R + 1.7), y = eye.y * (R + 1.7), z = eye.z * (R + 1.7) }, t, -0.06) then
+    P("SEALOOK RESULT: no free camera"); return
+  end
+  wait(2.5)
+  stats("shore")
+  w_shot("a_shore_eye")
+  local pc = findScript("planet_camera")
+  local fc = pc.freecamState()
+  -- b: skimming the surface 25 m out, looking along it (reflections, foam)
+  local out = w_along(u, t, 25, R)
+  fc.rel = vec3(out.x, out.y, out.z) * (R + 0.5)
+  fc.ref = vec3(t.x, t.y, t.z)
+  fc.pitch = -0.04
+  wait(2.0)
+  sc_begin("b_sea")
+  wait(6)
+  sc_end("b_sea")
+  stats("skim")
+  w_shot("b_skim")
+  -- grazing looks (Ty, 11-12: the horizon's bend showed through the surface):
+  -- 0.5, 1.5 and 3 m over the water, level, out to the horizon
+  for _, hgt in ipairs({ 0.5, 1.5, 3.0 }) do
+    fc.rel = vec3(out.x, out.y, out.z) * (R + hgt)
+    fc.ref = vec3(t.x, t.y, t.z)
+    fc.pitch = -0.02
+    wait(1.5)
+    w_shot(string.format("b_graze_%.1fm", hgt))
+  end
+  -- jitter (Ty, 11-12: "the water jitters into different shapes"): a camera
+  -- held at a fixed BODY-relative point 2 m over the water for ~10 s while
+  -- the planet moves, 16 shots; work/water/jitter_diff.py diffs them. The
+  -- wind is logged with each so a direction change can be matched to a jump.
+  fc.rel = vec3(out.x, out.y, out.z) * (R + 2.0)
+  fc.ref = vec3(t.x, t.y, t.z)
+  fc.pitch = -0.35
+  wait(1.5)
+  local wx0 = findScript("weather")
+  for k = 0, 15 do
+    local wc0 = wx0 and wx0.current and wx0.current()
+    local bb0 = home()
+    P("SEALOOK jit %02d: t %.2f body %.1f %.1f %.1f wind %.1f dir %.2f %.2f %.2f", k, time, bb0.x, bb0.y, bb0.z,
+      wc0 and (wc0.windNow or wc0.wind or 0) or -1, wc0 and wc0.windX or 0, wc0 and wc0.windY or 0, wc0 and wc0.windZ or 0)
+    w_shot(string.format("j_jit_%02d", k))
+    wait(0.2)
+  end
+  -- c: 12 m up, looking down 45°
+  fc.rel = vec3(out.x, out.y, out.z) * (R + 12)
+  fc.pitch = -0.8
+  wait(2.0)
+  w_shot("c_12m")
+  -- d: 150 m up (the cap's reach from above)
+  fc.rel = vec3(out.x, out.y, out.z) * (R + 150)
+  fc.pitch = -1.2
+  wait(2.5)
+  stats("150m")
+  w_shot("d_150m")
+  -- e: 700 m up (the far sphere alone)
+  fc.rel = vec3(out.x, out.y, out.z) * (R + 700)
+  fc.pitch = -1.3
+  wait(2.5)
+  stats("700m")
+  w_shot("e_700m")
+  -- f: back down, a fly along the shore (the cap re-aims under the eye)
+  local st = w_along(u, t, 12, R)
+  fc.rel = vec3(st.x, st.y, st.z) * (R + 1.2)
+  fc.ref = vec3(t.x, t.y, t.z)
+  fc.pitch = -0.03
+  wait(2.0)
+  local c0 = caps().builds
+  key_down("w")
+  wait(2.0)
+  w_shot("f_fly_moving")
+  wait(2.0)
+  key_up("w")
+  wait(1.0)
+  local c1 = caps().builds
+  P("SEALOOK fly: cap builds %d -> %d", c0, c1)
+  stats("fly")
+  w_shot("f_fly")
+  -- g: the same from the water, 0.3 m under, looking up at the surface
+  local sw = w_along(u, t, 30, R)
+  fc.rel = vec3(sw.x, sw.y, sw.z) * (R - 0.6)
+  fc.ref = vec3(t.x, t.y, t.z)
+  fc.pitch = 0.5
+  wait(2.0)
+  w_shot("g_under")
+  -- h: a lake's shore (the same shader on a sheet climate built; its
+  -- parameters land the tick after the node, dress_params)
+  local h0 = cl.hydroOf and cl.hydroOf(b.name)
+  local L = h0 and h0.lakes and h0.lakes[1]
+  if L then
+    local lu = unit({ x = L.x, y = L.y, z = L.z })
+    local Rl = WR + L.level
+    local lt1 = w_tangent(lu)
+    local le = w_along(lu, lt1, L.reach * 0.6, WR)
+    fc.rel = vec3(le.x, le.y, le.z) * (Rl + 1.8)
+    fc.ref = vec3(-lt1.x, -lt1.y, -lt1.z)
+    fc.pitch = -0.12
+    local A2 = astro()
+    local bb = home()
+    A2.x, A2.y, A2.z = bb.x + le.x * (Rl + 2.5), bb.y + le.y * (Rl + 2.5), bb.z + le.z * (Rl + 2.5)
+    A2.vx, A2.vy, A2.vz = 0, 0, 0
+    wait_for(function() return cl.waterNear().lakes >= 1 end, 60, "the lake built")
+    wait(3)
+    w_shot("h_lake")
+    fc.rel = vec3(le.x, le.y, le.z) * (Rl + 20)
+    fc.pitch = -0.9
+    wait(1.5)
+    w_shot("i_lake_high")
+    P("SEALOOK lake 1: %s", tostring(cl.waterNear().lakes))
+  end
+  -- r: a RIVER (the longest, from a third of the way down): its ribbon, the
+  -- stream loop, and the first waterfall the build found (sheet, mist, loop)
+  local best_rv, best_len = nil, 0
+  for _, rv in ipairs(h0 and h0.rivers or {}) do
+    if rv.river and (rv.length or 0) > best_len then best_rv, best_len = rv, rv.length or 0 end
+  end
+  if best_rv then
+    local n = math.floor(#best_rv.points / 3)
+    local i = math.max(1, math.floor(n / 3))
+    local ru = unit({ x = best_rv.points[i * 3 - 2], y = best_rv.points[i * 3 - 1], z = best_rv.points[i * 3] })
+    w_stream_to(ru, WR + 30, "river")
+    local A3 = astro()
+    local bb = home()
+    local rg = w_ground(ru, WR + 80) or WR
+    A3.x, A3.y, A3.z = bb.x + ru.x * (rg + 1.5), bb.y + ru.y * (rg + 1.5), bb.z + ru.z * (rg + 1.5)
+    A3.vx, A3.vy, A3.vz = 0, 0, 0
+    wait_for(function() return cl.waterNear().rivers >= 1 end, 60, "the river built")
+    -- let the pieces near the eye finish (one build at a time)
+    local last, same = -1, 0
+    for _ = 1, 40 do
+      wait(1)
+      local nr = cl.waterNear().rivers
+      if nr == last then same = same + 1 else same, last = 0, nr end
+      if same >= 4 then break end
+    end
+    local wn = cl.waterNear()
+    -- the built row nearest the crew (the hydro point itself may lie in a lake's basin)
+    local bb3 = home()
+    local crx, cry, crz = A3.x - bb3.x, A3.y - bb3.y, A3.z - bb3.z
+    local row, rd = nil, 1e9
+    for _, rw in ipairs(wn.rows or {}) do
+      local d = len(rw.x - crx, rw.y - cry, rw.z - crz)
+      if d < rd then row, rd = rw, d end
+    end
+    P("SEALOOK river: %d row samples, nearest %.0f m away; falls: %d", #(wn.rows or {}), rd, #(wn.falls or {}))
+    for i, f in ipairs(wn.falls or {}) do
+      if i <= 8 then P("SEALOOK   fall %d: drop %.1f half %.1f built %s piece %s, %.0f m from the crew", i, f.drop, f.half, tostring(f.built), tostring(f.piece), len(f.x - crx, f.y - cry, f.z - crz)) end
+    end
+    if row then
+      ru = unit({ x = row.x, y = row.y, z = row.z })
+      rg = len(row.x, row.y, row.z)
+      w_stream_to(ru, rg + 2, "the river row")
+      wait(3)
+      A3 = astro()
+      P("SEALOOK river: standing by the nearest built row (half-width %.1f m); stream loop at %s m", row.half or -1, tostring(cl.waterNear().ambient.stream))
+    end
+    local am = wn.ambient or {}
+    P("SEALOOK river: %d pieces built, falls %d, stream loop at %s m, fall loops %s, near %s; river stats %s",
+      wn.rivers, #(wn.falls or {}), tostring(am.stream), tostring(am.fall), tostring(am.near), json and json(wn.stats) or "?")
+    local rt1 = w_tangent(ru)
+    local re = w_along(ru, rt1, 6, WR)
+    fc.rel = vec3(re.x, re.y, re.z) * (rg + 1.7)
+    fc.ref = vec3(-rt1.x, -rt1.y, -rt1.z)
+    fc.pitch = -0.2
+    wait(1.5)
+    w_shot("r_river_eye")
+    fc.rel = vec3(ru.x, ru.y, ru.z) * (rg + 25)
+    fc.pitch = -1.1
+    wait(1.5)
+    w_shot("s_river_high")
+    -- the nearest built fall: stand 12 m off its foot, looking at it
+    local nf, nd = nil, 1e9
+    bb = home()
+    for _, f in ipairs(wn.falls or {}) do
+      local d = len(f.x - (A3.x - bb.x), f.y - (A3.y - bb.y), f.z - (A3.z - bb.z))
+      if d < nd then nf, nd = f, d end
+    end
+    if nf and nd > 600 then P("SEALOOK fall: the nearest is %.0f m away (a stale piece); none near", nd); nf = nil end
+    if nf then
+      local fu = unit({ x = nf.x, y = nf.y, z = nf.z })
+      local fr = len(nf.x, nf.y, nf.z)
+      w_stream_to(fu, fr + 3, "the fall")
+      wait_for(function() local a = cl.waterNear().ambient; return a and (a.fall or 0) >= 1 end, 40, "a fall loop near")
+      wait(3)
+      local ft1 = w_tangent(fu)
+      local fe = w_along(fu, ft1, 12, WR)
+      fc.rel = vec3(fe.x, fe.y, fe.z) * (fr + 2.5)
+      fc.ref = vec3(-ft1.x, -ft1.y, -ft1.z)
+      fc.pitch = 0.1
+      wait(2.0)
+      local wn2 = cl.waterNear()
+      P("SEALOOK fall: drop %.1f half %.1f built %s, %.0f m from the crew; fall loops %s", nf.drop, nf.half, tostring(nf.built), nd,
+        tostring(wn2.ambient and wn2.ambient.fall))
+      w_shot("t_fall")
+      fc.rel = vec3(fu.x, fu.y, fu.z) * (fr + nf.drop + 8)
+      fc.pitch = -0.9
+      wait(1.5)
+      w_shot("u_fall_above")
+    else
+      P("SEALOOK fall: none within the built pieces of the longest river")
+    end
+  end
+  w_cam_off()
+  P("SEALOOK RESULT: shots a–u taken")
+end

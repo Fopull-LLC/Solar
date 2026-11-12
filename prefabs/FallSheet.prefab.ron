@@ -1,0 +1,22 @@
+// A waterfall's sheet, a script-built ribbon from the lip down the drop
+// (scripts/climate.lua) wearing shaders/fallsheet.flsl. See
+// WaterSheet.prefab.ron for why the material is authored here.
+[
+    (
+        name: "FallSheet",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        material: Some((
+            color: (1.0, 1.0, 1.0),
+            alpha: 0.999,
+            shader: Some("shaders/fallsheet.flsl"),
+        )),
+        cast_shadow: false,
+        scripts: [],
+        tags: ["genbody"],
+    ),
+]

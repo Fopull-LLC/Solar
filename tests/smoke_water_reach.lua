@@ -83,6 +83,16 @@ local API = {
     nodes[#nodes + 1] = n
     if fn then fn(n) end
   end,
+  -- the water sheets come from prefabs (WaterSheet / RiverSheet) now
+  spawn = function(prefab, pos, fn, parent)
+    local n = { name = prefab, valid = true, prefab = prefab }
+    function n:setShaderParam() end
+    function n:material() return {} end
+    function n:setMaterial() end
+    function n:destroy() self.valid = false end
+    nodes[#nodes + 1] = n
+    if fn then fn(n) end
+  end,
   app = { wallClock = function() return os.clock() end },
   findScript = function(n) if n == "underground" then return UG end return nil end,
   find = function(n) if n == "Astronaut" then return { x = BODY.x, y = BODY.y + 102, z = BODY.z } end end,

@@ -142,7 +142,8 @@ shader river {
   let col = mix(lit, sky, reflected) + spec
 
   // Drawn whole (the bed behind is already in its colour): only the banks fade.
-  let alpha = edge
+  // (a run's ends fade over three rows: climate.lua bakes it into the vertex alpha)
+  let alpha = edge * vertexColor.a
   let dbg = vec3(saturate(speed / 4), fract(uv.y * 0.1), saturate(gap / 6))
   output color = mix(vec4(col, alpha * instanceColor.a), vec4(dbg, 1), debugView)
 }

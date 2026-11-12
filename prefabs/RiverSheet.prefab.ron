@@ -1,0 +1,24 @@
+// A river's ribbon, a script-built mesh (scripts/climate.lua build_river)
+// wearing shaders/river.flsl. See WaterSheet.prefab.ron for why the material
+// is authored here rather than set from the script.
+[
+    (
+        name: "RiverSheet",
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        // Empty: the script gives it `node.model` (a mesh.build mesh); a Mesh
+        // matter kept drawing its own asset and the sheet never showed.
+        matter: Empty,
+        material: Some((
+            color: (1.0, 1.0, 1.0),
+            alpha: 0.999,
+            shader: Some("shaders/river.flsl"),
+        )),
+        cast_shadow: false,
+        scripts: [],
+        tags: ["genbody"],
+    ),
+]

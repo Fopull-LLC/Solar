@@ -983,12 +983,35 @@ local function footstep(node, from, to)
   -- Crouched, a step is placed, not planted: a third of the sound, carried a
   -- third as far; a heavy pack lands a little harder.
   local q = 1 - 0.68 * crouchAmount
+  local n = math.floor(time * 137.0) % 5
+  -- Wading (ankle to thigh deep): a splashing step instead of the boot on
+  -- ground (audio/water/wade_1..4, a real puddle walk, CC0), louder the
+  -- deeper, with a ring of foam where the foot lands.
+  if (wadeDepth or -1) > 0.08 then
+    local w = math.min(1, (wadeDepth - 0.08) / 0.5)
+    audio.play("audio/water/wade_" .. (1 + n % 4) .. ".ogg", node,
+      { track = "SFX", volume = (0.35 + 0.4 * w) * q, mode = "spatial", falloff = "inverse",
+        minDistance = 3.0, maxDistance = 45.0 })
+    if vfx_ref and vfx_ref.splash and space and space.dominant then
+      -- at the water's surface over the body: depth is measured at the
+      -- capsule's centre, so the surface is that far up the radial
+      local bn = space.body(space.dominant(node.x, node.y, node.z))
+      if bn then
+        local rx, ry, rz = node.x - bn.x, node.y - bn.y, node.z - bn.z
+        local rl = math.sqrt(rx * rx + ry * ry + rz * rz)
+        if rl > 1e-6 then
+          local k = wadeDepth / rl
+          vfx_ref.splash(node.x + rx * k, node.y + ry * k, node.z + rz * k, 0.25 + 0.5 * w)
+        end
+      end
+    end
+    return
+  end
   local fx = ref("sfx")
   if fx and fx.step then
     fx.step((ground_surface(node)), node, q * (1 + 0.25 * encumbrance), q)
     return
   end
-  local n = math.floor(time * 137.0) % 5
   audio.play(FOOTSTEPS .. n .. ".ogg", node,
     { track = "SFX", volume = 0.5 * q * (1 + 0.25 * encumbrance), mode = "spatial", falloff = "inverse",
       minDistance = 3.0, maxDistance = 60.0 * q })
@@ -2354,8 +2377,15 @@ function update(node, dt)
   local cl = ref("climate")
   local depth = cl and cl.seaDepth(node.x, node.y, node.z) or nil
   local swimming = depth ~= nil and depth > 0.7
+  -- (published: how deep the body stands in water, for the wading steps and
+  -- the tool belt; -1 on dry ground)
+  wadeDepth = (depth ~= nil and depth > 0) and depth or -1
   if swimming then
     speed = sprint and params.swim_fast or params.swim
+  elseif depth ~= nil and depth > 0.12 then
+    -- Wading: the water drags the legs, knee-deep halves the pace, no sprint.
+    speed = speed * (1 - 0.55 * math.min(1, (depth - 0.12) / 0.58))
+    sprint = false
   end
 
   -- THE IMPACT (playtest 2026-11-05: "fall damage extremely annoying and

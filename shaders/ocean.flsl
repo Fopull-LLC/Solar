@@ -1,50 +1,59 @@
-// OCEAN — the sea surface of a generated world.
+// OCEAN — the sea surface of a generated world (and its lakes and pools).
 //
 // Drawn on a unit icosphere (models/water/ocean_sphere.glb) scaled to the sea
 // radius, so `objectPos` is metres on the sea and `normalize(objectPos)` is the
 // exact local up. Bodies do not rotate, so object axes are world axes and the
-// normal built here is lit against world directions directly.
+// normal built here is lit against world directions directly. The same shader
+// dresses the NEAR CAP (scripts/ocean.lua: a disc of the sea under the eye,
+// dense enough to carry waves as geometry), the lake sheets and the pools
+// (scripts/climate.lua): meshes in the planet's own frame, under the body.
 //
-//   waves    a long swell and a short chop drifting different ways; their
-//            gradient (three samples, along the surface) bends the normal.
-//            They are in the light, normals only: `output offset` could
-//            move the mesh, but this sphere's vertices are ~28 m apart at
-//            scale 3 — far too coarse to carry a wave.
+//   swell    six Gerstner waves off the wind (scripts size them from the
+//            wind and the world's g: JONSWAP, fetch-limited; a few-km sea is
+//            a choppy lake, 0.1–0.3 m, 3–8 m long). On the cap (geomWaves =
+//            1) they MOVE the vertices (output offset); everywhere their sum
+//            bends the normal, read at the unmoved objectPos (the same input
+//            the offset saw). They shoal: amplitude × tanh(k·depth), the
+//            depth baked into the cap's uv.x (water over the bed / 16).
+//            Where the surface folds (the sum of the sines near its top) the
+//            crest breaks: foam.
+//   chop     fbm ripples under the swell, drifting downwind: the fine normal.
+//   frame    a plane wave k·dot(d, p) is a wave on the sphere within ~30° of
+//            `capDir` (the eye's direction for the sea, a lake's centre for a
+//            lake): each wave's direction lies in capDir's tangent plane, and
+//            its displacement and slope are projected onto the vertex's own.
 //   behind   the sea is SEE-THROUGH (engine 0.117 rc3, card 0454): the
 //            scene behind the surface (sceneColor), looked at where the
 //            wave-tilted ray meets it (refraction), and the length of water
 //            the view ray crosses to get there (sceneDepth − the surface's
 //            own distance). A look that bends onto something in FRONT of the
 //            water keeps the straight look instead.
-//   sky      the reflected ray sees a horizon-to-zenith gradient of the
-//            world's own air colour, weighted by Fresnel, plus a sun glint.
-//            The two ends are the sky as the engine DRAWS it (skyColor the
-//            pale horizon, zenithColor the deep overhead, pushed by
-//            scripts/ocean.lua and climate.lua from atmosphere.lua's air):
-//            a mirror of the rolled pastel was paler than the real sky, and
-//            at a grazing look the water became a flat sheet of it.
+//   sky      the reflected ray sees the SKY THE ENGINE DREW (skyRadiance,
+//            0.118: its atmosphere, clouds and sun, rougher as the wind
+//            freshens and from far off), weighted by Fresnel; where nothing
+//            was captured, the old horizon-to-zenith gradient of the world's
+//            air colour (skyColor, zenithColor) stands in. Plus a sun glint.
 //   body     Beer–Lambert, per channel: the water's own absorption per metre
-//            (`absorb`, from the chemistry, climate.waterAbsorb: clear water
-//            eats red first, tea-brown water blue first) over the view ray's
-//            path through the water. What comes through is the REAL bed as
-//            the engine lit it; what is lost is replaced by the column's own
-//            scattered light (deepColor, a little of shallowColor where the
-//            water is thin). Clear shallows show their pebbles tinted
-//            turquoise, then blue, then navy as they deepen, each world's
-//            water in its own order. `bodyLight` darkens dark water (tannin,
-//            iron, methane), whose lit tint read as sand.
+//            (`absorb`, from the chemistry, climate.waterAbsorb) over the view
+//            ray's path through the water. What comes through is the REAL bed
+//            as the engine lit it; what is lost is the column's own scattered
+//            light (deepColor, a little of shallowColor where the water is
+//            thin). `bodyLight` darkens dark water (tannin, iron, methane).
 //   wind     the weather's wind at the eye (scripts, weather.current): waves
 //            run downwind and grow with it, and past a fresh breeze their
 //            crests break into whitecaps.
-//   surf     the vertical depth (the water crossed × the look's steepness) is how
-//            deep the water is over the bottom here. Where it shallows, bands of foam
-//            roll in toward the waterline (their phase advances as depth
-//            falls) and a swash line runs up the beach and draws back.
+//   surf     the vertical depth (the water crossed × the look's steepness) is
+//            how deep the water is over the bottom here. Where it shallows,
+//            bands of foam roll in toward the waterline and a swash line
+//            runs up the beach and draws back.
+//   cap      the far sphere hides under the cap (capHide = 1, capR its
+//            reach) and the cap's rim (uv.y → 0) fades, so the two meet
+//            without a seam or a z-fight.
 //
 // Lighting is its own (sun term + sky) rather than litSurface: the engine's
 // lit path marches the terrain shadow for every fragment, and a sea covers a
 // lot of fragments. The sun is the engine's key light (lightDir, and the hue of
-// lightColor); skyColor is pushed by scripts/ocean.lua from the world's air.
+// lightColor).
 shader ocean {
   stage fragment
   blend alpha
@@ -73,28 +82,131 @@ shader ocean {
   uniform wind: float = 4 range(0, 40)
   // How far the waves bend the look at the bed, per metre of water (to 3 m).
   uniform refractK: float = 0.2 range(0, 2)
+  // The swell: the biggest wave's amplitude (m) and the peak wavelength (m),
+  // the world's gravity, the Gerstner steepness shared by the six.
+  uniform waveAmp: float = 0.12 range(0, 2)
+  uniform waveLen: float = 6 range(0.5, 80)
+  uniform gAccel: float = 9.81 range(0.1, 40)
+  uniform steep: float = 0.5 range(0, 1)
+  // 1 on the near cap only: the swell moves the mesh, uv = (depth/16, rim).
+  uniform geomWaves: float = 0 range(0, 1)
+  // A fixed planet-local direction near the water being drawn (see `frame`).
+  uniform capDir: vec3 = vec3(0, 1, 0)
+  // The swell's and the chop's direction: a FIXED planet-frame vector the
+  // script sets once per body of water (ocean.lua / climate.lua), never the
+  // live wind. A plane wave's phase is k·dot(d, p) with p ~ 900 m from the
+  // centre, so a direction that turned a degree slid the whole pattern 15 m;
+  // the live windDir (gusts, pushed twice a second) and the eye's capDir
+  // (new at each cap rebuild) both did exactly that (Ty, 11-12: "the water
+  // jitters into different shapes"). The wind still sets the size, the
+  // whitecaps and the roughness.
+  uniform swellDir: vec3 = vec3(0.6, 0, 0.8)
+  // On the far sphere: 1 hides it under a cap of reach capR (m) round capDir.
+  uniform capHide: float = 0 range(0, 1)
+  uniform capR: float = 0 range(0, 3000)
+  // How much of the reflection is the engine's captured sky (0: the gradient).
+  uniform skyMix: float = 1 range(0, 1)
 
   let up = normalize(objectPos)
   let sunDir = lightDir
   let sunColor = lightColor / max(max(lightColor.x, max(lightColor.y, lightColor.z)), 0.001)
-  // Waves run downwind, faster and taller as it freshens; the chop crosses
-  // them at an angle.
-  let wdir = normalize(windDir - up * dot(windDir, up) + cross(up, vec3(0.37, 0.83, 0.42)) * 0.001)
   let windK = saturate(wind / 12)
+
+  // ── the swell: six Gerstner waves in capDir's tangent plane ──
+  // Six fixed 3-D directions off swellDir: a plane wave cut by the sphere
+  // is a wave on the water everywhere but where its direction is radial
+  // (there that one wave goes flat; the six never do together), and it is
+  // continuous across cap rebuilds and under a changing wind.
+  let cwd = normalize(swellDir + vec3(0.0001, 0.0002, 0.0003))
+  let cwx = normalize(cross(cwd, vec3(0.37, 0.83, 0.42)))
+  // (a mesh with no depth baked in reads deep; the cap's uv.x is depth/16)
+  let depth = max(mix(16, uv.x * 16, geomWaves), 0.05)
+  // Where the cap ends and the far sphere begins: one hard hand-over at
+  // capR − 20 m from capDir (a 4 m blend), the same arc on both, so no band
+  // is half-drawn by both or by neither (Ty, 11-12: the horizon's bend
+  // showed through the surface where the cap's rim fade and the sphere's
+  // hide fade did not overlap). The swell dies out well before it, so the
+  // two surfaces are the same water at the seam.
+  let arc = length(up - capDir) * length(objectPos)
+  let capIn = 1 - smoothstep(capR - 22, capR - 18, arc)
+  let rim = mix(1, 1 - smoothstep(capR - 90, capR - 40, arc), geomWaves)
+  let d1 = cwd
+  let d2 = normalize(cwd * 0.878 + cwx * 0.479)
+  let d3 = normalize(cwd * 0.900 - cwx * 0.435)
+  let d4 = normalize(cwd * 0.622 + cwx * 0.783)
+  let d5 = normalize(cwd * 0.540 - cwx * 0.841)
+  let d6 = normalize(cwd * 0.969 + cwx * 0.247)
+  let k1 = 6.2832 / waveLen
+  let k2 = 6.2832 / (waveLen * 0.62)
+  let k3 = 6.2832 / (waveLen * 0.48)
+  let k4 = 6.2832 / (waveLen * 0.30)
+  let k5 = 6.2832 / (waveLen * 0.22)
+  let k6 = 6.2832 / (waveLen * 0.75)
+  // shoaling, tanh(k·d) as 1 − exp(−2kd); the far sphere's swell fades
+  let fadeA = (1 - farFade * 0.95) * rim
+  let a1 = waveAmp * 1.00 * (1 - exp(-2 * k1 * depth)) * fadeA
+  let a2 = waveAmp * 0.55 * (1 - exp(-2 * k2 * depth)) * fadeA
+  let a3 = waveAmp * 0.42 * (1 - exp(-2 * k3 * depth)) * fadeA
+  let a4 = waveAmp * 0.22 * (1 - exp(-2 * k4 * depth)) * fadeA
+  let a5 = waveAmp * 0.16 * (1 - exp(-2 * k5 * depth)) * fadeA
+  let a6 = waveAmp * 0.60 * (1 - exp(-2 * k6 * depth)) * fadeA
+  let p1 = k1 * dot(d1, objectPos) - sqrt(gAccel * k1) * time
+  let p2 = k2 * dot(d2, objectPos) - sqrt(gAccel * k2) * time + 1.7
+  let p3 = k3 * dot(d3, objectPos) - sqrt(gAccel * k3) * time + 4.1
+  let p4 = k4 * dot(d4, objectPos) - sqrt(gAccel * k4) * time + 2.9
+  let p5 = k5 * dot(d5, objectPos) - sqrt(gAccel * k5) * time + 0.6
+  let p6 = k6 * dot(d6, objectPos) - sqrt(gAccel * k6) * time + 5.3
+  // each wave's direction on this vertex's own tangent plane
+  let t1 = d1 - up * dot(d1, up)
+  let t2 = d2 - up * dot(d2, up)
+  let t3 = d3 - up * dot(d3, up)
+  let t4 = d4 - up * dot(d4, up)
+  let t5 = d5 - up * dot(d5, up)
+  let t6 = d6 - up * dot(d6, up)
+  let c1 = cos(p1)
+  let c2 = cos(p2)
+  let c3 = cos(p3)
+  let c4 = cos(p4)
+  let c5 = cos(p5)
+  let c6 = cos(p6)
+  let s1 = sin(p1)
+  let s2 = sin(p2)
+  let s3 = sin(p3)
+  let s4 = sin(p4)
+  let s5 = sin(p5)
+  let s6 = sin(p6)
+  // Gerstner: Q_i = steep / (k_i a_i N), so the horizontal share of wave i
+  // is (steep / N) · cos / k_i along its direction, the vertical a_i · sin.
+  let q = steep / 6
+  let horiz = t1 * (q * c1 / k1) + t2 * (q * c2 / k2) + t3 * (q * c3 / k3) + t4 * (q * c4 / k4) + t5 * (q * c5 / k5) + t6 * (q * c6 / k6)
+  let vert = a1 * s1 + a2 * s2 + a3 * s3 + a4 * s4 + a5 * s5 + a6 * s6
+  // (the horizontal share only where the wave itself is alive: a_i > 0)
+  let alive = saturate(waveAmp * 40) * fadeA
+  output offset = (horiz * alive + up * vert) * geomWaves
+
+  // the swell's slope and fold (the Jacobian's other half), for the normal
+  // and the crest foam
+  let slopeG = t1 * (k1 * a1 * c1) + t2 * (k2 * a2 * c2) + t3 * (k3 * a3 * c3) + t4 * (k4 * a4 * c4) + t5 * (k5 * a5 * c5) + t6 * (k6 * a6 * c6)
+  let fold = (s1 + s2 + s3 + s4 + s5 + s6) * q * alive
+  let crestFoam = smoothstep(0.62, 0.92, fold) * smoothstep(0.04, 0.16, waveAmp)
+
+  // ── the chop: fbm ripples drifting downwind ──
+  // (the chop drifts along the same fixed direction, projected onto the
+  // surface here: `drift` is that vector times the time elapsed, and a
+  // direction that moved with the wind jumped the pattern by metres)
+  let wdir = normalize(cwd - up * dot(cwd, up) + cross(up, vec3(0.37, 0.83, 0.42)) * 0.001)
   let tw = time * waveSpeed * (0.7 + 0.9 * windK)
   let drift = wdir * tw * 1.1
   let chopDrift = (cross(up, wdir) * 0.6 - wdir) * tw * 1.7
-  let q = objectPos * waveScale
-
-  // Two tangents on the sea sphere; never parallel to `up` in practice.
-  let t1 = normalize(cross(up, vec3(0.37, 0.83, 0.42)))
-  let t2 = cross(up, t1)
+  let qq = objectPos * waveScale
+  let tt1 = normalize(cross(up, vec3(0.37, 0.83, 0.42)))
+  let tt2 = cross(up, tt1)
   let e = 0.35
-  let h0 = fbm(q + drift, octaves: 2) + noise(q * 3.3 + chopDrift) * 0.3
-  let h1 = fbm(q + t1 * e + drift, octaves: 2) + noise((q + t1 * e) * 3.3 + chopDrift) * 0.3
-  let h2 = fbm(q + t2 * e + drift, octaves: 2) + noise((q + t2 * e) * 3.3 + chopDrift) * 0.3
-  let slope = (t1 * (h1 - h0) + t2 * (h2 - h0)) / e
-  let nw = normalize(up - slope * bump * (0.85 + 0.6 * windK) * (1 - farFade * 0.92))
+  let h0 = fbm(qq + drift, octaves: 2) + noise(qq * 3.3 + chopDrift) * 0.3
+  let h1 = fbm(qq + tt1 * e + drift, octaves: 2) + noise((qq + tt1 * e) * 3.3 + chopDrift) * 0.3
+  let h2 = fbm(qq + tt2 * e + drift, octaves: 2) + noise((qq + tt2 * e) * 3.3 + chopDrift) * 0.3
+  let slopeC = (tt1 * (h1 - h0) + tt2 * (h2 - h0)) / e
+  let nw = normalize(up * (1 - fold) - slopeG - slopeC * bump * (0.85 + 0.6 * windK) * (1 - farFade * 0.92))
 
   // Seen from below (a swimmer looking up) the mesh's back face is what draws.
   let side = mix(-1, 1, step(0, dot(up, viewDir)))
@@ -128,10 +240,9 @@ shader ocean {
   // touch of the shallow tint while it is thin.
   let column = mix(shallowColor.rgb * 0.55, deepColor.rgb, saturate(deep * 1.4)) * bodyLight
 
-  // Surf, keyed to how shallow the water is here.
-  // How deep the water is here: the view ray's path through it (read from
-  // the drawn depth, so it follows the TRUE terrain outline) turned vertical
-  // by the angle of the look, held at grazing angles.
+  // Surf, keyed to how shallow the water is here: the view ray's path through
+  // it (read from the drawn depth, so it follows the TRUE terrain outline)
+  // turned vertical by the angle of the look, held at grazing angles.
   let sd = min(thick0 * max(abs(dot(viewDir, up)), 0.15), 1000) + (1 - step(0, side)) * 1000
   let shore = 1 - smoothstep(0, surfDepth, sd)
   let jitter = noise(objectPos * 0.21 + drift * 0.2) * 0.35
@@ -140,10 +251,26 @@ shader ocean {
   let bubbles = smoothstep(-0.05, 0.6, noise(objectPos * 3.1 + drift * 2.5))
   let swashReach = 0.05 + 0.15 * (sin(time * 1.1 + jitter * 6) * 0.5 + 0.5)
   let swash = 1 - smoothstep(0, swashReach, sd)
+  // Contact foam: rock (or a hull) meeting the surface within a metre of
+  // this pixel, read from the scene's depth round it — a cliff foot, a
+  // steep bank, a boulder, where the shallow-water surf never shows.
+  // (two rings of taps, 8 and 20 px at 1280 wide; "near" is rock standing
+  // within ~2 m behind the surface here, or in front of it: the contact)
+  let o = 0.006
+  let g1 = sceneDepth(suv0 + vec2(o, 0)) - dist
+  let g2 = sceneDepth(suv0 - vec2(o, 0)) - dist
+  let g3 = sceneDepth(suv0 + vec2(0, o)) - dist
+  let g4 = sceneDepth(suv0 - vec2(0, o)) - dist
+  let g5 = sceneDepth(suv0 + vec2(o * 2.5, 0)) - dist
+  let g6 = sceneDepth(suv0 - vec2(o * 2.5, 0)) - dist
+  let g7 = sceneDepth(suv0 + vec2(0, o * 2.5)) - dist
+  let g8 = sceneDepth(suv0 - vec2(0, o * 2.5)) - dist
+  let nearRock = min(min(min(g1, g2), min(g3, g4)), min(min(g5, g6), min(g7, g8)) + 1.0)
+  let contact = (1 - smoothstep(0.2, 2.2, abs(nearRock))) * (1 - farFade) * step(0, side)
   // Whitecaps: past a fresh breeze (~6 m/s) the tallest crests break.
   let capAt = 1 - smoothstep(5, 16, wind) * 0.55
   let caps = smoothstep(capAt, capAt + 0.12, h0 * 0.5 + 0.5) * smoothstep(5, 9, wind) * (1 - farFade)
-  let foam = saturate((crest * shore * shore * 0.9 + swash) * bubbles + caps * bubbles * 0.8)
+  let foam = saturate((crest * shore * shore * 0.9 + swash) * bubbles + contact * (0.4 + 0.5 * bubbles) + (caps * 0.8 + crestFoam * 0.9) * bubbles)
 
   // Light on the column and the foam: sun (wrapped a little, water
   // scatters) + a sky-tinted ambient. The bed behind is already lit.
@@ -152,12 +279,17 @@ shader ocean {
   let water = behind * trans + column * light * (1 - trans)
   let lit = mix(water, vec3(0.93, 0.965, 0.98) * light, foam)
 
-  // The sky as the reflected ray sees it: the bright hazy horizon giving way to
-  // a darker zenith. A mirror of a flat sky is a flat sheet whatever the waves
-  // do; the gradient is what makes them read.
+  // The sky the reflected ray sees: the engine's own capture (atmosphere,
+  // clouds, sun), blurred as the wind roughens the surface and as the eye
+  // draws off; the air-colour gradient where nothing was captured (a world
+  // with no sky) or where skyMix says so.
   let rv = reflect(-viewDir, n)
   let elev = saturate(dot(rv, up))
-  let sky = mix(skyColor.rgb, zenithColor.rgb, pow(elev, 0.45)) * (0.06 + 0.94 * day)
+  let gradient = mix(skyColor.rgb, zenithColor.rgb, pow(elev, 0.45)) * (0.06 + 0.94 * day)
+  let rough = 0.05 + 0.3 * windK + 0.5 * farFade
+  let captured = skyRadiance(rv, rough)
+  let hasSky = step(0.0005, captured.x + captured.y + captured.z) * skyMix
+  let sky = mix(gradient, captured, hasSky)
   let glintDot = saturate(dot(rv, sunDir))
   let glint = pow(glintDot, mix(420, 90, farFade)) * mix(7, 2.2, farFade) + pow(glintDot, mix(48, 12, farFade)) * mix(0.18, 0.3, farFade)
   let spec = sunColor * glint * day * (1 - foam) * step(0, side)
@@ -170,7 +302,10 @@ shader ocean {
   // A lake mesh (climate.lua) marks its vertices uv = (fade, 7); the sea's
   // own uvs never reach 7. A lake's outermost ring over open water fades.
   let lakeEdge = mix(1, saturate(uv.x), step(6.5, uv.y))
-  let edge = smoothstep(0, 0.1, sd) * lakeEdge
+  // The far sphere under the cap, and the cap's own rim.
+  let underCap = capHide * capIn
+  let capRim = mix(1, capIn, geomWaves)
+  let edge = smoothstep(0, 0.1, sd) * lakeEdge * (1 - underCap) * capRim
   // The water is drawn whole (what is behind it is already in its colour):
   // only the waterline and a lake mesh's open edge fade.
   let alpha = edge

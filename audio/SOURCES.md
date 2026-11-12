@@ -252,6 +252,31 @@ Extinguisher Spraying" #750166 (AI-generated, as its page says); chimes — "SIL
 (room noise before the strike), "220516 desk bell rings" #717564. BigSoundBank's search page
 refused the automated fetch, so nothing came from there this time.
 
+## The water pass (2026-11-12): streams, falls, lapping, wading, strokes, splashes, bubbles, rain on water
+
+Built by `tools/build_water_audio.py` from freesound.org previews (hq mp3) downloaded by its
+curl lines into a scratch folder; every one CC0 1.0 (the licence read on each page). Cut points
+were chosen from the recordings' envelopes (onsets and the flattest windows), levels as
+`build_sfx.py` (loops −18 dBFS RMS, one-shots peak −1 dBFS).
+
+| file (audio/water/) | source | licence | use |
+|---|---|---|---|
+| `stream_loop` (11 s loop) | "The sound of a babbling brook" by hoshisato, https://freesound.org/s/853672/ (8–20 s) | CC0 1.0 | the nearest river stretch (climate.lua) |
+| `brook_loop` (11 s loop) | "Small Brook Flowing Around Rocks" by pepasystem, https://freesound.org/s/819768/ (6–18 s) | CC0 1.0 | narrow rivers |
+| `waterfall_loop` (12.5 s loop) | "Hidden waterfall.WAV" by BassmanJourney, https://freesound.org/s/632107/ (82–96 s) | CC0 1.0 | a waterfall's foot |
+| `waterfall_soft_loop` (10.5 s loop) | "Waterfall_Meraner_Höhenweg_01_160922.wav" by datapopstar2, https://freesound.org/s/650699/ (48–60 s) | CC0 1.0 | small falls, far falls |
+| `lap_loop` (12.5 s loop) | "Gentle waves on a lake" by TheFlyFishingFilmmaker, https://freesound.org/s/614299/ (140–154 s) | CC0 1.0 | a lake's shore |
+| `lap_rocks_loop` (10.5 s loop) | "LakeWavesOct25th2015.WAV" by kvgarlic, https://freesound.org/s/326097/ (78–90 s) | CC0 1.0 | a rocky lake shore |
+| `rain_water_loop` (10.5 s loop) | "Rain on pond" by Mjeno, https://freesound.org/s/399281/ (6–18 s) | CC0 1.0 | rain beside water (soundscape.lua) |
+| `wade_1..4` (0.7 s) | "Splashing Footsteps Shallow Water" by ChristopherJngs, https://freesound.org/s/861369/ (0.85, 3.30, 3.90, 5.05 s) | CC0 1.0 | wading steps (planet_walker.lua) |
+| `stroke_1..4` (0.9 s) | "G54-26-Person Swimming.wav" by craigsmith, https://freesound.org/s/438845/ (6.55, 7.45, 17.15, 20.15 s) | CC0 1.0 | swim strokes |
+| `splash_body_1` (2.6 s) | "5 meters dive.wav" by bruno.auzet, https://freesound.org/s/529794/ | CC0 1.0 | the crew hitting the water (ocean.lua) |
+| `splash_body_2` (2.0 s) | "Watersplash" by Sheyvan, https://freesound.org/s/469608/ | CC0 1.0 | the same |
+| `bubbles_loop` (11 s loop) | "Scuba_bubbles.mp3" by sbvitug, https://freesound.org/s/634225/ (72–84 s) | CC0 1.0 | under water (soundscape.lua) |
+| `exhale_1..2` (3 s) | "Siebe Gorman Exhaust 11.aif" by plaamook, https://freesound.org/s/409301/ | CC0 1.0 | an exhale under water every few seconds |
+
+Seen and not used: "bigsplash.mp3" #611643 (the preview is 40 ms), "Big Water Splash" #442773
+(a composite of other sounds, not a recording), "Rain Sprinkling in Pond" #570206 (4 s).
 ## audio/impact — impacts, failures and footsteps (2026-11-12)
 
 Ty, 2026-11-12: "impacts and damage sound odd because the same sound effect gets reused and doesn't

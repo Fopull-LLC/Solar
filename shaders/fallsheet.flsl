@@ -1,0 +1,49 @@
+// WATERFALL SHEET — where a river's bed drops (scripts/climate.lua builds a
+// ribbon from the lip down the drop; uv.x across the sheet −1..1, uv.y metres
+// below the lip). Falling water: streaked, white and aerated, faster lower
+// down (v = √(2gy), the streaks' phase is time of flight from the lip), the
+// sheet thinner and more see-through as it speeds up (continuity), torn into
+// threads toward the foot, the scene behind bent and dimmed through it.
+// Lighting is a plain sun + sky term like the sea's: a fall is mostly foam.
+shader fallsheet {
+  stage fragment
+  blend alpha
+  uniform foamColor: color = #E8F0F4
+  uniform tint: color = #9FC9D4
+  uniform skyColor: color = #9CC4E4
+  uniform gAccel: float = 9.81 range(0.1, 40)
+  uniform drop: float = 6 range(0.5, 120)
+  // discharge per metre of lip, m²/s: a thicker, whiter sheet
+  uniform flow: float = 1 range(0, 10)
+  uniform debugView: float = 0 range(0, 1)
+  texture ripples = "textures/water/river_ripples.png"
+
+  let y = max(uv.y, 0.05)
+  let v = sqrt(2 * gAccel * y)
+  // time of flight from the lip: streaks at (tof − time) fall at the local speed
+  let tof = sqrt(2 * y / gAccel)
+  let a0 = sample(ripples, vec2(uv.x * 0.35 + 0.5, (tof - time) * 1.9)).r
+  let a1 = sample(ripples, vec2(uv.x * 0.9 + 0.17, (tof - time) * 3.7 + 0.31)).r
+  let streak = a0 * 0.6 + a1 * 0.4
+  // the sheet thins as it speeds up
+  let thick = saturate(flow / max(v, 0.5) * 3)
+  // torn into threads lower down: coverage follows the streaks where it is thin
+  let tear = smoothstep(0.25, 0.75, y / drop)
+  let cover = saturate(thick + (1 - thick) * smoothstep(0.35 - 0.3 * (1 - tear), 0.65, streak))
+  // feathered at the sides, in over the lip and out at the foot; a small
+  // drop is a riffle, mostly see-through (r3d: a 1.5 m fall drew as a white
+  // slab)
+  let edge = (1 - smoothstep(0.7, 1.0, abs(uv.x))) * smoothstep(0, 0.35, uv.y) * (1 - smoothstep(drop - 0.5, drop, uv.y))
+  let big = 0.35 + 0.65 * smoothstep(1.0, 4.0, drop)
+  // the scene behind, bent by the streaks and dimmed by the sheet
+  let suv = screenUv(worldPos) + vec2(streak - 0.5, 0) * 0.02 * (1 - tear)
+  let behind = sceneColor(suv).rgb
+  let sunUp = dot(lightDir, normal)
+  let sunColor = lightColor / max(max(lightColor.x, max(lightColor.y, lightColor.z)), 0.001)
+  let light = sunColor * saturate(sunUp * 0.6 + 0.4) + skyColor.rgb * 0.3
+  let white = foamColor.rgb * light
+  let col = mix(behind * tint.rgb, white, saturate(cover * (0.55 + 0.45 * tear)))
+  let alpha = saturate(cover * 0.9 + 0.1) * edge * big
+  let dbg = vec3(cover, tear, thick)
+  output color = mix(vec4(col, alpha * instanceColor.a), vec4(dbg, 1), debugView)
+}

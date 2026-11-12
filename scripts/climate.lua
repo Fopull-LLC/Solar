@@ -959,17 +959,21 @@ function waterSky(w)
   return 0.03 + hr * k, 0.035 + hg * k, 0.05 + hb * k, 0.015 + r * 0.6 * k, 0.02 + g * 0.6 * k, 0.03 + b * 0.6 * k
 end
 
-local function dress(n, w, kind)
-  local river = kind == "river"
-  n:setMaterial { color = { 1, 1, 1 }, alpha = 0.999 }
-  -- The shader goes on through the material HANDLE (node:material()). This
-  -- was `getcomponent("Material")`, which is not a component the engine
-  -- exposes: it answered nil, the shader was never set, and every lake and
-  -- river drew in the plain white default material — lit by a warm star, a
-  -- flat beige or pink sheet (the world-117 contact sheet's s1 and s6).
-  local ok, m = pcall(n.material, n)
-  if ok and m then m.shader = river and "shaders/river.flsl" or "shaders/ocean.flsl" end
+local function dress(n, w, kind, ux, uy, uz)
+  -- The material and the shader come from the prefab the sheet is spawned
+  -- from (WaterSheet / RiverSheet): a node made with createNode and given a
+  -- model has no Material of its own, setMaterial puts no shader on, and
+  -- the handle write `node:material().shader = …` read back false — every
+  -- lake and river drew in the default material (the water pass, 11-12).
   pcall(function() n.castShadow = false end)
+end
+-- The shader's parameters, pushed the tick AFTER the node is made: a
+-- material set from a script lands at the pass's flush, so a setShaderParam
+-- in the same callback found "no Material" and every lake and river wore the
+-- shader's defaults (hundreds of warnings a run, said once per parameter).
+-- `update` calls this for every sheet marked `undressed`.
+local function dress_params(n, w, kind, ux, uy, uz)
+  local river = kind == "river"
   local atmo = w and w.atmo or 0
   local hr, hg, hb, zr, zg, zb = waterSky(w)
   n:setShaderParam("skyColor", hr, hg, hb, 1)
@@ -994,7 +998,32 @@ local function dress(n, w, kind)
     n:setShaderParam("waveScale", 0.55)
     n:setShaderParam("waveSpeed", 0.22)
     n:setShaderParam("surfDepth", 0.25)
+    -- The swell's frame (ocean.flsl: a plane wave within ~30° of capDir is a
+    -- wave on the sphere): the lake's own centre. Its size follows the wind
+    -- (update, lake_waves) with a lake's short fetch.
+    if ux then
+      n:setShaderParam("capDir", ux, uy, uz)
+      -- the swell's fixed direction (ocean.flsl swellDir): a tangent at the
+      -- lake's centre, never the live wind
+      local t1x, t1y, t1z = tangent_basis(ux, uy, uz)
+      n:setShaderParam("swellDir", t1x, t1y, t1z)
+    end
+    n:setShaderParam("waveAmp", 0.04 * calm)
+    n:setShaderParam("waveLen", 3.0)
+    local bn = space and space.body and space.body(water.body)
+    if bn and bn.mu and w.radius then n:setShaderParam("gAccel", bn.mu / (w.radius * w.radius)) end
   end
+end
+
+-- The swell on a lake from the wind: ocean.lua's spectrum (JONSWAP,
+-- fetch-limited) with a lake's 300 m fetch. → amplitude, wavelength.
+local function lake_waves(U, g)
+  U = math.max(U or 0, 0.8)
+  g = math.max(g or 9.81, 0.1)
+  local x = g * 300 / (U * U)
+  local Hs = 1.6e-3 * math.sqrt(x) * U * U / g
+  local Tp = 0.286 * x ^ (1 / 3) * U / g
+  return math.min(0.5, Hs * 0.5 * 0.8), math.max(1.2, math.min(20, g * Tp * Tp / 6.2832))
 end
 
 -- The ground radius under planet-local unit direction d, marched down the
@@ -1143,6 +1172,18 @@ local function build_lake(b, w, L)
       end
     end
   end
+  -- The shore ring's directions (every third cell, 400 at most): the lapping
+  -- sound (ambient_tick) finds the nearest to the eye.
+  local shore, sk = {}, 0
+  for k, st in pairs(state) do
+    if st == 2 then
+      sk = sk + 1
+      if sk % 3 == 0 and #shore < 400 then
+        local sx2, sy2, sz2 = dir(k % N, math.floor(k / N))
+        shore[#shore + 1] = { sx2, sy2, sz2 }
+      end
+    end
+  end
   -- The mesh: every lattice cell with a water corner and no corner outside.
   local pos, idx, vid, uvs = {}, {}, {}, {}
   local function vert(i, j)
@@ -1267,22 +1308,202 @@ local function build_lake(b, w, L)
       end
     end
   end
-  local lake = { mesh = name, node = nil, level = L.level, vspec = vols, vx = ux * Rl, vy = uy * Rl, vz = uz * Rl,
+  local lake = { mesh = name, node = nil, level = L.level, vspec = vols, vx = ux * Rl, vy = uy * Rl, vz = uz * Rl, shore = shore,
     vr = L.reach * 1.2 + 10, Rl = Rl, ux = ux, uy = uy, uz = uz,
     t1 = { t1x, t1y, t1z }, t2 = { t2x, t2y, t2z }, s = s, N = N, off = off, state = state,
     cx = b.x + ux * Rl, cy = b.y + uy * Rl, cz = b.z + uz * Rl, reach = L.reach, wet = nwet,
     provisional = unknown > 0 or (terrain.busy and terrain.busy()) or false, built_t = water.t_total or 0 }
-  createNode("Lake", b.node or find(water.body), function(n)
-    -- Local (0,0,0) under the body: the mesh is in the planet's own frame.
-    -- (This was `n.x, n.y, n.z = b.x, b.y, b.z`, which a child takes as a
-    -- LOCAL offset: every lake and river stood a body-position away from its
-    -- world — kilometres off, out of sight, or a sheet hanging in the air.)
+  -- Local (0,0,0) under the body: the mesh is in the planet's own frame.
+  -- (A child's position is a LOCAL offset: set to the body's own position,
+  -- every lake stood a body-position away from its world.)
+  spawn("WaterSheet", vec3(0, 0, 0), function(n)
+    n.name = "Lake"
+    -- (spawn's pos is a WORLD point; a child's x/y/z are its LOCAL offset)
+    n.x, n.y, n.z = 0, 0, 0
     n.model = name
     n.tags = { "genbody", "lake" }
-    dress(n, w, "lake")
+    dress(n, w, "lake", ux, uy, uz)
+    lake.undressed = { "lake", ux, uy, uz }
     lake.node = n
-  end)
+  end, b.node or find(water.body))
   return lake
+end
+
+-- ── waterfalls ──────────────────────────────────────────────────────────────
+-- Where a river's surface drops FALL_DROP m or more between two rows, a SHEET
+-- hangs from the lip to the foot (prefabs/FallSheet, shaders/fallsheet.flsl:
+-- uv.x across, uv.y metres below the lip), its shape the free fall's (the
+-- water leaves the lip level and drops as t²), a mist fired at the foot
+-- every few seconds while the eye is near (vfx/FallMist, through vfx.emit so
+-- it rides the planet), and a waterfall loop there (ambient_tick).
+FALL_DROP = 1.5
+local function fall_params(n, w, f)
+  local bn = space and space.body and space.body(water.body)
+  local g = (bn and bn.mu and w.radius) and (bn.mu / (w.radius * w.radius)) or 9.81
+  n:setShaderParam("drop", f.drop)
+  n:setShaderParam("gAccel", g)
+  n:setShaderParam("flow", math.min(4, 0.15 + f.half * 0.12 + f.drop * 0.05))
+  local hr, hg, hb = waterSky(w)
+  n:setShaderParam("skyColor", hr, hg, hb, 1)
+end
+function build_fall_sheets(b, w, river)
+  for _, f in ipairs(river.falls or {}) do
+    local tl = len(f.tx, f.ty, f.tz)
+    local bl = len(f.bx, f.by, f.bz)
+    local lx, ly, lz = f.tx / tl, f.ty / tl, f.tz / tl
+    local fx, fy, fz = f.bx / bl, f.by / bl, f.bz / bl
+    local pos, uvs, idx = {}, {}, {}
+    local N = 10
+    local half = f.half * 0.9
+    for k = 0, N do
+      local t = k / N
+      local dx, dy, dz = lx * (1 - t) + fx * t, ly * (1 - t) + fy * t, lz * (1 - t) + fz * t
+      local dl = len(dx, dy, dz)
+      dx, dy, dz = dx / dl, dy / dl, dz / dl
+      local r = f.tr + 0.05 - f.drop * t * t
+      if k == N then r = f.br + 0.15 end
+      for _, side in ipairs({ 1, 0, -1 }) do
+        pos[#pos + 1], pos[#pos + 2], pos[#pos + 3] = dx * r + f.nx * half * side, dy * r + f.ny * half * side, dz * r + f.nz * half * side
+        uvs[#uvs + 1], uvs[#uvs + 2] = side, f.drop * t * t
+      end
+    end
+    for k = 0, N - 1 do
+      local a = 1 + k * 3
+      for c = 0, 1 do
+        local a0, a1, b0, b1 = a + c, a + c + 1, a + c + 3, a + c + 4
+        idx[#idx + 1], idx[#idx + 2], idx[#idx + 3] = a0, b0, b1
+        idx[#idx + 1], idx[#idx + 2], idx[#idx + 3] = a0, b1, a1
+        idx[#idx + 1], idx[#idx + 2], idx[#idx + 3] = a0, b1, b0
+        idx[#idx + 1], idx[#idx + 2], idx[#idx + 3] = a0, a1, b1
+      end
+    end
+    local ok, name = pcall(mesh.build, { positions = pos, indices = idx, uvs = uvs })
+    if ok then
+      f.mesh = name
+      spawn("FallSheet", vec3(0, 0, 0), function(n)
+        n.name = "Fall"
+        n.x, n.y, n.z = 0, 0, 0
+        n.model = name
+        n.tags = { "genbody", "river" }
+        pcall(function() n.castShadow = false end)
+        f.node = n
+        f.undressed = true
+      end, b.node or find(water.body))
+    end
+  end
+end
+
+-- ── the water's sounds ──────────────────────────────────────────────────────
+-- Spatial loops the eye is near, each placed at a BODY-RELATIVE point and
+-- moved to its world point every frame (the planet moves on its rails):
+-- the nearest river stretch (stream_loop / brook_loop by its width), each
+-- waterfall's foot (waterfall_loop / waterfall_soft_loop by its drop), the
+-- nearest lake shore (lap_loop / lap_rocks_loop by the lake's size). The
+-- sea's own surf is ocean.lua's. Asked for every half second by
+-- ambient_tick; a loop nobody asked for in 1.2 s fades out.
+local amb = {}
+local function amb_set(name, clip, want, rx, ry, rz, minD, maxD)
+  local A = amb[name]
+  if not A then A = { v = 0 }; amb[name] = A end
+  A.want, A.rx, A.ry, A.rz, A.clip, A.minD, A.maxD, A.t = want, rx, ry, rz, clip, minD, maxD, water.t_total or 0
+end
+local function amb_frame(dt)
+  if not (audio and audio.play) then return end
+  local b = water.body and space.body(water.body)
+  for name, A in pairs(amb) do
+    local want = ((water.t_total or 0) - (A.t or 0) < 1.2) and (A.want or 0) or 0
+    A.v = A.v + (want - A.v) * math.min(1, dt * 1.5)
+    if A.v > 0.02 and b then
+      local wx, wy, wz = b.x + A.rx, b.y + A.ry, b.z + A.rz
+      if not A.h then
+        A.h = audio.play(A.clip, wx, wy, wz, { loop = true, volume = 0, track = "SFX", mode = "Spatial",
+          minDistance = A.minD or 8, maxDistance = A.maxD or 90 })
+      end
+      if A.h then A.h:setVolume(A.v); A.h:setPosition(wx, wy, wz) end
+    elseif A.h then
+      A.h:stop()
+      A.h = nil
+      if A.v <= 0.02 then amb[name] = nil end
+    end
+  end
+end
+local function amb_stop_all()
+  for name, A in pairs(amb) do if A.h then A.h:stop() end end
+  amb = {}
+end
+ambientStats = { stream = nil, fall = nil, lap = nil, near = nil }
+
+-- How far the eye is from the nearest standing water it is not in (m): the
+-- nearest lake or pool shore, river stretch or sea shore found this tick;
+-- nil when none is near. soundscape.lua's rain on water.
+function waterNearEye() return water.near_dist end
+
+local function ambient_tick(name, w, b, ex, ey, ez)
+  local rx, ry, rz = ex - b.x, ey - b.y, ez - b.z
+  local near = nil
+  -- the nearest river row
+  local best, brow, bhalf = 45, nil, nil
+  for _, rv in pairs(water.rivers) do
+    if rv and rv.rowinfo and len(rx - rv.vx, ry - rv.vy, rz - rv.vz) < rv.vr + 50 then
+      for _, row in ipairs(rv.rowinfo) do
+        local d = len(rx - row[1], ry - row[2], rz - row[3]) - row[5]
+        if d < best then best, brow, bhalf = d, row, row[5] end
+      end
+    end
+  end
+  if brow then
+    local k = 1 - math.max(0, best) / 45
+    amb_set("stream", (bhalf > 2.2) and "audio/water/stream_loop.ogg" or "audio/water/brook_loop.ogg",
+      (0.12 + 0.45 * k) * math.min(1, bhalf / 2.5 + 0.4), brow[1], brow[2], brow[3], 6, 60)
+    near = math.max(0, best)
+  end
+  ambientStats.stream = brow and best or nil
+  ambientStats.streamRow = brow and { brow[1], brow[2], brow[3], brow[5] } or nil
+  -- the falls
+  local nf = 0
+  for key, rv in pairs(water.rivers) do
+    if rv and rv.falls then
+      for i, f in ipairs(rv.falls) do
+        local d = len(rx - f.bx, ry - f.by, rz - f.bz)
+        if d < 150 then
+          nf = nf + 1
+          amb_set("fall" .. key .. "_" .. i, (f.drop > 4) and "audio/water/waterfall_loop.ogg" or "audio/water/waterfall_soft_loop.ogg",
+            math.min(0.9, 0.35 + f.drop * 0.06 + f.half * 0.04), f.bx, f.by, f.bz, 10, 160)
+          if d < 120 and (water.t_total or 0) - (f.mist_t or -10) > 4.5 then
+            f.mist_t = water.t_total or 0
+            local fx = findScript and findScript("vfx")
+            if fx and fx.emit then fx.emit("FallMist", b.x + f.bx, b.y + f.by, b.z + f.bz, { intensity = math.min(2, 0.5 + f.drop / 5) }) end
+          end
+        end
+      end
+    end
+  end
+  ambientStats.fall = nf
+  -- the nearest lake or pool shore
+  local lbest, lpt, lbig = 30, nil, false
+  local function shores(list)
+    for _, l in pairs(list) do
+      if l and l.shore and len(rx - l.vx, ry - l.vy, rz - l.vz) < (l.vr or 0) + 40 then
+        for _, sd in ipairs(l.shore) do
+          local d = len(rx - sd[1] * l.Rl, ry - sd[2] * l.Rl, rz - sd[3] * l.Rl)
+          if d < lbest then lbest, lpt, lbig = d, { sd[1] * l.Rl, sd[2] * l.Rl, sd[3] * l.Rl }, (l.reach or 0) > 60 end
+        end
+      end
+    end
+  end
+  shores(water.lakes)
+  shores(water.plakes)
+  if lpt then
+    amb_set("lap", lbig and "audio/water/lap_loop.ogg" or "audio/water/lap_rocks_loop.ogg", 0.4 * (1 - lbest / 30), lpt[1], lpt[2], lpt[3], 5, 40)
+    near = math.min(near or 1e9, lbest)
+  end
+  ambientStats.lap = lpt and lbest or nil
+  -- the sea's shore (ocean.lua publishes how far the nearest is from the eye)
+  for _, o in ipairs(findScripts and findScripts("ocean") or {}) do
+    if o.shoreDist and o.shoreDist < 1e8 then near = math.min(near or 1e9, o.shoreDist) end
+  end
+  water.near_dist = near
+  ambientStats.near = near
 end
 
 -- Travel time (s) from a river's source to each of its points: the bed's
@@ -1435,6 +1656,7 @@ local function build_river(b, w, rv, i0, i1)
   local prev, lx, ly, lz
   local prev_ax, prev_ay, prev_az, last_g
   local rows, runs, rowinfo = 0, {}, {}
+  local falls, last_row = {}, nil
   for si, sm in ipairs(samples) do
     local x, y, z = sm[1], sm[2], sm[3]
     local l = len(x, y, z)
@@ -1476,6 +1698,7 @@ local function build_river(b, w, rv, i0, i1)
       -- No ground answer here (a cold chunk), or a fold: end this run of
       -- ribbon and start a new one after it, rather than dropping the piece.
       rows = 0
+      if not g then last_row = nil end
     end
     if g then
       local half = sm[4] * 0.35
@@ -1497,6 +1720,16 @@ local function build_river(b, w, rv, i0, i1)
         uvs[#uvs + 1], uvs[#uvs + 2] = side, along
       end
       rowinfo[#rowinfo + 1] = { dx * r, dy * r, dz * r, r, half, along }
+      -- A FALL: the water's surface drops more than FALL_DROP from the last
+      -- row to this one within a few metres (the ribbon breaks there, `fold`):
+      -- kept for the sheet, the mist and the sound (build_fall_sheets).
+      if last_row and last_row.r - r > FALL_DROP
+          and len(dx * r - last_row.x, dy * r - last_row.y, dz * r - last_row.z) < 14 then
+        falls[#falls + 1] = { tx = last_row.x, ty = last_row.y, tz = last_row.z, tr = last_row.r,
+          bx = dx * r, by = dy * r, bz = dz * r, br = r, half = math.max(half, last_row.half),
+          nx = nx, ny = ny, nz = nz, drop = last_row.r - r }
+      end
+      last_row = { x = dx * r, y = dy * r, z = dz * r, r = r, half = half }
       rows = rows + 1
       if rows == 1 then runs[#runs + 1] = { first = #pos / 3 - 2, n = 0, row0 = #rowinfo } end
       runs[#runs].n = rows
@@ -1521,7 +1754,20 @@ local function build_river(b, w, rv, i0, i1)
     end
   end
   if #idx == 0 then return nil end
-  local ok, name = pcall(mesh.build, { positions = pos, indices = idx, uvs = uvs })
+  -- A run's ends fade out over three rows (vertexColor.a, river.flsl): a
+  -- ribbon that stopped at a fold, a cold chunk or standing water ended in
+  -- a straight cut across the water (Ty: "water ending abruptly at edges").
+  local cols = {}
+  for v = 1, #pos / 3 do cols[#cols + 1], cols[#cols + 2], cols[#cols + 3], cols[#cols + 4] = 1, 1, 1, 1 end
+  for _, run in ipairs(runs) do
+    if run.n >= 5 then
+      for rr = 0, run.n - 1 do
+        local fade = math.min(1, math.min(rr, run.n - 1 - rr) / 3)
+        for c = 0, 2 do cols[(run.first + rr * 3 + c) * 4] = fade end
+      end
+    end
+  end
+  local ok, name = pcall(mesh.build, { positions = pos, indices = idx, uvs = uvs, colors = cols })
   if not ok then return nil end
   -- The engine's water for it: a disc on the water's own sphere at every
   -- row, as wide as the ribbon (and reaching the next row), carrying the
@@ -1557,17 +1803,17 @@ local function build_river(b, w, rv, i0, i1)
   mx, my, mz = mx / #rowinfo, my / #rowinfo, mz / #rowinfo
   local vr = 0
   for _, a in ipairs(rowinfo) do vr = math.max(vr, len(a[1] - mx, a[2] - my, a[3] - mz)) end
-  local river = { mesh = name, vspec = vols, vx = mx, vy = my, vz = mz, vr = vr + 5 }
-  createNode("River", b.node or find(water.body), function(n)
-    -- Local (0,0,0) under the body: the mesh is in the planet's own frame.
-    -- (This was `n.x, n.y, n.z = b.x, b.y, b.z`, which a child takes as a
-    -- LOCAL offset: every lake and river stood a body-position away from its
-    -- world — kilometres off, out of sight, or a sheet hanging in the air.)
+  local river = { mesh = name, vspec = vols, vx = mx, vy = my, vz = mz, vr = vr + 5, rowinfo = rowinfo, falls = falls }
+  build_fall_sheets(b, w, river)
+  spawn("RiverSheet", vec3(0, 0, 0), function(n)
+    n.name = "River"
+    n.x, n.y, n.z = 0, 0, 0
     n.model = name
     n.tags = { "genbody", "river" }
     dress(n, w, "river")
+    river.undressed = { "river" }
     river.node = n
-  end)
+  end, b.node or find(water.body))
   return river
 end
 
@@ -1597,16 +1843,21 @@ local function free(t)
   vols_off(t)
   if t.node and t.node.valid then t.node:destroy() end
   if t.mesh then pcall(mesh.free, t.mesh) end
+  for _, f in ipairs(t.falls or {}) do
+    if f.node and f.node.valid then f.node:destroy() end
+    if f.mesh then pcall(mesh.free, f.mesh) end
+  end
 end
 
 local function clear_water()
   build_co, water.job = nil, nil
+  amb_stop_all()
   for _, l in pairs(water.lakes) do if l then free(l) end end
   for _, r in pairs(water.rivers) do if r then free(r) end end
   for _, p in pairs(water.plakes or {}) do if p then free(p) end end
   water.lakes, water.rivers, water.hydro, water.body = {}, {}, nil, nil
   water.plakes, water.pools, water.levels, water.targets, water.breach, water.rim = {}, {}, {}, {}, {}, {}
-  water.edit_serial, water.pools_loaded = nil, false
+  water.edit_serial, water.pools_loaded, water.rebuilt = nil, false, {}
 end
 
 -- Metres below a lake's (or a pool's) surface at a WORLD point on body `name`,
@@ -1651,8 +1902,18 @@ function waterNear()
   for _, l in pairs(water.lakes) do if l then nl = nl + 1; nv = nv + #(l.vols or {}) end end
   for _, r in pairs(water.rivers) do if r then nr = nr + 1; nv = nv + #(r.vols or {}) end end
   for _, p in pairs(water.plakes or {}) do if p then np = np + 1; nv = nv + #(p.vols or {}) end end
+  -- the falls of the built rivers (body-relative feet) and a sample of their
+  -- rows (every 6th), for the probes
+  local falls, rows = {}, {}
+  for k, r in pairs(water.rivers) do
+    for _, f in ipairs(r and r.falls or {}) do falls[#falls + 1] = { x = f.bx, y = f.by, z = f.bz, drop = f.drop, half = f.half, built = f.node ~= nil, piece = k } end
+    for i, row in ipairs(r and r.rowinfo or {}) do
+      if i % 6 == 1 then rows[#rows + 1] = { x = row[1], y = row[2], z = row[3], half = row[5], piece = k } end
+    end
+  end
   return { lakes = nl, rivers = nr, pools = np, volumes = nv, body = water.body, stats = water.stats,
-           levels = water.levels, targets = water.targets, poolSpecs = water.pools, reach = reachStats }
+           levels = water.levels, targets = water.targets, poolSpecs = water.pools, reach = reachStats,
+           falls = falls, rows = rows, ambient = ambientStats }
 end
 
 -- ── live levels and pools ───────────────────────────────────────────────────
@@ -1689,7 +1950,7 @@ local SUMP_KINDS = { karst = true, ice = true, chasm = true, collapse = true }
 local SUMP_BOUND = 24.0
 local SUMP_CELL = 1.0
 water.plakes, water.pools, water.levels, water.targets, water.breach, water.rim = {}, {}, {}, {}, {}, {}
-water.pool_next, water.pools_dirty, water.pools_dirty_t = 1, false, 0
+water.pool_next, water.pools_dirty, water.pools_dirty_t, water.rebuilt = 1, false, 0, {}
 water.sump_t, water.sump_u = -100, nil
 poolStats = { pits = 0, sumps = 0, dry = 0, rebuilt = 0, breaches = 0, searches = 0 }
 
@@ -2108,6 +2369,7 @@ function update(node, dt)
   if next(flood.jobs) then flood_step(FLOOD_SLICE) end
   reach_tick(REACH_SLICE)
   run_build()
+  amb_frame(dt)
   water.t = water.t + dt
   water.t_total = (water.t_total or 0) + dt
   if water.t < 0.5 then return end
@@ -2221,6 +2483,7 @@ function update(node, dt)
     end
   end
   levels_tick(name, w, h, step)
+  ambient_tick(name, w, b, ex, ey, ez)
   -- Cave sumps: in a wet cave kind, from where the eye is, every SUMP_EVERY s
   -- and SUMP_MOVE m of movement.
   if liquid and not built and water.t_total - water.sump_t > SUMP_EVERY then
@@ -2244,12 +2507,19 @@ function update(node, dt)
   if wc and wc.body == name then
     local sp = wc.windNow or wc.wind or 0
     local dx, dy, dz = wc.windX or 0, wc.windY or 0, wc.windZ or 1
-    for _, l in pairs(water.lakes) do
+    local bn = space.body(name)
+    local amp, lam = lake_waves(sp * 0.65, bn and bn.mu and bn.mu / (w.radius * w.radius) or 9.81)
+    local calm = (w.water and w.water.state == "methane" or (w.geo and w.geo.type == "titan")) and 0.18 or 1
+    local function blow(l)
       if l and l.node and l.node.valid then
         l.node:setShaderParam("windDir", dx, dy, dz)
         l.node:setShaderParam("wind", sp * 0.65)
+        l.node:setShaderParam("waveAmp", amp * calm)
+        l.node:setShaderParam("waveLen", lam)
       end
     end
+    for _, l in pairs(water.lakes) do blow(l) end
+    for _, p in pairs(water.plakes) do blow(p) end
   end
   -- Lakes: build what came near, give back what fell far. One build at a
   -- time, as a job (`run_build`): the slot reads `false` until it lands.
@@ -2259,10 +2529,15 @@ function update(node, dt)
       local lx, ly, lz = b.x + L.x, b.y + L.y, b.z + L.z
       local d = len(ex - lx, ey - ly, ez - lz) - L.reach
       local have = list[i]
+      local rk = (list == water.lakes) and i or ("p" .. i)
       -- A lake built while its ground was still streaming in is built again
-      -- once the terrain has settled, so its outline follows the real ground.
+      -- once the terrain has settled, so its outline follows the real ground
+      -- (three times at most: a lake wider than the ground that streams in
+      -- round the eye is provisional for ever, and rebuilding it every 4 s
+      -- kept the one build slot and starved the pools).
       if have and have.provisional and not built and water.t_total - (have.built_t or 0) > 4
-          and not (terrain.busy and terrain.busy()) then
+          and not (terrain.busy and terrain.busy()) and (water.rebuilt[rk] or 0) < 3 then
+        water.rebuilt[rk] = (water.rebuilt[rk] or 0) + 1
         free(have)
         list[i] = nil
         have = nil
@@ -2270,8 +2545,12 @@ function update(node, dt)
       if have == nil and d < near and not built then
         list[i] = false
         local spec = (list == water.lakes) and lake_spec(w.radius, i, L) or L
+        local rb = { k = rk }
         start_build("lake " .. i, function() return build_lake(bb, w, spec) end,
-          function(r) if list[i] == false then list[i] = r elseif r then free(r) end end)
+          function(r)
+            if r and not r.provisional then water.rebuilt[rb.k] = 0 end
+            if list[i] == false then list[i] = r elseif r then free(r) end
+          end)
         built = true
       elseif have and d > far then
         free(have)
@@ -2283,8 +2562,25 @@ function update(node, dt)
       if have and specs[i] == nil then free(have); list[i] = nil end
     end
   end
-  tend(water.lakes, h.lakes or {}, LAKE_NEAR, LAKE_FAR)
+  -- (pools first: they are small and the player is watching them fill)
   tend(water.plakes, water.pools, 300, 450)
+  tend(water.lakes, h.lakes or {}, LAKE_NEAR, LAKE_FAR)
+  -- Sheets made since last tick get their shader parameters now (dress_params).
+  local function redress(list)
+    for _, t in pairs(list) do
+      if t and t.undressed and t.node and t.node.valid then
+        local u = t.undressed
+        t.undressed = nil
+        dress_params(t.node, w, u[1], u[2], u[3], u[4])
+      end
+      for _, f in ipairs(t and t.falls or {}) do
+        if f.undressed and f.node and f.node.valid then f.undressed = nil; fall_params(f.node, w, f) end
+      end
+    end
+  end
+  redress(water.lakes)
+  redress(water.plakes)
+  redress(water.rivers)
   -- Engine water for what the eye is near.
   local function near_vols(t)
     if t and t.vspec then
