@@ -351,6 +351,15 @@ local function step()
     end
   end
 end
+-- A stage boundary: yields whatever the budget says, so two heavy engine
+-- calls (a texture upload, a file hand-over) never share a frame.
+local function yield_now()
+  if SLICE.budget then
+    SLICE.work = SLICE.work + (now_ms() - SLICE.t0)
+    coroutine.yield()
+    SLICE.t0 = now_ms()
+  end
+end
 
 -- ── the pen: design units onto a picture ────────────────────────────────────
 -- { img, k = pixels per design unit, gain = what every colour is scaled by
@@ -746,6 +755,7 @@ local function paint_text(cv, face, s, cx, by, cap, col, track, grow, alpha)
     local adv = (g and g.adv or data.space) * scale
     if g then draw_glyph(cv, g, pen_x + adv * 0.5, by, 1, 0, scale, col, alpha, grow) end
     pen_x = pen_x + adv + (track or 0) * scale
+    step()
   end
   return wd
 end
@@ -1170,7 +1180,7 @@ local function wear_tiles()
   local octs = { { 4, lattice(4, 1), 0.6 }, { 16, lattice(16, 2), 0.4 }, { 32, lattice(32, 3), 0 } }
   local rows = {}
   for y = 0, 127 do
-    if y % 16 == 0 then step() end
+    if y % 2 == 0 then step() end
     local row = {}
     for x = 0, 127 do
       local m, fl = 0, 0
@@ -1199,6 +1209,7 @@ local function wear_tiles()
   local mottle = image.fromPixels(128, 128, table.concat(rows))
   local g = {}
   for i = 1, 64 * 64 do
+    if i % 256 == 0 then step() end
     local G = hash2(i % 64, floor(i / 64), 9) - 0.5
     g[i] = char(0, 0, 0, floor(0.035 * (G + 0.5) * 255 + 0.5))
   end
@@ -1222,6 +1233,7 @@ local function wear_base(size, seed, amount)
   for y = 0, size - 1 do
     O:fill(0, y, size, 1, 0, 0, 0, 1 - (1.04 - 0.08 * (y / size)) / 1.04)
   end
+  step()
   local ox, oy = (seed * 37) % 128, (seed * 61) % 128
   local ga = amount / (1 + 0.0175 * amount)
   if size == 256 then
@@ -1266,8 +1278,11 @@ local function wear_overlay(size, seed, amount, body, shape)
   local O = recall(wear_cut, ck)
   if O then return O end
   local base = recall(wear_bases, bk) or remember(wear_bases, bk, wear_base(size, seed, amount))
+  step()
   O = base:copy()
-  cut_outside(O, spans_of(body, size / 256, size))
+  local rows = spans_of(body, size / 256, size)
+  step()
+  cut_outside(O, rows)
   return remember(wear_cut, ck, O)
 end
 
@@ -1281,7 +1296,7 @@ local function pack(cv)
   local rows = {}
   local row = {}
   for y = 0, h - 1 do
-    if y % 16 == 0 then step() end
+    if y % 4 == 0 then step() end
     local n = 0
     local base = y * w
     for x = 1, w do
@@ -1332,10 +1347,13 @@ function rasterEmblem(spec, name, size, custom)
     if T then PROF.draw = (PROF.draw or 0) + T() - t0; t0 = T() end
     step()
     if amount > 0 then
-      img:draw(wear_overlay(size, (spec.seed or 1) % 9973, amount, body, spec.shape), 0, 0)
+      local ov = wear_overlay(size, (spec.seed or 1) % 9973, amount, body, spec.shape)
+      step()
+      img:draw(ov, 0, 0)
     end
     if T then PROF.wear = (PROF.wear or 0) + T() - t0; t0 = T() end
   end
+  step()
   local px = img:bytes()
   if T then PROF.bytes = (PROF.bytes or 0) + T() - t0 end
   return px, img
@@ -1359,11 +1377,13 @@ function rasterFlag(spec, name, epx)
     local e = type(epx) == "string" and image.fromPixels(ES, ES, epx) or epx
     img:draw(e, EX, EY)
   end
+  step()
   -- the name under it
   local up = upperName(name)
   local TY0, TH = EY + ES + 6, H - (EY + ES + 6)
   local cap = fit_cap("label", up, 34, W - 90, 5)
   paint_text(pen(img, 1), "label", up, W / 2 + 10, TY0 + TH * 0.5 + cap * 0.5, cap, P.fg, 5)
+  step()
   return img:bytes(), img
 end
 
@@ -1812,14 +1832,23 @@ end
 -- never in the save), so a load is a file read and two texture uploads, not
 -- a raster. A cache file is only ever trusted when its signature matches the
 -- spec in the save; the save stays the truth.
-local function cache_path()
-  local sl = save and save.slot and save.slot()
-  return string.format("user://agency/%s.rgba", (type(sl) == "string" and sl ~= "") and sl:gsub("[^%w_%-]", "_") or "slot")
+-- One file per identity (named by its signature's hash, the signature on its
+-- first line), shared by every slot: a new save or a scenario's fresh slot
+-- with an identity built before (the default agency, most often) loads it
+-- instead of rastering again.
+local function cache_path(sig)
+  local h1, h2 = 5381, 52711
+  for i = 1, #sig do
+    local c = sig:byte(i)
+    h1 = (h1 * 33 + c) % 4294967296
+    h2 = (h2 * 31 + c * 7) % 4294967296
+  end
+  return string.format("user://agency/e_%08x%08x.rgba", h1, h2)
 end
 
 local function cache_read(sig)
   if not (assets and assets.readBytes) then return nil end
-  local ok, bytes = pcall(assets.readBytes, cache_path())
+  local ok, bytes = pcall(assets.readBytes, cache_path(sig))
   if not ok or type(bytes) ~= "string" then return nil end
   local nl = bytes:find("\n", 1, true)
   if not nl or bytes:sub(1, nl - 1) ~= sig then return nil end
@@ -1834,12 +1863,12 @@ local function cache_write(sig, epx, fpx)
   -- (off the frame: a plain write fsyncs on it, 189 ms for this one on a busy
   -- disk, fpstall 2026-11-11; a readBytes of it waits for the write, and a
   -- quit waits for what was handed over)
-  pcall(assets.writeBytes, cache_path(), sig .. "\n" .. epx .. fpx, { async = true })
+  pcall(assets.writeBytes, cache_path(sig), sig .. "\n" .. epx .. fpx, { async = true })
 end
 
 -- ── JOBS: builds spread over frames ─────────────────────────────────────────
 local jobs = {}          -- a queue: { co, done, t0, frames }
-local JOB_BUDGET = 5.0   -- ms of raster work a frame
+local JOB_BUDGET = 2.0   -- ms of raster work a frame (a slice runs on to the next step: frames stay under 5)
 local live = false       -- the node's update is running (else builds run straight through)
 
 local function run(fn, done)
@@ -1859,6 +1888,7 @@ local function pump()
   SLICE.budget, SLICE.t0, SLICE.work = JOB_BUDGET, now_ms(), j.work or 0
   local ok, r = coroutine.resume(j.co)
   local t = now_ms()
+  if t - SLICE.t0 > (j.maxSlice or 0) then j.maxSlice = t - SLICE.t0 end
   j.work = SLICE.work + (t - SLICE.t0)
   SLICE.budget = nil
   if not ok then
@@ -1868,6 +1898,7 @@ local function pump()
   end
   if coroutine.status(j.co) == "dead" then
     table.remove(jobs, 1)
+    lastMaxSlice = j.maxSlice
     j.done(r, j.work, j.frames)
   end
 end
@@ -1886,6 +1917,7 @@ local function raster(nm, sp)
     end
   end
   local epx, eimg = rasterEmblem(sp, nm, EMBLEM_SIZE, custom)
+  step()
   local fpx, fimg = rasterFlag(sp, nm, eimg)
   return { epx = epx, fpx = fpx, eimg = eimg, fimg = fimg, custom = custom ~= nil }
 end
@@ -1899,9 +1931,19 @@ local function texture_of(img, w, h, px)
   return t
 end
 
+-- The engine-call stages of the last build, ms each (the log line names them).
+lastStages = {}
+local function staged(name, fn, ...)
+  local t0 = now_ms()
+  local a, b = fn(...)
+  lastStages[#lastStages + 1] = string.format("%s %.1f", name, now_ms() - t0)
+  return a, b
+end
+
 local function textures(rec)
-  rec.tex = texture_of(rec.eimg, EMBLEM_SIZE, EMBLEM_SIZE, rec.epx)
-  rec.flagTex = texture_of(rec.fimg, FLAG_W, FLAG_H, rec.fpx)
+  rec.tex = staged("tex", texture_of, rec.eimg, EMBLEM_SIZE, EMBLEM_SIZE, rec.epx)
+  yield_now()
+  rec.flagTex = staged("flagTex", texture_of, rec.fimg, FLAG_W, FLAG_H, rec.fpx)
   rec.eimg, rec.fimg = nil, nil
   return rec
 end
@@ -1930,22 +1972,29 @@ local building = 0
 local function build_live(nm, sp, then_)
   building = building + 1
   local mine = building
-  local sig = signature(nm, sp)
-  local t0 = now_ms()
-  local epx, fpx = cache_read(sig)
-  if epx then
-    local rec = textures({ name = nm, spec = sp, epx = epx, fpx = fpx })
-    lastLoadMs = now_ms() - t0
-    install(rec)
-    if then_ then then_(rec) end
-    return
-  end
-  run(function() return raster(nm, sp) end, function(r, work, frames)
-    if mine ~= building then return end   -- a newer build overtook it
-    lastBuildMs, lastBuildFrames = work, frames
+  -- In a game every stage is a job slice of its own (the cache file's read,
+  -- each texture upload, the raster's steps, the write's hand-over), so no
+  -- frame carries more than one of them.
+  run(function()
+    lastStages = {}
+    local sig = signature(nm, sp)
+    local epx, fpx = staged("read", cache_read, sig)
+    yield_now()
+    if epx then return textures({ name = nm, spec = sp, epx = epx, fpx = fpx, cached = true }) end
+    local r = raster(nm, sp)
+    yield_now()
+    staged("write", cache_write, sig, r.epx, r.fpx)
+    yield_now()
+    return textures(r)
+  end, function(r, work, frames)
+    if mine ~= building then   -- a newer build overtook it
+      release(r.tex); release(r.flagTex)
+      return
+    end
+    if r.cached then lastLoadMs = work; lastBuildMs = nil
+    else lastBuildMs, lastBuildFrames = work, frames end
     r.name, r.spec = nm, sp
-    cache_write(sig, r.epx, r.fpx)
-    install(textures(r))
+    install(r)
     if then_ then then_(r) end
   end)
 end
@@ -2365,6 +2414,8 @@ end
 
 -- ── the node ────────────────────────────────────────────────────────────────
 
+local reload_due = false
+
 function start(node)
   -- One AgencyLib per scene: a second (two scripts asked for it in the same
   -- frame) stands down.
@@ -2377,9 +2428,10 @@ function start(node)
   end
   live = true
   -- The main menu has no agency of its own (the slot cards and the editor
-  -- ask for what they need); a game builds its identity at once.
+  -- ask for what they need); a game builds its identity from the first
+  -- update on (not in the frame that loads every script).
   if is_menu() then return end
-  reload()
+  reload_due = true
 end
 
 -- The scene goes (AgencyLib is spawned again in the next one): every texture
@@ -2395,6 +2447,11 @@ end
 
 local reported = false
 function update(node, dt)
+  if reload_due then
+    reload_due = false
+    reload()
+    return
+  end
   pump()
   if not reported and cur then
     reported = true
@@ -2402,8 +2459,8 @@ function update(node, dt)
       if lastLoadMs and not lastBuildMs then
         log(string.format("emblem: '%s' loaded from the cache in %.1f ms", cur.name, lastLoadMs))
       else
-        log(string.format("emblem: '%s' built: %.1f ms of work over %d frame(s)", cur.name, lastBuildMs or -1,
-          lastBuildFrames or 0))
+        log(string.format("emblem: '%s' built: %.1f ms of work over %d frame(s), the longest slice %.1f ms · %s", cur.name,
+          lastBuildMs or -1, lastBuildFrames or 0, lastMaxSlice or -1, table.concat(lastStages, ", ")))
       end
     end
   end

@@ -126,6 +126,23 @@ local clip_back = nil
 -- and the most the orbit may pull out to, eased toward the indoor limit.
 local pivot_r = nil
 local room_cap = nil
+-- The roof test's last answer and when it was asked (it is cast 10 times a
+-- second, 4 in first person where only the pitch limit and a later switch
+-- to the orbit read it: the cap it sets is eased over a quarter second).
+local roof_hit, roof_t = nil, -100
+
+-- RAY PROBE (perf2 2026-11-11): a probe sets RAY_HOOK = fn(tag, ms, origin,
+-- dir, max, hit) to time this script's ray (tools/perf/slowray.lua); nil in
+-- play, where the cast is a plain call.
+RAY_HOOK = nil
+local function timed_ray(tag, o, d, m, opts)
+  local h = RAY_HOOK
+  if not (h and app and app.wallClock) then return raycast(o, d, m, opts) end
+  local t0 = app.wallClock()
+  local hit = raycast(o, d, m, opts)
+  pcall(h, tag, (app.wallClock() - t0) * 1000, o, d, m, hit)
+  return hit
+end
 -- The over-the-shoulder offset now (eased), and when a tool was last fired.
 local shoulder_now, shoulder_t = 0.0, -100.0
 
@@ -1472,7 +1489,12 @@ local function place_camera(node, dt)
   -- tunnel you have bored.
   -- The roof sets a CEILING on the zoom, eased, rather than a zoom: your own
   -- scroll setting is untouched and comes back when you step outside.
-  local roof = (not piloting) and not HELD_S and raycast(target.pos, up, params.ceiling_probe, target) or nil
+  if piloting or HELD_S then roof_hit, roof_t = nil, -100
+  elseif time - roof_t >= (firstPerson and 0.25 or 0.1) or time < roof_t then
+    roof_t = time
+    roof_hit = timed_ray("planet_camera.roof", target.pos, up, params.ceiling_probe, target) ~= nil
+  end
+  local roof = (not piloting) and not HELD_S and roof_hit or nil
   local cap = roof and params.indoor_distance or maxd
   if room_cap == nil or piloting then room_cap = cap end
   room_cap = room_cap + (cap - room_cap) * (1 - math.exp(-4 * dt))

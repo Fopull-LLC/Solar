@@ -358,10 +358,36 @@ local function smooth01(a, b, x)
   return t * t * (3 - 2 * t)
 end
 
+-- RAY PROBE (perf2 2026-11-11): a probe sets RAY_HOOK = fn(tag, ms, origin,
+-- dir, max, hit) to time this script's ray (tools/perf/slowray.lua); nil in
+-- play, where the cast is a plain call.
+RAY_HOOK = nil
+local function timed_ray(tag, o, d, m, opts)
+  local h = RAY_HOOK
+  if not (h and app and app.wallClock) then return raycast(o, d, m, opts) end
+  local t0 = app.wallClock()
+  local hit = raycast(o, d, m, opts)
+  pcall(h, tag, (app.wallClock() - t0) * 1000, o, d, m, hit)
+  return hit
+end
+
 -- What the camera is looking at, in metres: the crew (or the craft) it
 -- orbits in third person; in first person, the cockpit and the free camera,
 -- whatever is in the middle of the view (a ray, four times a second, eased).
+-- A view that has not moved (under 0.3 m against its world, under 2 degrees)
+-- keeps its last answer for up to 2 s instead of casting again: the ray is
+-- 400 m and only sets the focus.
 local pc_ref3, astro_ref, look_ray_t, look_d = nil, nil, -100, 20
+local look_at = nil    -- { body, lx, ly, lz, fx, fy, fz, t } of the last cast (body-relative)
+local function look_still(cx, cy, cz, f)
+  local L = look_at
+  if not (L and space and space.dominant) or time - L.t > 2.0 or time < L.t then return false end
+  local b = space.body(L.body)
+  if not b or space.dominant(cx, cy, cz) ~= L.body then return false end
+  local dx, dy, dz = cx - b.x - L.lx, cy - b.y - L.ly, cz - b.z - L.lz
+  if dx * dx + dy * dy + dz * dz > 0.09 then return false end
+  return f.x * L.fx + f.y * L.fy + f.z * L.fz > 0.99939
+end
 local function subject_distance(cx, cy, cz)
   if not (pc_ref3 and pc_ref3.valid ~= false) then pc_ref3 = findScript and findScript("planet_camera") or nil end
   local pc = pc_ref3
@@ -374,10 +400,18 @@ local function subject_distance(cx, cy, cz)
   if time - look_ray_t > 0.25 and raycast and cam_node.worldForward then
     look_ray_t = time
     local f = cam_node:worldForward()
-    if not (astro_ref and astro_ref.valid) then astro_ref = find("Astronaut") end
-    local hit = raycast(vec3(cx, cy, cz), f, 400, astro_ref and { ignore = astro_ref } or nil)
-    local want = hit and math.max(2, hit.distance or 400) or 400
-    look_d = look_d + (want - look_d) * 0.5
+    if not look_still(cx, cy, cz, f) then
+      if not (astro_ref and astro_ref.valid) then astro_ref = find("Astronaut") end
+      local hit = timed_ray("graphics.subject", vec3(cx, cy, cz), f, 400, astro_ref and { ignore = astro_ref } or nil)
+      local want = hit and math.max(2, hit.distance or 400) or 400
+      look_d = look_d + (want - look_d) * 0.5
+      local bn = space and space.dominant and space.dominant(cx, cy, cz)
+      local b = bn and space.body(bn)
+      look_at = b and { body = bn, lx = cx - b.x, ly = cy - b.y, lz = cz - b.z, fx = f.x, fy = f.y, fz = f.z, t = time, want = want } or nil
+    else
+      -- (the eased focus still settles on the last answer)
+      look_d = look_d + ((look_at.want or look_d) - look_d) * 0.5
+    end
   end
   return look_d, true
 end

@@ -657,6 +657,61 @@ function fine_slope(o, dx, dy, dz, h0, e, R, crat)
   return sqrt(g1 * g1 + g2 * g2) / (e * max(R, 1))
 end
 
+-- Buffers for mesh.build (engine 0698), unless a probe turns them off
+-- (FAR_LISTS = true, for a before/after on the same build).
+-- Whether this engine's mesh.build reads buffers is asked once, with a
+-- one-triangle mesh (an engine before 0698 refuses one).
+FAR_LISTS = nil
+local buffers_ok = nil
+function use_buffers()
+  if FAR_LISTS then return false end
+  if buffers_ok == nil then
+    buffers_ok = false
+    if buffer ~= nil and type(buffer.create) == "function" and type(buffer.writef32) == "function" and mesh and mesh.build then
+      local ok, name = pcall(function()
+        local p, ix, c = buffer.create(36), buffer.create(12), buffer.create(48)
+        for i = 0, 8 do buffer.writef32(p, i * 4, (i == 3 or i == 7) and 1 or 0) end
+        for i = 0, 2 do buffer.writeu32(ix, i * 4, i) end
+        for i = 0, 11 do buffer.writef32(c, i * 4, 1) end
+        return mesh.build { positions = p, indices = ix, colors = c }
+      end)
+      if ok and name then buffers_ok = true; pcall(mesh.free, name) end
+    end
+  end
+  return buffers_ok
+end
+local function clock_ms()
+  if app and app.wallClock then return app.wallClock() * 1000 end
+  return os.clock() * 1000
+end
+
+-- Each mesh.build's own time (ms), the last and the worst, and its vertices.
+local UPS = {}
+local function upload_ms(ms, n)
+  S.uploadMs, S.uploadN = ms, n
+  if ms > (S.uploadMax or 0) then S.uploadMax, S.uploadMaxN = ms, n end
+  UPS[#UPS + 1] = { ms = ms, n = n }
+  if #UPS > 32 then table.remove(UPS, 1) end
+end
+-- The uploads since the last call: { { ms, n }, … } (probes).
+function uploads() local u = UPS; UPS = {}; return u end
+
+-- A level's triangles as a u32 buffer, numbered from 0 (made once a level,
+-- in slices, and shared by every body).
+local function index_buffer(T)
+  if T.ibuf then return T.ibuf end
+  local F = T.idx
+  local m = #F
+  local b = buffer.create(m * 4)
+  local wu = buffer.writeu32
+  for i = 1, m do
+    wu(b, (i - 1) * 4, F[i] - 1)
+    if i % 64 == 0 then work(-0.1) end
+  end
+  T.ibuf = b
+  return b
+end
+
 local function build_job(e, level)
   return coroutine.create(function()
     while not TOPO[level] do
@@ -717,25 +772,51 @@ local function build_job(e, level)
     -- surface where it is under the sea) for where the engine draws chunks,
     -- and COVER (nothing lower than just outside the engine's ball) for where
     -- it draws its ball. Positions are body-local metres.
-    local Pt, Pc, Cl = {}, {}, {}
+    -- Written straight into buffers where the engine has them (mesh.build
+    -- reads a buffer in one copy; a 45,000-vertex list was 12-14 ms of its
+    -- frame), else into lists (the tests, an older engine).
     local floor_r = e.Rb * BALL_COVER
     local wl = e.sea or 0
-    for i = 1, n do
-      local r = max(R + H[i], wl)
-      local dx, dy, dz = D[i * 3 - 2], D[i * 3 - 1], D[i * 3]
-      Pt[i * 3 - 2], Pt[i * 3 - 1], Pt[i * 3] = dx * r, dy * r, dz * r
-      local rc = max(r, floor_r)
-      Pc[i * 3 - 2], Pc[i * 3 - 1], Pc[i * 3] = dx * rc, dy * rc, dz * rc
-      Cl[i * 4 - 3], Cl[i * 4 - 2], Cl[i * 4 - 1], Cl[i * 4] = C[i * 3 - 2], C[i * 3 - 1], C[i * 3], 1
-      work(-0.3)
+    local Pt, Pc, Cl, idx
+    if use_buffers() then
+      local wf = buffer.writef32
+      Pt, Pc, Cl = buffer.create(n * 12), buffer.create(n * 12), buffer.create(n * 16)
+      for i = 1, n do
+        local r = max(R + H[i], wl)
+        local dx, dy, dz = D[i * 3 - 2], D[i * 3 - 1], D[i * 3]
+        local o3 = (i - 1) * 12
+        wf(Pt, o3, dx * r); wf(Pt, o3 + 4, dy * r); wf(Pt, o3 + 8, dz * r)
+        local rc = max(r, floor_r)
+        wf(Pc, o3, dx * rc); wf(Pc, o3 + 4, dy * rc); wf(Pc, o3 + 8, dz * rc)
+        local o4 = (i - 1) * 16
+        wf(Cl, o4, C[i * 3 - 2]); wf(Cl, o4 + 4, C[i * 3 - 1]); wf(Cl, o4 + 8, C[i * 3]); wf(Cl, o4 + 12, 1)
+        work(-0.3)
+      end
+      idx = index_buffer(T)
+    else
+      Pt, Pc, Cl = {}, {}, {}
+      for i = 1, n do
+        local r = max(R + H[i], wl)
+        local dx, dy, dz = D[i * 3 - 2], D[i * 3 - 1], D[i * 3]
+        Pt[i * 3 - 2], Pt[i * 3 - 1], Pt[i * 3] = dx * r, dy * r, dz * r
+        local rc = max(r, floor_r)
+        Pc[i * 3 - 2], Pc[i * 3 - 1], Pc[i * 3] = dx * rc, dy * rc, dz * rc
+        Cl[i * 4 - 3], Cl[i * 4 - 2], Cl[i * 4 - 1], Cl[i * 4] = C[i * 3 - 2], C[i * 3 - 1], C[i * 3], 1
+        work(-0.3)
+      end
+      idx = T.idx
     end
     -- the two uploads on frames of their own
     units = 0
     coroutine.yield()
-    local mt = mesh.build { positions = Pt, indices = T.idx, colors = Cl }
+    local t0 = clock_ms()
+    local mt = mesh.build { positions = Pt, indices = idx, colors = Cl }
+    upload_ms(clock_ms() - t0, n)
     units = 0
     coroutine.yield()
-    local mc = mesh.build { positions = Pc, indices = T.idx, colors = Cl }
+    t0 = clock_ms()
+    local mc = mesh.build { positions = Pc, indices = idx, colors = Cl }
+    upload_ms(clock_ms() - t0, n)
     local old = e.mesh[level]
     e.mesh[level] = { ["true"] = mt, cover = mc, n = n }
     if old then
@@ -882,6 +963,24 @@ end
 
 function focusedBody() return focused end
 
+-- Drop a world's built meshes so they are made again (from the disk cache:
+-- the uploads alone), for a probe's before/after. False while it is building.
+function rebuild(name)
+  local e = B[name]
+  if not e or next(e.jobs) then return false end
+  for _, m in pairs(e.mesh) do pcall(mesh.free, m["true"]); pcall(mesh.free, m.cover) end
+  e.mesh = {}
+  return true
+end
+
+-- The worlds with an impostor (names).
+function tracked()
+  local t = {}
+  for name in pairs(B) do t[#t + 1] = name end
+  table.sort(t)
+  return t
+end
+
 function setActive(on)
   active = on and true or false
   if not active then for _, e in pairs(B) do hide(e); body_shown(e, true) end end
@@ -907,8 +1006,9 @@ function stats()
       e.cover and "cover" or "true", off, e.hidden and " terrain-hidden" or "")
   end
   table.sort(lv)
-  return string.format("tracked %d shown %d hidden %d (hides %d) built %d cached %d verts %d buildMs %.0f queue %d focus %s err %s :: %s",
-    n, shown, nh, S.hides, S.built, S.cached, S.verts, S.buildMs, #queue, tostring(focused), tostring(S.lastErr), table.concat(lv, " "))
+  return string.format("tracked %d shown %d hidden %d (hides %d) built %d cached %d verts %d buildMs %.0f upload %.1f ms (%d v) max %.1f ms (%d v) %s queue %d focus %s err %s :: %s",
+    n, shown, nh, S.hides, S.built, S.cached, S.verts, S.buildMs, S.uploadMs or -1, S.uploadN or 0, S.uploadMax or -1,
+    S.uploadMaxN or 0, use_buffers() and "buffers" or "lists", #queue, tostring(focused), tostring(S.lastErr), table.concat(lv, " "))
 end
 
 -- The decision for one body, given the camera: (alpha, wanted level, cover?).
