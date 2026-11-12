@@ -1561,12 +1561,21 @@ function place(sid, partId, p, payer, opts)
   local c = ref("crew")
   if c and c.credit and by then pcall(c.credit, by, "built", 1, { body = p.body }) end
   -- (progression P1) feats: a piece down; a timber one counts toward wood_built
+  -- (Ty 11-12: an undo takes them back, so place-and-undo is no way to
+  -- "build 8 timber pieces": the counts are of pieces still standing)
   local F = ref("feats")
-  if F and F.mark then
-    pcall(F.mark, "kit_placed", { b = p.body })
-    local km = type(partId) == "string" and partId:match("%.(%w+)$")
-    if km == "wood" then pcall(F.mark, "wood_built", { b = p.body }) end
+  local km = type(partId) == "string" and partId:match("%.(%w+)$")
+  local function feats_mark(sign)
+    if not (F and F.mark) then return end
+    if sign > 0 then
+      pcall(F.mark, "kit_placed", { b = p.body })
+      if km == "wood" then pcall(F.mark, "wood_built", { b = p.body }) end
+    elseif F.unmark then
+      pcall(F.unmark, "kit_placed", 1)
+      if km == "wood" then pcall(F.unmark, "wood_built", 1) end
+    end
   end
+  feats_mark(1)
   lastPlace = { sid = sid, uid = uid, id = partId, total = q.total, cost = q.cost, ship = q.ship, foot = q.foot, t = t, mode = p.mode }
   -- the ring: undo = a full refund within the minute; redo = buy it again
   local e = { label = "place " .. def.label, kind = "place", t = t, sid = sid, uid = uid, partId = partId,
@@ -1589,6 +1598,7 @@ function place(sid, partId, p, payer, opts)
       if co.refund then co.refund(amount, "returned: " .. def.label .. " (undone within a minute)") else co.earn(amount, "returned: " .. def.label) end
     end
     if c and c.credit and by then pcall(c.credit, by, "built", -1) end
+    feats_mark(-1)
     e.res = amount
   end
   e.redo = function()
@@ -1611,6 +1621,7 @@ function place(sid, partId, p, payer, opts)
     e.t = t2
     restore(e.sid, e.hdr, { e.part })
     if c and c.credit and by then pcall(c.credit, by, "built", 1, { body = e.hdr.b }) end
+    feats_mark(1)
     e.res = q2.total
   end
   -- (a drag-run, a mirrored twin, a paste: one step in the ring for all of them)
@@ -1684,6 +1695,22 @@ function deconstruct(sid, uid)
   local taken = ST.removeParts(sid, uids)
   local saved = {}
   for _, p in ipairs(taken) do saved[#saved + 1] = copy(p) end
+  -- (Ty 11-12) what comes down is no longer standing: the build counts lose
+  -- it (a take-down refunds in full within the minute, as an undo does)
+  local nwood = 0
+  for _, p in ipairs(saved) do if type(p.id) == "string" and p.id:match("%.wood$") then nwood = nwood + 1 end end
+  local function decon_feats(sign)
+    local F = ref("feats")
+    if not (F and F.mark and F.unmark) or #saved == 0 then return end
+    if sign < 0 then
+      pcall(F.unmark, "kit_placed", #saved)
+      if nwood > 0 then pcall(F.unmark, "wood_built", nwood) end
+    else
+      pcall(F.mark, "kit_placed", { b = hdr and hdr.b, n = #saved, quiet = true })
+      if nwood > 0 then pcall(F.mark, "wood_built", { b = hdr and hdr.b, n = nwood, quiet = true }) end
+    end
+  end
+  decon_feats(-1)
   for _, cr in ipairs(crates) do cr.cid = return_crated(cr.id, cr.prefer) end
   local lbl = label_of(part.id)
   local why = string.format("taken down: %s%s · %s", lbl, #uids > 1 and string.format(" and %d on it", #uids - 1) or "",
@@ -1714,6 +1741,7 @@ function deconstruct(sid, uid)
       e.res = nil return
     end
     restore(e.sid, e.hdr, e.parts)
+    decon_feats(1)
     e.res = e.refund
   end
   e.redo = function()
@@ -1727,6 +1755,7 @@ function deconstruct(sid, uid)
     for _, cr in ipairs(crates) do return_crated(cr.id, cr.prefer) end
     if planks > 0 then planks_back(planks) end
     if e.refund > 0 then co.refund(e.refund, "taken down again: " .. lbl) end
+    decon_feats(-1)
     e.t = agency_now()
     e.res = e.refund
   end

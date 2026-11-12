@@ -340,6 +340,60 @@ function lockLine(id)
   return string.format("LOCKED · research %s%s", money, afford and "  (click)" or "  — not enough funds")
 end
 
+-- The whole of it, for a place with room to read (Ty 11-12: "the Build Kit
+-- doesn't say anywhere why a locked item can't be unlocked yet; you can only
+-- read a cut-off message"): the catalogue's hover plate. → nil when open, or
+-- { need = "needs …" | nil, how = "what to go and do" | nil, price = "research
+-- $6,000 + 40 RP (click the card, then again)" | nil }
+local function feat_how(feat)
+  local O = findScript and findScript("objectives", { quiet = true })
+  local e = O and type(O.FEAT_STEP) == "table" and O.FEAT_STEP[feat]
+  if type(e) == "table" then return e[2] end
+  if type(e) == "function" then
+    local ok, _, how = pcall(e, find and find("Astronaut"), nil, { id = feat })
+    if ok then return how end
+  end
+  return nil
+end
+function lockDetail(id)
+  id = tid(id)
+  local t = TECH[id]
+  if not t or isUnlocked(id) then return nil end
+  local co = findScript("company")
+  local out = { need = blockedBy(id) }
+  if t.grantOnly then
+    local f = t.featGrant or t.feat
+    out.how = (f and feat_how(f))
+      or (t.prog and string.format("Complete the %s milestone: the objectives list (top right) names its steps.", t.progLabel or (tostring(t.prog):gsub("_", " "))))
+      or "It is given, not bought: it opens by itself once that is done."
+    out.price = "Not bought: it opens by itself the moment that is done."
+    return out
+  end
+  if t.feat and not featDone(t.feat, t.featN) then out.how = feat_how(t.feat)
+  elseif t.after and not isUnlocked(t.after) then
+    local sub = lockDetail(t.after)
+    out.how = string.format("Research the %s first (its own card in the catalogue)%s", labelOf(t.after),
+      (sub and sub.need) and (": it " .. sub.need .. ".") or ".")
+  elseif t.prog and not (save.get("prog.done") or {})[t.prog] then
+    out.how = string.format("Complete the %s milestone: the objectives list (top right) names its steps.", t.progLabel or t.prog)
+  elseif t.mat and out.need and out.need:find("sample") then
+    out.how = "Bring some back: mine it from rock with the laser, or pick it up where it lies. Once it is in a pack or a store it counts."
+  elseif t.rep and out.need and out.need:find("reputation") then
+    out.how = "Reputation comes from contracts: take them at the Ops Board and deliver them."
+  elseif (t.rp or 0) > 0 and points() < t.rp then
+    out.how = "Research points come from the Research Lab: study ore samples there and carry in the Data Cores found in ruins."
+  end
+  local money = priceText(id, co and co.money)
+  local afford = (not co) or co.afford(costOf(id))
+  if out.need then
+    out.price = string.format("Then research it for %s.", money)
+  else
+    out.price = string.format("Research it for %s: click the card, then click it again to confirm.%s", money,
+      afford and "" or " Not enough funds yet.")
+  end
+  return out
+end
+
 -- Buy the unlock. Returns ok, reason.
 function unlock(id)
   id = tid(id)

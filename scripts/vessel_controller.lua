@@ -6081,6 +6081,9 @@ function evaNow(in_tick)
   -- hatch's ladder when it is out of a standing reach, and in space on the
   -- hatch's handrail (crew_task's climb: E / F back in, SPACE lets go)
   if exitUid then climbOut(node, exitUid, c and c.activeId and c.activeId()) end
+  -- (the E/F that put them out is still this tick's press: footTick must
+  -- not read it as "go back in")
+  FOOT.outT = time or 0
   return true
 end
 
@@ -6152,6 +6155,7 @@ function pickerNow()
 end
 function pickerOpen()
   local p = pickerNow()
+  if p and p.isBusy then return p.isBusy() == true end
   return p ~= nil and p.isOpen ~= nil and p.isOpen() == true
 end
 -- Open it for this craft. → true when it opened (two or more aboard)
@@ -6522,7 +6526,15 @@ function avatarSeatedIn(parts)
       end
     end
   end
-  return not any
+  if any then return false end
+  -- No slot names anyone (a record from before the seats, or one written
+  -- while they rode and emptied since): the flag is trusted only while the
+  -- member you are has not got out. Afoot, at the base or carried, a stale
+  -- `crew` flag must not seat them and hand this craft the controls (Ty
+  -- 11-12: a bike started driving again, remotely, with the crew walking).
+  local r = id and c.get and c.get(id)
+  if r and (r.status == "afoot" or r.status == "base" or r.status == "carried" or r.status == "dead") then return false end
+  return true
 end
 -- The avatar rides ONE craft: any other that thinks it carries them lets go
 -- (and their seat there empties).
@@ -8111,7 +8123,7 @@ function footTick(node, info)
   end
   local ch = boardChoice(node, info)
   FOOT.ch = ch
-  if input.pressed("e") or input.pressed("f") then
+  if (input.pressed("e") or input.pressed("f")) and (time or 0) - (FOOT.outT or -10) > 0.35 then
     if boardAct(node, info, ch) then set_prompt(""); FOOT.shown = false; FOOT.ch = nil return end
   end
   local p = choicePrompt(ch)

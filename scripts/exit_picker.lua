@@ -98,8 +98,14 @@ local pad_b = false       -- the pad's B, last frame (an edge)
 focus_want = false
 KEYS = { t = -1 }
 escTakenAt = -1
+closedAt = -10            -- (time) the pick's own F must not reach the craft
 lastPick = nil            -- probes: { id | "everyone", stay, ok, why }
 function isOpen() return open_ end
+-- Open, or closed by a pick a moment ago: the key that picked is still this
+-- frame's (and the next physics tick's) press, and vessel_controller's F
+-- would read it as a second F (reopen the picker, or with you out by the
+-- hatch, board again: Ty 11-12 "they go out and IMMEDIATELY go back in").
+function isBusy() return open_ or ((time or 0) - closedAt) < 0.3 end
 
 local function caption(t)
   local fx = ref("sfx")
@@ -124,6 +130,7 @@ function close(why)
   if open_ and log then log("exit_picker: closed (" .. tostring(why or "a pick") .. ")") end
   if not open_ then return end
   open_ = false
+  closedAt = time or 0
   cur = nil
   if el then el.visible = false end
   if ui and ui.focus then pcall(ui.focus, nil) end
@@ -182,7 +189,11 @@ function pick(r, stay)
     if you then ok, why = go(you, false) else ok, why = #others > 0, nil end
     lastPick = { id = "everyone", n = #others + (you and 1 or 0), ok = ok, why = why }
   else
-    ok, why = go(r.id, r.you or stay == true)
+    -- (you: always out yourself. `stay` sends a member out as a CrewBody
+    -- while you keep the craft; for the member you ARE that spawned a second
+    -- you by the hatch, the record said afoot and the avatar stayed aboard.
+    -- Ty 11-12: "they go out and IMMEDIATELY go back inside".)
+    ok, why = go(r.id, (not r.you) and stay == true)
     lastPick = { id = r.id, stay = stay == true, ok = ok, why = why }
   end
   close()

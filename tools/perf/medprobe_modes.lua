@@ -296,3 +296,88 @@ function MED.rover()
   MED.cam_off()
   MED.result()
 end
+
+-- ── medbike (Ty 11-12: "walking into the medbay resumed driving the bike
+-- remotely"): a rover driven off the runway onto the apron, F out of it,
+-- walked from the lab into the bay, a talk with Dr Rao, W held. Every frame
+-- after stepping out: whether any craft is flown (piloting) while the crew is
+-- on foot, and whether the rover moves. ──────────────────────────────────────
+MB = { first = nil, n = 0 }
+local function mb_watch(tag, vc0)
+  local pw = findScript("planet_walker")
+  for _, v in ipairs(findScripts("vessel_controller")) do
+    if v.piloting and v.node and v.node.valid and pw and pw.onFoot then
+      MB.n = MB.n + 1
+      if not MB.first then
+        MB.first = { tag = tag, name = v.craftName, aboard = v.crewAboard, t = W() }
+        P("MED BIKE: %s is flown (crewAboard %s) while the crew is on foot, at %s", tostring(v.craftName), tostring(v.crewAboard), tag)
+      end
+    end
+  end
+end
+function MED.bike()
+  wait_ready(120)
+  wait(2)
+  local vc = launch_via_builder(ROVER, "runway", 6)
+  if not MED.check("rover", vc ~= nil, "launched %s", tostring(vc and vc.craftName)) then MED.result() return end
+  vc.releaseClamps()
+  wait(1)
+  key_down("w"); wait(4.0); key_up("w")
+  tap("b"); wait(3.0)
+  local C = findScript("crew")
+  tap("f")
+  wait(2.0)
+  local pw = findScript("planet_walker")
+  MED.check("out", pw.onFoot and not vc.crewAboard and not vc.piloting, "on foot %s, aboard %s, flown %s", tostring(pw.onFoot), tostring(vc.crewAboard), tostring(vc.piloting))
+  local fo = findScript("flight_ops")
+  if fo and fo.fleetSync then fo.fleetSync("now") end
+  wait(2.0)
+  local vn = vc.node
+  local p0 = vn.valid and { x = vn.x, y = vn.y, z = vn.z } or nil
+  local b0 = home()
+  local rel0 = p0 and sub(p0, b0)
+  -- the walk: lab → link → bay → Dr Rao, watched every frame
+  local md = wait_for(function() local m = findScript("medical"); return m and m.linked and m end, 10, "medical")
+  MED.put(MED.LG(7.5, 0.2, 0.15))
+  for _ = 1, 150 do yield(); mb_watch("in the lab", vc) end
+  local function walk(fn, tag)
+    local d = 1e9
+    local t0 = W()
+    local co = coroutine.create(function() d = MED.walk(fn, 12, 0.7) end)
+    while coroutine.status(co) ~= "dead" and W() - t0 < 14 do
+      local ok, err = coroutine.resume(co)
+      if not ok then P("MED BIKE walk error %s", tostring(err)) break end
+      mb_watch(tag, vc)
+      if coroutine.status(co) ~= "dead" then yield() end
+    end
+    return d
+  end
+  walk(function() return MED.LG(12.0, 1.0, 0.15) end, "the lab door")
+  walk(function() return MED.G(-9.0, 1.0, 0.15) end, "the link")
+  walk(function() return MED.G(-4.5, 1.0, 0.15) end, "the bay")
+  walk(function() return MED.G(-3.0, 1.0, -3.3) end, "by her")
+  local a = find("Astronaut")
+  MED.check("walked_in", inside_bay(a), "in the room %s", tostring(inside_bay(a)))
+  for _ = 1, 120 do yield(); mb_watch("standing in the bay", vc) end
+  tap("e")
+  local t0 = W()
+  while W() - t0 < 30 do
+    local run = findScript("scenario_run")
+    local _, ch = run.careerLine()
+    if ch then run.choose(1) end
+    mb_watch("the talk", vc)
+    if W() - t0 > 2 and not md.isTalking() then break end
+    yield()
+  end
+  for _ = 1, 120 do yield(); mb_watch("after the talk", vc) end
+  -- W held on foot: the rover must not move
+  key_down("w")
+  for _ = 1, 120 do yield(); mb_watch("W held in the bay", vc) end
+  key_up("w")
+  wait(1.0)
+  local b1 = home()
+  local moved = (rel0 and vn.valid) and len(vn.x - b1.x - rel0.x, vn.y - b1.y - rel0.y, vn.z - b1.z - rel0.z) or -1
+  MED.check("bike_stays", MB.first == nil and moved < 0.5, "a craft flown while on foot: %s (%d frames, first at %s); the rover moved %.2f m",
+    tostring(MB.first ~= nil), MB.n, tostring(MB.first and MB.first.tag), moved)
+  MED.result()
+end

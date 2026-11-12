@@ -497,15 +497,33 @@ function previewReady() return pv.ready and pv_valid(pv.cam) and pv.on end
 -- The floating plate: the part's picture, its name, its role.
 local function preview_plate(B, L)
   local id = st.hover or st.held
-  if not (id and pv.ready) then return nil end
+  if not id then return nil end
   local def = B.partInfo(id) or {}
+  def = (B.liveDef and B.liveDef(id)) or def
+  -- a locked card: the whole reason, wrapped, where there is room to read it
+  -- (Ty 11-12: the card's one ellipsised line and a caption were all there
+  -- was). Shown even before the spinning preview is ready.
+  local rs = ref("research")
+  local rid = (def.kit and (def.vab or def.tech)) or id
+  local lock = rs and rs.isUnlocked and not rs.isUnlocked(rid) and rs.lockDetail and rs.lockDetail(rid) or nil
+  if not (pv.ready or lock) then return nil end
   local r = L.left
   local plate = { "col", key = "pv", style = "panel/frame", pin = "topLeft", x = r.x + r.w + 8, y = r.y, w = 196, h = "fit",
-    gap = 4, pad = 8, align = "stretch",
-    { "image", key = "img", texture = "rt:" .. PREVIEW_TARGET, w = 180, h = 180 },
-    { "text", key = "n", style = "cat/name", w = "100%", h = 16, text = (st.held == id and "IN HAND  ·  " or "") .. (def.label or id),
-      maxLines = 1, overflow = "ellipsis" },
-    { "text", key = "r", style = "cat/role", w = "100%", h = "fit", text = role(def), wrap = true, maxLines = 3 } }
+    gap = 4, pad = 8, align = "stretch" }
+  if pv.ready then plate[#plate + 1] = { "image", key = "img", texture = "rt:" .. PREVIEW_TARGET, w = 180, h = 180 } end
+  plate[#plate + 1] = { "text", key = "n", style = "cat/name", w = "100%", h = 16, text = (st.held == id and "IN HAND  ·  " or "") .. (def.label or id),
+    maxLines = 1, overflow = "ellipsis" }
+  plate[#plate + 1] = { "text", key = "r", style = "cat/role", w = "100%", h = "fit", text = role(def), wrap = true, maxLines = 3 }
+  if lock then
+    plate[#plate + 1] = { "text", key = "lk", style = "panel/label", w = "100%", h = "fit", text = "LOCKED", wrap = true }
+    local rows = {}
+    if lock.need then rows[#rows + 1] = { lock.need:sub(1, 1):upper() .. lock.need:sub(2) .. ".", "cat/roleNeeds" } end
+    if lock.how then rows[#rows + 1] = { lock.how, "cat/role" } end
+    if lock.price then rows[#rows + 1] = { lock.price, "cat/role" } end
+    for i, row in ipairs(rows) do
+      plate[#plate + 1] = { "text", key = "lk" .. i, style = row[2], w = "100%", h = "fit", text = row[1], wrap = true, maxLines = 6 }
+    end
+  end
   -- (expansion X4) a host's extra lines under the role: the Build Kit's
   -- recipe, what is in reach and the crate key. { { text, style?, head? } … }
   local extra = B.plateRows and B.plateRows(id) or nil

@@ -189,6 +189,24 @@ function mark(id, ctx)
   return e.n
 end
 
+-- Take back `n` (default 1) of a count: a piece undone or taken down is not
+-- standing any more (Ty 11-12: "Build 8 timber pieces" was met by placing one
+-- and undoing it eight times). Never below 0; the first mark's date and its
+-- grants stay (an unlock is never taken back). → the new count
+function unmark(id, n)
+  local t = all()
+  local e = t[id]
+  if type(e) ~= "table" then return 0 end
+  local c = tonumber(e.n) or 0
+  local d = math.max(1, math.floor(tonumber(n) or 1))
+  if c <= 0 then return 0 end
+  e.n = math.max(0, c - d)
+  t[id] = e
+  sset("feats", t)
+  version = version + 1
+  return e.n
+end
+
 -- A running total: the feat's count raised to `n` (never lowered).
 function markAtLeast(id, n, ctx)
   n = math.floor(tonumber(n) or 0)

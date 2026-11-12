@@ -367,14 +367,23 @@ do
   store["agency.clock"] = 1700; E.time = 700
   CA.tickNow()
   check(CA.statusOf(v, 1).p > 0.96, "sealed again: the regulator refills it")
-  -- EVA: the hatch of the part left opens; nobody inside, it stays open
+  -- EVA: the hatch of the part left opens; nobody inside, the one who left
+  -- pulls it shut behind them (Ty 11-12: hatches left open emptied the air)
   CA.eventsNow()
   v.crewAboard, v.leftAt, v.lastExitUid, v.seats = false, 701, 1, {}
   CA.eventsNow()
   check(CA.lastHatch and CA.lastHatch.by == "eva" and CA.lastHatch.to == "open", "an EVA opens the hatch it went out by")
+  E.time = 700 + CA.SELF_CLOSE * 0.5
+  CA.eventsNow()
+  check(CA.doorsOf(v)[1].state == "open", "nobody left inside: open while they climb out")
+  E.time = 704
+  CA.eventsNow()
+  check(CA.doorsOf(v)[1].state == "sealed", "and shut behind them once clear (" .. tostring(CA.doorsOf(v)[1].state) .. ")")
+  -- propped: opened by hand from outside, it stays open
+  CA.setDoor(v, 1, "open", "hand")
   E.time = 706
   CA.eventsNow()
-  check(CA.doorsOf(v)[1].state == "open", "nobody left inside: it stays open")
+  check(CA.doorsOf(v)[1].state == "open", "a hatch opened by hand from its menu stays propped open")
   -- boarding seals it; then an EVA with a crewmate left inside: closed behind
   v.crewAboard, v.seats = true, { { uid = 1, slot = 1, taken = 7 } }
   CA.eventsNow()
@@ -397,6 +406,16 @@ do
   -- the scenario read
   local cab = CA.cabinOf(v, "crew")
   check(cab and cab.breathable and cab.label == "Pod Mk1", "cabinOf(v, \"crew\"): the crew's module")
+  -- an EVA's close-behind stands down when a hand props the hatch open
+  v.crewAboard, v.leftAt, v.lastExitUid, v.seats = false, 712, 1, {}
+  CA.eventsNow()
+  CA.setDoor(v, 1, "open", "hand")
+  E.time = 716
+  CA.eventsNow()
+  check(CA.doorsOf(v)[1].state == "open", "propped by hand right after an EVA: the close-behind stands down")
+  CA.setDoor(v, 1, "sealed", "hand")
+  v.crewAboard, v.seats = true, { { uid = 1, slot = 1, taken = 7 } }
+  CA.eventsNow()
   -- the setting off
   store["craft.cabin_air"] = "off"
   check(CA.avatarAir() == nil and CA.helmetAboard() == nil and CA.infoRows({ vessel = v, uid = 1 }) == nil, "cabin air off: no answers, the old rules")

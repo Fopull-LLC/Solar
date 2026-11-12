@@ -74,6 +74,9 @@ do
   check("has(id, n)", F.has("drive_m", 1000) and not F.has("drive_m", 2000))
   check("the save holds it all under `feats`", type(store.feats) == "table" and store.feats.kit_placed.n == 2)
   check("a bad id marks nothing", F.mark(nil) == nil and F.mark("") == nil)
+  F.mark("wood_built"); F.mark("wood_built")
+  check("unmark takes a piece back (undone: not standing)", F.unmark("wood_built") == 1 and F.count("wood_built") == 1)
+  check("…never below nothing", F.unmark("wood_built", 5) == 0 and F.unmark("wood_built") == 0 and F.unmark("never_marked") == 0)
   check("every feat in LABEL reads as a lock line", F.LABEL.base_founded:find("base") ~= nil and F.labelOf("odd_one") == "odd one")
   local n = F.seed({ "room_sealed", { id = "cave_kinds", n = 2 }, { "lock_opened", 1 } })
   check("seed (a scenario's start.feats): ids and { id, n }", n == 3 and F.has("room_sealed") and F.count("cave_kinds") == 2 and F.has("lock_opened"))
@@ -92,6 +95,15 @@ do
   check("…and the lock says what to go and do", why and why:find("a base of your own", 1, true) ~= nil, why)
   check("…the card's line", (RS.lockLine("solarArray") or ""):find("^LOCKED · needs a base of your own") ~= nil, RS.lockLine("solarArray"))
   check("…it can't be bought", not RS.unlock("solarArray"))
+  -- (Ty 11-12) the whole reason for the catalogue's plate: need, how, price
+  local ld = RS.lockDetail("solarArray")
+  check("lockDetail: the need, what to do about it, and that it isn't bought", ld and ld.need and ld.need:find("a base of your own", 1, true)
+    and ld.how ~= nil and ld.price and ld.price:find("Not bought", 1, true) ~= nil, ld and (tostring(ld.need) .. " | " .. tostring(ld.how) .. " | " .. tostring(ld.price)))
+  RS.TECH.testAfter = { cost = 900, label = "After Test", after = "solarArray" }
+  local la = RS.lockDetail("testAfter")
+  check("lockDetail of a research behind another: research that first, and why it is shut", la and la.how
+    and la.how:find("Solar Array", 1, true) and la.how:find("base of your own", 1, true) and la.price:find("900", 1, true) ~= nil, la and la.how)
+  RS.TECH.testAfter = nil
   store.feats = { base_founded = { n = 1, t = 5 } }
   check("base_founded in the save: both open, read without a feats script (the builder)", RS.isUnlocked("solarArray") and RS.isUnlocked("batteryBank"))
   check("…no lock line", RS.lockLine("solarArray") == nil and RS.blockedBy("batteryBank") == nil)

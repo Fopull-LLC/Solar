@@ -1434,7 +1434,10 @@ local function role_of(ctx)
   local C = ref("crew")
   local id = ctx and ctx.actor and ctx.actor.id
   if not (C and C.role) then return nil end
-  if not id and C.activeId then id = C.activeId() end
+  -- (the context menu's actor id is "astro" on foot, "craft:<n>" aboard:
+  -- not a member id. Read as one, every crew had no role and an Engineer
+  -- was told "an Engineer claims a site": Ty 11-12. The member you are.)
+  if type(id) ~= "number" and C.activeId then id = C.activeId() end
   local ok, r = pcall(C.role, id)
   return ok and r or nil
 end

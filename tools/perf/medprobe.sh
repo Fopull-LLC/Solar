@@ -25,7 +25,7 @@ s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
-              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "med" then MED.med()\n    elseif MODE == "medrover" then MED.rover()')
+              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "med" then MED.med()\n    elseif MODE == "medrover" then MED.rover()\n    elseif MODE == "medbike" then MED.bike()')
 open(p, 'w').write(s)
 PY
 rm -rf $S/proj/save/user/medshots

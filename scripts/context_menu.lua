@@ -330,7 +330,13 @@ function pick(sx, sy, who)
   -- from the crew's own eyes their whole body is behind the lens: the ray
   -- passes the avatar AND everything under it (suit, helmet, the tool in
   -- hand: `ignoreChildren`), so the first thing it meets is the world
-  if who.kind == "crew" and eyes_now and who.node then opts = { ignore = who.node, ignoreChildren = true } end
+  -- ...and over the shoulder too (Ty 11-12, Hard Vacuum: "every right-click
+  -- selected my own EVA suit instead of the parts"): the camera sits behind
+  -- the crew, so a ray at what they face passes through their own capsule
+  -- first. The suit is never what a right-click is aimed past; your own
+  -- menu is the Context key held or the portrait, and a tap on the crew
+  -- with nothing behind them still finds the suit (the by-eye rule below).
+  if who.kind == "crew" and who.node then opts = { ignore = who.node, ignoreChildren = true } end
   -- flying, the crew riding in the craft is part of the furniture: a click
   -- on the pod is the pod, not the person sitting in it
   if who.kind == "craft" then

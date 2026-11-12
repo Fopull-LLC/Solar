@@ -23,7 +23,7 @@ OUTD=${OUT:-$S/shots}; mkdir -p $OUTD
 if [ -x "$eng" ]; then F=$eng; VER=$(basename $(dirname $eng)); else F=$HOME/.local/share/floptle/versions/$eng/floptle; VER=$eng; fi
 ALSA=${ALSA:-/mnt/disks/3tb/.floptle-shared/silent-alsa.conf}
 mkdir -p $PJ/save $PJ/saves $PJ/.floptle
-for d in animation_controllers animations audio docs fonts materials models shaders terrain tests textures tools ui vfx input.ron .luarc.json; do
+for d in animation_controllers animations audio docs fonts materials models scenarios shaders terrain tests textures tools ui vfx input.ron .luarc.json; do
   if [ -L "$PJ/$d" ] || [ ! -e "$PJ/$d" ]; then ln -sfn "$SOL/$d" "$PJ/$d"; fi
 done
 rm -rf $PJ/scripts $PJ/scenes $PJ/prefabs

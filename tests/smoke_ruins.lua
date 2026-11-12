@@ -376,7 +376,21 @@ do
   check("an unclaimed ruin is no base", #B.list() == 0)
   local okc, why = S2.claim(s.id, nil)
   check("only an Engineer claims a site", not okc and why ~= nil)
-  okc = S2.claim(s.id, nil, true)
+  -- (Ty 11-12) the context menu's actor on foot is id "astro": the member
+  -- you are is asked, so an Engineer is one
+  do
+    local roles = { [3] = "engineer", [4] = "pilot" }
+    local act = 4
+    SCRIPTS.crew = { activeId = function() return act end, role = function(id) return roles[id] end }
+    local okp = S2.claim(s.id, { actor = { kind = "crew", id = "astro", pack = "astro" } })
+    check("a Pilot on foot (actor astro) may not claim", not okp)
+    act = 3
+    local oke, whye = S2.claim(s.id, { actor = { kind = "crew", id = "astro", pack = "astro" } })
+    check("an Engineer on foot (actor astro) claims the site", oke, tostring(whye))
+    SCRIPTS.crew = nil
+    okc = oke
+  end
+  if not okc then okc = S2.claim(s.id, nil, true) end
   r = ST.get(S2.state(s.id).sid)
   check("claimed: the tower is no longer held", okc and S2.towerHeld(r) == false)
   local q = S2.restoreQuote(s.id)

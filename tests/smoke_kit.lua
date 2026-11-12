@@ -305,6 +305,36 @@ do
   local amt = FB.undo()
   check(amt ~= nil and STs.getPart(sid, 2) == nil and STs.getPart(sid, 3) == nil and STs.getPart(sid, 1) ~= nil, "one Ctrl+Z takes the group back: wall and light")
   check(FB.redo() ~= nil and STs.getPart(sid, 2) ~= nil and STs.getPart(sid, 3) ~= nil, "and Ctrl+Shift+Z puts both back")
+  -- (Ty 11-12) the build feats count pieces still standing: place-and-undo
+  -- over and over is no way to "build 8 timber pieces"
+  do
+    local cnt = {}
+    SS.feats = { mark = function(id, ctx) cnt[id] = (cnt[id] or 0) + ((ctx and ctx.n) or 1); return cnt[id] end,
+                 unmark = function(id, k) cnt[id] = math.max(0, (cnt[id] or 0) - (k or 1)); return cnt[id] end }
+    local c0 = cnt.kit_placed or 0
+    local rp2 = { body = "Home", mode = "face", sid = sid, lx = 0, ly = 0.2, lz = -1, yaw = 0, pitch = 0, roll = 0, x = 0, y = 0.2, z = -1,
+                  up = { x = 0, y = 1, z = 0 }, fwd = { x = 0, y = 0, z = 1 } }
+    for _ = 1, 6 do
+      FB.place(sid, "wall.steel", rp2, "money")
+      FB.undo()
+    end
+    check((cnt.kit_placed or 0) == c0, "placed and undone six times: kit_placed net " .. tostring((cnt.kit_placed or 0) - c0))
+    FB.place(sid, "wall.steel", rp2, "money")
+    check((cnt.kit_placed or 0) == c0 + 1, "placed once and left standing: +1")
+    FB.undo(); FB.redo()
+    check((cnt.kit_placed or 0) == c0 + 1, "undo then redo: still +1")
+    local u2 = nil
+    for _, part in ipairs(STs.get(sid).bp) do if part.id == "wall.steel" and near(part.lz or part.z or 0, -1) then u2 = part.uid end end
+    if u2 and FB.deconstruct then
+      FB.deconstruct(sid, u2)
+      check((cnt.kit_placed or 0) == c0, "taken down (Deconstruct): no longer counted")
+      FB.undo()
+      check((cnt.kit_placed or 0) == c0 + 1, "the take-down undone: counted again")
+    end
+    -- (the wall goes: the floor's own take-down below counts what is on it)
+    for _, part in ipairs(STs.get(sid).bp) do if part.id == "wall.steel" and near(part.lz or part.z or 0, -1) then STs.removeParts(sid, { part.uid }) end end
+    SS.feats = nil
+  end
   -- the mirror: about the structure's X plane at 0
   FB.sym = { axis = "x", sid = sid, at = 0 }
   local sp = { body = "Home", mode = "face", sid = sid, lx = 1, ly = 0.2, lz = 0, yaw = math.pi / 2, pitch = 0, roll = 0 }

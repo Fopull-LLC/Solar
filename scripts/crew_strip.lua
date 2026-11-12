@@ -466,8 +466,13 @@ local function portrait(i, m, L, hov, v)
     img = { "box", key = "ib" .. i, w = L.w, h = L.h, img, eva_btn }
   end
   local chips = chipsFor(a, m)
+  -- The whole card is the hover region (Ty 11-12: the EVA button only came
+  -- up near the name tag). The engine's pointer pass only hit-tests elements
+  -- that opt in (a button, a tooltip, draggable); the picture is scenery, so
+  -- only the plate's tooltip was ever ui.hovered(). The card carries the
+  -- tooltip too: anywhere on it reads as hovering "pt<i>".
   local col = { "col", key = "pt" .. i, style = "hud/chip", w = L.w + 2 * FRAME_PAD, h = "fit", gap = 1, pad = FRAME_PAD,
-                align = "start",
+                align = "start", tooltip = plate.tooltip or tostring(m.name or "crew"),
                 img, plate }
   if #chips > 0 then col[#col + 1] = chip_row("ch" .. i, chips) end
   return col

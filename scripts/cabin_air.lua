@@ -56,8 +56,10 @@
 --             helmet on), and die of it on Permadeath
 --   EVA       stepping out opens the hatch: the module vents to the outside
 --             (warned, never refused). Crew left inside shut it after
---             CLOSE_BEHIND s; boarding seals it and the regulator
---             repressurises from the reserve.
+--             CLOSE_BEHIND s, the last one out after SELF_CLOSE s (a hatch
+--             opened by hand from its menu is propped and stays open);
+--             boarding seals it and the regulator repressurises from the
+--             reserve.
 --
 -- ── WHEN THINGS RUN (never per frame per part) ──────────────────────────────
 --   graph     rebuilt when vessel_controller.partsGen() moves, or a door changes
@@ -85,6 +87,7 @@ PATCH_HP = 0.55          -- what a patch leaves the part at (no hole over 0.5)
 P_ALARM = 0.8            -- a module that held this much and vents: the alarm
 SCRUB_K = 2.0            -- a scrubber clears this many crew's CO2
 CLOSE_BEHIND = 3.0       -- s: the crew left inside shut the hatch behind an EVA
+SELF_CLOSE = 2.0         -- s: the last one out pulls it shut from outside
 STEP_MAX = 30.0          -- s: a long step is cut into these (the leak and the chemistry are split)
 CATCH_MAX = 30 * 86400
 O2N_ = 0.21
@@ -828,6 +831,8 @@ local function set_door(v, c, k, state, by)
     if F then pcall(audio.play, clip, F.ox, F.oy, F.oz, { maxDistance = 20, track = "SFX", volume = 0.5 })
     else pcall(audio.play, clip, { track = "SFX", volume = 0.4 }) end
   end
+  -- (a hand on the door overrides the close-behind: propped open stays open)
+  if by == "hand" and c.closeAt and c.closeAt.k == k then c.closeAt = nil end
   lastHatch = { vid = c.id, k = k, uid = d.uid, kind = d.kind, from = before, to = state, by = by, warn = warn, t = now() }
   if log then log(string.format("cabin_air: %s %s → %s%s", door_label(c, d), before, state, warn and (" (" .. warn .. ")") or "")) end
   return true, warn
@@ -1108,13 +1113,11 @@ local function events(v, c)
       local left = 0
       for _, s in ipairs(v.seatsOf and v.seatsOf() or {}) do if s.taken and s.taken ~= id and c.G.modOf[s.uid] == i then left = left + 1 end end
       c.crew[i] = left
-      if left > 0 then c.closeAt = { k = k, t = now() + CLOSE_BEHIND } end
-      -- (Ty 2026-11-11: only what the player must act on) the banner only
-      -- when nobody is left inside to close it behind them
-      if warn and (c.crew[i] or 0) == 0 then
-        local bc = ref("big_caption")
-        if bc and bc.show then bc.show("HATCH OPEN", warn .. " Close it from outside: right-click the hatch.", 4.0, "result") end
-      end
+      -- The hatch shuts behind them (Ty 11-12: "hatches don't auto-close, so
+      -- all the air leaks out"): the crew left inside close it, and the last
+      -- one out pulls it to from outside once clear of it. A hatch opened
+      -- by hand (its menu) is propped and stays open: that clears this.
+      c.closeAt = { k = k, t = now() + (left > 0 and CLOSE_BEHIND or SELF_CLOSE) }
     end
   end
   -- boarded: the hatch they came in by is sealed, the regulator refills

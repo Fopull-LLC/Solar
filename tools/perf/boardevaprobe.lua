@@ -13,6 +13,8 @@
 --             EVA button sends the third out; boarding by the hatch handrail.
 --   ground  — a pod on the pad: walk to it, E on its ladder, climb, the
 --             "Enter hatch" prompt, E boards; F back out onto the ladder.
+--   picker  — a Pod Mk2 on the pad with two aboard: F,F (you) and F,2 (the
+--             other); each still out 3 s later (Ty 11-12).
 --   (shot names: <stop>_<tag> holds at a step for `floptle shot`)
 -- params: slot (14), seed, quit
 defaults = { slot = 14, seed = 1911564384, quit = 1 }
@@ -92,7 +94,7 @@ local function piloted()
 end
 
 -- Roll a blueprint out of the VAB onto the pad. → vc
-local function rollout(bp)
+local function rollout(bp, full)
   local co = findScript("company")
   if co and co.earn then co.earn(80000, "probe") end
   local vab = wait_for(function() return find("VabInterior") end, 150, "the VAB")
@@ -107,10 +109,11 @@ local function rollout(bp)
     BH = wait_for(function() local bh = findScript("build_host"); return bh and bh.state == "building" and bh end, 30, "the builder (menu)") end
   local B = findScript("builder")
   wait(1)
-  save.set("shipyard.blueprint", { parts = bp })
+  save.set("shipyard.blueprint", full or { parts = bp })
   B.reload()
   wait_for(function() return not (B.loadProgress and B.loadProgress()) and (B.partCount or 0) >= #bp end, 60, "the blueprint")
-  if B.launchSite and B.launchSite() ~= "pad" and B.toggleLaunchSite then B.toggleLaunchSite() end
+  local want_site = (full and full.site) or "pad"
+  if B.launchSite and B.launchSite() ~= want_site and B.toggleLaunchSite then B.toggleLaunchSite() end
   B.doLaunch()
   wait(0.6)
   if BH.state == "building" then B.doLaunch() end
@@ -557,6 +560,165 @@ local function orbit_run()
   R("enter_space", vc.crewAboard, "back in by the hatch: %s", tostring(vc.crewAboard))
 end
 
+-- PICKER (Ty 11-12: "F, pick a crew member, they go out and IMMEDIATELY go
+-- back in"): a Pod Mk2 with two aboard on the pad; F opens the picker, F
+-- picks you, then (back in) F and 2 picks the other; each must still be out
+-- 3 s later.
+local function picker_run(kind)
+  local vc
+  if kind == "asha" then
+    -- Thirty Kilometres' Asha-1 (Ty 11-12: "after boarding Asha's rover F
+    -- won't EVA"): the scenario's own blueprint, off the runway
+    local ok, data = pcall(function() return json.decode(assets.readText("scenarios/thirty_km/asha1.json")) end)
+    local bp = ok and data and data.bp
+    if not bp then R("asha", false, "no blueprint: %s", tostring(data)) return end
+    bp.site = "runway"
+    vc = rollout(bp.parts, bp)
+    if vc then wait(2); vc.releaseClamps() end
+  else
+    vc = rollout(stack({ "tankM", "tankS", "podMk2" }))
+  end
+  if not vc then R("pad", false, "no craft") return end
+  wait(3)
+  local c = findScript("crew")
+  local act = c.activeId()
+  -- a second member in the next free seat aboard
+  local seats = vc.seatsOf and vc.seatsOf() or {}
+  local free = nil
+  for _, s in ipairs(seats) do if not s.taken and not free then free = s end end
+  for _, r in ipairs(c.roster()) do
+    local id = type(r) == "table" and r.id or r
+    local rec = c.get(id)
+    if id ~= act and rec and rec.status ~= "dead" and free then
+      local ok = vc.seatMember(free.uid, free.slot, id)
+      if ok then c.patch(id, { status = "aboard", craft = vc.craftName or false, body = false, x = false, y = false, z = false }) end
+      break
+    end
+  end
+  wait(1.0)
+  local X = findScript("exit_picker")
+  R("two", #c.aboard(vc) == 2, "%d aboard", #c.aboard(vc))
+  -- the portrait's hover region (Ty 11-12: only near the name tag): the
+  -- pointer on the picture's upper half, well clear of the plate. uiRect is
+  -- only laid out under `floptle shot` (at = hover).
+  if HOLDAT then
+    -- third person, as flying with a free pointer (first person grabs it)
+    local pcam = findScript("planet_camera")
+    if pcam then pcam.firstPerson = false; if pcam.setCockpit then pcall(pcam.setCockpit, false) end end
+    wait(0.5)
+    P("pointer: firstPerson %s cockpit %s mouseLooking %s", tostring(pcam and pcam.firstPerson), tostring(pcam and pcam.cockpit), tostring(pcam and pcam.mouseLooking))
+    local S = findScript("crew_strip")
+    local img = find("img2")
+    local x, y, w, h = nil, nil, nil, nil
+    if img and img.uiRect then x, y, w, h = img:uiRect() end
+    P("img2 rect %s %s %s %s", tostring(x), tostring(y), tostring(w), tostring(h))
+    if x then
+      input.simulate { mouse = { x + w * 0.5, y + h * 0.3 } }
+      wait(1.0)
+      local list = c.aboard(vc)
+      R("hover_picture", S.hoverId == (list[2] and list[2].id), "pointer on portrait 2's picture (%.0f, %.0f): hoverId %s (want #%s)",
+        x + w * 0.5, y + h * 0.3, tostring(S.hoverId), tostring(list[2] and list[2].id))
+      local eva = find("eva2")
+      R("hover_eva_btn", eva ~= nil, "EVA button on portrait 2: %s", tostring(eva ~= nil))
+      local hv = ui.hovered and ui.hovered()
+      P("ui.hovered over the picture: %s (parent %s)", tostring(hv and hv.name), tostring(hv and hv.parent and hv.parent.name))
+      -- the control: the name plate (hoverable before the fix too)
+      local pl = find("pl2")
+      local px, py, pw2, ph2 = nil, nil, nil, nil
+      if pl and pl.uiRect then px, py, pw2, ph2 = pl:uiRect() end
+      if px then
+        input.simulate { mouse = { px + pw2 * 0.5, py + ph2 * 0.5 } }
+        wait(1.0)
+        local hv2 = ui.hovered and ui.hovered()
+        P("control: pointer on the plate (%.0f, %.0f): hoverId %s, ui.hovered %s", px + pw2 * 0.5, py + ph2 * 0.5, tostring(S.hoverId), tostring(hv2 and hv2.name))
+        input.simulate { mouse = { x + w * 0.5, y + h * 0.3 } }
+        wait(1.0)
+      end
+    else
+      R("hover_picture", false, "no rect for img2")
+    end
+    shot_at("hover")
+  end
+  -- 1. F, then F: you
+  tap("f")
+  wait(0.6)
+  R("picker_open", X.isOpen(), "picker open %s", tostring(X.isOpen()))
+  tap("f")
+  local outAt = nil
+  for _ = 1, 30 do yield(); if not vc.crewAboard and not outAt then outAt = time end end
+  wait(3.0)
+  local me = c.get(act)
+  R("pick_you_stays_out", not vc.crewAboard and c.activeId() == act and me and me.status == "afoot",
+    "F,F: out %s (left at %s), controlling #%s (was #%s), status %s", tostring(not vc.crewAboard), tostring(outAt),
+    tostring(c.activeId()), tostring(act), tostring(me and me.status))
+  shot_at("pick_you")
+  -- back in by the hatch (or the seat)
+  if not vc.crewAboard and vc.boardNow then vc.boardNow() wait(1.0) end
+  if not vc.crewAboard then tap("e"); wait(1.5) end
+  if not vc.crewAboard then
+    local cs = climb_state()
+    if cs then hold_key("w", 4.0); tap("e"); wait(1.5) end
+  end
+  R("back_in", vc.crewAboard, "aboard again %s (%d aboard)", tostring(vc.crewAboard), #c.aboard(vc))
+  -- 2. F, then 2: the other one
+  tap("f")
+  wait(0.6)
+  local rows = X.rowsNow() or {}
+  local other = nil
+  for _, r in ipairs(rows) do if r.id and not r.you then other = r.id end end
+  local key = nil
+  for _, r in ipairs(rows) do if r.id == other then key = r.key end end
+  tap(key or "2")
+  wait(3.0)
+  local ro = c.get(other)
+  R("pick_other_stays_out", c.activeId() == other and not vc.crewAboard and ro and ro.status == "afoot",
+    "F,%s: controlling #%s (picked #%s), out %s, status %s", tostring(key), tostring(c.activeId()), tostring(other),
+    tostring(not vc.crewAboard), tostring(ro and ro.status))
+  -- 3. a right-click aimed through your own suit (Ty 11-12, Hard Vacuum):
+  -- the pick is what lies behind it, not you. On the ladder against the pod,
+  -- the camera behind: the pod is under the suit on screen.
+  if HOLDAT then
+    wait(1.5)
+    local CM = findScript("context_menu")
+    local a = find("Astronaut")
+    local up = a.up or vec3(0, 1, 0)
+    -- off the ladder onto the ground, 2.5 m from the pod, the camera behind
+    -- them looking past their chest at the pod (the suit in the way)
+    local cs0 = climb_state()
+    if cs0 then hold_key("s", 5.0); tap("e"); wait(1.0) end
+    local pc = findScript("planet_camera")
+    local pn = vc.node
+    local function eye()
+      local q = pn.worldPos
+      local ax, ay, az = a.worldX + up.x * 1.1, a.worldY + up.y * 1.1, a.worldZ + up.z * 1.1
+      local dx, dy, dz = ax - q.x, ay - q.y, az - q.z
+      local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+      return ax + dx / l * 2.5, ay + dy / l * 2.5 + up.y * 0.3, az + dz / l * 2.5, q.x, q.y + 0.0, q.z, up.x, up.y, up.z
+    end
+    pc.setShot(eye, 0.05)
+    wait(1.0)
+    local sx, sy, _, on = camera.worldToScreen(a.worldX + up.x * 0.2, a.worldY + up.y * 0.2, a.worldZ + up.z * 0.2)
+    local t, why, info = nil, nil, nil
+    if on then t, why, info = CM.pick(sx, sy) end
+    -- the same ray with nothing ignored: what it meets first (the suit, if
+    -- the suit is in the way: the case the fix is for)
+    if on then
+      local okr, ox, oy, oz, dx, dy, dz = pcall(camera.screenToRay, sx, sy)
+      local h0 = okr and ox and raycast(ox, oy, oz, dx, dy, dz, 60) or nil
+      local nm = h0 and h0.node and h0.node.name or "nothing"
+      local par = h0 and h0.node and h0.node.parent and h0.node.parent.name or "-"
+      P("raw ray at the chest meets %s (parent %s) at %.2f m; astronaut visible %s", tostring(nm), tostring(par), h0 and h0.distance or -1, tostring(a.visible))
+    end
+    R("pick_through_suit", t ~= nil and t.kind ~= "astro", "tap on the suit's chest (%.0f, %.0f) on screen %s: %s (%s) hit %s",
+      sx or -1, sy or -1, tostring(on), tostring(t and t.kind), tostring(t and (t.label or t.id) or why), tostring(info and info.hit))
+    -- and with nothing behind it in reach, a tap on the suit still finds it
+    local sx2, sy2, _, on2 = camera.worldToScreen(a.worldX + up.x * 1.05, a.worldY + up.y * 1.05, a.worldZ + up.z * 1.05)
+    local t2 = on2 and CM.pick(sx2, sy2) or nil
+    P("tap over the helmet (%.0f, %.0f): %s", sx2 or -1, sy2 or -1, tostring(t2 and t2.kind))
+    shot_at("pick")
+  end
+end
+
 local MAIN = function()
   boot()
   wait(3)
@@ -570,6 +732,10 @@ local MAIN = function()
     ground_run()
   elseif STOP == "orbit" then
     orbit_run()
+  elseif STOP == "picker" then
+    picker_run()
+  elseif STOP == "pickerasha" then
+    picker_run("asha")
   end
   P("DONE")
   if (params.quit or 0) > 0 then app.quit() end

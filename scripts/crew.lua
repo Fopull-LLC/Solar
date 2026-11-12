@@ -872,6 +872,10 @@ end
 local function rec_of(m)
   if type(m) == "table" then return m end
   if m == nil or not (save and save.get) then return nil end
+  -- (the context menu's on-foot actor is "astro": the member you are. Read
+  -- as a record id it was nobody, so role/perk/hasRole said no role at all:
+  -- Ty 11-12, an Engineer told a ruin "needs an Engineer".)
+  if m == "astro" then m = activeId() end
   return get(m)
 end
 
