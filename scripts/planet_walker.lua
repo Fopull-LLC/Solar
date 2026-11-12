@@ -304,6 +304,13 @@ end
 function impactOf(vx, vy, vz, nx, ny, nz)
   return math.max(0, -(vx * nx + vy * ny + vz * nz))
 end
+-- THE MOST A LANDING CAN TAKE: the speed a drop of `dh` m (the arc's top
+-- over the touchdown) under gravity `g` gives, with `vh` m/s carried along
+-- the ground, and `slack` m/s for the solver's give (default 1.5). A jump on
+-- the flat (1.9 m at g 7) is 5.4 m/s at most; a 30 m fall is 20.5.
+function impactCap(g, dh, vh, slack)
+  return math.sqrt(2 * math.max(0, g or 9.8) * math.max(0, dh or 0) + (vh or 0) ^ 2) + (slack or 1.5)
+end
 
 -- Published: the load (`packKg`, `encumbrance` 0..1), the crouch (`crouching`,
 -- `crouchAmount` 0..1 eased, `eyeDrop` m below the standing eye), the slide
@@ -321,6 +328,7 @@ moveSpeed = 0.0         -- ground speed (m/s) this frame
 fallSpeed = 0.0         -- m/s down, in the air
 landSeq, landSpeed = 0, 0.0
 impactSeq, impactSpeed = 0, 0.0
+impactRaw = 0.0          -- (probes) the last landing's speed before impactCap
 local crouch_toggled = false
 local crouch_in_prev = false
 local crouch_was = false
@@ -1876,7 +1884,11 @@ local function stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming)
     if want then face_yaw = face_yaw + wrap(want - face_yaw) * (1 - math.exp(-params.turn * dt)) end
     model.yaw = face_yaw
   end
-  animate(node, dt, 0.0, is_held, false, false, false)
+  -- (held, sliding in to a repair's work spot: the steps of the walk there)
+  local held_spd = 0.0
+  local ctk = is_held and ref("crew_task")
+  if ctk and type(ctk.slideSpeed) == "number" then held_spd = ctk.slideSpeed end
+  animate(node, dt, held_spd, is_held, false, false, false)
   return true
 end
 
@@ -2363,26 +2375,39 @@ function update(node, dt)
     -- a teleport (a rescue, a switch, a probe, the net) is no fall
     if imp.px and (px - imp.px) ^ 2 + (py - imp.py) ^ 2 + (pz - imp.pz) ^ 2
         > (5 + (math.sqrt((node.vx or 0) ^ 2 + (node.vy or 0) ^ 2 + (node.vz or 0) ^ 2) * dt * 3)) ^ 2 then
-      imp.air, imp.v = 0.0, nil
+      imp.air, imp.v, imp.top = 0.0, nil, nil
     end
     imp.px, imp.py, imp.pz = px, py, pz
     local touched = contact or (ground_hit ~= nil and ground_hit.field == true and field_sunk ~= nil)
+    local r_now = math.sqrt(px * px + py * py + pz * pz)
     if swimming then
-      imp.air, imp.v = 0.0, nil
+      imp.air, imp.v, imp.top = 0.0, nil, nil
     elseif touched then
       if not imp.contact and imp.v and imp.air >= 0.12 then
         local n = node.groundNormal
         local nx, ny, nz = ux, uy, uz
         if n and n.x then nx, ny, nz = n.x, n.y, n.z end
-        impactSpeed = impactOf(imp.v[1], imp.v[2], imp.v[3], nx, ny, nz)
+        local raw = impactOf(imp.v[1], imp.v[2], imp.v[3], nx, ny, nz)
+        -- NO HARDER THAN THE FALL (playtest 2026-11-12: "died jumping on
+        -- flat ground with a heavy-ish pack"). The landing cannot meet the
+        -- ground faster than the drop from the arc's top and the speed it
+        -- carried along the ground allow (impactCap); a frame's velocity
+        -- past that is not the fall's — a stalled frame's catch-up ticks, a
+        -- seam's push, the snap-down's pull — and is not judged.
+        impactRaw = raw
+        impactSpeed = math.min(raw, impactCap(local_g(node), (imp.top or r_now) - r_now, imp.vh or 0))
         impactSeq = impactSeq + 1
       end
-      imp.air, imp.v = 0.0, nil
+      imp.air, imp.v, imp.top = 0.0, nil, nil
     else
       imp.air = imp.air + dt
       local v = imp.v or {}
       v[1], v[2], v[3] = node.vx or 0, node.vy or 0, node.vz or 0
       imp.v = v
+      -- (the arc's top, and the speed along the ground, body-relative)
+      imp.top = math.max(imp.top or r_now, r_now)
+      local vu = v[1] * ux + v[2] * uy + v[3] * uz
+      imp.vh = math.sqrt(math.max(0, v[1] * v[1] + v[2] * v[2] + v[3] * v[3] - vu * vu))
     end
     imp.contact = touched
   end

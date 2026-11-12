@@ -1236,10 +1236,23 @@ check("landing on a 45° slope is 71% of it", math.abs(walker.impactOf(0, -12, 0
 check("brushing down a wall, nothing", walker.impactOf(0, -12, 0, 1, 0, 0) == 0)
 check("moving away from a surface, nothing", walker.impactOf(0, 3, 0, 0, 1, 0) == 0)
 -- …and the walker measures it at the first contact, from the frame before
-local function drop_onto(n, vy, frames)
+-- (the body falls for real, from where that speed puts it: impactCap judges
+-- no landing harder than the drop from the arc's top; `last` is the speed of
+-- the last frame before the contact, when it differs)
+local function drop_onto(n, vy, frames, last)
   local seq0 = walker.impactSeq
   ground_under, ASTRO.grounded, ASTRO.groundNormal = false, false, nil
-  for _ = 1, frames do ASTRO.vy = vy; tick(1) end
+  local y0 = ASTRO.y
+  local fall = math.max(vy * vy / 13.0, -vy * TICK * frames)   -- (the drop at g 6.5, or the frames' own)
+  local steps = math.max(frames, math.ceil(fall / (-vy * TICK)))
+  if last then fall, steps = -vy * TICK * frames, frames end
+  ASTRO.y = y0 + fall
+  tick(1)
+  for k = 1, steps do
+    ASTRO.vy = (last and k == steps) and last or vy
+    ASTRO.y = y0 + fall * (1 - k / steps)
+    tick(1)
+  end
   ASTRO.grounded, ASTRO.groundNormal, ASTRO.vy = true, n, 0
   ground_under = true
   tick(1)
@@ -1254,8 +1267,15 @@ check("a 12 m/s fall onto the flat is judged once, at 12 m/s (crew: an injury pa
 local n2, sp2 = drop_onto(vec3(s45 * 1.0, s45, 0), -12, 20)
 check("the same fall onto a 45° slope is 8.5 m/s (no injury)", n2 == 1 and math.abs(sp2 - 12 * s45) < 0.4 and sp2 < 9,
   string.format("%d impacts, %.2f m/s", n2, sp2))
-local n3 = drop_onto(vec3(0, 1, 0), -6, 4)
+local n3 = drop_onto(vec3(0, 1, 0), -6, 4, -6)
 check("a hop off a kerb (under 0.12 s in the air) is no impact", n3 == 0)
+-- (playtest 2026-11-12: "died jumping on flat ground with a heavy-ish pack")
+-- a frame's velocity past what the drop allows is not the fall's
+local n4, sp4 = drop_onto(vec3(0, 1, 0), -5, 15, -25)
+check("a 25 m/s frame at the end of a 1.25 m drop is judged as the drop (impactCap)", n4 == 1 and sp4 < 9,
+  string.format("%d impacts, %.2f m/s (raw %.2f)", n4, sp4, walker.impactRaw or -1))
+check("impactCap: a 1.9 m jump on g 7 lands under 6.9 m/s, a 30 m fall at 20+",
+  walker.impactCap(7, 1.9, 0) < 6.9 and walker.impactCap(7, 30, 0) > 20)
 ASTRO.vy = 0
 tick(10)
 

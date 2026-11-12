@@ -1020,6 +1020,45 @@ local function pose_carry(id, dt, fp)
   if not p.visible then p.visible = true end
 end
 
+-- The hands' blend into and out of the work (s).
+WORK_BLEND = { inn = 0.45, out = 0.35 }
+RELEASE = nil     -- the last work pose, while the hands ease back off it
+
+-- The job over: the hands leave the hull over WORK_BLEND.out, from the weight
+-- they had, the back straightens, the head lets go. → true while it runs.
+local function pose_release(dt)
+  local Rl = RELEASE
+  if not Rl then return false end
+  Rl.t0 = Rl.t0 or now()
+  local k = 1 - math.min(1, (now() - Rl.t0) / WORK_BLEND.out)
+  local w = (Rl.w or 1) * k * k * (3 - 2 * k)
+  local v = Rl.v
+  if w <= 0.01 or not (v and v.node and v.node.valid) then RELEASE = nil return false end
+  local hx, hy, hz = from_part(v, Rl.uid, Rl.frame, Rl.lx, Rl.ly, Rl.lz, true)
+  if not hx then RELEASE = nil return false end
+  local ex, ey, ez = from_part(v, Rl.uid, Rl.frame, Rl.lx + Rl.nx, Rl.ly + Rl.ny, Rl.lz + Rl.nz, true)
+  local nx, ny, nz = norm(ex - hx, ey - hy, ez - hz)
+  if Rl.pnode and Rl.pnode.valid ~= false and Rl.nl then
+    local p = Rl.pnode:toWorld(Rl.nl)
+    hx, hy, hz = p.x, p.y, p.z
+  end
+  local m, an = model()
+  if not (m and an and an.reach) then return true end
+  local hit, n = vec3(hx, hy, hz), vec3(nx, ny, nz)
+  local _, U = frame_of(m)
+  local side = n:cross(U)
+  side = side:length() < 1e-3 and vec3(1, 0, 0) or side:normalized()
+  if Rl.lean and Rl.lean_sign then pcall(an.addBoneRot, an, "Back", 0, Rl.lean * Rl.lean_sign * w, 0, 1.0) end
+  local sh = an:boneWorld("Upperarm.Right")
+  local sl = an:boneWorld("Upperarm.Left")
+  local rh = hit + side * 0.07 + n * 0.03
+  local lh = hit - side * 0.08 + n * 0.035
+  if sh then pcall(an.reach, an, "Hand.Right", rh, { pole = sh - U * 0.45 + side * 0.3, weight = w }) end
+  if sl then pcall(an.reach, an, "Hand.Left", lh, { pole = sl - U * 0.45 - side * 0.3, weight = w }) end
+  pcall(an.lookAt, an, { "Back", "Head" }, hit, { limit = 60, weight = 0.8 * w })
+  return true
+end
+
 -- the work: both hands on the hull at the hit point, the kit clamped beside
 local function pose_work(tk, dt)
   local v = R.v
@@ -1036,6 +1075,18 @@ local function pose_work(tk, dt)
     hx, hy, hz = w.x, w.y, w.z
   end
   workX, workY, workZ = hx, hy, hz   -- (probes: the hit as drawn this frame)
+  -- BLENDED IN (playtest 2026-11-12, "repair animations janky"): the hands
+  -- went to the hull at full weight the frame the job began, while the body
+  -- was still sliding in, and snapped back to the sides the frame it ended.
+  -- In over WORK_BLEND.inn (eased), out over WORK_BLEND.out after it ends
+  -- (pose_release, below), from wherever the arms were.
+  -- (the clock starts as the body arrives: crew_task slides it in at a
+  -- walk first, and arms out the whole way read as reaching from afar)
+  local ctk = ref("crew_task")
+  if ctk and (ctk.slideSpeed or 0) > 0.05 then R.t0 = now() - WORK_BLEND.inn * 0.2 end
+  local wk = math.min(1, (now() - (R.t0 or now())) / WORK_BLEND.inn)
+  local w = wk * wk * (3 - 2 * wk)
+  R.w = w
   local m, an = model()
   local a = astro()
   local hit = vec3(hx, hy, hz)
@@ -1071,8 +1122,8 @@ local function pose_work(tk, dt)
             R.lean_sign = d2 < (mid - hit):length() and 1 or -1
             pcall(an.addBoneRot, an, "Back", 0, -0.3, 0, 1.0)
           end
-          R.lean = (R.lean or 0) + (want - (R.lean or 0)) * math.min(1, dt * 6)
-          pcall(an.addBoneRot, an, "Back", 0, R.lean * R.lean_sign, 0, 1.0)
+          R.lean = (R.lean or 0) + (want - (R.lean or 0)) * (1 - math.exp(-6 * dt))
+          pcall(an.addBoneRot, an, "Back", 0, R.lean * R.lean_sign * w, 0, 1.0)
           sh = an:boneWorld("Upperarm.Right") or sh
           sl = an:boneWorld("Upperarm.Left") or sl
         end
@@ -1082,13 +1133,18 @@ local function pose_work(tk, dt)
       local wob = math.sin(now() * 7.0) * 0.035
       local rh = hit + side * (0.07 + wob) + n * 0.03
       local lh = hit - side * (0.08 - wob * 0.5) + n * 0.035
-      if sh then pcall(an.reach, an, "Hand.Right", rh, { pole = sh - U * 0.45 + side * 0.3, weight = 1.0 }) end
-      if sl then pcall(an.reach, an, "Hand.Left", lh, { pole = sl - U * 0.45 - side * 0.3, weight = 1.0 }) end
+      if sh then pcall(an.reach, an, "Hand.Right", rh, { pole = sh - U * 0.45 + side * 0.3, weight = w }) end
+      if sl then pcall(an.reach, an, "Hand.Left", lh, { pole = sl - U * 0.45 - side * 0.3, weight = w }) end
       -- (probes: how far the right hand landed from where it was sent, both
       -- read in this pass, the drawn pose)
       local hr = an:boneWorld("Hand.Right")
       if hr then handErr = (hr - rh):length(); handToHit = (hr - hit):length() end
-      pcall(an.lookAt, an, { "Back", "Head" }, hit, { limit = 60, weight = 0.8 })
+      pcall(an.lookAt, an, { "Back", "Head" }, hit, { limit = 60, weight = 0.8 * w })
+      -- (what the blend out eases from: the hit and the hands' offsets, kept
+      -- in the part's frame and re-placed each frame)
+      RELEASE = { v = v, uid = tk.uid, frame = tk.frame, lx = tk.lx, ly = tk.ly, lz = tk.lz,
+                  nx = tnx, ny = tny, nz = tnz, pnode = R.pnode, nl = R.nl, lean = R.lean, lean_sign = R.lean_sign,
+                  w = w, t0 = nil }
     end
   else
     side = vec3(1, 0, 0)
@@ -1702,6 +1758,7 @@ function lateUpdate(node, dt)
     return
   end
   if R.snd then snd_off() end
+  if RELEASE then guard("release", pose_release, dt) end
   if not carrying then props_except(nil) ghosts_off() return end
   local id = held()
   local I = items()

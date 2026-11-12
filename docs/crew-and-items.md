@@ -1156,12 +1156,22 @@ pack over when it is filled. The other fills (air, cells) are weightless.
 5. **Right-click it → Repair (~14 s)**. The row shows the part's health and the time.
 6. **Held at the work.** From the moment Repair starts, the crew member is **locked to
    the part** (§6.3):
-   - they slide in over 0.4 s to a work spot 0.7 m off the surface, facing the
-     right-clicked **hit point**;
-   - on the ground they kneel or stand; in space they hang facing the hull with their
-     legs trailing;
+   - **on a world** (any craft that is not out in space, parked, asleep or on its
+     legs: `evaState().space` false) they walk in (1.1 m/s, the walk clip plays off
+     `crew_task.slideSpeed`) to a spot **standing on what is under it**: the ground,
+     a deck or a step (`crew_task.groundSpot`, playtest 2026-11-12: "floating at an
+     angle off the rover, arms reaching into a battery"). The spot faces out of the
+     work along the ground (the normal's ground part; a top or underside faces from
+     the crew's side), clear of the hull by horizontal rays at knee, hip, chest and
+     head height plus the capsule's radius and a hand (`STANCE`), and upright:
+     the body never tilts on a world. A hit out of a standing reach (deep in a top,
+     over the head) is still worked from that footing, reaching and leaning;
+   - **in space** they slide in over 0.4 s to a work spot 0.5–1.1 m off the hull along
+     its normal and hang facing it with their legs trailing;
    - a looping work animation plays: both hands reach (`anim:reach`) to the hit
-     point, the kit clamps to the hull beside the hands (a prop in the part's frame);
+     point, blended in over 0.45 s once the body has arrived and out over 0.35 s
+     when the job ends (`item_hand.WORK_BLEND`); past arm's length the back leans
+     in; the kit clamps to the hull beside the hands (a prop in the part's frame);
    - a spark and weld puff plays at the hands (the laser's `FxCutBite`, tinted), with
      a ratchet loop sound;
    - a progress ring is drawn over the part. The HUD reads "REPAIRING Pod Mk2 · 43% ·

@@ -56,6 +56,9 @@ end
 local H = {}
 -- the last tick's numbers, for probes: { err (m), id }
 lastTick = nil
+-- m/s the held body slides in to its work spot this tick (0 once there):
+-- planet_walker plays the walk off it
+slideSpeed = 0
 
 local function astro() return find and find("Astronaut") or nil end
 
@@ -134,6 +137,142 @@ end
 
 local function clock() return (space and space.time and space.time()) or time or 0 end
 
+-- ── standing at the work (on a world) ──────────────────────────────────────
+-- Where a crew member stands to work on point (lx, ly, lz) of part `uid`
+-- (its frame), the surface's normal (nx, ny, nz) a world direction: the suit
+-- centre, a world point of THIS TICK's physics pose, or nil when no footing
+-- puts the hit in reach. Worked in the physics frame throughout: the rays
+-- meet the colliders, which are where the tick has them (the drawn pose is a
+-- rails carry off).
+--   * facing: the normal's part along the ground; a hit on a top or an
+--     underside (no such part) faces from the crew's side;
+--   * clear of the hull: horizontal rays at shin, knee, hip, chest and head
+--     height (`heights` over the soles) find how far the craft stands out
+--     toward the crew; under `hip` only the legs (`leg_r`) need the room (a
+--     wheel), above it the whole body (`body_r`, a deck's edge), plus a
+--     hand, never nearer than `near`;
+--   * on what is under that spot: the ground, a deck, a step (a ray down from
+--     above the hit and the crew's feet), so a repair at the top of a rover
+--     is done standing beside it, and one at height from what is up there;
+--   * `far`, `low`, `high`: past them the hit is out of a standing reach
+--     (lastStance.reach false, for probes); they stand there all the same.
+--   * the way in: straight along the facing, or turned 35° or 70° round
+--     the up when that brings the shoulders nearer the hit by more than
+--     `turn_cost` a step (a battery over a wheel is reached past the wheel),
+--     and from footing above the crew's own only when it gains more than
+--     `climb_cost` a metre of climb.
+STANCE = { body_r = 0.33, leg_r = 0.2, clear = 0.08, near = 0.45, far = 1.5, low = -0.35, high = 2.25,
+           shoulder_h = 1.42, shoulder_f = 0.12, turns = { 0, 35, -35, 70, -70 }, turn_cost = 0.12,
+           climb_cost = 0.6, heights = { 0.25, 0.55, 0.85, 1.2, 1.6 }, hip = 0.7,
+           across = { -0.24, 0, 0.24 } }
+-- (probes) the last stance worked out: { d, g, hh, turn, shoulder, reach }
+lastStance = nil
+function groundSpot(vc, uid, lx, ly, lz, nx, ny, nz, a)
+  if not (raycast and vc.partPointNow) then return nil end
+  local hx, hy, hz = vc.partPointNow(uid, lx, ly, lz)
+  if not hx then return nil end
+  local d0 = space and space.dominant and space.dominant(hx, hy, hz)
+  local b = d0 and space.body(d0)
+  if not b then return nil end
+  local ux, uy, uz = hx - b.x, hy - b.y, hz - b.z
+  local ul = len(ux, uy, uz)
+  if ul < 1e-6 then return nil end
+  ux, uy, uz = ux / ul, uy / ul, uz / ul
+  local ax, ay, az = a.x, a.y, a.z
+  if vc.physPosOf then ax, ay, az = vc.physPosOf(a) end
+  local half = P("half_h")
+  -- facing out of the work, along the ground
+  local hu = nx * ux + ny * uy + nz * uz
+  local fx, fy, fz = nx - ux * hu, ny - uy * hu, nz - uz * hu
+  local fl = len(fx, fy, fz)
+  if fl < 0.3 then
+    fx, fy, fz = ax - hx, ay - hy, az - hz
+    local au = fx * ux + fy * uy + fz * uz
+    fx, fy, fz = fx - ux * au, fy - uy * au, fz - uz * au
+    fl = len(fx, fy, fz)
+    if fl < 1e-3 then return nil end
+  end
+  fx, fy, fz = fx / fl, fy / fl, fz / fl
+  local f0x, f0y, f0z = fx, fy, fz
+  -- the crew's soles, over the hit (m along the up)
+  local feet = (ax - hx) * ux + (ay - hy) * uy + (az - hz) * uz - half
+  local S = STANCE
+  local ign = { ignore = a }
+  -- what is under the point `d` m out along f: its height over the hit, or nil
+  local function support(d)
+    local top = math.max(0.4, feet + 0.6)
+    local px, py, pz = hx + fx * d + ux * top, hy + fy * d + uy * top, hz + fz * d + uz * top
+    local h = raycast(px, py, pz, -ux, -uy, -uz, top - S.low + 2.5, ign)
+    if not (h and h.distance) then return nil end
+    -- (a wall's face is not footing)
+    if h.nx and (h.nx * ux + h.ny * uy + h.nz * uz) < 0.6 then return nil end
+    return top - h.distance
+  end
+  -- how near the body may stand along f, its soles at `g`: the craft's
+  -- reach toward it at the legs' heights (a wheel, a skid) leaves room for
+  -- the legs (`leg_r`), at the chest's and head's for the whole capsule
+  local function need(g)
+    local d = S.near
+    -- (across the body too: a wheel beside the line to the hit is still in
+    -- the legs' way)
+    local sx, sy, sz = uy * fz - uz * fy, uz * fx - ux * fz, ux * fy - uy * fx
+    for _, z in ipairs(S.heights) do
+      for _, w in ipairs(S.across) do
+        local o = 2.5
+        local px = hx + fx * o + ux * (g + z) + sx * w
+        local py = hy + fy * o + uy * (g + z) + sy * w
+        local pz = hz + fz * o + uz * (g + z) + sz * w
+        local h = raycast(px, py, pz, -fx, -fy, -fz, o + 0.6, ign)
+        -- (the ground rising under a ray, or a floor, is no hull)
+        if h and h.distance and not (h.nx and (h.nx * ux + h.ny * uy + h.nz * uz) > 0.7) then
+          d = math.max(d, o - h.distance + (z < S.hip and S.leg_r or S.body_r) + S.clear)
+        end
+      end
+    end
+    return d
+  end
+  -- one way in: f turned `ang` about the up → d, footing, how far the
+  -- shoulders are from the hit (the arm's reach to make), or nil
+  local function try(ang)
+    local c, sn = math.cos(ang), math.sin(ang)
+    -- (f0 turned about u: f0 cos + (u × f0) sin; f0 is along the ground)
+    local cx, cy, cz = uy * f0z - uz * f0y, uz * f0x - ux * f0z, ux * f0y - uy * f0x
+    fx, fy, fz = f0x * c + cx * sn, f0y * c + cy * sn, f0z * c + cz * sn
+    local g = support(1.0) or feet
+    local d = need(g)
+    local g2 = support(d)
+    if g2 and math.abs(g2 - g) > 0.25 then
+      g = g2
+      d = need(g)
+      g2 = support(d)
+    end
+    if not g2 then return nil end
+    local reach = math.sqrt((d - S.shoulder_f) ^ 2 + (-g2 - S.shoulder_h) ^ 2)
+    return { d = d, g = g2, reach = reach, fx = fx, fy = fy, fz = fz, ang = ang }
+  end
+  -- straight in first; round the corner (a wheel, a fender in the way)
+  -- only when that is a real gain in reach
+  local best = nil
+  for _, deg in ipairs(S.turns) do
+    local r = try(math.rad(deg))
+    if r then
+      -- (and from the ground where the ground will do: up on a deck or a
+      -- step only for what is out of reach from the ground)
+      r.score = r.reach + S.turn_cost * math.abs(deg) / 35 + S.climb_cost * math.max(0, r.g - feet)
+      if not best or r.score < best.score then best = r end
+    end
+  end
+  if not best then return nil end
+  local d, g = best.d, best.g
+  fx, fy, fz = best.fx, best.fy, best.fz
+  -- (out of reach from there — a hit deep in a top, or over the head — they
+  -- still stand on that footing and reach and lean as far as arms go: never
+  -- held in the air to it)
+  lastStance = { d = d, g = g, hh = -g, turn = math.deg(best.ang), shoulder = best.reach,
+                 reach = d <= S.far and -g <= S.high and -g >= S.low }
+  return hx + fx * d + ux * (g + half), hy + fy * d + uy * (g + half), hz + fz * d + uz * (g + half)
+end
+
 -- ── building a task from a pick ────────────────────────────────────────────
 -- A Repair task for part `uid` of craft `vc` (a controller handle), from a
 -- world hit point and its surface normal (a ray off the screen: `opts.rendered`
@@ -166,8 +305,30 @@ function repairTask(vc, uid, hx, hy, hz, nx, ny, nz, opts)
   end
   local st = vc.evaState and vc.evaState() or nil
   local sx, sy, sz
+  local lx, ly, lz = vc.partLocalNow(uid, hx, hy, hz, opts.rendered)
+  if not lx then return nil, "that part isn't on this craft" end
+  -- (the surface's normal in the part's frame: the hands and the kit lie on it)
+  local _, _, _, nlx, nly, nlz = vc.partLocalNow(uid, hx, hy, hz, opts.rendered, nx, ny, nz)
+  -- ON THE GROUND (playtest 2026-11-12: "floating at an angle off the
+  -- rover, arms reaching into a battery"): stood on what is under the work
+  -- spot, clear of the hull, facing the part. A craft that is not `surface`
+  -- by evaState (a parked rover asleep off its wheels, a lander on its
+  -- legs) was treated as one in space: the suit hung 0.5-1.1 m off the hit
+  -- along its normal at the hit's height and turned its whole body onto it.
+  if a and st and not st.space then
+    local gx, gy, gz = groundSpot(vc, uid, lx, ly, lz, nx, ny, nz, a)
+    if gx then
+      local px, py, pz = vc.partLocalNow(uid, gx, gy, gz)
+      local secs = repairSecs(hp, opts.id)
+      local rec = vc.partRec and vc.partRec(uid)
+      return { kind = "repair", craft = vc.node.id, uid = uid, lx = lx, ly = ly, lz = lz,
+               sx = px, sy = py, sz = pz, nx = nlx, ny = nly, nz = nlz, ground = true,
+               secs = secs, done = 0, item = "repairkit", name = rec and (rec.label or rec.name or rec.id) or nil }
+    end
+  end
   if st and st.surface and a then
-    -- on the ground: in front of the part, standing at the crew's height
+    -- on the ground with no stance found (nothing under the spot within a
+    -- standing reach): in front of the part, at the crew's height
     local hu = nx * ux + ny * uy + nz * uz
     local fx, fy, fz = nx - ux * hu, ny - uy * hu, nz - uz * hu
     local fl = len(fx, fy, fz)
@@ -187,15 +348,14 @@ function repairTask(vc, uid, hx, hy, hz, nx, ny, nz, opts)
     local off = P("standoff") + (P("half_h") - 0.33) * along
     sx, sy, sz = hx + nx * off, hy + ny * off, hz + nz * off
   end
-  local lx, ly, lz = vc.partLocalNow(uid, hx, hy, hz, opts.rendered)
   local px, py, pz = vc.partLocalNow(uid, sx, sy, sz, opts.rendered)
-  if not lx then return nil, "that part isn't on this craft" end
   local secs = repairSecs(hp, opts.id)
   local name = nil
   local rec = vc.partRec and vc.partRec(uid)
   if rec then name = rec.label or rec.name or rec.id end
   return { kind = "repair", craft = vc.node.id, uid = uid, lx = lx, ly = ly, lz = lz,
-           sx = px, sy = py, sz = pz, secs = secs, done = 0, item = "repairkit", name = name }
+           sx = px, sy = py, sz = pz, nx = nlx, ny = nly, nz = nlz, ground = false,
+           secs = secs, done = 0, item = "repairkit", name = name }
 end
 
 -- ── may it start ───────────────────────────────────────────────────────────
@@ -292,6 +452,7 @@ do_release = function(id, why)
   local h = H[id]
   if not h then return false end
   H[id] = nil
+  slideSpeed = 0
   local t = h.task
   local v = vessel(h.vid)
   local a = astro()
@@ -695,7 +856,17 @@ function holdTick(dt)
         end
         climbSpot(t)
       end
-      local k = math.min(1, h.t / math.max(1e-3, P("slide")))
+      -- (on the ground the slide in goes at a walk, 1.1 m/s, at least
+      -- `slide`: a crew stood 1.5 m off no longer glides there in 0.4 s;
+      -- the walker plays the steps from slideSpeed)
+      if not h.slide then
+        h.slide = P("slide")
+        if t.ground == true and t.kind == "repair" then
+          h.slide = math.max(h.slide, len(t.sx - h.s0x, t.sy - h.s0y, t.sz - h.s0z) / 1.1)
+        end
+      end
+      local k = math.min(1, h.t / math.max(1e-3, h.slide))
+      slideSpeed = (k < 1 and t.kind ~= "climb") and len(t.sx - h.s0x, t.sy - h.s0y, t.sz - h.s0z) / h.slide or 0
       k = k * k * (3 - 2 * k)
       local lx = h.s0x + (t.sx - h.s0x) * k
       local ly = h.s0y + (t.sy - h.s0y) * k
@@ -710,8 +881,12 @@ function holdTick(dt)
         a.vx, a.vy, a.vz = vx, vy, vz
         h.lx, h.ly, h.lz = lx, ly, lz
         if h.space == nil then
-          local st = v.evaState and v.evaState() or nil
-          h.space = not (st and st.surface)
+          if t.kind == "repair" and t.ground ~= nil then
+            h.space = t.ground ~= true
+          else
+            local st = v.evaState and v.evaState() or nil
+            h.space = not (st and st.surface)
+          end
         end
         if h.space then face_work(a, h, v, wx, wy, wz, dt) end
         lastTick = { id = id, t = h.t, k = k, err = err }

@@ -3469,6 +3469,58 @@ treat_tick = function(dt)
 end
 
 -- ── the monitor: impact, crush, heat (the avatar on foot; heat aboard) ─────
+-- (the death curtain's numbers, s; frames under calm_ms in a row, calm_n,
+-- say the world has caught up)
+DEATH_FADE = { out = 0.5, hold_min = 0.5, hold_max = 3.5, inn = 0.5, calm_ms = 45, calm_n = 4 }
+deathCurtain = nil   -- { phase = "black" | "in", t0, calm, text } while it is up
+-- (the game clock: a paused or loading game holds the curtain where it is)
+local function wall() return now() end
+-- How black the picture is now (0..1), and the death's line to show on it.
+function curtainAlpha()
+  local m = MON.dying
+  local w = wall()
+  local function ease(k) k = math.max(0, math.min(1, k)) return k * k * (3 - 2 * k) end
+  if m and m.fade then return ease((w - m.fade) / DEATH_FADE.out), lastDeath and lastDeath.text end
+  local c = deathCurtain
+  if not c then return 0, nil end
+  if c.phase == "black" then return 1, c.text end
+  return 1 - ease((w - c.t0) / DEATH_FADE.inn), c.text
+end
+-- Each FRAME (lateUpdate, its dt the frame's): frames under calm_ms in a
+-- row say the world has caught up; a fixed tick can't see a long frame (it
+-- runs several of them inside it).
+local function curtain_calm(fdt)
+  local c = deathCurtain
+  if not (c and c.phase == "black") then return end
+  if (fdt or 0) * 1000 < DEATH_FADE.calm_ms then c.calm = c.calm + 1 else c.calm = 0 end
+end
+-- Each tick: black until calm (or hold_max), then the fade back in.
+local function curtain_tick()
+  local c = deathCurtain
+  if not c then return end
+  local w = wall()
+  if c.phase == "black" then
+    local age = w - c.t0
+    if (age >= DEATH_FADE.hold_min and c.calm >= DEATH_FADE.calm_n) or age >= DEATH_FADE.hold_max then
+      c.phase, c.t0 = "in", w
+      c.held = age
+    end
+  elseif w - c.t0 >= DEATH_FADE.inn then
+    deathCurtain = nil
+  end
+end
+local function curtain_draw()
+  local a, text = curtainAlpha()
+  if a <= 0.001 or not (draw and draw.rect and camera and camera.screenRect) then return end
+  local vx, vy, vw, vh = camera.screenRect()
+  if not vw then return end
+  draw.rect(vx - 2, vy - 2, vw + 4, vh + 4, 0, 0, 0, a)
+  if text and draw.text then
+    draw.text(vx + vw * 0.5, vy + vh * 0.44, "ASTRONAUT LOST", 30, 0.92, 0.36, 0.30, a, "center")
+    draw.text(vx + vw * 0.5, vy + vh * 0.44 + 44, text, 18, 0.88, 0.86, 0.82, a, "center")
+  end
+end
+
 local function avatar_monitor(dt)
   local a = astro()
   local id = activeId()
@@ -3481,11 +3533,23 @@ local function avatar_monitor(dt)
       local b = space.body(m.d)
       if b then a.x, a.y, a.z = b.x + m.x, b.y + m.y, b.z + m.z; a.vx, a.vy, a.vz = 0, 0, 0 end
     end
-    if now() >= m.t1 then
+    -- THE DEATH CURTAIN (playtest 2026-11-12: "the game often freezes when an
+    -- astronaut dies"). The control passing on puts the next member at the
+    -- Command Centre (or on another body): the view jumps there, and the
+    -- world catching up with it — ground and props streamed in round the
+    -- base, the origin following the camera — held one frame for 0.2-0.7 s
+    -- (physfixprobe deaths: 207 ms near the base, 699 ms from 1.5 km out,
+    -- the rest of untimed, no script in it). So after the hold the picture
+    -- fades to black, the handoff happens behind it, and it stays black
+    -- until the frames are calm again; then it fades back in.
+    if now() >= m.t1 and not m.fade then m.fade = wall() end
+    if m.fade and wall() - m.fade >= DEATH_FADE.out then
       MON.dying = nil
       -- (the suit's parts come back; the walker re-shows the root)
       for _, ch in ipairs(MON.hid or {}) do if ch.valid ~= false then ch.visible = true end end
       MON.hid = nil
+      local w = wall()
+      deathCurtain = { phase = "black", t0 = w, calm = 0, text = lastDeath and lastDeath.text or nil }
       handoff(m.id, m.v)
     end
     return
@@ -3504,6 +3568,7 @@ local function avatar_monitor(dt)
   local wseq = pw0 and pw0.impactSeq
   if ride or now() < hold_imp or held(id) then
     MON.vx = nil
+    MON.hs1 = nil
     MON.fall, MON.pinned, MON.crush_t = 0, false, 0
     MON.air, MON.peak = 0, 0
     MON.imp_seq = wseq
@@ -3561,7 +3626,14 @@ local function avatar_monitor(dt)
         end
         local h0x, h0y, h0z = MON.vx - ux * r0, MON.vy - uy * r0, MON.vz - uz * r0
         local h1x, h1y, h1z = vx - ux * r1, vy - uy * r1, vz - uz * r1
-        local side = math.max(0, len(h0x, h0y, h0z) - len(h1x, h1y, h1z) - P("walk_dv"))
+        -- (the speed HELD the two frames before, not one frame's: a single
+        -- frame's spike along the ground — a seam's push at a touchdown, a
+        -- stalled frame's catch-up — then back to a walk, read as a crash;
+        -- a crash is speed carried in, and lost)
+        local hs0 = len(h0x, h0y, h0z)
+        local had = math.min(hs0, MON.hs1 or hs0)
+        MON.hs1 = hs0
+        local side = math.max(0, had - len(h1x, h1y, h1z) - P("walk_dv"))
         dv = math.sqrt(down * down + side * side)
       end
     end
@@ -4046,9 +4118,35 @@ function carry_tick(dt)
 end
 
 -- ── the manager ────────────────────────────────────────────────────────────
+-- WHAT A DEATH AND A HANDOFF FIRST DRAW, loaded ahead (playtest 2026-11-12:
+-- "the game often freezes when an astronaut dies"). The next member's face
+-- is put on the avatar as the control passes (face.lua swaps the head and
+-- hair models), the fallen's Remains and their pack's crate are spawned:
+-- a model drawn for the first time is read and imported on that frame, and
+-- one head took 2.15 s of frameSettle in one frame (physfixprobe deaths,
+-- bled-out: "imported models/astronaut/faces/head_2.glb"). In the
+-- background, once a world is up: every head and hair style the roster
+-- can wear, the Remains, the crate.
+PRELOAD = { "models/astronaut/faces/cap.glb", "models/astronaut/astronaut_male_lod1.glb", "models/parts/cargo.glb" }
+for i = 1, 8 do PRELOAD[#PRELOAD + 1] = "models/astronaut/faces/head_" .. i .. ".glb" end
+for _, h in ipairs({ "braid", "bun", "buzz", "crop", "curls", "halfup", "long", "lowtail", "receding", "shoulder",
+                     "side", "swept", "tail", "wavy" }) do
+  PRELOAD[#PRELOAD + 1] = "models/astronaut/faces/hair_" .. h .. ".glb"
+end
+preloaded = nil      -- nil | "pending" | "done" (probes)
+local function preload_faces()
+  if preloaded or not (assets and assets.preload) then return end
+  preloaded = "pending"
+  pcall(assets.preload, PRELOAD, function(failed)
+    preloaded = "done"
+    if failed and #failed > 0 then log_("crew: could not preload " .. tostring(failed[1])) end
+  end)
+end
+
 function start(node)
   ensure()
   quiet_monitors(3.0)
+  preload_faces()
   local n = save.get("crew.notice")
   if type(n) == "string" and n ~= "" then
     local bc = ref("big_caption")
@@ -4093,6 +4191,7 @@ function fixedUpdate(node, dt)
   end
   run_queue()
   recordTick()
+  curtain_tick()
   avatar_monitor(dt or 0.016)
   heat_monitor(dt or 0.016)
   down_monitor(dt or 0.016)
@@ -4115,6 +4214,8 @@ function lateUpdate(node, dt)
   dollSync(false)
   body_sync()
   heal(dt or 0.016)
+  curtain_calm(dt)
+  curtain_draw()
 end
 
 -- Probes and tests: the module's live tables.
