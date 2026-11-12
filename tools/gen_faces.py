@@ -1029,12 +1029,10 @@ def face_nodes(parent, first, ind="        ", ids=None):
          f"{ind}        scale: ({_f(s)}, {_f(s)}, {_f(s)}),\n{ind}    ),\n{ind})),\n{o}),\n")
     for k, (nm, model, mats) in enumerate((("Hair", "hair_crop", ["Hair", "HairLong"]),
                                            ("Cap", "cap", ["CapCloth", "CapShell"])), 1):
-        # the Hair node's spring bones: the long styles' chains and colliders
-        # (one spec for all of them; a short style has no rig and ignores it)
+        # (the long styles' spring bones are each model's own
+        # models/astronaut/faces/hair_<style>.springs.ron, engine 0700: the
+        # node carries none, so the style worn decides)
         spring = ""
-        if nm == "Hair":
-            import gen_faces_longhair as LH
-            spring = LH.spring_spec(ind)
         r += (f"{o}(\n{ind}name: \"{nm}\",\n" + ident +
               f"{ind}matter: Mesh(\n{ind}    asset_path: \"models/astronaut/faces/{model}.glb\",\n{ind}),\n" +
               _mats(mats, ind) + spring + f"{ind}scripts: [],\n" + idl(k, ids[0] if ids else 0) +

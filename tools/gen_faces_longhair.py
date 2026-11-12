@@ -77,7 +77,7 @@ COPYRIGHT = "Solar crew long hair (tools/gen_faces_longhair.py), CC0."
 
 # ── colliders (head-local metres; x the crew's left, y up, z forward) ───────
 # (bone, centre, radius, capsule end or None). The spring spec in the prefab
-# is written from this list (spring_spec), so the drape here and the engine's
+# is written from this list (springs_file, one .springs.ron per model), so the drape here and the engine's
 # swing use the same shapes.
 HIT = 0.016                # the chains' own thickness against them
 
@@ -113,7 +113,7 @@ COLLIDERS = [
 ]
 
 # the chains' spring (one spec for every style)
-SPRING = dict(stiffness=3.0, gravity=1.0, drag=0.4, max_angle=35.0, hit_radius=HIT)
+SPRING = dict(stiffness=2.6, gravity=1.0, drag=0.35, max_angle=45.0, hit_radius=HIT, root_stiffness=0.6)
 
 
 def push_out(p, a, b, r):
@@ -258,11 +258,11 @@ def chain_phis(amax=np.pi):
 # hair's depth (m); tips: the spread of the ends (share of the length)
 LONG = {
     "long":     dict(kind="hang", part="centre", hang=0.42, segs=6, wave=0.0, cards=1000, thick=0.020, tips=0.20,
-                     line="normal", front=0.8, amax=2.5),
-    "wavy":     dict(kind="hang", part="side", hang=0.38, segs=6, wave=0.014, cards=1000, thick=0.026, tips=0.18,
-                     line="normal", front=0.6, amax=2.5),
+                     line="normal", front=0.8, amax=2.5, crown=240),
+    "wavy":     dict(kind="hang", part="side", hang=0.38, segs=6, wave=0.010, cards=1000, thick=0.017, tips=0.22,
+                     line="normal", front=0.35, amax=2.5, crown=220),
     "shoulder": dict(kind="hang", part="side", hang=0.17, segs=4, wave=0.0, cards=640, thick=0.020, tips=0.08,
-                     line="normal", front=0.3),
+                     line="normal", front=0.3, crown=180),
     # a low ponytail and a plait, tied at the nape on the left and worn
     # forward over the shoulder
     "lowtail":  dict(kind="tail", tie_at=(2.25, -0.34), hang=0.34, segs=6, cards=520, line="low"),
@@ -381,16 +381,49 @@ def spring_rest(B, secs=3.0, g=np.array([0.0, -9.81, 0.0])):
         head = B[0].copy()
         for i in range(n):
             a = R @ rest_dir[i]
-            pull = (head + a * ln[i] - tips[i]) * k + g * p["gravity"]
+            # engine 0700: the aim blends from the parent's swung position
+            # toward the tip's own animated place measured from the root
+            aim = head + a * ln[i]
+            rs = p.get("root_stiffness", 0.0)
+            if rs > 0:
+                aim = aim + (head + unit(B[i + 1] - head) * ln[i] - aim) * rs
+            pull = (aim - tips[i]) * k + g * p["gravity"]
             nxt = tips[i] + (tips[i] - prev[i]) * keep + pull * h * h
             nxt = _constrain(head, nxt, a, ln[i], mx)
-            nxt = collide(nxt)
+            nxt = collide_v2(nxt, head, aim)
             nxt = _constrain(head, nxt, a, ln[i], mx)
             prev[i] = tips[i]
             tips[i] = nxt
             R = _arc(a, unit(nxt - head)) @ R
             head = nxt
     return np.vstack([B[:1], np.array(tips)])
+
+
+def collide_v2(p, head, aim):
+    """The engine's 0700 collision: each collider pushes the particle out
+    and slides it a little round toward its aim, and the segment's midpoint
+    is pushed out too (the tip moving twice as far)."""
+    for _, a, r, b in COLLIDERS:
+        rr = r + HIT
+        out = push_out(p, a, b, rr)
+        if np.linalg.norm(out - p) > 1e-12:
+            bb = a if b is None else b
+            ab = bb - a
+            t = np.clip(np.dot(out - a, ab) / max(np.dot(ab, ab), 1e-12), 0, 1) if b is not None else 0.0
+            q = a + ab * t
+            nrm = unit(out - q)
+            tw = aim - out
+            along = tw - nrm * np.dot(tw, nrm)
+            la = np.linalg.norm(along)
+            if la > rr * 0.25:
+                along = along / la * rr * 0.25
+            out = push_out(out + along, a, b, rr)
+        p = out
+        mid = (head + p) * 0.5
+        cl = push_out(mid, a, b, rr)
+        if np.linalg.norm(cl - mid) > 1e-12:
+            p = p + (cl - mid) * 2.0
+    return p
 
 
 def _constrain(head, nxt, a, ln, mx):
@@ -649,7 +682,17 @@ def build_hang(name, st, G, skin, rng):
     left = sorted(range(12), key=lambda i: phis[i])            # +φ, ascending
     right = sorted(range(12, 24), key=lambda i: -phis[i])      # -φ, ascending |φ|
     knot = np.asarray(st["knot"], float) if st.get("knot") else None
-    for (ph, th, c) in roots(st["cards"], st["line"], rng):
+    crown = []
+    while len(crown) < st.get("crown", 0):
+        # along the parting and over the crown: an outer, lighter layer that
+        # breaks up the top of the head (the key light catches its sheen)
+        ph = rng.uniform(-np.pi, np.pi)
+        th = float(np.arcsin(rng.uniform(np.sin(0.75), 1.0)))
+        c = float(GH.hairline(np.array(ph), np.array(th), st["line"]))
+        if c > 0.9:
+            crown.append((ph, th, c, True))
+    for (ph, th, c, *outer) in [r + (False,) for r in roots(st["cards"], st["line"], rng)] + crown:
+        outer = outer[0]
         p0 = scalp_pt(ph, th, 0.0)
         # which side of the parting
         side = 1.0 if p0[0] > xpart else -1.0
@@ -669,7 +712,7 @@ def build_hang(name, st, G, skin, rng):
             continue
         e_th = release_th(a)
         # lift: the hair from the parting lies over the hair below it
-        depth = rng.random()
+        depth = rng.uniform(0.85, 1.0) if outer else rng.random()
         top = smooth(0.2, 1.3, th)
         lift1 = 0.004 + 0.008 * top + 0.004 * depth
         ks = 5
@@ -741,6 +784,10 @@ def build_hang(name, st, G, skin, rng):
             col = int(rng.choice([4, FINE, 1]))
         else:
             col = int(rng.integers(0, 5))
+        # each card its own shade: a value jitter, a little warmer or cooler
+        cval = float(np.clip(rng.normal(1.0, 0.09), 0.78, 1.22))
+        hj = rng.normal(0, 0.035)
+        chue = (1 + hj, 1.0, 1 - hj)
         Lr, Rr, N, UV, C, JW = [], [], [], [], [], []
         for i, p in enumerate(path):
             t = unit(path[min(i + 1, len(path) - 1)] - path[max(i - 1, 0)])
@@ -761,7 +808,10 @@ def build_hang(name, st, G, skin, rng):
                       ((((col + 0.03) / ATLAS), v), (((col + 0.97) / ATLAS), v)))
             dark = 0.50 + 0.55 * depth ** 0.8
             rootd = 0.70 + 0.30 * smooth(0.0, 0.06, ln[i])
-            C.append((dark * rootd, dark * rootd, dark * rootd, 1.0 - 0.35 * smooth(0.8, 1.0, v)))
+            tipl = 1.0 + 0.22 * smooth(0.45, 1.0, v)
+            k_ = dark * rootd * tipl * cval
+            C.append((min(1, k_ * chue[0]), min(1, k_ * chue[1]), min(1, k_ * chue[2]),
+                      1.0 - 0.35 * smooth(0.8, 1.0, v)))
             if i < nS - 1:
                 JW.append(norm4({skin.ix["HairRoot"]: 1.0}))
             else:
@@ -794,6 +844,8 @@ def hairline_wisps(M, st, skin, rng, n=420):
         c = float(GH.hairline(np.array(ph), np.array(th), st.get("line", "normal")))
         if not (0.03 < c < 0.65):
             continue
+        if tie is not None and 0.8 < abs(ph) < 1.9 and th < 0.55:
+            continue                    # (pulled back, a temple's wisps read as dashes)
         p0 = scalp_pt(ph, th, 0.0)
         if tie is not None:
             tp = GH.to_angles(tie)
@@ -929,6 +981,9 @@ def build_tail(name, st, G, skin, rng, braid=False):
         w0 = 0.010 if c < 0.8 else 0.012 + 0.003 * rng.random()
         Lr, Rr, N, UV, C, JW = [], [], [], [], [], []
         depth = rng.random()
+        cval = float(np.clip(rng.normal(1.0, 0.09), 0.78, 1.22))
+        hj = rng.normal(0, 0.035)
+        chue = (1 + hj, 1.0, 1 - hj)
         for i, p in enumerate(path):
             t = unit(path[min(i + 1, len(path) - 1)] - path[max(i - 1, 0)])
             if i < nS:
@@ -944,8 +999,8 @@ def build_tail(name, st, G, skin, rng, braid=False):
             Rr.append(p + sd * wid * 0.5)
             N.append(unit(nn + 0.6 * (axis_out(p) if i >= nS else unit(p - GH.O)) + np.array([0, 0.15, 0])))
             UV.append((((col + 0.03) / ATLAS, v), ((col + 0.97) / ATLAS, v)))
-            dark = 0.66 + 0.34 * depth
-            C.append((dark, dark, dark, 1.0 - 0.35 * smooth(0.85, 1.0, v)))
+            dark = (0.58 + 0.42 * depth) * cval * (0.75 + 0.25 * smooth(0.0, 0.06, ln[i])) * (1 + 0.2 * smooth(0.5, 1.0, v))
+            C.append((min(1, dark * chue[0]), min(1, dark), min(1, dark * chue[2]), 1.0 - 0.35 * smooth(0.85, 1.0, v)))
             if braid or i < nS:
                 JW.append(norm4({skin.ix["HairRoot"]: 1.0}))
             else:
@@ -1186,24 +1241,33 @@ def _v(p):
     return "(" + ", ".join(f"{float(x):.4f}" for x in p) + ")"
 
 
-def spring_spec(ind):
-    """The node's `spring_bones` field as RON at indent `ind`. Collider
-    offsets are in their bone's space: HairRoot is at the head's centre,
-    HairBody at BODY_PIVOT (rest rotations identity)."""
+def springs_file(name):
+    """A style's spring bones as a `.springs.ron` (engine 0700), written
+    beside its model: every node wearing the model swings by it. A hanging
+    style is one pattern (S??_0: a chain per strand); a tail or a plait
+    names its real chains only (no stubs). Collider offsets are in their
+    bone's space: HairRoot at the head's centre, HairBody at BODY_PIVOT
+    (rest rotations identity)."""
     s = SPRING
-    lines = [f"{ind}spring_bones: Some((", f"{ind}    chains: ["]
-    for c in range(NCH):
-        lines.append(f'{ind}        (name: "S{c:02d}", root: "S{c:02d}_0", stiffness: {s["stiffness"]}, gravity: {s["gravity"]}, '
-                     f'drag: {s["drag"]}, max_angle: {s["max_angle"]}, hit_radius: {s["hit_radius"]}),')
-    lines.append(f"{ind}    ],")
-    lines.append(f"{ind}    colliders: [")
+    st = LONG[name]
+    num = (f'stiffness: {s["stiffness"]}, gravity: {s["gravity"]}, drag: {s["drag"]}, max_angle: {s["max_angle"]}, '
+           f'hit_radius: {s["hit_radius"]}, root_stiffness: {s["root_stiffness"]}')
+    lines = ["// tools/gen_faces_longhair.py writes this: the spring bones of hair_%s.glb" % name, "(", "    chains: ["]
+    if st["kind"] == "hang":
+        lines.append(f'        (name: "S", root: "S??_0", {num}),')
+    else:
+        real = 6 + 2 if st["kind"] == "tail" else 1 + 2
+        for c in range(real):
+            lines.append(f'        (name: "S{c:02d}", root: "S{c:02d}_0", {num}),')
+    lines.append("    ],")
+    lines.append("    colliders: [")
     for bone, a, r, b in COLLIDERS:
         o = a - (BODY_PIVOT if bone == "HairBody" else 0)
         e = "" if b is None else f", end: Some({_v(b - (BODY_PIVOT if bone == 'HairBody' else 0))})"
-        lines.append(f'{ind}        (bone: "{bone}", offset: {_v(o)}, radius: {r:.4f}{e}),')
-    lines.append(f"{ind}    ],")
-    lines.append(f"{ind}    gravity: (0.0, -9.81, 0.0),")
-    lines.append(f"{ind})),")
+        lines.append(f'        (bone: "{bone}", offset: {_v(o)}, radius: {r:.4f}{e}),')
+    lines.append("    ],")
+    lines.append("    gravity: (0.0, -9.81, 0.0),")
+    lines.append(")")
     return "\n".join(lines) + "\n"
 
 
@@ -1307,9 +1371,54 @@ def texture(n=1024, seed=11):
     partial = (A > 0.02) & (A < 0.98)
     Ad = np.where(partial, A + noise * 0.55, A)
     img[..., 3] = np.round(np.clip(Ad, 0, 1) * 255)
+    # columns 0-5 from real strands rendered in Blender (tools/hair_strands_blender.py),
+    # when it can be run: curves with round, tapering sections, antialiased
+    # coverage, the clump's back strands and the roots in their own shade
+    real = blender_strands(n)
+    if real is not None:
+        img[:, :6 * cw] = real[:, :6 * cw]
+        # the sheen band across each clump (as the painted strands have it)
+        for col in range(5):
+            x0 = col * cw
+            b0 = 0.16 + 0.05 * (col % 3)
+            band = np.exp(-((v - b0) / 0.05) ** 2)[:, None, None]
+            jit = 1 + 0.5 * np.sin(np.arange(cw)[None, :, None] * 0.9 + col)
+            c3 = img[:, x0:x0 + cw, :3].astype(np.float32) * (1 + 0.35 * band * jit)
+            img[:, x0:x0 + cw, :3] = np.clip(c3, 0, 255).astype(np.uint8)
     # bleed the colour out under the transparent texels (mips don't go black at the edges)
     img = _bleed(img)
     return img, None
+
+
+BLENDER = "/mnt/disks/3tb/SteamLibrary/steamapps/common/Blender/blender"
+
+
+def blender_strands(n):
+    """The strand columns rendered from curves at twice the size and brought
+    down (a box filter on premultiplied colour: the coverage stays), or None
+    without Blender. HAIR_STRANDS=<png> reuses a render."""
+    import subprocess
+    png = os.environ.get("HAIR_STRANDS")
+    if not png:
+        if not os.path.exists(BLENDER):
+            return None
+        cache = os.path.join(os.path.expanduser("~"), ".cache", "solar_hair")
+        os.makedirs(cache, exist_ok=True)
+        png = os.path.join(cache, "strands.png")
+        subprocess.run([BLENDER, "--background", "--python",
+                        os.path.join(os.path.dirname(os.path.abspath(__file__)), "hair_strands_blender.py"),
+                        "--", png, str(n * 2)], check=True, capture_output=True)
+    im = np.asarray(Image.open(png).convert("RGBA"), np.float32) / 255.0
+    a = im[..., 3:4]
+    pre = np.concatenate([im[..., :3] * a, a], -1)
+    h = pre.shape[0] // n
+    pre = pre.reshape(n, h, n, h, 4).mean((1, 3))
+    al = pre[..., 3:4]
+    rgb = np.where(al > 1e-4, pre[..., :3] / np.maximum(al, 1e-4), 0.0)
+    out = np.zeros((n, n, 4), np.uint8)
+    out[..., :3] = np.round(np.clip(rgb, 0, 1) * 255)
+    out[..., 3] = np.round(np.clip(al[..., 0] * 1.1, 0, 1) * 255)
+    return out
 
 
 def _bleed(img, rounds=6):
@@ -1346,6 +1455,8 @@ def main():
             print(f"hair_{name}: verts {len(M.P)} quads {len(M.F)} chains {len(G)}")
             continue
         ntri, nb = write_glb(name, M, G, os.path.join(MODELS, f"hair_{name}.glb"))
+        with open(os.path.join(MODELS, f"hair_{name}.springs.ron"), "w") as f:
+            f.write(springs_file(name))
         print(f"hair_{name}: verts {len(M.P)} tris {ntri} bones {nb}")
 
 

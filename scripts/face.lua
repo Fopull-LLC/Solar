@@ -210,7 +210,7 @@ end
 
 -- ── long hair on spring bones (tools/gen_faces_longhair.py) ─────────────────
 -- The long styles are rigged: 24 chains, S00..S23, that the engine swings
--- (the Hair node's spring_bones; one spec fits every style). Here only:
+-- (each model's own hair_<style>.springs.ron beside it, engine 0700). Here only:
 --   * the gravity they feel is this world's, toward its centre at its own
 --     strength (Solar's down is not -Y), and almost none weightless in orbit;
 --   * the animator skips the hair while it is hidden (a helmet, first
