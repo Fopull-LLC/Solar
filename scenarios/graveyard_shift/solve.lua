@@ -655,6 +655,7 @@ function SOLVE(SP)
     wait(1.0)
     SP.check("setback_card", sr.phaseNow() == "setback", "the fail is a setback (phase %s)", tostring(sr.phaseNow()))
     SP.shot("a3_setback_card", true)
+    if SP.fail_screen then SP.fail_screen(sr, "a3") end
     local sr2 = nil
     local t0 = W()
     while W() - t0 < 300 do

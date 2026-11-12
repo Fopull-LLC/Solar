@@ -14,6 +14,11 @@
 --   DEBRIEF           at the end: the medal, the numbers against par, Ops'
 --                     line for the outcome, and RETRY · RESTART · CONTINUE ·
 --                     MENU. The world is held still behind it.
+--   FAIL SCREEN       (storypolish) a setback: the picture fades to black,
+--                     then YOU DIED / MISSION FAILED, who and how, the
+--                     story's line, one thing to try, and CONTINUE (Enter,
+--                     a pad's A, a click) back to the last checkpoint, or
+--                     MENU. Nothing moves on by itself.
 --
 -- It also hands scenario_run's `ops` beat to ops_strip.lua
 -- (scenario_run.listen("ops", …)) and claims the briefing
@@ -75,6 +80,28 @@ function buttonsFor(st)
   out[#out + 1] = { "restart", "Restart" }
   out[#out + 1] = { "menu", "Menu" }
   return out
+end
+
+-- (storypolish) THE FAIL SCREEN, pure. The fade: the picture goes to black
+-- over FAIL_FADE s, then the words come up over FAIL_WORDS s. → black, words
+FAIL_FADE, FAIL_WORDS = 1.6, 0.9
+function failFade(age)
+  age = math.max(0, age or 0)
+  local k = math.min(1, age / FAIL_FADE)
+  local black = k * k * (3 - 2 * k)
+  local w = math.max(0, math.min(1, (age - FAIL_FADE * 0.7) / FAIL_WORDS))
+  return black, w
+end
+-- the line over the title: where you go back to, and when it happened
+function failKicker(sb)
+  if type(sb) ~= "table" then return "" end
+  local a = string.upper(tostring(sb.act or "the start"))
+  return sb.clock and (a .. "   ·   " .. clock(sb.clock)) or a
+end
+-- the key line under the buttons
+function failKeys(sb)
+  local back = (type(sb) == "table" and sb.to) and ("continue from " .. tostring(sb.act or "the checkpoint")) or "start again from the beginning"
+  return "Enter: " .. back
 end
 
 -- The brief, `n` characters in: each line's shown text (a line not reached
@@ -168,6 +195,7 @@ function briefTyped() return brief_all and 9999 or math.floor(brief_t * CPS) end
 local brief_nodes = {}    -- made text nodes of the brief's lines (the typewriter writes them)
 local brief_n = -1
 local paused_by_us = false
+local fail_t0, fail_k, fail_focused, fail_cine = nil, nil, nil, nil   -- (storypolish) the fail screen's clock, frame, focus, HUD off
 
 -- Published for probes: what is up ("curtain" | "brief" | "debrief" | "chip" | nil).
 function showing() return shown end
@@ -190,6 +218,7 @@ local function act(what)
     -- the preview has no runner: the keys only move its phase along
     if what == "go" then preview_st.phase = "running" end
     if what == "continue" then preview_st.phase = "freeplay" end
+    if what == "continue_setback" then preview_st.phase = "running"; preview_st.setback = nil end
     preview_st.version = (preview_st.version or 0) + 1
     lastAction = what
     return
@@ -200,6 +229,7 @@ local function act(what)
   elseif what == "retry" and r.retry then r.retry()
   elseif what == "restart" and r.restart then r.restart()
   elseif what == "continue" and r.continueFreeplay then r.continueFreeplay()
+  elseif what == "continue_setback" and r.continueSetback then r.continueSetback()
   elseif what == "hint" and r.hint then
     -- (S7: the press always answers: the hint itself as a toast, or why not)
     local ok, why, txt = r.hint()
@@ -331,6 +361,36 @@ local function debrief_tree(s)
   }
 end
 
+-- (storypolish) THE FAIL SCREEN: black over the picture, then the words.
+-- `age` is wall-clock seconds since it went up (the world is held).
+local function fail_tree(s, age)
+  local sb = s.setback or {}
+  local black, wa = failFade(age)
+  local death = sb.title == "YOU DIED"
+  local out = { { "box", key = "black", style = "scn/failBlack", inset = 0, opacity = black } }
+  if wa <= 0 then return out end
+  out[#out + 1] = { "col", key = "fail", pin = "center", y = -20, w = 680, h = "fit", pad = 0, gap = 10, align = "center", opacity = wa,
+    { "text", key = "k", style = "panel/label", w = "100%", h = "fit", textAlign = "center", text = failKicker(sb) },
+    { "text", key = "t", name = "Scenario Fail Title", style = "scn/failTitle", w = "100%", h = "fit", textAlign = "center",
+      textColor = (not death) and { 0.90, 0.86, 0.78, 1.0 } or nil, text = tostring(sb.title or "MISSION FAILED") },
+    sb.cause and { "text", key = "c", style = "panel/cellMuted", w = "100%", h = "fit", textAlign = "center", text = string.upper(sb.cause) } or nil,
+    { "box", key = "r1", style = "panel/rule", w = 220, h = 1 },
+    { "text", key = "x", name = "Scenario Fail Text", style = "scn/failLine", w = 600, h = "fit", wrap = true, textAlign = "center",
+      text = tostring(sb.text or "") },
+    sb.hint and { "col", key = "try", w = 560, h = "fit", pad = 0, gap = 4, align = "center",
+      { "text", key = "l", style = "panel/label", w = "100%", h = "fit", textAlign = "center", text = "NEXT TIME" },
+      { "text", key = "h", style = "panel/body", w = "100%", h = "fit", wrap = true, textAlign = "center", text = tostring(sb.hint) } } or nil,
+    { "box", key = "sp", w = 10, h = 8 },
+    { "row", key = "keys", w = 360, h = 34, pad = 0, gap = 10, align = "center",
+      { "button", key = "go", name = "Scenario Continue", style = "panel/action", w = "grow", h = 34, text = "Continue",
+        textAlign = "center", textValign = "center", focusable = true, onClicked = function() act("continue_setback") end },
+      { "button", key = "menu", name = "Scenario Fail Menu", style = "panel/secondary", w = 120, h = 34, text = "MENU",
+        textAlign = "center", textValign = "center", focusable = true, onClicked = function() act("menu") end } },
+    { "text", key = "kh", style = "panel/hint", w = "100%", h = "fit", textAlign = "center", text = failKeys(sb) } }
+  return out
+end
+failTree = fail_tree
+
 local el_raw, el_base, el_since = nil, 0, 0   -- the clock between state reads
 local function elapsed_now() return el_base + el_since end
 
@@ -379,6 +439,8 @@ local function hook(r)
       if s and s.say then s.say(text, who, function() if r.lineDone then pcall(r.lineDone) end end, { scenario = true }) end
     end)
     pcall(r.listen, "phase", function() seen_version = nil; poll_t = POLL end)
+    -- (storypolish) the fail screen claims the setback: the runner waits for CONTINUE
+    pcall(r.listen, "setback", function() seen_version = nil; poll_t = POLL end)
     -- the story (scenario_stage.lua): dialogue lines, choices, cutscenes
     local function stage() return ref("scenario_stage") end
     -- Ops talks on the comms strip; the cast (named people) on the plate.
@@ -408,6 +470,12 @@ end
 
 local function clear(node)
   if shown then ui.make(node, {}) end
+  -- (storypolish) the fail screen rides the stage's layer
+  if shown == "setback" then
+    local sg = ref("scenario_stage")
+    if sg and sg.overlay then sg.overlay(nil) end
+    if fail_cine then local pc = ref("planet_camera"); if pc and pc.setCinematic then pcall(pc.setCinematic, false) end; fail_cine = nil end
+  end
   shown, chip_key = nil, nil
   -- (an empty full-screen element must not sit over the world's clicks)
   if el and el.visible then el.visible = false end
@@ -422,6 +490,7 @@ local function want(s, gm, pm)
   local ph = s.phase
   if ph == "briefing" then return "brief" end
   if ph == "done" or ph == "failed" then return "debrief" end
+  if ph == "setback" and s.setback then return "setback" end
   if ph == "running" then
     if s.cutscene then return nil end
     local pc = ref("planet_camera")
@@ -462,8 +531,16 @@ function update(node, dt)
   local w = want(st, gm, pm)
   -- the world holds still behind a briefing or a debrief (re-asserted: the
   -- pause menu's close lets it go)
-  local modal = (w == "brief" or w == "debrief") or ((pm and pm.open) and st and
-    (st.phase == "briefing" or st.phase == "done" or st.phase == "failed"))
+  -- (storypolish) the fail screen holds it once the picture is nearly black:
+  -- the moment itself (a fall, the death camera's hold) plays under the fade
+  local fail_age = 0
+  if w == "setback" then
+    local wc = (app and app.wallClock) and app.wallClock() or (time or 0)
+    if shown ~= "setback" or not fail_t0 then fail_t0 = wc end
+    fail_age = wc - fail_t0
+  else fail_t0 = nil end
+  local modal = (w == "brief" or w == "debrief") or (w == "setback" and fail_age >= FAIL_FADE * 0.8) or ((pm and pm.open) and st and
+    (st.phase == "briefing" or st.phase == "done" or st.phase == "failed" or st.phase == "setback"))
   if modal then
     if not paused_by_us or (physics and physics.isPaused and not physics.isPaused()) then
       paused_by_us = false
@@ -536,6 +613,37 @@ function update(node, dt)
     end
     return
   end
+  -- (storypolish) THE FAIL SCREEN: re-described while it fades (two seconds,
+  -- a few dozen frames), then only when the state moves. Enter, Space, a
+  -- pad's A (CONTINUE has the focus) or a click: back to the checkpoint.
+  if w == "setback" then
+    if input and input.setMouseLocked then input.setMouseLocked(false) end
+    local _, wa = failFade(fail_age)
+    if wa >= 1 and input and input.pressed and (input.pressed("enter") or input.pressed("space")) then act("continue_setback") return end
+    local fading = fail_age < FAIL_FADE + FAIL_WORDS * 1.7 + 0.1
+    local k = fading and math.floor(fail_age * 30) or -1
+    if seen_version ~= st.version or shown ~= "setback" or k ~= fail_k then
+      -- (on the stage's layer, over the whole HUD: a HUD text is drawn over
+      -- any box of its own layer, whatever the order; without a stage, here)
+      local sg = ref("scenario_stage")
+      local items = tidy(fail_tree(st, fail_age))
+      if sg and sg.overlay then sg.overlay(items) else ui.make(node, items) end
+      shown, seen_version, fail_k = "setback", st.version, k
+      -- once it is black, the HUD layers go off too (the cinematic switch)
+      local black = failFade(fail_age)
+      if black >= 0.9 and not fail_cine then
+        local pc = ref("planet_camera")
+        if pc and pc.setCinematic then pcall(pc.setCinematic, true); fail_cine = true end
+      end
+      -- the keys' focus once the words are up (a pad's A presses CONTINUE)
+      if wa > 0 and not fail_focused then
+        local b = find and find("Scenario Continue")
+        if b and ui.focus then pcall(ui.focus, b); fail_focused = true end
+      end
+    end
+    return
+  end
+  fail_focused = nil
   if w == "curtain" then
     if shown ~= "curtain" or seen_version ~= st.version then
       ui.make(node, tidy(curtain_tree(st)))

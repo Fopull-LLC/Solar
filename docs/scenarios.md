@@ -146,6 +146,7 @@ Everything in `start` is staged once, behind the loading curtain, through the ga
 | *(fail list)* suit_air | who, below |
 | *(fail list)* craft_lost | craft |
 | *(fail list)* timer | secs, from = start \| step \| step:<id> |
+| *(fail list, any kind)* | `text` (required), `title`, `hint`: the fail screen's words (§4.3) |
 | missions kinds | altitude, speed, orbit, soi, land, flag, dock, drive, home, recover, deliver, sample… (as contracts) |
 
 Every goal returns met and a reading, and every one can be an event's `when`, a meter's `when` or a model's `when` / `active`.
@@ -193,7 +194,15 @@ Graveyard Shift's pump bearing, which its hooks keep, is the same thing written 
 Ty, 2026-11-10: "you can fail but it just goes back to your last checkpoint."
 
 - By default (`failure = "checkpoint"`), a fail is a **setback**, not the end. That covers a death, a melted core and any fail kind.
-- A card shows what happened and where you go back to ("BACK TO ACT 3 · PL-7"). Then the run is restored to the last checkpoint reached, or to the start if none was reached:
+- **The fail screen** (storypolish; Ty 2026-11-11: "dying needs its own death screen that explains why you failed the mission and died in a scenario, and then lets you continue whenever you're ready"). The picture fades to black over 1.6 s (the moment itself, a fall or the death camera's hold, plays under the fade), then the words come up:
+  - a title: YOU DIED when the player's own member died, else the fail kind's (MISSION FAILED, MELTDOWN, CABIN LOST, OUT OF AIR, CRAFT LOST, OUT OF TIME);
+  - who died and how ("IMRE SZABO · OUT OF OXYGEN"), from crew.lua's cause;
+  - the story's line: the fail entry's `text`, else the cause's own in the second person ("Your suit ran out of air."), else the kind's;
+  - NEXT TIME: one hint, the entry's `hint`, else the cause's or the kind's;
+  - where you go back to and when it happened ("ACT 3 · THE SEAL · 41:07"), and CONTINUE (Enter, Space, a pad's A: it has the focus; a click) or MENU. Nothing moves on by itself; the world is held once the picture is black.
+  - A fail entry authors its own words: `{ kind = "core_melted", struct = "…", title = "KERNE IS DARK", text = "The core uncovered at {clock}. Nothing was cooling it.", hint = "…" }`. `{clock}` is the story's clock, `{who}` the member who died, `{cause}` how. Defaults by kind and cause: `scenario.lua` FAIL_WORDS and DEATH_WORDS (pure: `failWords(f, ctx)`).
+  - It is drawn on the stage's layer (scenario_stage `overlay`), over the whole HUD, which goes off once the picture is black. Without a UI listening (a test runner), the old card shows and the restore follows after `setback_secs`.
+- CONTINUE restores the run to the last checkpoint reached, or to the start if none was reached:
   - the world is staged again from `start`, plus the checkpoint step's `stage` table;
   - the steps before the checkpoint are latched;
   - the story's state comes back from the snapshot;
@@ -260,6 +269,8 @@ A beat is a table with one key. Beats run in order from a queue. A line of dialo
 | board | (SC-5) `{ who, craft, seat = uid }` puts a member in a free seat (that seat part first); `{ who, craft = false }` takes them out at the seat. A member with no body in reach is seated straight away. |
 | place | (SC-5) `{ craft \| who, at = ref, offset }`: set down there now (a checkpoint's `stage.beats`: the rovers back where the act begins). A craft far from where it stands is rebuilt the right way up. |
 | charge | (SC-5) `{ craft, frac }`: the craft's batteries at that share of what they hold. |
+| portrait | (storypolish) `"<cast key>"`: that member's live picture taken again, now (Dust Season's Beck: his first was taken in a dark rover seat, this one in the lit ops room). |
+| until | (storypolish) `{ kind = <goal kind>, …goal fields, secs = 30 }`: the queue holds until that goal holds, read every frame, or `secs` run out. A cutscene waits for a rover to pull up (`{ kind = "at", who = "craft:Tarrant Rover", at = "mark:beckpark", r = 4 }`) or a member to come through a door, instead of guessing a `wait`. A skip drops it. |
 | give (craft) | (SC-5) `{ craft, item, n }` into that craft's locker (`uid`: a particular one); a negative `n` takes it back out (of a pack too). |
 
 ### 5.2 Cutscenes
@@ -336,6 +347,7 @@ Ty, 2026-11-10: "captured since every human should be random."
 - `radio = true`: the speaker is heard over the set. The plate shows their picture under a phosphor wash with RADIO in the corner, and the radio crackles under the line.
 - `delay = secs`: each of their lines is heard that many game seconds after its beat (light-time: Ops at nine minutes is `delay = 540`). The queue does not wait for it, a delayed line never cuts into a cutscene, and a reload keeps the lines still in flight.
 - `link = "craft:<name>" | "crew:<name>"`: when that craft, or the craft that member rides, has no comms path, every third word is lost ("—") and a squelch ends the line. The plate says LINK LOST.
+- `here = "<var>"` (storypolish): a radio voice who comes home. Once that variable is true they are in the room with you: no RADIO, no delay or link, and `hereTag` (if given) for their tag. Dust Season's Beck is on the radio all night and face to face once he is through the lock (`here = "beck_in"`).
 
 ### 5.8 Time of day and light
 

@@ -459,6 +459,17 @@ local function dialogue_tree(d, y)
     b.with and listener_tree(b.with) or nil }
 end
 
+-- (storypolish) AN OVERLAY over everything (scenario_ui's fail screen): this
+-- layer is drawn after the Ship HUD's, whose texts are drawn after all of
+-- its boxes (a HUD text showed through a box of a higher `order`: the Ops
+-- strip's lines over the right-click menu, Ty 11-11), so a full-screen black
+-- here is the only black that covers the whole HUD. overlay(items | nil).
+ov_tree, ov_n = nil, 0
+function overlay(items)
+  ov_tree = items
+  ov_n = ov_n + 1
+  drawn_key = nil
+end
 local function stage_tree()
   local out = {}
   if alarm_on then out[#out + 1] = { "box", key = "alarm", style = "scn/alarm", inset = 0 } end
@@ -480,12 +491,13 @@ local function stage_tree()
       cap.title and { "text", key = "a", style = "scn/capTitle", w = "100%", h = "fit", textAlign = "center", text = cap.title } or nil,
       cap.sub and { "text", key = "b", style = "scn/capSub", w = "100%", h = "fit", textAlign = "center", wrap = true, text = cap.sub } or nil }
   end
-  if D then
+  if D and not under_menu then
     local y = (h >= BAR_H - 1) and -(BAR_H + 10) or -150
     if cap and h < BAR_H - 1 then y = -210 end
     plate_y = y
     out[#out + 1] = dialogue_tree(D, y)
   end
+  if ov_tree then for _, it in ipairs(ov_tree) do out[#out + 1] = it end end
   return out
 end
 
@@ -502,6 +514,18 @@ function plateBand()
   local hgt = 92 + 22 * math.max(0, lines - 2)
   if d.typed and d.i == #d.lines and #d.choices > 0 then hgt = hgt + 36 * #d.choices end
   return bottom, bottom + math.max(120, hgt + 28), PANEL_W
+end
+-- (storypolish) the plate as it is drawn, in screen pixels: x, y, w, h, or
+-- nil. The estimate above came up short on a long radio line with a
+-- listener (Ty 11-11: the plate's lines over the right-click menu), so the
+-- menu reads this first.
+function plateRect()
+  if not D then return nil end
+  local n = find and find("Scenario Dialogue")
+  if not (n and n.uiRect) then return nil end
+  local x, y, w, h = n:uiRect()
+  if not (x and w and w > 0 and h and h > 0) then return nil end
+  return x, y, w, h
 end
 
 local function tidy(t)
@@ -549,7 +573,7 @@ function update(node, dt)
   local w = app and app.wallClock and app.wallClock() or nil
   if w then dt = last_wall and math.max(0, math.min(0.1, w - last_wall)) or (dt or 0); last_wall = w end
   dt = dt or 0
-  if not D and #Q == 0 and not cut.on and cut.h <= 0 and not cap and not alarm_on then
+  if not D and #Q == 0 and not cut.on and cut.h <= 0 and not cap and not alarm_on and not ov_tree then
     if idle_drawn then redraw(node); idle_drawn = false; set_hud(false); hold_world(false) end
     return
   end
@@ -607,7 +631,26 @@ function update(node, dt)
   else
     hold_world(false)
   end
-  local key = table.concat(key_parts, ",") .. (D and string.format("d%d.%d.%s.%d.%s", D.i, #Q, tostring(D.typed), #D.choices,
+  -- (storypolish) a right-click menu too tall to stand above the plate:
+  -- the plate steps aside (a plain line only; never a choice) until it closes
+  if D then
+    local tw = (app and app.wallClock and app.wallClock()) or clock
+    if tw - (menu_t or -1) >= 0.25 or tw < (menu_t or -1) then
+      menu_t = tw
+      local was = under_menu
+      under_menu = false
+      local cm = ref("context_menu")
+      if #D.choices == 0 and cm and cm.isOpen and cm.isOpen() and cm.screenRect then
+        local mx, my, mw, mh = cm.screenRect()
+        local px, py, pw, ph = plateRect()
+        if not px and plate_px_last then px, py, pw, ph = plate_px_last[1], plate_px_last[2], plate_px_last[3], plate_px_last[4] end
+        if mx and px and mx < px + pw and px < mx + mw and my < py + ph and py < my + mh then under_menu = true end
+      end
+      if not under_menu then local a, b, c2, d2 = plateRect(); if a then plate_px_last = { a, b, c2, d2 } end end
+      if was ~= under_menu then drawn_key = nil end
+    end
+  else under_menu = false end
+  local key = table.concat(key_parts, ",") .. (under_menu and "M" or "") .. (ov_tree and ("O" .. ov_n) or "") .. (D and string.format("d%d.%d.%s.%d.%s", D.i, #Q, tostring(D.typed), #D.choices,
     tostring(D.beat.with and D.beat.with.who or "")) or "") ..
     (cap and ("c" .. tostring(cap.title) .. tostring(cap.sub)) or "") .. (cut.on and "on" or "off") .. (alarm_on and "A" or "")
   if key ~= drawn_key or drawn_key == nil then

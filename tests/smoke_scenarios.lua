@@ -696,11 +696,20 @@ do
   -- a SETBACK: a fail goes back to the checkpoint, the story kept
   local loads0 = SCENE_LOADS or 0
   SAVE.deleteSlot = function() for k in pairs(store) do if k:sub(1, 4) == "scn." then store[k] = nil end end end
-  S.fail("Okafor fell through the floor.")
+  -- (storypolish) the fail screen listens: the setback carries its words and
+  -- waits for CONTINUE (no auto-advance)
+  local sbk = nil
+  S.listen("setback", function(sb) sbk = sb end)
+  S.fail("Okafor fell through the floor.", { kind = "crew_dead", any = true, text = "Okafor fell through the floor.", hint = "Mind the hatch." })
   tick(2)
   check("FW-C: a fail in a story scenario is a setback, not the debrief", S.phaseNow() == "setback" and store["scn.outcome"] == nil, S.phaseNow())
-  check("FW-C: …with a card that says where you go back to", caught.caption[#caught.caption] == "BACK TO THE FIX", caught.caption[#caught.caption])
+  check("storypolish: the setback carries the fail screen's words and where it goes back to",
+    sbk and sbk.title == "MISSION FAILED" and sbk.text == "Okafor fell through the floor." and sbk.hint == "Mind the hatch." and sbk.to == "fix"
+    and type(sbk.act) == "string" and type(sbk.clock) == "number" and S.state().setback == sbk, sbk and (tostring(sbk.title) .. " / " .. tostring(sbk.act)))
   for _ = 1, 600 do tick() if (SCENE_LOADS or 0) > loads0 then break end end
+  check("storypolish: nothing moves on by itself while the fail screen is up", (SCENE_LOADS or 0) == loads0 and S.phaseNow() == "setback")
+  check("storypolish: CONTINUE puts it back", S.continueSetback() == true and S.continueSetback() == false)
+  for _ = 1, 60 do tick() if (SCENE_LOADS or 0) > loads0 then break end end
   check("FW-C: …then the run is put back (the slot restaged, the scene loaded)", (SCENE_LOADS or 0) > loads0)
   check("FW-C: the restore kept the story: vars, the steps before, no opening again, the setback counted",
     store["scn.vars"] and store["scn.vars"].trust == 1 and store["scn.vars"].faulted == true and (store["scn.done"] or {}).walk ~= nil
@@ -709,6 +718,34 @@ do
   SAVE.deleteSlot = nil
   FIND_SCRIPTS = nil
   SCRIPTS.crew_faces = nil
+end
+
+-- ── storypolish: a slow model steps from its unrounded value ───────────────
+do
+  local md = { var = "km", start = 8, rate = -0.005, min = 0, round = 0.01 }
+  local v, raw = 0.2, 0.2
+  for _ = 1, 40 do local nv, _, rv = SCN.stepModel(md, raw, true, 0.25); v, raw = nv, rv end
+  check("model: 0.005/s at 1x, rounded to 0.01, still moves when stepped from its raw value", v <= 0.15 and math.abs(raw - 0.15) < 1e-9, v)
+end
+-- ── storypolish: the fail screen's words, pure ─────────────────────────────
+do
+  local w = SCN.failWords({ kind = "crew_dead", any = true }, { who = "Imre Szabo", cause = "oxygen", player = true, clock = 2467 })
+  check("fail words: the player's own death is YOU DIED, the cause in the second person, with its hint",
+    w.title == "YOU DIED" and w.text == "Your suit ran out of air." and w.hint:find("half a tank", 1, true) and w.cause == "Imre Szabo  ·  out of oxygen", w.title .. " / " .. tostring(w.text))
+  w = SCN.failWords({ kind = "crew_dead", any = true, text = "Kerne Station lost its night engineer." }, { who = "Dana Kovac", cause = "radiation", player = false })
+  check("fail words: someone else's death is MISSION FAILED, the author's line kept",
+    w.title == "MISSION FAILED" and w.text == "Kerne Station lost its night engineer." and w.cause == "Dana Kovac  ·  radiation sickness", w.title)
+  w = SCN.failWords({ kind = "core_melted", struct = "X" }, { clock = 192 })
+  check("fail words: a kind's default, {clock} filled", w.title == "MELTDOWN" and w.text == "3:12 in, the core melted. Nothing was cooling it.", w.text)
+  w = SCN.failWords({ kind = "core_melted", title = "KERNE IS DARK", text = "At {clock} the core uncovered.", hint = "Feed it." }, { clock = 61 })
+  check("fail words: the author's title, text and hint win", w.title == "KERNE IS DARK" and w.text == "At 1:01 the core uncovered." and w.hint == "Feed it.", w.text)
+  w = SCN.failWords("Probe setback.", {})
+  check("fail words: a plain fail beat", w.title == "MISSION FAILED" and w.text == "Probe setback." and type(w.hint) == "string", w.title)
+  local _, bad = SCN.validate({ id = "x", title = "X", steps = { { id = "a", text = "a", goals = { { kind = "var", name = "v", is = true } } } },
+    score = { par = 10 }, debrief = { bronze = "b", fail = "f" }, fail = { { kind = "timer", secs = 5, text = "t", title = 3 } } }, CTX)
+  local hit = false
+  for _, e in ipairs(bad or {}) do if tostring(e):find("fail%[1%]%.title") then hit = true end end
+  check("fail words: validation names a title that is not a string", hit, bad and table.concat(bad, "; "):sub(1, 200))
 end
 
 -- ── FW-C: the new kinds, pure ───────────────────────────────────────────────

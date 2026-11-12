@@ -76,7 +76,13 @@ cat > "$PJ/scenes/scnuiprobe.ron" <<RON
 )
 RON
 OUT=$WORK/scnuishots/$TAG; mkdir -p "$OUT"
-flock "$LOCK" bash -c "uptime > '$OUT/uptime.txt'; env -u WAYLAND_DISPLAY ALSA_CONFIG_PATH='$ALSA' timeout ${TMO:-420} $F play $PJ > '$OUT/run.log' 2>&1; echo exit \$? >> '$OUT/uptime.txt'; uptime >> '$OUT/uptime.txt'"
+# SIZE=WxH (storypolish): played offscreen at exactly that screen (`floptle shot
+# --after … --size`), so the interface's Auto scale is the real one for that
+# screen (a capture at another size keeps the window's); pass ("native", "1")
+# in SCN_PARAMS for one picture a pose at that size.
+RUNCMD="$F play $PJ"
+[ -n "${SIZE:-}" ] && RUNCMD="$F shot $PJ --scene scnuiprobe --after ${AFTER:-${TMO:-420}}s --size $SIZE --out $OUT/last_$SIZE.png"
+flock "$LOCK" bash -c "uptime > '$OUT/uptime.txt'; env -u WAYLAND_DISPLAY ALSA_CONFIG_PATH='$ALSA' timeout ${TMO:-420} $RUNCMD > '$OUT/run.log' 2>&1; echo exit \$? >> '$OUT/uptime.txt'; uptime >> '$OUT/uptime.txt'"
 mkdir -p "$OUT/png"; cp "$PJ"/save/user/scnuishots/*.png "$OUT/png/" 2>/dev/null
 # the probe's saves go: slot scn, its terrain, the profile, the pictures' copies
 rm -f "$PJ/save/scn.ron"; rm -rf "$PJ/saves/scn" "$PJ/save/user/scnuishots" "$PJ/save/user/scenarios" "$PJ/save/user/farlod/scn"

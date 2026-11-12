@@ -128,8 +128,140 @@ local function over_shoulder(sr, nm, who, me)
   free_off()
 end
 
+-- (storypolish) BENCH_STRS='("branch", "arrive")': straight to act 4 (the
+-- earlier acts latched, their events marked fired, the storm past), then
+-- Beck's drive home under warp and his arrival played out at 1x: pictures of
+-- every shot, his rover's track, his walk through the lock (no set-downs).
+function DS.arrive(sr)
+  local t0w = W()
+  until_(sr, function() return sr.state().phase == "running" end, 60, "running")
+  if sr.state().cutscene then sr.skipCutscene() end
+  local fired = save.get("scn.ev") or {}
+  local t = findScript("deployables").agencyClock()
+  for i, ev in ipairs(sr.scenario().events or {}) do
+    local key = ev.id or ("ev" .. i)
+    if not tostring(key):match("^beck") then fired[key] = t end
+  end
+  save.set("scn.ev", fired)
+  for k, v in pairs({ handover = true, plan = "shop", shed_ok = true, storm = true, front_passed = true, seal_choice = "off", seal_blown = true }) do sr.setVar(k, v) end
+  sr.runBeat({ weather = { kind = "dust", secs = 5 } })
+  sr.runBeat({ light = { time = -9, secs = 3 } })
+  sr.gotoStep("home")
+  SP.stand("mark:beckops", 30)
+  until_(sr, function() return sr.state().stepId == "home" end, 30, "act 4")
+  sr.setVar("beck_km", 1.95); sr.setVar("beck_driving", true)
+  SP.check("arrive_act4", sr.state().stepId == "home", "act 4 open after %.0f s", W() - t0w)
+  -- the drive under warp, to the staging (2 km) and the arrival
+  until_(sr, function() return sr.var("rover_staged") == true end, 120, "the rover staged")
+  space.warp(1)
+  local okR = until_(sr, function() local p = sr.posOf("craft:Tarrant Rover"); return p ~= nil end, 60, "the rover rebuilt")
+  local d0 = apart(sr, "craft:Tarrant Rover", "mark:roverfar") or -1
+  until_(sr, function() local C = findScript("crew"); local id = sr.who_id and sr.who_id("Oyelaran"); return id and C.craftOf and C.craftOf(id) ~= nil end, 30, "Beck aboard")
+  local C = findScript("crew")
+  local bid = sr.who_id and sr.who_id("Oyelaran")
+  SP.check("rover_staged", okR and d0 >= 0 and d0 < 12 and bid ~= nil and C.craftOf(bid) ~= nil, "the rover %.1f m from its mark, Beck aboard %s", d0, tostring(bid and C.craftOf(bid) ~= nil))
+  view("a4_rover_waiting_far", { -14, 3.2, 9 }, { -26, 0.5, 62 }, false)
+  -- (the last of the drive: two hundred metres of it, the model's own pace)
+  sr.setVar("beck_km", 0.2); sr.setVar("beck_driving", true)
+  space.warp(4)
+  local lastP = W()
+  until_(sr, function()
+    if W() - lastP > 5 then
+      lastP = W()
+      local mp = sr.worldAdapter and sr.worldAdapter.piece and sr.worldAdapter.piece({ struct = "Mast", uid = 1 })
+      P("DS DRIVE beck_km %s driving %s dark %s parked %s home %s mast %s", tostring(sr.var("beck_km")), tostring(sr.var("beck_driving")),
+        tostring(sr.var("beck_dark")), tostring(sr.var("beck_parked")), tostring(sr.var("beck_home")), tostring(mp and mp.running))
+    end
+    return sr.state().cutscene end, 200, "Beck's arrival")
+  space.warp(1)
+  DS.watch_arrival(sr)
+  step(sr, "home", 60)
+  until_(sr, function() return sr.state().cutscene end, 30, "the morning")
+  wait(4); SP.shot("a4_morning", true)
+  step(sr, "morning", 200)
+  until_(sr, function() return not sr.state().line end, 40, "the last line")
+  wait(2); SP.shot("a4_debrief", true)
+end
+-- the arrival cutscene, at 1x: lines run by themselves (hold), pictures by
+-- what is said; the rover's track and Beck's steps sampled every frame
+function DS.watch_arrival(sr)
+  local C = findScript("crew")
+  local bid = sr.who_id and sr.who_id("Oyelaran")
+  local track, maxstep, last, lastBeck, beckMax = {}, 0, nil, nil, 0
+  local lastW, lastBW = W(), W()
+  local function sample()
+    local p = sr.posOf("craft:Tarrant Rover")
+    if p then
+      -- (as a speed over the real time between samples: a picture holds frames)
+      local dw = math.max(0.016, W() - lastW)
+      if last and last.body == p.body then local s = math.sqrt((p.x - last.x) ^ 2 + (p.y - last.y) ^ 2 + (p.z - last.z) ^ 2) / dw; if s > maxstep then maxstep = s end end
+      last, lastW = p, W()
+    end
+    local q = sr.posOf("crew:Oyelaran")
+    local C2 = findScript("crew")
+    local afoot = bid and C2.get(bid) and C2.get(bid).status == "afoot"
+    -- (the first moments afoot are the climb down from the seat: not a walk)
+    if afoot and not DS.afoot_t then DS.afoot_t = W() end
+    if q and afoot and W() - DS.afoot_t > 1.5 then
+      -- (over half a second or more: a member's record, which posOf reads,
+      -- follows the body twice a second while it walks)
+      local dw = math.max(0.016, W() - lastBW)
+      if not (dw < 0.6 and lastBeck) then
+        if lastBeck and lastBeck.body == q.body then local s = math.sqrt((q.x - lastBeck.x) ^ 2 + (q.y - lastBeck.y) ^ 2 + (q.z - lastBeck.z) ^ 2) / dw; if s > beckMax then beckMax = s end end
+        lastBeck, lastBW = q, W()
+      end
+    else lastBeck = nil end
+  end
+  local diag_t = W()
+  local function diag()
+    if W() - diag_t < 1.0 then return end
+    diag_t = W()
+    local rd = sr.SC5R and sr.SC5R.read and sr.SC5R.read("Tarrant Rover")
+    local n = rd and rd.npc or {}
+    P("DS ROVER way %.1f park %.1f speed %.2f charge %.0f npc %s dist %s v* %s stuck %s why %s · beck lock %.1f door %.1f status %s",
+      apart(sr, "craft:Tarrant Rover", "mark:roverway") or -1, apart(sr, "craft:Tarrant Rover", "mark:beckpark") or -1, rd and rd.speed or -1, rd and rd.charge or -1,
+      tostring(n.active), tostring(n.dist), tostring(n.vstar), tostring(n.stuck), tostring(n.why),
+      apart(sr, "crew:Oyelaran", "mark:lockout") or -1, apart(sr, "crew:Oyelaran", "mark:lockdoor") or -1,
+      tostring(bid and C.get(bid) and C.get(bid).status))
+  end
+  local function line_has(s) local st = sr.state(); return st.line and tostring(st.line.text):find(s, 1, true) ~= nil end
+  local function upto(cond, tmo, what) return until_(sr, function() sample(); diag(); return cond() end, tmo, what, true) end
+  local ta = W()
+  upto(function() return W() - ta > 4.0 end, 6, "lights")
+  SP.shot("a4_arrive_1_lights_in_dust", true)
+  upto(function() return line_has("Prettiest thing") end, 25, "Beck on the radio")
+  wait(1.0); SP.shot("a4_arrive_2_radio", true)
+  upto(function() return line_has("Last hundred metres") end, 40, "the last hundred metres")
+  wait(1.5); SP.shot("a4_arrive_3_alongside", true)
+  upto(function() local d = apart(sr, "craft:Tarrant Rover", "mark:beckpark"); return d and d < 12 end, 40, "near the lock")
+  SP.shot("a4_arrive_4_pulling_up", true)
+  local tp = W()
+  upto(function() local C2 = findScript("crew"); local r = bid and C2.get(bid); return r and r.status == "afoot" end, 45, "Beck climbs down")
+  local dpark = apart(sr, "craft:Tarrant Rover", "mark:beckpark") or -1
+  SP.check("rover_parked", dpark >= 0 and dpark < 6, "the rover drove in and parked %.1f m from its mark (%.0f s after pulling up)", dpark, W() - tp)
+  wait(2.0); SP.shot("a4_arrive_5_climbs_down", true)
+  upto(function() local d = apart(sr, "crew:Oyelaran", "mark:lockout"); return d and d < 2.0 end, 45, "Beck at the lock")
+  SP.shot("a4_arrive_6_at_the_lock", true)
+  local tl = W()
+  upto(function() return line_has("gone amber") end, 30, "inside, the wait")
+  wait(1.0); SP.shot("a4_arrive_7_waiting_inside", true)
+  upto(function() local d = apart(sr, "crew:Oyelaran", "mark:lockdoor"); return d and d < 1.5 end, 90, "Beck through the lock")
+  local through = W() - tl
+  wait(0.8); SP.shot("a4_arrive_8_through_the_door", true)
+  upto(function() return line_has("You look terrible") end, 30, "face to face")
+  local dbw = apart(sr, "crew:Oyelaran", "crew:Achterberg") or -1
+  wait(1.5); SP.shot("a4_arrive_9_face_to_face", true)
+  SP.check("beck_walked_in", through > 3 and beckMax < 4.0, "Beck through the lock in %.0f s, his fastest %.2f m/s (walked, never set down); Wren %.2f m from him", through, beckMax, dbw)
+  SP.check("rover_drove", maxstep < 12.0, "the rover's fastest %.2f m/s (driven, never placed)", maxstep)
+  upto(function() return line_has("Mast's still lit") end, 50, "the mast")
+  wait(1.0); SP.shot("a4_arrive_10_mast_still_lit", true)
+  until_(sr, function() return not sr.state().cutscene end, 40, "arrival ends", true)
+  SP.check("arrival_done", sr.var("act4") == true and sr.var("beck_in") == true, "act4 %s beck_in %s", tostring(sr.var("act4")), tostring(sr.var("beck_in")))
+end
+
 function SOLVE(SP)
   local sr = SP.run_()
+  if tostring(params.branch or "") == "arrive" then return DS.arrive(sr) end
   local ST, BG, BP, KL, T, RA, CB, BT = findScript("structures"), findScript("base_grid"), findScript("base_power"), findScript("kit_live"),
     findScript("terminal"), findScript("room_air"), findScript("base_cable"), findScript("base_tower")
   local ride = tostring(params.branch or "") == "ride"
@@ -385,8 +517,7 @@ function SOLVE(SP)
   space.warp(1)
   if sr.var("beck_home") then
     until_(sr, function() return sr.state().cutscene end, 20, "Beck's arrival")
-    wait(2.5); SP.shot("a4_beck_arrives", true)
-    until_(sr, function() return not sr.state().cutscene end, 40, "arrival ends")
+    DS.watch_arrival(sr)
   end
   step(sr, "home", 60)
   gline("home")

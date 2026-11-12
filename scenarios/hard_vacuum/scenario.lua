@@ -119,7 +119,8 @@ return {
       { state = { craft = "Ansel", uid = 16, st = { ph = "sealed" } } },
       { sound = "audio/foley/latch_clunk.ogg" },
       { say = { who = "ewan", text = "The hole's somewhere on the stores. Two cans below B. You'll hear it before you see it, while there's still air to hear." } },
-      { say = { who = "ewan", text = "And Mira. The stores sits right on top of the shield. Up there the shield throws a shadow about a metre wide. Keep tight to the hull. Drift out of it and you're standing in front of the core." } },
+      { say = { who = "ewan", text = "And Mira. The stores sits right on top of the shield. Up there its shadow is about a metre wide." } },
+      { say = { who = "ewan", text = "Keep tight to the hull. Drift out of the shadow and you're standing in front of the core." } },
       { say = { who = "mira", text = "Tight to the hull. Got it." } },
       { choice = { who = "ewan", prompt = "I can take the Ember down while you're out there.",
         options = {
@@ -192,6 +193,9 @@ return {
       { branch = { var = "res_at_patch", lt = 25,
         beats = { { say = { who = "mira", text = "The stores bottles went out the hole. That's air we'll want on day six." } } },
         elseBeats = { { say = { who = "mira", text = "We kept most of the stores bottles. That's day six sorted." } } } } },
+      -- (her brother pressed a hub bearing back in with a rock: Thirty Kilometres)
+      { say = { who = "mira", text = "My brother once fixed a wheel hub with a rock and called it a repair. He's hearing about this patch for the rest of his life." } },
+      { shot = { orbit = "craft:Ansel@17", dist = 10, height = 2.5, turn = 45, start = 160, secs = 14, wait = false } },
       { say = { who = "mira", text = "You talked to me, you know. Out there. Not to her. To me." } },
       { say = { who = "ewan", text = "Don't tell her. She gets jealous." } },
       { var = { debriefed = true } },
@@ -270,8 +274,10 @@ return {
   },
 
   fail = {
-    { kind = "crew_dead", any = true, text = "The Ansel lost a crew member three days from anywhere." },
-    { kind = "craft_pressure", craft = "Ansel", module = "#17", below = 0.5, secs = 60, text = "The flight deck lost its air with Ewan in it." },
+    { kind = "crew_dead", any = true, text = "The Ansel lost a crew member three days from anywhere.",
+      hint = "Outside, stay on the shaded side of the core and keep an eye on the suit's air: the walk aft is longer than it looks." },
+    { kind = "craft_pressure", craft = "Ansel", module = "#17", below = 0.5, secs = 60, text = "The flight deck lost its air with Ewan in it.",
+      hint = "Dog hatch B first, before anything else: the hole is aft, and every second it is open the whole ship breathes out of it." },
   },
 
   score = {

@@ -1078,7 +1078,7 @@ local function panel_up()
   -- A scenario's BRIEFING or DEBRIEF card: the card overlapped it (uxpolish 11-11).
   local su = ref("scenario_ui")
   local sw = su and su.showing and su.showing()
-  if sw == "brief" or sw == "debrief" then return true end
+  if sw == "brief" or sw == "debrief" or sw == "setback" then return true end
   return false
 end
 

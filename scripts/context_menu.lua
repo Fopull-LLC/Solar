@@ -653,6 +653,17 @@ local function describe(list, title, subtitle)
     local okb, _, top = pcall(SG.plateBand)
     if okb and top then floor = math.max(floor, top + 8) end
   end
+  -- (storypolish) …and its rect as drawn, when there is one: the estimate
+  -- came up short on a long radio line (Ty 11-11: the plate's lines over the
+  -- menu). The plate is on a layer above this one, so the menu must clear it.
+  if SG and SG.plateRect then
+    local okr, px, py = pcall(SG.plateRect)
+    if okr and py then
+      local _, oy, _, sh = screen()
+      local du = (oy + sh - py) * design_h() / sh
+      floor = math.max(floor, du + 10)
+    end
+  end
   local x = math.max(6, math.min(st.x + 14, W - W_MENU - 6))
   local y = math.max(6, math.min(st.y + 10, H - h - floor))
   st.rect = { x = x, y = y, w = W_MENU, h = h }

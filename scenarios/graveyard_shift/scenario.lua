@@ -158,8 +158,8 @@ return {
       { face = { who = "dana", emotion = "tired", secs = 60 } },
       { say = { who = "dana", text = "There you are. Coffee's on the bench, it's been on since nine, drink it at your own risk.", with = "me" } },
       { gesture = { who = "Kowalczyk", clip = "stand_talk", secs = 14 } },
-      { say = { who = "dana", text = "Where we are: I tripped her at ten past eleven to look at FW-2. Feed pump, outside, by the radiators. She's back up and parked at two per cent.", with = "me" } },
-      { say = { who = "dana", text = "Turbine's off line. Both coolant pumps running, pressuriser's holding, radiators are cold-soaked, so take the first thirty per cent slowly or the condenser sulks.", with = "me" } },
+      { say = { who = "dana", text = "Where we are. I tripped her at ten past eleven to look at FW-2, the feed pump out by the radiators. She's back up and parked at two per cent.", with = "me" } },
+      { say = { who = "dana", text = "Turbine's off line. Both coolant pumps running, pressuriser's holding. The radiators are cold-soaked, so take the first thirty slowly or the condenser sulks.", with = "me" } },
       { gesture = { who = "Anand", clip = false } },
       { turn = { who = "Anand", to = "crew:Halloran" } },
       { look = { who = "priya", at = "crew:Halloran" } },
@@ -170,7 +170,10 @@ return {
       { look = { who = "priya", at = false } },
       { gesture = { who = "Anand", clip = "lean_console" } },
       { look = { who = "dana", at = "crew:Halloran" } },
+      -- (she points the desk out with the line; her eyes stay on you: the talk gaze)
+      { gesture = { who = "Kowalczyk", clip = "point", secs = 4 } },
       { say = { who = "dana", text = "The log's on the desk terminal, under the porthole. Read it. Three items, all mine, none of them finished.", with = "me" } },
+      { gesture = { who = "Kowalczyk", clip = "stand_talk", secs = 30 } },
       { choice = { who = "dana", prompt = "Questions before I fall over?",
         options = {
           { text = "What did you find on FW-2?", run = "q_fw2" },
@@ -190,7 +193,8 @@ return {
       { run = "q_end" },
     },
     q_bed = {
-      { say = { who = "dana", text = "Bed. Yes. That word." } },
+      { say = { who = "dana", text = "Bed. Yes. That word. Say it again, slowly." } },
+      { face = { who = "dana", emotion = "smile", secs = 5 } },
       { run = "q_end" },
     },
     -- (gy3, Ty 2026-11-11: "she doesn't go to the bedroom to sleep when she
@@ -216,6 +220,7 @@ return {
                  pose = { kind = "lie", struct = "Kerne Station", spot = { -5.55, 0.68, 8.45 }, toward = { -6.6, 0.68, 8.45 }, stand = "mark:bunk" } } },
       { var = { dana_bed = true } },
       { wait = 2.5 },
+      { face = { who = "priya", emotion = "smile", secs = 6 } },
       { say = { who = "priya", text = "She says that every night. She's asleep before the door closes." } },
     },
     -- (gy3) the climb, with Dana in her bunk: Priya has the board's other half
@@ -226,6 +231,10 @@ return {
     -- ── ACT 2 ──────────────────────────────────────────────────────────────
     hum = {
       { hook = "bearing_start" },
+      -- (she comes off the bench for this one: the first thing all night that isn't hers)
+      { gesture = { who = "Anand", clip = false } },
+      { turn = { who = "Anand", to = "crew:Halloran" } },
+      { face = { who = "priya", emotion = "worried", secs = 40 } },
       { say = { who = "priya", text = "Halloran. Is that new? There's a tone in the floor. My strainmeter's got a line at forty-nine hertz that wasn't there an hour ago." } },
       { say = { who = "priya", text = "Something in the plant is turning and it's not happy about it. Can you see it on the board?" } },
       { objective = { step = "diagnose", text = "Something is singing at 49 Hz. Read the feed pump bearings (the card) and the LOOPS page, then tell Priya which pump." } },
@@ -243,7 +252,12 @@ return {
     diag_rcp = { { say = { who = "priya", text = "The coolant pumps are canned motors, they don't have a bearing you could hear from here. Dana told me that twice. Look again." } }, { run = "diag_q" } },
     diag_right = {
       { say = { who = "priya", text = "The one outside. In the dark. Of course it is." } },
-      { say = { who = "priya", text = "I've got OP-14 up. Step one: setpoint to forty per cent, so FW-1 can carry the secondary on its own. Step two, isolate. Step three, swap the cartridge. I'll read, you do." } },
+      { say = { who = "priya", text = "I've got OP-14 up. Step one: setpoint to forty per cent, so FW-1 can carry the secondary on its own." } },
+      { say = { who = "priya", text = "Step two, isolate. Step three, swap the cartridge. I'll read, you do." } },
+      -- (back to her readout: she reads you the procedure from there)
+      { face = { who = "priya", emotion = "focus", secs = 30 } },
+      { turn = { who = "Anand", to = "mark:priyabench" } },
+      { gesture = { who = "Anand", clip = "lean_console" } },
     },
     at_skid = {
       { say = { who = "priya", text = "I've got your helmet camera. That's FW-2? It's frosted over. You can hear it from there?" } },
@@ -252,8 +266,9 @@ return {
     },
     swap_talk = {
       { say = { who = "priya", text = "FW-2 off. Flow on FW-1's up to four kilos a second, which the procedure says is fine. Step three." } },
-      { say = { who = "priya", text = "Cartridge is the round housing at the drive end. Four bolts. Old cartridge out, new one in, torque to the tag. It says, and I quote, do not drop the cartridge." } },
-      { say = { who = "priya", text = "Your Repair Kit has the puller. Right-click the pump." } },
+      { say = { who = "priya", text = "Cartridge is the round housing at the drive end. Four bolts. Old cartridge out, new one in, torque to the tag." } },
+      { say = { who = "priya", text = "It says, and I quote, do not drop the cartridge." } },
+      { say = { who = "priya", text = "The puller's in your Repair Kit. Hands on the pump, and don't drop the cartridge. I'm reading that bit twice." } },
     },
     swap_done = {
       { say = { who = "priya", text = "That's in. The old one's sitting in your hand, isn't it. Look at the race. Is it blue?" } },
@@ -274,6 +289,8 @@ return {
       { shot = { from = "mark:camhall", look = "mark:pl7", offset = { 0, 2.2, 0 }, toOffset = { 0, 2.0, 0 }, secs = 3.5, wait = false } },
       { sound = "audio/foley/switch_3.ogg" },
       { alarm = true },
+      { gesture = { who = "Anand", clip = false } },
+      { face = { who = "priya", emotion = "alarmed", secs = 25 } },
       { say = { who = "priya", text = "What was that? That was a bang. That was a bang in the hall." } },
       { shot = { from = "mark:dolly1", to = "mark:dolly2", look = "mark:core", offset = { 0, 3.3, 0 }, toOffset = { 0, 3.0, 0 }, secs = 6, wait = false } },
       { branch = { var = "prot_at_break", is = true,
@@ -325,7 +342,8 @@ return {
       { say = { who = "priya", text = "Power's falling. One per cent. Under one. That's shut down? That's shut down." } },
       { objective = { step = "stabilise", text = "The primary is losing water through PL-7. Makeup: start P-3, the makeup pump by the pressuriser (its valve MU-1 must be open). Weld PL-7. Refill until the core is covered." } },
       { branch = { var = "woke", is = true,
-        beats = { { say = { who = "dana", text = "Decay heat's small, we've only been at power an hour. But she's still losing water through that clamp. Makeup first, P-3 on the charging line, then the weld. I'll keep the board." } } },
+        beats = { { say = { who = "dana", text = "Decay heat's small, we've only been at power an hour. But she's still losing water through that clamp." } },
+                  { say = { who = "dana", text = "Makeup first, P-3 on the charging line, then the weld. I'll keep the board." } } },
         elseBeats = { { say = { who = "priya", text = "The LOOPS page says INVENTORY, and it's going down. What puts water back in?" } } } } },
     },
     dana_steps_in = {
@@ -342,18 +360,31 @@ return {
       { shot = { orbit = "mark:center", dist = 48, height = 18, turn = 40, start = 30, secs = 10, wait = false } },
       { caption = { "05:58", "Kerne Station · the primary holds", 5 } },
       { say = { who = "log", text = "05:58  Halloran.  Primary intact, inventory recovering, plant shut down and stable. Hand-over to day shift at 07:40." } },
+      -- (inside: Dana at the board, in a shot from the window; she has had the night she had)
+      -- (a crew ref is the capsule's centre, a metre up, and a look lifts 1.2 more: the lookOffset brings it back to her face)
+      -- (a metre north of the window, so the line to her clears you at the console; gs2's monitor had the camera
+      -- pulled out in front of your capsule when it was authored on that line)
+      { shot = { from = "mark:window", look = "crew:Kowalczyk", offset = { 0, 1.6, 1.0 }, lookOffset = { 0, -0.8, 0 }, secs = 14, wait = false } },
+      { face = { who = "dana", emotion = "tired", secs = 40 } },
       { branch = { var = "woke", is = true,
         beats = { { say = { who = "dana", text = "Clamp's off, weld's in, inventory's back over ninety. I'll write it up. You'll sign it." } } },
         elseBeats = { { say = { who = "dana", text = "Somebody could have woken me. I'd have said the same thing you did, but somebody could have." } } } } },
       { branch = { var = "prot_at_break", is = true,
         beats = { { say = { who = "dana", text = "And the trips were in. You read the log. She shut herself down the second that clamp went, the way she's meant to." } } },
         elseBeats = { { say = { who = "dana", text = "And the protection was still bypassed. My bypass. My log item. I'll be the one explaining that to Kessel, not you." } } } } },
-      { branch = { var = "peak_k", gt = 900,
-        beats = { { say = { who = "priya", text = "The fuel went past nine hundred kelvin. I don't know what that means. Dana's face says it means paperwork." } } },
-        elseBeats = { { say = { who = "priya", text = "The fuel never got hot. I watched it the whole time. That's the most boring graph I've ever been glad to see." } } } } },
       { branch = { var = "seized", is = true,
         beats = { { say = { who = "dana", text = "And FW-2 seized on your watch. Next time it sings, you go out when it starts singing." } } } } },
+      { say = { who = "dana", text = "There's fresh coffee. I made it at five, which tells you what kind of night I've had." } },
+      -- (Priya, from the window end of the room, with the night on her screen; not from the console: you stand there)
+      { shot = { from = "mark:window", look = "crew:Anand", offset = { 0, 1.7, 1.3 }, lookOffset = { 0, -0.8, 0 }, secs = 14, wait = false } },
+      { branch = { var = "peak_k", gt = 900,
+        beats = { { say = { who = "priya", text = "The fuel went past nine hundred kelvin. I don't know what that means. Dana's face says it means paperwork." } } },
+        elseBeats = { { face = { who = "priya", emotion = "happy", secs = 20 } },
+                      { say = { who = "priya", text = "The fuel never got hot. I watched it the whole time. That's the most boring graph I've ever been glad to see." } } } } },
       { say = { who = "priya", text = "My strainmeter's got the whole night on it. The bang, the trip, your boots on the catwalk. Thirty-seven hours in and the best data I've taken all year." } },
+      { say = { who = "dana", text = "Did I sneeze?", with = "priya" } },
+      { say = { who = "priya", text = "Twice. Ten past four. It's the clearest thing on the trace.", with = "dana" } },
+      { shot = { orbit = "mark:center", dist = 56, height = 20, turn = 30, start = 70, secs = 12, wait = false } },
       { say = { who = "ops", text = "Kerne, Kessel Ops. Event report received. Day shift lands 07:40 with a welder and a spare spool. Nights, go to bed. Ops out." } },
       { var = { debriefed = true } },
     },
@@ -473,8 +504,10 @@ return {
   },
 
   fail = {
-    { kind = "crew_dead", any = true, text = "Kerne Station lost its night engineer." },
-    { kind = "core_melted", struct = "Kerne Station", text = "The core has melted. Kerne Station will not make power again." },
+    { kind = "crew_dead", any = true, text = "Kerne Station lost its night engineer.",
+      hint = "Dose is time near the core: stay out of the gap in the shield, and do the weld in one go." },
+    { kind = "core_melted", struct = "Kerne Station", text = "{clock} into the shift the core uncovered, and nothing was cooling it. Kerne Station will not make power again.",
+      hint = "SCRAM first, then water: P-3 on the charging line with MU-1 open keeps the fuel covered while you weld." },
   },
 
   score = {

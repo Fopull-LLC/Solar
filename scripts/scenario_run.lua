@@ -390,8 +390,11 @@ W.var = function(name) return var(name) end
 local function cast_speaker(k, c, who)
   local pt = rulebook().portraitOf(sc, k, c)
   local tex = c.portrait == "auto" and portraitTex and portraitTex(k) or nil
-  return { who = k, name = c.name or who, tag = c.tag, color = c.color, portrait = tex or (pt and (sc._dir .. pt)) or nil,
-           radio = c.radio == true or nil, delay = c.delay, link = c.link, crew = c.crew }
+  -- (storypolish) `here = "<var>"`: a radio voice who has come home: in the
+  -- room with you (no radio, `hereTag`) once that variable is true
+  local here = c.here ~= nil and var(c.here) == true
+  return { who = k, name = c.name or who, tag = here and (c.hereTag or c.tag) or c.tag, color = c.color, portrait = tex or (pt and (sc._dir .. pt)) or nil,
+           radio = (c.radio == true and not here) or nil, delay = (not here) and c.delay or nil, link = (not here) and c.link or nil, crew = c.crew }
 end
 local function speaker(who)
   who = who or "ops"
@@ -1931,6 +1934,17 @@ local function run_beat(b, e)
   elseif k == "board" then SC5R.board(v)
   elseif k == "place" then SC5R.place(v)
   elseif k == "charge" then SC5R.charge(v)
+  -- storypolish: UNTIL { kind = <goal kind>, …, secs }: the queue holds until
+  -- the goal holds (a rover pulled up at its mark, a member through a door),
+  -- or `secs` (default 30) run out. A cutscene's skip drops it.
+  -- storypolish: PORTRAIT "<cast key | crew name>": their live picture taken
+  -- again, now (Beck's was taken in a dark rover seat; this, in the lit room)
+  elseif k == "portrait" then
+    local c = sc and sc.cast and sc.cast[v]
+    local nm = (c and c.crew) or v
+    if portraitFor then portraitFor(nm, true) end
+  elseif k == "until" then
+    beat_busy = { kind = "until", g = v, mem = {}, t1 = now() + (v.secs or 30) }
   end
   return nil
 end
@@ -2071,6 +2085,12 @@ local function beats_tick()
   end
   if line and not (beat_busy and beat_busy.kind == "line") and now() > line.t0 + line.secs + 0.5 then line = nil; bump() end
   if beat_busy and beat_busy.kind == "walk" and not walks[beat_busy.id] then beat_busy = nil end
+  -- (storypolish) an `until` beat: its goal read every frame (one goal: cheap)
+  if beat_busy and beat_busy.kind == "until" then
+    local t = agency_now()
+    local ok = rulebook().evalGoal(beat_busy.g, W, beat_busy.mem, { now = t, t0 = tonumber(sget("scn.t0")) or t, done = done_tbl and done_tbl() or {} })
+    if ok then beat_busy = nil end
+  end
   if beat_busy then
     if beat_busy.kind == "choice" and now() >= beat_busy.t1 and choice then choose(choice.default or 1) end
     if beat_busy and now() < beat_busy.t1 then return end
@@ -3075,6 +3095,29 @@ end
 -- `face` (a ref) or `yaw` from the ground frame's front, its batteries at
 -- `charge`; flight_ops rebuilds it (fleetRescan) once the ground under it is
 -- solid (a body near it), and staging waits up to `wait` s for that.
+-- is something built (taller than a person: 2.2 m over the terrain) at the
+-- body-relative ground point `g` or 4 m round it? Rays come down from 25 m.
+function SC5R.builtNear(b, g)
+  if not raycast then return false end
+  local G = ground_of(b)
+  local gl = math.sqrt(g.x * g.x + g.y * g.y + g.z * g.z)
+  local ux, uy, uz = g.x / gl, g.y / gl, g.z / gl
+  local ax, ay, az = uy, -ux, 0
+  if math.abs(uz) > 0.9 then ax, ay, az = 0, uz, -uy end
+  local al = math.sqrt(ax * ax + ay * ay + az * az)
+  ax, ay, az = ax / al, ay / al, az / al
+  local cx, cy, cz = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
+  for _, o in ipairs({ { 0, 0 }, { 4, 0 }, { -4, 0 }, { 0, 4 }, { 0, -4 } }) do
+    local px, py, pz = g.x + ax * o[1] + cx * o[2], g.y + ay * o[1] + cy * o[2], g.z + az * o[1] + cz * o[2]
+    local pl = math.sqrt(px * px + py * py + pz * pz)
+    local dx, dy, dz = px / pl, py / pl, pz / pl
+    local R = G({ x = dx, y = dy, z = dz }) or pl
+    local top = R + 25
+    local ok, h = pcall(raycast, b.x + dx * top, b.y + dy * top, b.z + dz * top, -dx, -dy, -dz, 30)
+    if ok and h and h.distance and top - h.distance > R + 2.2 then return true end
+  end
+  return false
+end
 function SC5R.stageGround(i, c, bp, wh, out)
   local FO, E = ref("flight_ops"), ref("electronics")
   local g = resolve_stage(wh.ground, wh.offset, wh.yaw)
@@ -3087,6 +3130,35 @@ function SC5R.stageGround(i, c, bp, wh, out)
     dx, dy, dz = dx - g.ux * du, dy - g.uy * du, dz - g.uz * du
     local l = math.sqrt(dx * dx + dy * dy + dz * dz)
     if l > 1e-6 then hx, hy, hz = dx / l, dy / l, dz / l end
+  end
+  -- never set a craft down inside something built: a spot written against an
+  -- older base can land on a building added since (Thirty Kilometres' Asha-1
+  -- spot fell inside the Medical Bay, and the rover was thrown out of it).
+  -- The spot moves on along the way the craft faces, 4 m at a time.
+  local gb = space.body(g.body)
+  if gb and SC5R.builtNear(gb, g) then
+    local G, moved = ground_of(gb), nil
+    for k = 1, 20 do
+      local s = 4 * k
+      local qx, qy, qz = g.x + hx * s, g.y + hy * s, g.z + hz * s
+      local ql = math.sqrt(qx * qx + qy * qy + qz * qz)
+      local dx, dy, dz = qx / ql, qy / ql, qz / ql
+      local R = G({ x = dx, y = dy, z = dz })
+      if R then
+        local q = { x = dx * R, y = dy * R, z = dz * R, ux = dx, uy = dy, uz = dz }
+        if not SC5R.builtNear(gb, q) then moved = { q = q, s = s }; break end
+      end
+    end
+    if moved then
+      g.x, g.y, g.z, g.ux, g.uy, g.uz = moved.q.x, moved.q.y, moved.q.z, moved.q.ux, moved.q.uy, moved.q.uz
+      local du = hx * g.ux + hy * g.uy + hz * g.uz
+      hx, hy, hz = hx - g.ux * du, hy - g.uy * du, hz - g.uz * du
+      local l = math.sqrt(hx * hx + hy * hy + hz * hz)
+      hx, hy, hz = hx / l, hy / l, hz / l
+      out[#out + 1] = string.format("craft %d: its spot had something built on it; set down %d m further on", i, moved.s)
+    else
+      out[#out + 1] = string.format("craft %d: its spot has something built on it and no clear ground within 80 m", i)
+    end
   end
   local X = { hx, hy, hz }
   local Y = { g.ux, g.uy, g.uz }
@@ -3154,6 +3226,11 @@ function SC5R.drive(v)
   d[name] = { follow = v.follow, to = v.to, speed = v.speed, gap = v.gap, r = v.r }
   sset("scn.drives", d)
   SC5R.t = -1e9      -- (handed over at the next tick)
+  -- (storypolish) a new command replaces the one it is on: the tick hands a
+  -- drive over only to a craft with none, and a rover parked inside its last
+  -- target's gap still counts as driving (Beck sat at the waypoint for good)
+  local vc = SC5R.vc(name)
+  if vc and vc.npcDrive and not vc.piloting then vc.npcDrive(nil) end
 end
 -- 4 Hz with the goals: every standing drive handed to its craft when it has
 -- none (once a second), and a `to` that moves (a crew member) re-read
@@ -3561,37 +3638,79 @@ end
 -- to ("BACK TO ACT 3", the checkpoint step's `act`, else its text), then the
 -- run is put back (checkpoint_restore). The DEBRIEF is only for the end.
 setback = nil          -- { text, act, to, t1 } while the card is up
-local function setback_start(why)
+-- ── storypolish: THE FAIL SCREEN (Ty 2026-11-11: "dying needs its own death
+-- screen that explains why you failed the mission and died in a scenario,
+-- and then lets you continue whenever you're ready, then it loads back to
+-- the checkpoint"). The setback carries the screen's words (scenario.lua
+-- failWords: the fail entry's own title / text / hint, else the kind's, and
+-- for a death who died and how), the act it goes back to and the story's
+-- clock. With a "setback" listener (scenario_ui's fail screen) the run waits
+-- for continueSetback(): no auto-advance. With none (luajit, a bare runner)
+-- the old card shows and the restore follows after setback_secs.
+local function sp_dead_member()
+  local C = ref("crew")
+  if not C then return nil end
+  local me_ = nil
+  for _, c in ipairs((sc and sc.start and sc.start.crew) or {}) do if c.control then me_ = c.name end end
+  local best = nil
+  for name, id in pairs(crew_ids()) do
+    local r = C.get(id)
+    if r and r.status == "dead" then
+      local d = { name = r.name or name, cause = r.died and r.died.cause, player = (name == me_) or (r.name == me_) }
+      if not best or d.player then best = d end
+    end
+  end
+  return best
+end
+local function setback_start(why, f)
   local cp = sget("scn.cp")
   local i = cp and rulebook().stepIndex(sc, cp)
   local s = i and sc.steps[i]
   local act = s and (s.act or s.text) or "the start"
   local n = (tonumber(sget("scn.setbacks")) or 0) + 1
   sset("scn.setbacks", n)
-  setback = { text = why or "That went wrong.", act = act, to = cp, t1 = now() + ((params and params.setback_secs) or 4.5), n = n }
+  local t0 = tonumber(sget("scn.t0"))
+  local clock = t0 and (agency_now() - t0) or 0
+  local ent = type(f) == "table" and f or { kind = "fail", text = why }
+  local dm = ent.kind == "crew_dead" and sp_dead_member() or nil
+  local R_ = rulebook()
+  local words = R_.failWords and R_.failWords(ent, { who = dm and dm.name, cause = dm and dm.cause, player = dm and dm.player, clock = clock })
+    or { title = "MISSION FAILED", text = why }
+  setback = { text = words.text or why or "That went wrong.", title = words.title, hint = words.hint, cause = words.cause, kind = words.kind,
+              act = act, to = cp, n = n, clock = clock, t0 = now() }
   say_log(string.format("SETBACK %d: %s → back to %s", n, tostring(why), tostring(cp or "the start")))
   beatq, beat_busy, line, choice = {}, nil, nil, nil
   local stg = ref("scenario_stage")
   if stg and stg.dropSays then pcall(stg.dropSays) end
   if cut then cut_end() end
   camera_end()
+  -- (the alarm's red edge is on the stage's layer, over the fail screen)
+  if alarm_on then alarm_on = false; emit("alarm", false) end
   set_phase("setback")
   if not emit("setback", setback) then
+    setback.t1 = now() + ((params and params.setback_secs) or 4.5)
     local bc = ref("big_caption")
     if bc and bc.show then bc.show("BACK TO " .. string.upper(tostring(act)), setback.text, 5.0, "story") end
   end
+  bump()
 end
 local function setback_tick()
-  if setback and now() >= setback.t1 then
-    local to, n = setback.to, setback.n
-    setback = nil
-    checkpoint_restore(to, { setbacks = n })
-  end
+  if setback and setback.t1 and now() >= setback.t1 then continueSetback() end
 end
+-- CONTINUE on the fail screen: back to the checkpoint now. → true when it went
+function continueSetback()
+  if phase ~= "setback" or not setback or setback.going then return false end
+  setback.going = true
+  local to, n = setback.to, setback.n
+  setback = nil
+  checkpoint_restore(to, { setbacks = n })
+  return true
+end
+function setbackNow() return setback end
 
-function fail(why)
-  if not sc or phase == "done" or phase == "failed" or phase == "setback" then return end
-  if (sc.failure or "checkpoint") ~= "end" then setback_start(why); return end
+function fail(why, f)
+  if not sc or phase == "done" or phase == "failed" or phase == "setback" or phase == "freeplay" then return end   -- (storypolish: not after the story is over)
+  if (sc.failure or "checkpoint") ~= "end" then setback_start(why, f); return end
   fail_text = why or "The scenario failed."
   local st = stats_now()
   stats_final = st
@@ -3682,7 +3801,13 @@ local function meters_models(t, ctx)
       local rising = true
       if md.when then mem["mr:" .. i] = mem["mr:" .. i] or {}; rising = R_.evalGoal(md.when, W, mem["mr:" .. i], ctx) end
       local cur = var(md.var)
-      local nv, crossed = R_.stepModel(md, cur, rising, dt)
+      -- (storypolish) stepped from its unrounded value while the variable
+      -- still reads as that value rounded (nothing else wrote it)
+      local raw = mem["mv:" .. i]
+      local from = cur
+      if type(raw) == "number" and type(cur) == "number" and math.abs(raw - cur) <= (md.round or 0) * 0.5 + 1e-9 then from = raw end
+      local nv, crossed, rv = R_.stepModel(md, from, rising, dt)
+      mem["mv:" .. i] = rv
       if nv ~= cur then setVar(md.var, nv) end
       for _, j in ipairs(crossed) do
         fired = fired or sget("scn.mat") or {}
@@ -3766,7 +3891,7 @@ local function evaluate()
     mem[key] = mem[key] or {}
     local hit, reading = R_.evalGoal(f, W, mem[key], ctx)
     fail_read[i] = reading
-    if hit then fail(f.text); break end
+    if hit then fail(f.text, f); break end
   end
   if phase == "running" and not finishing and R_.finished(sc, done_tbl()) then finish() end
   PROF.evals = PROF.evals + 1
@@ -3792,6 +3917,7 @@ local function build_state()
     par = sc.score and sc.score.par, hintsUsed = tonumber(sget("scn.hints")) or 0,
     outcome = outcome or nil, medal = med or nil, failText = sget("scn.failText") or nil,
     after = sc.after or "freeplay", checkpoint = sget("scn.cp") or nil, version = version,
+    setback = setback,      -- (storypolish) the fail screen's words while it is up
     mark = s and s.mark,
     line = line, choice = choice and { who = choice.who, name = choice.name, color = choice.color, tag = choice.tag, portrait = choice.portrait, prompt = choice.prompt,
                                       options = choice.options, t0 = choice.t0, timeout = choice.timeout } or nil,
@@ -4271,8 +4397,8 @@ function capturePortrait(id, opts, cb)
   return true
 end
 -- the job: every auto cast member with a body, one after another
-local function portrait_job(only)
-  for _ = 1, 30 do coroutine.yield() end          -- (the bodies set down and posed first)
+local function portrait_job(only, now)
+  for _ = 1, now and 3 or 30 do coroutine.yield() end          -- (the bodies set down and posed first)
   local keys = {}
   for k, c in pairs(sc.cast or {}) do if c.portrait == "auto" and c.crew and (only == nil or c.crew == only) then keys[#keys + 1] = k end end
   table.sort(keys)
@@ -4286,7 +4412,7 @@ local function portrait_job(only)
     local C_ = ref("crew")
     if id and C_ and C_.activeId and C_.activeId() == id then id = nil end
     -- a quiet moment: no cutscene (its looks and walks turn heads), not walking
-    local t1q = wall() + 60
+    local t1q = wall() + (now and 0 or 60)
     while wall() < t1q do
       local cb = id and body_script("crew_body", id)
       -- (graveyard2 fix: and facing where it means to: a body still easing
@@ -4321,8 +4447,8 @@ local function portrait_job(only)
 end
 -- (scn_dust) a cast member who joins later (a `spawn` crew beat): their own
 -- face, photographed once they have arrived
-function portraitFor(name)
-  jobs[#jobs + 1] = coroutine.create(function() portrait_job(name) end)
+function portraitFor(name, now)
+  jobs[#jobs + 1] = coroutine.create(function() portrait_job(name, now) end)
 end
 local portraits_started = false
 function start_portraits()

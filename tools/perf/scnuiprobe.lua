@@ -36,7 +36,15 @@ local function R(name, ok, fmt, ...)
   P("RESULT %s: %s " .. (fmt or ""), name, ok and "PASS" or "FAIL", ...)
 end
 local function shot(name)
-  for _, sz in ipairs({ { 1920, 1080 }, { 2560, 1440 } }) do
+  local sizes = { { 1920, 1080 }, { 2560, 1440 } }
+  -- (storypolish) native = 1: one picture at the screen's own size (the
+  -- run's --size: the interface's Auto scale follows the real screen, which
+  -- a capture at another size does not)
+  if tostring(params.native or "") == "1" and camera.screenSize then
+    local w, h = camera.screenSize()
+    sizes = { { w, h } }
+  end
+  for _, sz in ipairs(sizes) do
     pending = pending + 1
     local nm = string.format("%s_%d", name, sz[2])
     local ok, err = pcall(camera.capture, { w = sz[1], h = sz[2], ui = true, draws = true }, function(bytes, why)
@@ -56,6 +64,99 @@ local SCORE = {
   { label = "Hints", value = "1" },
   { label = "Crew", value = "safe", ok = true },
 }
+
+-- (storypolish) A UI node's rect on screen (pixels), when it is drawn
+local function rect(name)
+  local n = find(name)
+  if not (n and n.uiRect) then return nil end
+  local x, y, w, h = n:uiRect()
+  if not (x and w and w > 0 and h and h > 0) then return nil end
+  return { x = x, y = y, w = w, h = h }
+end
+local function ov(a, b) return a and b and a.x < b.x + b.w - 0.5 and b.x < a.x + a.w - 0.5 and a.y < b.y + b.h - 0.5 and b.y < a.y + a.h - 0.5 end
+local function rs(r) return r and string.format("%.0f,%.0f %.0fx%.0f", r.x, r.y, r.w, r.h) or "-" end
+local function enter() input.simulate({ key = "enter", down = true }); frames(2); input.simulate({ key = "enter", down = false }) end
+
+-- (storypolish) LAYERING (Ty 11-11: the radio strip's lines over the
+-- right-click menu): the Ops strip with its history up, then the menu opened
+-- at the bottom centre over it; then a long radio line on the plate while
+-- the menu is open. Nothing transient may be drawn over the menu.
+function layers_pass(run, sg, os_)
+  local cm = findScript("context_menu")
+  if not cm then R("layers", false, "no context_menu") return end
+  for _ = 1, 10 do if sg.current() then sg.advance() end; if sg.cutsceneOn() then sg.skipCutscene() end; hold(0.3) end
+  os_.say("Tarrant, Marlow Ops, met desk. Your front is forty minutes out, wind to thirty, optical depth past six by dark.", nil, nil, { scenario = true })
+  os_.say("It will sit on you for a couple of hours. Marlow out.", nil, nil, { scenario = true })
+  os_.say("Ops copies. Keep the mast lit.", nil, nil, { scenario = true })
+  for i = 1, 3 do
+    wait_for(function() return os_.queue().cur and os_.queue().cur.typed end, 15, "typed")
+    if i < 3 then os_.skipLine(); hold(0.6) end
+  end
+  hold(0.6)
+  local sw, sh = camera.screenSize()
+  local strip0 = rect("Ops Strip Plate")
+  P("GEOM screen %dx%d strip %s", sw, sh, rs(strip0))
+  shot("layers_strip")
+  local who = cm.actorNow and cm.actorNow()
+  local t = cm.selfTarget and cm.selfTarget(who)
+  local opened = t and cm.openFor(t, who, sw * 0.5, sh * 0.80)
+  hold(1.0)
+  local m = cm.screenRect and { cm.screenRect() }
+  local mr = m and m[1] and { x = m[1], y = m[2], w = m[3], h = m[4] } or nil
+  local strip = rect("Ops Strip Plate")
+  local se = find("Ops Strip"); se = se and se:getcomponent("UiElement")
+  local strip_up = strip ~= nil and se ~= nil and se.visible ~= false
+  P("GEOM menu %s strip %s (visible %s)", rs(mr), rs(strip), tostring(strip_up))
+  R("menu_over_strip", opened and mr ~= nil and not (strip_up and ov(mr, strip)), "menu %s, strip %s visible %s", rs(mr), rs(strip), tostring(strip_up))
+  shot("layers_menu_strip")
+  -- a long radio line with a listener arrives while the menu is up
+  -- (through the runner: the plate follows the runner's line)
+  run.runBeat({ say = { who = (run.scenario and run.scenario() and run.scenario().cast and run.scenario().cast.beck) and "beck" or "Beck Oyelaran", secs = 12,
+                        text = "Imre. Beck. Tell me you can hear me over this, because I can barely hear me. I'm eight k out on the Sefton track and the front's going to land between us. I'll crawl in on the mast light." } })
+  hold(2.0)
+  m = cm.screenRect and { cm.screenRect() }
+  mr = m and m[1] and { x = m[1], y = m[2], w = m[3], h = m[4] } or nil
+  local pl = rect("Scenario Dialogue")
+  P("GEOM menu %s plate %s", rs(mr), rs(pl))
+  R("menu_over_plate", mr ~= nil and not ov(mr, pl), "menu %s, plate %s", rs(mr), rs(pl))
+  shot("layers_menu_plate")
+  if cm.close then cm.close() end
+  hold(0.8)
+  pl = rect("Scenario Dialogue")
+  R("plate_back", pl ~= nil, "the plate is back once the menu closes: %s", rs(pl))
+  shot("layers_after_menu")
+  for _ = 1, 6 do if sg.current() then sg.advance() end; hold(0.3) end
+  os_.skipLine(); os_.skipLine()
+end
+
+-- (storypolish) THE FAIL SCREEN: a forced fail, the screen (fading, then up),
+-- no auto-advance, CONTINUE by Enter, back to the checkpoint (a new runner).
+function fail_pass(run, ui_)
+  run.fail("Probe: a forced fail.", { kind = "crew_dead", any = true, text = "The night side took another one. Haldane will want to know why.",
+                                      hint = "Keep the helmet on until the room reads breathable." })
+  hold(0.8)
+  R("fail_phase", run.phaseNow() == "setback", "phase %s", tostring(run.phaseNow()))
+  shot("fail_fading")
+  hold(2.6)
+  ui_ = findScript("scenario_ui") or ui_
+  R("fail_screen", ui_.showing and ui_.showing() == "setback" and find("Scenario Continue") ~= nil and find("Scenario Fail Title") ~= nil,
+    "showing %s", tostring(ui_.showing()))
+  shot("fail_screen")
+  hold(6.0)
+  R("fail_waits", run.valid ~= false and run.phaseNow and run.phaseNow() == "setback" and findScript("scenario_run") == run, "still up after 9 s: %s", tostring(run.phaseNow()))
+  enter()
+  local r2 = wait_for(function()
+    local s = findScript("scenario_run")
+    return s and s ~= run and s.isActive and s.isActive() and s.phaseNow and (s.phaseNow() == "running" or s.phaseNow() == "briefing") and s
+  end, 300, "the restore")
+  R("fail_continue", r2 ~= nil and (tonumber(save.get("scn.setbacks")) or 0) == 1, "back: %s, setbacks %s", tostring(r2 and r2.phaseNow()), tostring(save.get("scn.setbacks")))
+  local u2 = findScript("scenario_ui") or ui_
+  if r2 and r2.phaseNow() == "briefing" then hold(2.0); enter() end
+  wait_for(function() return r2 and r2.phaseNow() == "running" end, 30, "running again")
+  hold(2.0)
+  shot("fail_after_restore")
+  return r2 or run, u2
+end
 
 -- With FW-A's runner: the scenario plays itself (its brief, cutscenes, lines,
 -- a choice, an alarm); the probe answers as a player would (Enter on a read
@@ -98,6 +199,12 @@ function real_flow(run, ui_, gm)
   end
   R("story", seen.cutscene and seen.dialogue ~= nil, "seen: cutscene %s dialogue %s choice %s alarm %s strip %s chip %s",
     tostring(seen.cutscene), tostring(seen.dialogue), tostring(seen.choice), tostring(seen.alarm), tostring(seen.ops_strip), tostring(seen.chip))
+  -- (storypolish) LAYERING, then THE FAIL SCREEN
+  if tostring(params.layers or "1") == "1" then layers_pass(run, sg, os_) end
+  if tostring(params.failpass or "1") == "1" then
+    run, ui_ = fail_pass(run, ui_)
+    sg, os_ = findScript("scenario_stage"), findScript("ops_strip")
+  end
   -- to the end: complete the steps by hand
   for _ = 1, 20 do
     local st = run.state()
@@ -143,6 +250,8 @@ local function main()
   local gm = wait_for(function() local g = findScript("game_manager"); return g and g.curtain and g end, 60, "the curtain")
   R("slot", save.slot() == "scn" and save.get("g_scenario") == params.id, "slot %s g_scenario %s", tostring(save.slot()), tostring(save.get("g_scenario")))
   local ui_ = wait_for(function() return findScript("scenario_ui") end, 30, "scenario_ui")
+  -- (storypolish) the system scene spawns its own ScenarioLib: a second one made two runners
+  wait_for(function() return findScript("scenario_run") end, 20, "the runner")
   if not findScript("scenario", { quiet = true }) then pcall(spawn, "ScenarioLib", vec3(0, 0, 0)); frames(3) end
   local run = findScript("scenario_run")
   P("scenario_run present: %s", tostring(run ~= nil))

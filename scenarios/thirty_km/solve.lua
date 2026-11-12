@@ -163,14 +163,78 @@ local function stick_to(sr, vc, ref, r, vmax, mem, dt)
   return I
 end
 -- every rover's tick pose moved `m` metres along the ground toward `ref`
--- (a fast-forward: small hops so the tilt between frames stays a few degrees)
+-- (a fast-forward: small hops so the tilt between frames stays a few degrees).
+-- A teleport keeps a craft's velocity and its axes, so each hop:
+--  * STOPS every rover first (its velocity off through its centre of mass, as
+--    scenario_run's place beat does). Kit's driver had come out of every hop
+--    flat out at a leader 40 m off (the follower took the spot the leader had
+--    left), and landed on each new spot at 5-7 m/s: the hub heated, the hull
+--    gained speed the safety net took back, parts broke and Asha-1 came apart
+--    on the way home (the run's `solve` error was the setback that followed);
+--  * sets a FOLLOWER down `FOLLOW_GAP` behind the leader on the ground the
+--    leader just hopped over, so the convoy comes out of a hop at its station
+--    and Kit's driver has nothing to chase;
+--  * lands each rover with EVERY part clear of the ground under that part
+--    (hop_lift). It used to keep the height its origin had over the old spot,
+--    and kept its old axes: over Barrow Ridge 40 m on, the ground under one
+--    end can be a metre higher than that, and the rover landed in it (the
+--    safety net read "0.0 -> 8.1 m/s gained in one tick" as it was thrown out);
+--  * never lands anyone on something built (built_at): the hop goes on past it.
+local FOLLOW_GAP = 16
+-- how far the craft must rise so that, moved by (dx, dy, dz), each part's
+-- origin stands its reach over the ground straight under it: a wheel its
+-- radius and a little, anything else 0.45 m (a hull's half height and some).
+-- The part frames are the physics frame's (partFrameNow), as info.origin is.
+local function hop_lift(vc, b, ground, dx, dy, dz)
+  local fp = vc.fleetParts and vc.fleetParts()
+  if not (fp and fp.parts and vc.partFrameNow) then return 0.6 end
+  local reach = {}
+  for _, w in ipairs((vc.R2 and vc.R2.wheels) or {}) do
+    if w.uid then reach[w.uid] = (w.r or 0.5) + 0.12 end
+  end
+  local lift = -1e9
+  for _, d in ipairs(fp.parts) do
+    local F = d.uid and vc.partFrameNow(d.uid)
+    if F then
+      local qx, qy, qz, ql = n3(F.ox + dx - b.x, F.oy + dy - b.y, F.oz + dz - b.z)
+      local g = ground({ x = qx, y = qy, z = qz })
+      if g then lift = math.max(lift, g + (reach[d.uid] or 0.45) - ql) end
+    end
+  end
+  return lift > -1e8 and lift or 0.6
+end
+-- is something built at ground direction `dir` (unit, from the body's centre)?
+-- Rays down at it and 4 m round it (the rovers themselves skipped) that stop
+-- more than half a metre over the terrain's ground met a structure: the ruin
+-- near home (Varro Sink Camp, stamped as the rovers come within 600 m) stands
+-- beside the road to Caird, and `ground` reads the terrain alone, so a hop
+-- set Asha-1 down inside it ("ruins: stamped" then the deck hit at 12.7 m/s,
+-- the hull spun up to 327 rad/s and tore apart).
+local function built_at(b, ground, dir, skip)
+  if not raycast then return false end
+  local g = ground(dir)
+  if not g then return false end
+  local ax, ay, az = n3(dir.y, -dir.x, 0)
+  if math.abs(dir.z) > 0.9 then ax, ay, az = n3(0, dir.z, -dir.y) end
+  local cx, cy, cz = dir.y * az - dir.z * ay, dir.z * ax - dir.x * az, dir.x * ay - dir.y * ax
+  for _, o in ipairs({ { 0, 0 }, { 4, 0 }, { -4, 0 }, { 0, 4 }, { 0, -4 } }) do
+    local qx, qy, qz = n3(dir.x * g + ax * o[1] + cx * o[2], dir.y * g + ay * o[1] + cy * o[2], dir.z * g + az * o[1] + cz * o[2])
+    local gq = ground({ x = qx, y = qy, z = qz }) or g
+    local top = gq + 25
+    local h = raycast(b.x + qx * top, b.y + qy * top, b.z + qz * top, -qx, -qy, -qz, 30, { ignore = skip, ignoreChildren = true })
+    if h and h.distance and top - h.distance > gq + 0.5 then return true end
+  end
+  return false
+end
 local function hop(sr, list, ref, m)
   local p = sr.posOf(ref)
   if not p then return end
   local b = space.body(p.body)
   local ground = sr.groundOf(b)
   local tx, ty, tz = n3(p.x, p.y, p.z)
-  local lead = nil      -- (followers take the spot the leader hopped from: ground it drove)
+  local from, to = nil, nil   -- the leader's ground, before and after (unit directions)
+  local skip = {}
+  for _, vc in ipairs(list) do if vc and vc.node and vc.node.valid then skip[#skip + 1] = vc.node end end
   for k, vc in ipairs(list) do
     local info = vc and vc.node and vc.node.valid and assembly.info(vc.node)
     if info then
@@ -179,20 +243,75 @@ local function hop(sr, list, ref, m)
       local g0 = ground({ x = ox, y = oy, z = oz }) or ol
       local clear = ol - g0
       local nx, ny, nz
-      if k > 1 and lead then
-        nx, ny, nz = lead.x, lead.y, lead.z
+      if k > 1 and from then
+        local f = math.max(0, math.min(1, (m - FOLLOW_GAP * (k - 1)) / m))
+        nx, ny, nz = n3(from.x + (to.x - from.x) * f, from.y + (to.y - from.y) * f, from.z + (to.z - from.z) * f)
       else
         local dd = ox * tx + oy * ty + oz * tz
         local hx, hy, hz = n3(tx - ox * dd, ty - oy * dd, tz - oz * dd)
-        local a = m / ol
-        lead = { x = ox, y = oy, z = oz }
-        nx, ny, nz = n3(ox * math.cos(a) + hx * math.sin(a), oy * math.cos(a) + hy * math.sin(a), oz * math.cos(a) + hz * math.sin(a))
+        -- the hop goes on in 10 m steps past anything built where it would
+        -- set the leader, or a follower behind it, down
+        local function spot(mm)
+          local a = mm / ol
+          return n3(ox * math.cos(a) + hx * math.sin(a), oy * math.cos(a) + hy * math.sin(a), oz * math.cos(a) + hz * math.sin(a))
+        end
+        local mm = m
+        for _ = 1, 8 do
+          nx, ny, nz = spot(mm)
+          local free = not built_at(b, ground, { x = nx, y = ny, z = nz }, skip)
+          for j = 2, #list do
+            if not free then break end
+            local fx, fy, fz = spot(math.max(0, mm - FOLLOW_GAP * (j - 1)))
+            free = not built_at(b, ground, { x = fx, y = fy, z = fz }, skip)
+          end
+          if free then break end
+          TK.hopBuilt = (TK.hopBuilt or 0) + 1
+          mm = mm + 10
+        end
+        m = mm
+        from, to = { x = ox, y = oy, z = oz }, { x = nx, y = ny, z = nz }
       end
       local g1 = ground({ x = nx, y = ny, z = nz }) or g0
-      local R1 = g1 + clear + 0.25
-      assembly.teleport(vc.node, vec3(b.x + nx * R1, b.y + ny * R1, b.z + nz * R1))
+      local R1 = g1 + clear
+      local px, py, pz = b.x + nx * R1, b.y + ny * R1, b.z + nz * R1
+      -- (a rise along the new up moves every part about as far up)
+      local lift = math.max(0.05, hop_lift(vc, b, ground, px - o.x, py - o.y, pz - o.z))
+      TK.liftMax = math.max(TK.liftMax or 0, lift)
+      local v, ms = info.vel, info.mass or 0
+      if v and ms > 0 then
+        assembly.impulseAt(vc.node, vec3(-v.x * ms, -v.y * ms, -v.z * ms), info.com or o)
+      end
+      assembly.teleport(vc.node, vec3(px + nx * lift, py + ny * lift, pz + nz * lift))
     end
   end
+end
+-- after a hop: frames until every rover in `list` stands still on its wheels
+-- again (no speed up or down, no spin: a follower's driver may creep on to
+-- its gap), at least `lo`, at most `hi`
+local function hop_settle(sr, list, lo, hi)
+  for i = 1, hi do
+    talk(sr)
+    yield()
+    if i >= lo then
+      local still = true
+      for _, vc in ipairs(list) do
+        local info = vc and vc.node and vc.node.valid and assembly.info(vc.node)
+        local o = info and info.origin
+        local bn = o and space.dominant(o.x, o.y, o.z)
+        local bb = bn and space.body(bn)
+        if bb then
+          local ux, uy, uz = n3(o.x - bb.x, o.y - bb.y, o.z - bb.z)
+          local v, w = info.vel, info.angVel
+          local vu = v and math.abs(v.x * ux + v.y * uy + v.z * uz) or 0
+          local sw = w and math.sqrt(w.x * w.x + w.y * w.y + w.z * w.z) or 0
+          if vu > 0.25 or sw > 0.15 then still = false end
+        end
+      end
+      if still then TK.hopN, TK.hopF = (TK.hopN or 0) + 1, (TK.hopF or 0) + i; return i end
+    end
+  end
+  TK.hopN, TK.hopF, TK.hopMax = (TK.hopN or 0) + 1, (TK.hopF or 0) + hi, (TK.hopMax or 0) + 1
+  return hi
 end
 local function dist_to(sr, a, ref)
   local p, q = sr.posOf(a), sr.posOf(ref)
@@ -235,7 +354,7 @@ local function leg(sr, vc, ref, r, vmax, real, followers, tag, shots)
     for _, f in ipairs(followers or {}) do list[#list + 1] = f end
     vc.R2.cmd = { drive = 0, steer = 0 }
     hop(sr, list, ref, 40)
-    for _ = 1, 20 do talk(sr); yield() end
+    hop_settle(sr, list, 12, 90)
   end
   until_(sr, function()
     local I = stick_to(sr, vc, ref, r * 0.6, vmax, mem, 1 / 60)
@@ -371,6 +490,8 @@ function SOLVE(SP)
              ["How do we go home"] = variant == "crawl" and 2 or (variant == "abandon" and 3 or 1) }
   local b, bn = body()
   local A1, A2 = vcOf("Asha-1"), vcOf("Asha-2")
+  -- (a part that breaks says what broke it, where, and how fast the craft went)
+  for _, v in ipairs({ A1, A2 }) do v.CRASH_TRACE = true end
   -- ── the staged night ──
   local function up_dot(vc)
     local info = vc and assembly.info(vc.node)
@@ -539,15 +660,18 @@ function SOLVE(SP)
       guard = guard + 1
       A1.R2.cmd = { drive = 0, steer = 0 }
       hop(sr, list, ref, 40)
-      for _ = 1, 20 do talk(sr); yield() end
+      hop_settle(sr, list, 12, 90)
     end
   end
   if route == "ridge" then home_leg("mark:r1") else home_leg("mark:f1") end
-  P("TK HOME blizzard %s · ray %s · a1 %s %%", tostring((findScript("weather") or {}).kind), tostring(sr.var("ray_air")), tostring(sr.var("a1_pct")))
+  P("TK HOME blizzard %s · ray %s · a1 %s %% · hops so far %d, %.1f frames to settle each, %d never settled, highest set-down %.2f m, %d spots passed for something built", tostring((findScript("weather") or {}).kind),
+    tostring(sr.var("ray_air")), tostring(sr.var("a1_pct")), TK.hopN or 0, (TK.hopF or 0) / math.max(1, TK.hopN or 0), TK.hopMax or 0, TK.liftMax or 0, TK.hopBuilt or 0)
   chase(A1, 8, 3.0, -2, 12)
   shot_at(SP, "06_blizzard_home", 1.0)
   cam_off()
   home_leg("mark:caird")
+  P("TK HOPS %d in all, %.1f frames to settle each, %d never settled, highest set-down %.2f m, %d spots passed for something built",
+    TK.hopN or 0, (TK.hopF or 0) / math.max(1, TK.hopN or 0), TK.hopMax or 0, TK.liftMax or 0, TK.hopBuilt or 0)
   until_(sr, function() stick_to(sr, A1, "mark:caird", 25, 4, mem, 1 / 60); return done("home") end, 90, "home")
   A1.R2.cmd = { drive = 0, steer = 0 }
   SP.wait_step("home", 10)

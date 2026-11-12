@@ -296,6 +296,89 @@ local function strip_y()
   return FOOT_Y
 end
 
+-- (storypolish, Ty 2026-11-11: "please fix weird UI overlapping") THE
+-- STRIP KEEPS CLEAR. The Flight Ops card (STRANDED, DOWN, bottom-left) can
+-- reach under the strip's left end where the screen is narrow in design
+-- units (1600×900 at Auto: 1384 wide, the card's right edge at 376, the
+-- strip's left at 372): the strip steps right of it. Pure: clearX(dw, w,
+-- card) with the card as { x, w, top } in design units → the strip's x
+-- offset from the centre (0 when there is room).
+CLEAR_GAP = 12
+function clearX(dw, w, card)
+  if not (card and card.w and card.w > 0) then return 0 end
+  local left = dw / 2 - w / 2
+  local need = card.x + card.w + CLEAR_GAP - left
+  if need <= 0 then return 0 end
+  -- (never off the right edge)
+  return math.min(need, math.max(0, dw / 2 - w / 2 - CLEAR_GAP))
+end
+-- The card's rect in design units, when it is up (2 Hz: a node lookup)
+local function card_du()
+  local n = find and find("Flight Ops")
+  local e = n and n.getcomponent and n:getcomponent("UiElement")
+  if not (n and e and e.visible ~= false and n.uiRect and camera and camera.screenSize) then return nil end
+  local x, y, w, h = n:uiRect()
+  local _, sh = camera.screenSize()
+  if not (x and w and w > 0 and sh and sh > 0) then return nil end
+  local st = ref("settings")
+  local k = ((st and st.designHeight and st.designHeight()) or 720) / sh
+  return { x = x * k, y = y * k, w = w * k, h = h * k }
+end
+local place_x, place_t = 0, -1
+local function strip_x()
+  local t = time or 0
+  if t - place_t < 0.5 and t >= place_t then return place_x end
+  place_t = t
+  local c = card_du()
+  local st = ref("settings")
+  local dh = (st and st.designHeight and st.designHeight()) or 720
+  local dw = dh
+  if camera and camera.screenSize then local sw, sh = camera.screenSize(); if sw and sh and sh > 0 then dw = dh * sw / sh end end
+  -- (only a card standing level with the strip: its top above the strip's foot)
+  if c and c.y + c.h < dh + strip_y() - 200 then c = nil end
+  place_x = clearX(dw, W, c)
+  return place_x
+end
+
+-- (storypolish) A menu or a panel the player has open owns that part of the
+-- screen: the strip steps out of the way (hidden, its line waits) while the
+-- right-click menu covers it, and while a console, a crate or a scenario
+-- card (BRIEFING, DEBRIEF, the fail screen) is up. Pure: overlaps(a, b) on
+-- { x, y, w, h } rects.
+function overlaps(a, b)
+  if not (a and b) then return false end
+  return a.x < b.x + b.w and b.x < a.x + a.w and a.y < b.y + b.h and b.y < a.y + a.h
+end
+local function plate_px()
+  local n = find and find("Ops Strip Plate")
+  if not (n and n.uiRect) then return nil end
+  local x, y, w, h = n:uiRect()
+  if not (x and w and w > 0) then return nil end
+  return { x = x, y = y, w = w, h = h }
+end
+local strip_px = nil      -- the plate's last rect on screen (pixels), kept while it hides
+local function covered()
+  local su = ref("scenario_ui")
+  local sw = su and su.showing and su.showing()
+  if sw == "brief" or sw == "debrief" or sw == "setback" then return true end
+  for _, k in ipairs({ "terminal", "loot_panel", "facility_menu", "ops_board" }) do
+    local s = ref(k)
+    if s and s.isOpen and s.isOpen() then return true end
+  end
+  local ip = ref("inventory_panel")
+  if ip and ip.open then return true end
+  local cm = ref("context_menu")
+  if cm and cm.isOpen and cm.isOpen() and cm.screenRect then
+    local x, y, w, h = cm.screenRect()
+    if x then
+      local r = strip_px or plate_px()
+      -- (no rect yet: a menu up at all keeps the strip down)
+      if not r or overlaps({ x = x - 6, y = y - 6, w = w + 12, h = h + 12 }, r) then return true end
+    end
+  end
+  return false
+end
+
 local function speaker(who) return string.upper(tostring(who or OPS)) .. "  ›" end
 
 local function describe()
@@ -324,7 +407,7 @@ local function describe()
           text = typed(c.text, c.n) .. (c.typed and "" or "▌") } } }
   end
   return {
-    { "button", key = "strip", style = "hud/instrument", pin = "bottom", y = strip_y(), w = W, h = "fit",
+    { "button", key = "strip", name = "Ops Strip Plate", style = "hud/instrument", pin = "bottom", x = drawn_x, y = strip_y(), w = W, h = "fit",
       dir = "column", pad = PAD, gap = 3, align = "stretch", opacity = a, focusable = false,
       tooltip = c and "Click (or Space in a briefing) to finish the line" or nil,
       onClicked = function() skipLine() end,
@@ -332,6 +415,7 @@ local function describe()
   }
 end
 
+drawn_x = 0
 local function redraw(node)
   if not (ui and ui.make) then return end
   if (not Q.cur and #Q.hist == 0) or (Q.cur == nil and Q.fade >= 1) then
@@ -342,6 +426,7 @@ local function redraw(node)
     if el and el.visible then el.visible = false end
     return
   end
+  drawn_x = strip_x()
   ui.make(node, describe())
   drawn = true
   line_node = Q.cur and find and find("Ops Strip Line") or nil
@@ -367,6 +452,8 @@ local function hidden()
   -- the dialogue plate says it (and logs it here); a cutscene hides the HUD
   local sg = ref("scenario_stage")
   if sg and sg.busy and sg.busy() then return true end
+  -- (storypolish) a menu or a panel over it
+  if covered() then return true end
   return false
 end
 
@@ -390,7 +477,15 @@ function update(node, dt)
   if ev == "start" then chirp("card") end
   if ev == "typed" then chirp("chime") end
   if el and not el.visible then el.visible = true end
-  if ev == "start" or ev == "end" or ev == "idle" or ev == "fade" or ev == "typed" or was_hidden or logged
+  -- (storypolish) where it stands, twice a second: the plate's rect for the
+  -- menu test, and a step right of the Flight Ops card when that comes up
+  local moved = false
+  if drawn and (time or 0) - (rect_t or -1) >= 0.5 then
+    rect_t = time or 0
+    strip_px = plate_px() or strip_px
+    moved = strip_x() ~= drawn_x
+  end
+  if ev == "start" or ev == "end" or ev == "idle" or ev == "fade" or ev == "typed" or was_hidden or logged or moved
      or (not drawn and (Q.cur or #Q.hist > 0)) then
     logged = false
     redraw(node)

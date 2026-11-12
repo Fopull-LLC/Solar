@@ -548,7 +548,7 @@ local function panel_open()
   local su = optional_ref("scenario_ui")
   if su and su.showing then
     local w = su.showing()
-    if w == "brief" or w == "debrief" then return true end
+    if w == "brief" or w == "debrief" or w == "setback" then return true end
   end
   return false
 end

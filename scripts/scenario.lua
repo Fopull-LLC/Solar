@@ -1215,7 +1215,11 @@ function stepModel(md, cur, rising, dt)
       elseif v0 < a.value and v >= a.value then crossed[#crossed + 1] = i end
     end
   end
-  return round_to(v, md.round), crossed
+  -- (storypolish) the unrounded value too: a caller that steps it again
+  -- from the rounded one loses every step under half a `round` (Beck's
+  -- 0.005 km a second at 1x, rounded to 0.01, never moved: he only came
+  -- home under warp; a slow fall's downward crossings never fired)
+  return round_to(v, md.round), crossed, v
 end
 
 -- ── FW-C: radio (PLAN §2 F3) ───────────────────────────────────────────────
@@ -1322,6 +1326,72 @@ for k in pairs(MISSION_KINDS) do
 end
 
 -- A default card line for a goal (an author's `label` wins).
+-- ── storypolish: THE FAIL SCREEN's words (Ty 2026-11-11: "dying needs its
+-- own death screen that explains why you failed the mission and died") ──────
+-- A fail entry may carry its own `title`, `text` and `hint`; whatever it
+-- leaves out comes from here, by kind, and for a death by who died and how
+-- (crew.lua's causes). `{who}`, `{clock}` (the story's clock, "41:07") and
+-- `{cause}` in any of them are filled in. Pure: failWords(f, ctx) with
+-- ctx = { who, cause, player (bool), clock (s) } → { title, text, cause, hint }.
+FAIL_WORDS = {
+  crew_dead = { title = "MISSION FAILED", text = "{who} is dead.", hint = "Nobody walks into what killed them twice. Keep the crew where the air, the heat and the ground are." },
+  core_melted = { title = "MELTDOWN", text = "{clock} in, the core melted. Nothing was cooling it.",
+                  hint = "Watch the fuel temperature, not the power. Trip it (SCRAM) early: a cold core costs an hour, a melted one costs the plant." },
+  room_unbreathable = { title = "MISSION FAILED", text = "The air went bad and stayed bad.",
+                        hint = "Find what is leaking (the console's AIR page names it) and shut the door between it and the crew before you fix it." },
+  craft_pressure = { title = "CABIN LOST", text = "The cabin lost its air with the crew in it.",
+                     hint = "Close the hatch to a breached module first, then patch it. Air you keep is worth more than air you make." },
+  suit_air = { title = "OUT OF AIR", text = "The suit ran dry.", hint = "Turn back at half a tank. Out is always further than back." },
+  craft_lost = { title = "CRAFT LOST", text = "The craft is gone.", hint = "Slower, and closer to the ground: a craft you can still steer is a craft you can still save." },
+  timer = { title = "OUT OF TIME", text = "Time ran out.", hint = "Do the thing that cannot wait first, and leave what can." },
+  fail = { title = "MISSION FAILED", text = "That went wrong.", hint = "Read the objective again: the card says what the step needs." },
+}
+-- the player's own death, by cause: what happened, in the second person
+DEATH_WORDS = {
+  oxygen = { text = "Your suit ran out of air.", hint = "Watch the O2 chip. Turn back at half a tank, and keep a spare bottle in your pack." },
+  impact = { text = "You hit the ground too fast.", hint = "Slow down before the ground comes up: a fall you can walk away from is a few metres, not a few dozen." },
+  cabin = { text = "The cabin failed around you.", hint = "Helmet on before you open anything, and close the hatch to a breached module." },
+  drowned = { text = "You drowned.", hint = "A suit is not a boat. Keep your head out of deep water." },
+  crushed = { text = "You were crushed.", hint = "Stand clear of what is falling or moving: give it room." },
+  heat = { text = "You burned up.", hint = "Come in shallower and slower: heat is speed you did not lose in time." },
+  lost = { text = "You went down with the craft.", hint = "Fly it slower, and get out while it can still be got out of." },
+  shot = { text = "You were shot.", hint = "Cover first, then the fight." },
+  explosion = { text = "You were caught in the blast.", hint = "Stand well back from what can burst, and clear out when it starts to go." },
+  radiation = { text = "The dose was too much.", hint = "Time, distance, shielding: less of the first, more of the other two. Your dosimeter is on the suit's chips." },
+  cold = { text = "The cold got you.", hint = "Heat first. A room with a heater running is worth more than anything you go out for." },
+}
+function clockWords(s)
+  if type(s) ~= "number" or s ~= s then return "--:--" end
+  s = math.max(0, math.floor(s + 0.5))
+  local h, m, sec = math.floor(s / 3600), math.floor(s / 60) % 60, s % 60
+  if h > 0 then return string.format("%d:%02d:%02d", h, m, sec) end
+  return string.format("%d:%02d", m, sec)
+end
+local CAUSE_WORDS = { impact = "impact", cabin = "the cabin failed", oxygen = "out of oxygen", drowned = "drowned", crushed = "crushed",
+                      heat = "burned up", lost = "lost with the craft", shot = "shot", explosion = "caught in a blast",
+                      radiation = "radiation sickness", cold = "the cold" }
+function failWords(f, ctx)
+  f = type(f) == "table" and f or { text = f }
+  ctx = ctx or {}
+  local kind = f.kind or "fail"
+  local d = FAIL_WORDS[kind] or FAIL_WORDS.fail
+  local death = kind == "crew_dead" and ctx.player and ctx.cause and DEATH_WORDS[ctx.cause] or nil
+  local title = f.title or (kind == "crew_dead" and ctx.player and "YOU DIED") or d.title
+  -- the line: the author's, else the cause's own, else the kind's
+  local text = f.text or (death and death.text) or d.text
+  local hint = f.hint or (death and death.hint) or d.hint
+  local cause = nil
+  if kind == "crew_dead" and ctx.who then
+    cause = tostring(ctx.who) .. (ctx.cause and ("  ·  " .. (CAUSE_WORDS[ctx.cause] or tostring(ctx.cause))) or "")
+  end
+  local function fill(s)
+    if type(s) ~= "string" then return s end
+    return (s:gsub("{who}", tostring(ctx.who or "A crew member")):gsub("{clock}", clockWords(ctx.clock))
+             :gsub("{cause}", tostring(ctx.cause and (CAUSE_WORDS[ctx.cause] or ctx.cause) or "")))
+  end
+  return { title = fill(title), text = fill(text), hint = fill(hint), cause = cause, kind = kind }
+end
+
 function goalLabel(g)
   if g.label then return g.label end
   local k = g.kind
@@ -1627,12 +1697,16 @@ BEATS = { ops = "string", say = "table", caption = "table", camera = "table", wa
           core = "table",
           -- SC-5 (scenarios/thirty_km): a crew member driving a craft, boarding or
           -- leaving one, a craft or a member put at a place, a craft's batteries
-          drive = "table", board = "table", place = "table", charge = "table" }
+          drive = "table", board = "table", place = "table", charge = "table",
+          -- storypolish: the queue holds until a goal holds (or secs run out)
+          ["until"] = "table", portrait = "string" }
 GESTURES = { stand_talk = true, point = true, wave = true, lean_console = true, kneel_work = true, sit_idle = true, lie_rest = true }
 POSES = { lie = true, sit = true, stand = true }
 -- FW-C cast fields (the rest is refused, so a typo is caught)
 CAST_FIELDS = { name = true, tag = true, color = true, crew = true, portrait = true, expression = true, look = true,
-                radio = true, delay = true, link = true, playable = true }
+                radio = true, delay = true, link = true, playable = true,
+                -- storypolish: a radio voice home at last (radio off once the var is true)
+                here = true, hereTag = true }
 TEACH = { overlay = true, catalogue = true, ghost = true, at = true, mark = true, marker = true }
 WEATHERS = { clear = true, overcast = true, rain = true, storm = true, thunderstorm = true, hail = true, snow = true,
              blizzard = true, dust = true, duststorm = true, ash = true, ashstorm = true, calm = true }
@@ -2222,6 +2296,12 @@ function validate(sc, ctx)
             end
           elseif SC5_BEATS[key] then
             SC5_BEATS[key](val, pk, E, check_ref, check_who)
+          elseif key == "until" then
+            -- (storypolish) a goal the queue waits on
+            if not KINDS[val.kind] then E(pk .. ".kind", "a goal kind (\"at\", \"var\", …)")
+            elseif KINDS[val.kind].fail then E(pk .. ".kind", "'" .. tostring(val.kind) .. "' is a fail condition") end
+            if val.secs ~= nil and (type(val.secs) ~= "number" or val.secs <= 0) then E(pk .. ".secs", "seconds, above 0") end
+            for _, f in ipairs({ "who", "at" }) do if type(val[f]) == "string" and val[f]:find(":") then check_ref(pk .. "." .. f, val[f]) end end
           end
         end
       end
@@ -2338,6 +2418,9 @@ function validate(sc, ctx)
   for i, f in ipairs(sc.fail or {}) do
     check_goal(string.format("fail[%d]", i), f, true)
     if type(f.text) ~= "string" then E(string.format("fail[%d].text", i), "the line the debrief shows") end
+    -- (storypolish) the fail screen's own words
+    if f.title ~= nil and type(f.title) ~= "string" then E(string.format("fail[%d].title", i), "the fail screen's title (\"YOU DIED\")") end
+    if f.hint ~= nil and type(f.hint) ~= "string" then E(string.format("fail[%d].hint", i), "one line: what to try next time") end
   end
   check_beats("on_fail", sc.on_fail)
   local S = sc.score
@@ -2373,6 +2456,8 @@ function validate(sc, ctx)
       if c.expression ~= nil and not (type(c.expression) == "string" and FACES[faceName(c.expression)]) then E(pc .. ".expression", "a face (neutral, tired, alarmed, focus, worried, happy…)") end
       if c.look ~= nil and type(c.look) ~= "number" then E(pc .. ".look", "a face seed (a number)") end
       if c.radio ~= nil and type(c.radio) ~= "boolean" then E(pc .. ".radio", "true or false") end
+      if c.here ~= nil and type(c.here) ~= "string" then E(pc .. ".here", "a variable's name: in the room (no radio) once it is true") end
+      if c.hereTag ~= nil and type(c.hereTag) ~= "string" then E(pc .. ".hereTag", "the tag once they are here") end
       if c.delay ~= nil and (type(c.delay) ~= "number" or c.delay < 0) then E(pc .. ".delay", "seconds, 0 or more") end
       if c.link ~= nil then
         local lk = parseRef(c.link)

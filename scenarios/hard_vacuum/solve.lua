@@ -181,6 +181,30 @@ function SOLVE(SP)
   P("HV hatch B: %s %s", tostring(okd), tostring(wd))
   talk_until(sr, function() return (save.get("scn.done") or {}).isolate ~= nil end, 30, "isolate")
   SP.wait_step("isolate", 5)
+  -- (storypolish) BENCH_STRS='("setback", "1")': a forced fail at the act 2
+  -- checkpoint (the scenario's own cabin fail, its words), the fail screen,
+  -- CONTINUE, and back at hatch B; the run ends there
+  if tostring(params.setback or "") == "1" then
+    local f = nil
+    for _, e in ipairs(sr.scenario().fail or {}) do if e.kind == "craft_pressure" then f = e end end
+    sr.fail(f and f.text or "Probe: a forced fail.", f)
+    wait(1.0)
+    SP.check("setback_card", sr.phaseNow() == "setback", "the fail is a setback (phase %s)", tostring(sr.phaseNow()))
+    SP.shot("a2_fail_fading", true)
+    local sb = sr.setbackNow and sr.setbackNow()
+    local to = sb and sb.to
+    SP.fail_screen(sr, "a2")
+    local sr2 = wait_for(function()
+      local s = findScript("scenario_run")
+      return s and s ~= sr and s.isActive and s.isActive() and s.phaseNow and s.phaseNow() == "running" and s
+    end, 300, "the restore")
+    local d = save.get("scn.done") or {}
+    SP.check("setback_restore", sr2 ~= nil and to ~= nil and d.listen ~= nil and d[to] == nil and (tonumber(save.get("scn.setbacks")) or 0) == 1,
+      "back at %s (%s): listen %s, %s open again %s, setbacks %s", tostring(to), tostring(sb and sb.act), tostring(d.listen ~= nil), tostring(to), tostring(to and d[to] == nil), tostring(save.get("scn.setbacks")))
+    wait(4.0)
+    SP.shot("a2_after_setback", true)
+    return
+  end
   air("isolated")
   SP.shot("a2_gauge_isolated", true)
   if pc.setCockpit then pc.setCockpit(false) end

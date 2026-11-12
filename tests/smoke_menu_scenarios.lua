@@ -48,6 +48,11 @@ end
 -- ── 1. THE OPS STRIP, pure ──────────────────────────────────────────────────
 local O = load("solar/scripts/ops_strip.lua")
 check(O.typed("Hello", 3) == "Hel" and O.typed("Hello", 0) == "" and O.typed("Hello", 99) == "Hello", "typed cuts by characters")
+-- (storypolish) the strip keeps clear of the Flight Ops card, and knows overlap
+check(O.clearX(1506, 640, { x = 16, w = 360 }) == 0, "1080p at Auto: room for the strip beside the card")
+check(math.abs(O.clearX(1384, 640, { x = 16, w = 360 }) - (16 + 360 + O.CLEAR_GAP - (692 - 320))) < 1e-6, "1600x900 at Auto: the strip steps right of the card: " .. O.clearX(1384, 640, { x = 16, w = 360 }))
+check(O.clearX(1384, 640, nil) == 0, "no card: centred")
+check(O.overlaps({ x = 0, y = 0, w = 10, h = 10 }, { x = 5, y = 5, w = 10, h = 10 }) and not O.overlaps({ x = 0, y = 0, w = 10, h = 10 }, { x = 10, y = 0, w = 5, h = 5 }), "overlaps")
 check(O.typed("N₂ and O₂", 2) == "N₂" and O.charCount("N₂") == 2, "typed never cuts inside a character")
 check(O.charsAt(0.5, 40) == 20 and O.charsAt(0, 40) == 0, "40 characters a second")
 do
@@ -159,6 +164,20 @@ do
   check(t[2] == L[2] and all, "and ends whole")
 end
 
+-- (storypolish) THE FAIL SCREEN, pure
+do
+  local b0, w0 = U.failFade(0)
+  local b1, w1 = U.failFade(U.FAIL_FADE)
+  local b2, w2 = U.failFade(10)
+  check(b0 == 0 and w0 == 0 and b1 > 0.9 and w1 > 0 and w1 < 1 and w2 == 1 and b2 > 0.9, "the fail screen fades to black, then the words come up")
+  local sb = { title = "YOU DIED", text = "Your suit ran out of air.", hint = "Turn back at half.", cause = "Imre Szabo  ·  out of oxygen",
+               act = "Act 3 · the seal", to = "gusts", clock = 2467 }
+  check(U.failKicker(sb) == "ACT 3 · THE SEAL   ·   41:07", "the kicker: " .. U.failKicker(sb))
+  check(U.failKeys(sb):find("continue from Act 3", 1, true) ~= nil and U.failKeys({}):find("beginning", 1, true) ~= nil, "the key line says where CONTINUE goes")
+  check(U.wantFor({ phase = "setback", setback = sb }, {}, {}) == "setback", "a setback with its words is the fail screen")
+  check(U.wantFor({ phase = "setback" }, {}, {}) == nil, "a setback with no words (an old runner) is not")
+end
+
 -- ── 4. SCENARIO UI, in a scene ──────────────────────────────────────────────
 do
   local paused, made, last, focused = false, 0, nil, nil
@@ -256,6 +275,32 @@ do
   by(last, "name", "Scenario Restart").onClicked()
   by(last, "name", "Scenario Menu").onClicked()
   check(calls.retry and calls.restart and calls.menu, "RETRY, RESTART and MENU reach the runner")
+  -- (storypolish) THE FAIL SCREEN: a setback waits for CONTINUE
+  check(listeners.setback ~= nil, "the fail screen claims the setback (the runner waits for CONTINUE)")
+  local wc = 100
+  env.app = { wallClock = function() return wc end }
+  run.continueSetback = function() calls.contSb = (calls.contSb or 0) + 1 end
+  paused = false
+  S.phase, S.outcome, S.version = "setback", nil, 11
+  S.setback = { title = "YOU DIED", text = "Your suit ran out of air.", hint = "Turn back at half a tank.", cause = "Imre Szabo  ·  out of oxygen",
+                act = "Act 3 · the seal", to = "gusts", clock = 2467 }
+  frames(20)
+  check(UI.showing() == "setback" and not paused, "the fail screen is up; the moment plays under the fade (world not held yet)")
+  check(by(last, "name", "Scenario Fail Title") == nil, "first only black")
+  presses.enter = true; frames(1); presses.enter = nil
+  check(calls.contSb == nil, "Enter does nothing before the words are up")
+  wc = 104; frames(20)
+  tx = texts(last)
+  check(paused and tx:find("YOU DIED") and tx:find("ran out of air") and tx:find("Turn back at half") and tx:find("OUT OF OXYGEN")
+    and tx:find("ACT 3 · THE SEAL"), "then the title, who and how, the line, the hint, where you go back to: " .. tx)
+  local mf = made
+  wc = 106; frames(30)
+  check(made == mf, "still once the fade is done: no re-describing")
+  check(calls.contSb == nil, "no auto-advance")
+  presses.enter = true; frames(1); presses.enter = nil
+  check(calls.contSb == 1, "Enter is CONTINUE")
+  by(last, "name", "Scenario Continue").onClicked()
+  check(calls.contSb == 2, "and so is a click")
 end
 -- outside the scenario slot: nothing at all
 do

@@ -66,6 +66,20 @@ function SP.wait_phase(want, tmo)
   return wait_for(function() local p = sr.phaseNow(); for _, w in ipairs(want) do if p == w then return p end end end, tmo or 60, "phase " .. table.concat(want, "|"))
 end
 
+-- (storypolish) THE FAIL SCREEN after a fail: up, with its words, not moving
+-- on by itself; then CONTINUE pressed as a player does (Enter)
+function SP.fail_screen(sr, tag)
+  wait(3.0)
+  local ui_ = findScript("scenario_ui")
+  local sb = sr.setbackNow and sr.setbackNow()
+  SP.check("fail_screen", ui_ and ui_.showing and ui_.showing() == "setback" and find("Scenario Continue") ~= nil and sb ~= nil,
+    "the fail screen is up: %s · %s · %s", tostring(sb and sb.title), tostring(sb and sb.text), tostring(sb and sb.hint))
+  SP.shot(tag .. "_fail_screen", true)
+  wait(4.0)
+  SP.check("fail_waits", sr.phaseNow() == "setback", "no auto-advance: still %s after 7 s", tostring(sr.phaseNow()))
+  input.simulate({ key = "enter", down = true }); yield(); yield(); input.simulate({ key = "enter", down = false })
+end
+
 -- built-in solvers ----------------------------------------------------------
 SOLVERS = SOLVERS or {}
 SOLVERS._probe = function()
@@ -180,6 +194,8 @@ SOLVERS._story = function()
   wait(1.0)
   SP.check("setback_card", sr.phaseNow() == "setback", "a fail is a setback (phase %s)", tostring(sr.phaseNow()))
   SP.shot("07_setback_card", true)
+  -- (storypolish) the fail screen: black, then the words; it waits for CONTINUE
+  SP.fail_screen(sr, "07")
   local sr2 = wait_for(function()
     local s = findScript("scenario_run")
     return s and s ~= sr and s.isActive and s.isActive() and s.phaseNow and s.phaseNow() == "running" and s

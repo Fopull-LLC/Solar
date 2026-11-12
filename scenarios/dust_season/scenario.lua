@@ -31,7 +31,9 @@ return {
 
   cast = {
     ops   = { name = "Marlow Ops", tag = "OPS · MET", color = { 0.55, 0.85, 1.0 }, radio = true },
-    beck  = { name = "Beck Oyelaran", tag = "BASE CHIEF · ON THE ROAD", crew = "Oyelaran", color = { 1.0, 0.72, 0.38 }, portrait = "auto", radio = true },
+    -- (storypolish) `here`: once he is through the lock, in the room with you, off the radio
+    beck  = { name = "Beck Oyelaran", tag = "BASE CHIEF · ON THE ROAD", crew = "Oyelaran", color = { 1.0, 0.72, 0.38 }, portrait = "auto", radio = true,
+              here = "beck_in", hereTag = "BASE CHIEF" },
     wren  = { name = "Dr Wren Achterberg", tag = "BOTANIST · GROW ROOM", crew = "Achterberg", color = { 0.62, 0.92, 0.70 }, portrait = "auto", expression = "worried" },
     me    = { name = "Imre Szabo", tag = "ENGINEER", crew = "Szabo", color = { 0.85, 0.88, 0.95 }, portrait = "auto" },
     log   = { name = "Base Log", tag = "TERMINAL · TARRANT-1", color = { 1.0, 0.70, 0.25 } },
@@ -42,7 +44,8 @@ return {
            grow_c = 18, grow_min = 18, trial_lost = false, batt_min = 0.71, unbreathable_s = 0,
            seal_choice = "", seal_blown = false, seal_fixed = false,
            beck_km = 8, beck_dark = 0, beck_parked = false, beck_home = false, beck_driving = false, act4 = false,
-           silver_ok = false, debriefed = false, handover = false, wren_pleaded = false },
+           silver_ok = false, debriefed = false, handover = false, wren_pleaded = false,
+           rover_staged = false, mast_lost = false, beck_in = false },
 
   -- METERS: the lowest the battery went until the front's core passed; the coldest
   -- the grow room got
@@ -146,6 +149,20 @@ return {
       camsw   = { at = "struct:Tarrant Flats", offset = { -24, 0, -34 } },
       camstore = { at = "struct:Tarrant Flats", offset = { 6.5, 0, 9.5 } },
       cammast = { at = "struct:Mast", offset = { -10, 0, -14 } },
+      -- (storypolish) Beck's road in: out of the north-west past the mast,
+      -- round the hab's west side, parked by the south airlock
+      roverfar = { at = "struct:Tarrant Flats", offset = { -26, 0, 62 } },
+      roverfar2 = { at = "struct:Tarrant Flats", offset = { -30, 0, 62 } },
+      roverway = { at = "struct:Tarrant Flats", offset = { -22, 0, 14 } },
+      beckpark = { at = "struct:Tarrant Flats", offset = { -12, 0, -13 } },
+      lockdoor = { at = "struct:Tarrant Flats", offset = { -2.2, 0, -2.2 } },   -- the inner airlock door, from the ops room
+      wrenwait = { at = "struct:Tarrant Flats", offset = { -3.9, 0, -0.2 } },
+      beckhome = { at = "struct:Tarrant Flats", offset = { -2.4, 0, -1.3 } },
+      imrewatch = { at = "struct:Tarrant Flats", offset = { -4.9, 0, 0.9 } },
+      camnw   = { at = "struct:Tarrant Flats", offset = { -14, 0, 9 } },
+      camlock = { at = "struct:Tarrant Flats", offset = { 3.5, 0, -12 } },
+      camops  = { at = "struct:Tarrant Flats", offset = { -1.6, 0, 2.2 } },
+      camfinal = { at = "struct:Tarrant Flats", offset = { 18, 0, -30 } },
     },
   },
 
@@ -283,15 +300,26 @@ return {
     },
     beck8 = { { say = { who = "beck", text = "Six k. Doing eighteen an hour on dead reckoning and faith." } } },
     beck5 = { { say = { who = "beck", text = "Five k. I'm on the mast light now. It's a smudge, but it's my smudge. Keep it on." } } },
-    beck2 = { { say = { who = "beck", text = "Two. I can see it. Red mast, white light on top. Put the kettle on, Imre." } } },
-    mast_dark = { { say = { who = "beck", text = "Imre, I've lost the mast. I've lost the mast and the radio's going funny. Is it dark?" } } },
+    beck2 = { { say = { who = "beck", text = "Two. I can see it. Red mast, white light on top. Put the kettle on, Imre." } },
+              { branch = { var = "rover_staged", is = false, run = "beck_stage" } } },
+    -- (storypolish) Beck's rover, out on the flats where the dust hides it,
+    -- and Beck in its driving seat: staged two kilometres out in the story,
+    -- a hundred metres out in the world
+    beck_stage = {
+      { var = { rover_staged = true } },
+      { spawn = { craft = { file = "dust_season/rover.json", name = "Tarrant Rover", where = { ground = "mark:roverfar", face = "mark:roverway", charge = 0.3 } } } },
+      { spawn = { crew = { name = "Oyelaran", role = "engineer", title = "Base chief", where = { body = "home", site = "far_flat", offset = { -2, 0, 0 } }, post = "mark:roverfar2" } } },
+      { ["until"] = { kind = "at", who = "craft:Tarrant Rover", at = "mark:roverfar", r = 40, secs = 40 } },
+      { ["until"] = { kind = "at", who = "crew:Oyelaran", at = "mark:roverfar", r = 30, secs = 30 } },
+      { board = { who = "Oyelaran", craft = "Tarrant Rover", seat = 7 } },
+    },
+    mast_dark = { { var = { mast_lost = true } }, { say = { who = "beck", text = "Imre, I've lost the mast. I've lost the mast and the radio's going funny. Is it dark?" } } },
     beck_parks = {
       { var = { beck_parked = true, beck_driving = false } },
       { say = { who = "beck", text = "I'm parking. I'm not driving into a crater I can't see. I'll come in at first light. Keep the heaters on for me, the ones you've got left." } },
     },
     beck_home = {
       { var = { beck_home = true, beck_driving = false } },
-      { say = { who = "beck", text = "I'm at the airlock. I'm at the actual airlock. Somebody open it before I cry." } },
     },
     front_thins = {
       { var = { front_passed = true, beck_driving = true } },
@@ -337,13 +365,88 @@ return {
       { say = { who = "wren", text = "The console says the store's holding pressure. The bottle rack's refilling it. You can come in now. You can come in now, Imre." } },
     },
     -- ── ACT 4 ──────────────────────────────────────────────────────────────
+    -- (storypolish, Ty 2026-11-11: "when the rover guy makes it back it
+    -- should play a cutscene of him driving up in the rover") BECK COMES
+    -- HOME: his real rover out of the dust, headlights first, past the mast
+    -- he steered by; it parks by the south airlock, he climbs down, walks to
+    -- the lock and cycles in while the two of you wait out the purge; then
+    -- face to face, and the mast still lit. Every move is a real one (the
+    -- crew driver, a walk through the lock); nobody is set down in view.
     beck_arrives = {
       { cutscene = true },
-      { spawn = { crew = { name = "Oyelaran", role = "engineer", title = "Base chief", where = { body = "home", site = "far_flat", offset = { -2, 0, 0 } }, post = "mark:beckin" } } },
-      { shot = { from = "mark:lockout", look = "mark:beckin", offset = { 2, 2.2, -3 }, toOffset = { 0, 1.4, 0 }, secs = 4, wait = false } },
-      { walk = { who = "Oyelaran", to = "mark:lockout", speed = 1.1, secs = 14, wait = true } },
-      { say = { who = "beck", text = "Eleven hours in a rover with a broken heater seat. I've never loved a mast more." } },
-      { walk = { who = "Oyelaran", to = "mark:beckops", speed = 1.0, secs = 2 } },
+      { warp = 1 },
+      { branch = { var = "rover_staged", is = false, run = "beck_stage" } },
+      { ["until"] = { kind = "at", who = "craft:Tarrant Rover", at = "mark:roverfar", r = 40, secs = 30 } },
+      { weather = { kind = "dust", secs = 25 } },
+      { state = { craft = "Tarrant Rover", uid = 14, st = { lit = true } } },
+      { state = { craft = "Tarrant Rover", uid = 15, st = { lit = true } } },
+      { drive = { craft = "Tarrant Rover", to = "mark:roverway", speed = 5, r = 8 } },
+      -- lights in the dust, low, beside the lit mast
+      { walk = { who = "Szabo", to = "mark:imrewatch", speed = 1.3, secs = 25, face = "mark:lockdoor" } },
+      { shot = { from = "mark:camnw", offset = { 0, 4.6, 0 }, look = "craft:Tarrant Rover", lookOffset = { 0, -0.4, 0 }, secs = 10, wait = false } },
+      { wait = 1.5 },
+      { say = { who = "wren", text = "Imre. There are lights out there. Two of them, low down, by the mast." } },
+      { say = { who = "beck", text = "That's me. I've had your mast for the last two k. Prettiest thing on this planet, and I've seen the planet." } },
+      { ["until"] = { kind = "at", who = "craft:Tarrant Rover", at = "mark:roverway", r = 12, secs = 45 } },
+      { drive = { craft = "Tarrant Rover", to = "mark:beckpark", speed = 3.5, r = 3 } },
+      -- alongside as it comes round the hab
+      { shot = { from = "craft:Tarrant Rover", offset = { 6, 2.2, -6 }, look = "craft:Tarrant Rover", lookOffset = { 0, -0.3, 0 }, secs = 7, wait = false } },
+      { say = { who = "beck", text = "Last hundred metres. Somebody stand by the lock. And the kettle. I wasn't joking about the kettle." } },
+      { shot = { from = "mark:camlock", offset = { 0, 1.6, 0 }, look = "craft:Tarrant Rover", lookOffset = { 0, -0.3, 0 }, secs = 9, wait = false } },
+      { ["until"] = { kind = "at", who = "craft:Tarrant Rover", at = "mark:beckpark", r = 4, secs = 45 } },
+      { drive = { craft = "Tarrant Rover", stop = true } },
+      { wait = 2.0 },
+      { state = { craft = "Tarrant Rover", uid = 14, st = { lit = false } } },
+      { state = { craft = "Tarrant Rover", uid = 15, st = { lit = false } } },
+      { wait = 1.0 },
+      -- he climbs down and walks to the lock
+      { board = { who = "Oyelaran", craft = false } },
+      { wait = 1.0 },
+      { walk = { who = "Oyelaran", to = "mark:lockout", speed = 1.1, secs = 70 } },
+      { shot = { from = "mark:camlock", offset = { 0, 1.5, 0 }, look = "crew:Oyelaran", lookOffset = { 0, 0.2, 0 }, secs = 12, wait = false } },
+      { ["until"] = { kind = "at", who = "crew:Oyelaran", at = "mark:lockout", r = 1.6, secs = 70 } },
+      -- through the lock: forty seconds of purge on a CO2 world, waited out inside
+      { walk = { who = "Oyelaran", to = "mark:lockin", speed = 1.0, secs = 20 } },
+      { walk = { who = "Achterberg", to = "mark:wrenwait", speed = 1.3, secs = 25, face = "mark:lockdoor" } },
+      { ["until"] = { kind = "at", who = "crew:Oyelaran", at = "mark:lockin", r = 0.9, secs = 20 } },
+      { shot = { from = "mark:camops", offset = { 0, 1.6, 0 }, look = "mark:lockdoor", lookOffset = { 0, 0.1, 0 }, secs = 30, wait = false } },
+      { sound = "audio/foley/hiss_seal.ogg" },
+      { wait = 1.0 },
+      { say = { who = "wren", text = "He's in the lock. The light's gone amber." } },
+      { say = { who = "me", text = "Give it a minute. It pumps the CO2 out before it lets him through." } },
+      { face = { who = "wren", emotion = "worried", secs = 20 } },
+      { say = { who = "wren", text = "I know how an airlock works, Imre. I'm just counting." } },
+      { sound = "audio/foley/hiss_seal.ogg" },
+      { wait = 1.5 },
+      { walk = { who = "Oyelaran", to = "mark:beckhome", speed = 0.9, secs = 25, face = "mark:wrenwait" } },
+      { ["until"] = { kind = "at", who = "crew:Oyelaran", at = "mark:beckhome", r = 0.8, secs = 25 } },
+      { portrait = "beck" },
+      -- face to face (he is in the room now: off the radio)
+      { var = { beck_in = true } },
+      { walk = { who = "Achterberg", to = "crew:Oyelaran", near = 1.15, speed = 0.9, secs = 8 } },
+      { look = { who = "Oyelaran", at = "crew:Achterberg" } },
+      { look = { who = "Achterberg", at = "crew:Oyelaran" } },
+      { shot = { from = "mark:camops", offset = { 0, 1.6, 0 }, look = "mark:beckhome", lookOffset = { 0, 0.35, 0 }, secs = 16, wait = false } },
+      { face = { who = "wren", emotion = "relief", secs = 14 } },
+      { face = { who = "beck", emotion = "tired", secs = 14 } },
+      { say = { who = "wren", text = "You look terrible.", with = "beck" } },
+      { gesture = { who = "Oyelaran", clip = "stand_talk", secs = 4 } },
+      { say = { who = "beck", text = "Eleven hours on a heater seat that only heats the left side. I'm medium rare down one leg.", with = "wren" } },
+      { face = { who = "wren", emotion = "smile", secs = 8 } },
+      { look = { who = "Oyelaran", at = "crew:Szabo" } },
+      { say = { who = "beck", text = "Imre." } },
+      { look = { who = "Oyelaran", at = false } },
+      { look = { who = "Achterberg", at = false } },
+      -- the quiet one: to the console, and the mast on its POWER page
+      { walk = { who = "Oyelaran", to = "mark:console", speed = 0.8, secs = 14, face = "mark:desk" } },
+      { shot = { from = "mark:camfinal", offset = { 0, 3.0, 0 }, to = "mark:camfinal", toOffset = { -2, 2.4, 3 }, look = "mark:center", lookOffset = { 0, 1.0, 0 }, secs = 14, wait = false } },
+      { wait = 3.0 },
+      { gesture = { who = "Oyelaran", clip = "lean_console" } },
+      { say = { who = "beck", text = "Mast's still lit." } },
+      { branch = { var = "mast_lost", is = false,
+        beats = { { say = { who = "wren", text = "It never went out." } } },
+        elseBeats = { { say = { who = "wren", text = "It went out once. You kept coming anyway." } } } } },
+      { wait = 2.5 },
       { var = { act4 = true } },
     },
     beck_waits = {
@@ -461,7 +564,9 @@ return {
     { id = "home", text = "Bring Beck home: keep the mast lit.", act = "Act 4 · the mast light", checkpoint = true,
       stage = { beats = { { weather = { kind = "dust", secs = 5 } }, { var = { storm = true, front_passed = true } } } },
       on_enter = { { branch = { var = "beck_parked", is = false, beats = { { var = { beck_driving = true } } } } },
-                   { weather = { kind = "overcast", secs = 180 } } },
+                   { weather = { kind = "overcast", secs = 180 } },
+                   -- (storypolish) the small hours: the front passed at 02:40
+                   { light = { time = -9, secs = 90 } } },
       mark = "mark:mast",
       goals = { { kind = "var", name = "act4", is = true, label = "Beck" } },
       hint = "Beck drives only while the mast is lit: its floodlights and the tower are on the grid. Keep the battery up (the POWER page) and the mast served. Time warp brings him in.",
@@ -474,8 +579,10 @@ return {
   },
 
   fail = {
-    { kind = "crew_dead", any = true, text = "Tarrant Flats lost one of its crew in the storm." },
-    { kind = "room_unbreathable", struct = "Tarrant Flats", room = "largest", secs = 90, text = "The hab's biggest room was unbreathable for ninety seconds." },
+    { kind = "crew_dead", any = true, text = "Tarrant Flats lost one of its crew in the storm.",
+      hint = "Helmet on before any outer door, and in and out by the airlock only: what is outside is carbon dioxide at minus fifty-five." },
+    { kind = "room_unbreathable", struct = "Tarrant Flats", room = "largest", secs = 90, text = "The hab's biggest room was unbreathable for ninety seconds.",
+      hint = "A blown seal vents one room. Keep the inner door between it and the rest of the hab shut, and fix it from the outside." },
   },
 
   score = {

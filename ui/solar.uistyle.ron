@@ -1370,6 +1370,23 @@
         base: ( fill: (0.0, 0.0, 0.0, 1.0) ),
         transition: ( duration: 0.0, ease: Linear ),
     ),
+    // THE FAIL SCREEN (scenario_ui.lua, storypolish): the picture goes to
+    // black, then a stencilled title in the warning colour (YOU DIED) or ink
+    // (MISSION FAILED), the story's line under it, and what to try.
+    "scn/failBlack": (
+        base: ( fill: (0.010, 0.010, 0.009, 1.0) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "scn/failTitle": (
+        base: ( text_color: (0.93, 0.36, 0.27, 1.0), text_size: 54.0, font: "stencil", tracking: 12.0,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.8), offset: (0.0, 3.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
+    "scn/failLine": (
+        base: ( text_color: "ink", text_size: 17.0, line_height: 1.4,
+                text_shadow: ( color: (0.0, 0.0, 0.0, 0.8), offset: (0.0, 1.0) ) ),
+        transition: ( duration: 0.0, ease: Linear ),
+    ),
     // A speaker with no picture: the role letter stencilled on the CRT glass.
     "scn/glyph": (
         base: ( text_color: "phosDim", text_size: 44.0, font: "stencil" ),

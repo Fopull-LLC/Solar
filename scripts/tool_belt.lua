@@ -545,7 +545,7 @@ local function on_foot(node)
   -- and its labels were drawn over the card (uxpolish 11-11)
   local su = ref("scenario_ui")
   local sw = su and su.showing and su.showing()
-  if sw == "brief" or sw == "debrief" then why("a scenario card is up") return false end
+  if sw == "brief" or sw == "debrief" or sw == "setback" then why("a scenario card is up") return false end
   -- The map owns the camera (and the camera's screen ray starts thousands of
   -- metres out): no aiming, no rays, no plant queries from there.
   local om = ref("orbit_map")

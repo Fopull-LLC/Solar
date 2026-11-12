@@ -139,7 +139,7 @@ return {
       { say = { who = "sunniva", with = "jonah", text = "I've got the trauma bag and the medical bottle. If Ray's leg is what Kit says it is, I'm splinting it on the ground in the dark." } },
       { gesture = { who = "Berge", clip = "stand_talk", secs = 10 } },
       { say = { who = "sunniva", with = "jonah", text = "And I'm going to be sick in that rover. I'm telling you now so you don't slow down for it." } },
-      { say = { who = "ops", text = "Jonah. The spare cell is in Asha-1's rear locker, sixteen kilos, and there's a third Repair Kit in there with it. You've got two on you." } },
+      { say = { who = "ops", text = "Jonah. Spare cell's in Asha-1's rear locker, sixteen kilos, with a third Repair Kit beside it. You've got two on your belt. Count them." } },
       { run = "route_q" },
     },
     route_q = {
@@ -151,7 +151,8 @@ return {
         }, default = 1, timeout = 45 } },
     },
     route_ask = {
-      { say = { who = "ops", text = "Ridge road's nineteen hundred metres, the beacon line most of the way, and eighteen degrees at the top. The flats are longer and flat, and once you're round the end the ridge is between us." } },
+      { say = { who = "ops", text = "Ridge road's nineteen hundred metres, the beacon line most of the way, and eighteen degrees at the top." } },
+      { say = { who = "ops", text = "The flats are longer and flat. Once you're round the end, the ridge is between us and you're on your own." } },
       { say = { who = "sunniva", with = "jonah", text = "Ray's suit has a number on it. I'd like to arrive with some of it left." } },
       { choice = { who = "ops", prompt = "Which way?",
         options = {
@@ -165,7 +166,8 @@ return {
       { run = "get_in" },
     },
     route_flats = {
-      { say = { who = "ops", text = "The flats. Two kilometres and change, nothing steeper than a car park. The beacons are on the ridge. I'll hear you down the flats until you turn the end of it, then the ridge has you." } },
+      { say = { who = "ops", text = "The flats. Two kilometres and change, nothing steeper than a car park." } },
+      { say = { who = "ops", text = "The beacons are on the ridge. I'll hear you down the flats until you turn the end of it. Then the ridge has you." } },
       { run = "get_in" },
     },
     get_in = {
@@ -207,7 +209,11 @@ return {
       { shot = { from = "mark:wreckcam", look = "craft:Asha-2", offset = { 0, 2.2, 0 }, toOffset = { 0, 0.8, 0 }, secs = 5, wait = false } },
       { caption = { "ASHA-2", "The far side of Barrow Ridge · 19:06", 4 } },
       { gesture = { who = "Nakamura", clip = "wave", secs = 3 } },
-      { say = { who = "kit", text = "You took the ridge. I'd have taken the ridge. Hello. I'm very glad you're here." } },
+      { face = { who = "kit", emotion = "relief", secs = 10 } },
+      -- (she knows which way you came: your lamps told her)
+      { branch = { var = "route", eq = "ridge",
+        beats = { { say = { who = "kit", text = "You came over the ridge. I'd have come over the ridge. Hello. I'm very glad you're here." } } },
+        elseBeats = { { say = { who = "kit", text = "You came round by the flats. Twenty minutes of nobody, and then your lamps. Hello. I'm very glad you're here." } } } } },
       { say = { who = "ray", text = "Hub bearing walked out of its seat. I pressed it back in with a rock. It's in. It's not in in any way you'd sign for." } },
       { shot = { orbit = "mark:raysit", dist = 4.5, height = 1.6, turn = 25, secs = 5, wait = false } },
       { say = { who = "ray", text = "And the cell cooked when we kept pulling on it in the cold. The case is split. Don't touch the green stuff." } },
@@ -219,7 +225,7 @@ return {
       { face = { who = "kit", emotion = "tired", secs = 30 } },
       { say = { who = "kit", with = "jonah", text = "Ray's leg is broken, whatever he tells you. His suit's at what it's at. I've been counting out loud for an hour and he's sick of me." } },
       { gesture = { who = "Nakamura", clip = "point", secs = 3 } },
-      { say = { who = "kit", with = "jonah", text = "Front left, that's the hub. The drum behind the seats is the cell. You'll want the cradle mended before the new one goes in, Ray says." } },
+      { say = { who = "kit", with = "jonah", text = "Front left's the hub. The drum behind the seats is the cell. Ray says mend the cradle before the new one goes in. Ray says it every four minutes." } },
       { look = { who = "kit", at = false } },
     },
     medic = {
@@ -245,6 +251,7 @@ return {
     },
     cell_fitted = {
       { hook = "fit_cell" },
+      { face = { who = "kit", emotion = "delight", secs = 10 } },
       { say = { who = "kit", text = "She's awake. Asha-2's got lights. Look at that. A hundred per cent." } },
       { say = { who = "ray", text = "Thirty-one kilometres on the old one. I want that written down somewhere." } },
     },
@@ -300,21 +307,36 @@ return {
     -- ── ACT 4 ──────────────────────────────────────────────────────────────
     resolution = {
       { cutscene = true },
+      -- (storypolish, Ty 11-11: endings that cut away) the convoy rolling in
+      -- first, seen from outside, lamps on the snow; then the base
+      { shot = { from = "craft:Asha-1", offset = { 6, 2.4, 7 }, to = "craft:Asha-1", toOffset = { 4, 3.2, 11 }, look = "craft:Asha-1", lookOffset = { 0, -0.4, 0 }, secs = 7 , wait = false } },
+      { say = { who = "ops", text = "I have your lamps. Both sets. Come in slow, the pad's glazed." } },
+      { wait = 2.0 },
       { weather = { kind = "snow", secs = 20 } },
       { shot = { orbit = "mark:caird", dist = 40, height = 14, turn = 40, start = 30, secs = 12, wait = false } },
       { caption = { "21:14", "Caird Base · four souls · the front going over", 5 } },
       { branch = { var = "route", eq = "ridge",
         beats = { { say = { who = "kit", text = "You came over the ridge in the dark. I watched your lamps all the way down. I'd have done the same, and I'd have been wrong to." } } },
         elseBeats = { { say = { who = "kit", text = "You came round by the flats. Nobody heard from you for twenty minutes. That was the longest twenty minutes I've had." } } } } },
+      { shot = { orbit = "craft:Asha-1", dist = 9, height = 2.6, turn = 40, start = 200, secs = 14, wait = false } },
       { branch = { var = "hub_failed", is = true,
         beats = { { say = { who = "ray", text = "The hub let go a second time. My bearing, my rock. Next time somebody else holds the rock." } } },
         elseBeats = { { say = { who = "ray", text = "The hub held. All the way. Somebody write down that a rock and an engineer did that." } } } } },
+      -- (his sister is three days out on the Ansel: Hard Vacuum)
+      { say = { who = "ray", text = "And nobody tells my sister. She's on a freighter three days from anywhere and she'd still hear about it by morning." } },
       { branch = { var = "plan", eq = "abandon",
         beats = { { say = { who = "kit", text = "Asha-2's out there with six weeks of cores in her. We'll go back for her in daylight. She'll keep." } } } } },
       { branch = { var = "kit_bottle", is = true,
         beats = { { say = { who = "sunniva", text = "Kit gave Ray her spare bottle on the flats. That's the only reason he's breathing. I want that in the log." } } },
         elseBeats = { { say = { who = "sunniva", text = "Ray's leg is broken in two places and he's asleep on my table. His suit had air in it the whole way. That's a good night." } } } } },
-      { say = { who = "ops", text = "Asha-1, Asha-2, Caird. Logged in at 21:14. Thirty-two kilometres on Asha-2's odometer, one rover I didn't think I'd see again. Go to bed. Ops out." } },
+      { say = { who = "sunniva", text = "And I wasn't sick. Put that in the log too, under the hub." } },
+      -- (Ops counts the rovers she can see: Asha-2 left on the far side by plan; else home, or still
+      -- short of the pad when the convoy's tail lags the `a2home` event: then she counts souls only)
+      { branch = { var = "plan", eq = "abandon",
+        beats = { { say = { who = "ops", text = "Asha-1, Caird. Logged in at 21:14. Four souls, one rover. The other one keeps till daylight. Go to bed. Ops out." } } },
+        elseBeats = { { branch = { var = "asha2_home", is = true,
+          beats = { { say = { who = "ops", text = "Asha-1, Asha-2, Caird. Logged in at 21:14. Thirty-two kilometres on Asha-2's odometer, one rover I didn't think I'd see again. Go to bed. Ops out." } } },
+          elseBeats = { { say = { who = "ops", text = "Asha-1, Caird. Logged in at 21:14. Four souls. Bring Asha-2 up to the pad lights and go to bed. Ops out." } } } } } } } },
       { var = { debriefed = true } },
     },
   },
@@ -478,7 +500,8 @@ return {
   },
 
   fail = {
-    { kind = "crew_dead", any = true, text = "Somebody didn't come back from the far side of Barrow Ridge." },
+    { kind = "crew_dead", any = true, text = "Somebody didn't come back from the far side of Barrow Ridge.",
+      hint = "Ray's suit only fills on Asha-1. Watch his number, and stop to swap seats before it is low, not when it is." },
   },
 
   score = {

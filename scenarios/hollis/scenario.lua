@@ -175,7 +175,8 @@ return {
       { say = { who = "teo", text = "That's it. That's the camp. It's smaller than in the photographs.", with = "me" } },
       { turn = { who = "Lindqvist", to = "mark:hab" } },
       { look = { who = "teo", at = "mark:hab" } },
-      { say = { who = "teo", text = "The public report is nine pages. Pump failure in the reactor shed, orderly evacuation, one fatality in a surface accident during the evacuation. My mother. Four of the nine pages are the claim's coordinates.", with = "me" } },
+      { say = { who = "teo", text = "The public report is nine pages. Pump failure in the shed, orderly evacuation, one fatality in a surface accident. My mother.", with = "me" } },
+      { say = { who = "teo", text = "Four of the nine pages are the claim's coordinates.", with = "me" } },
       { look = { who = "teo", at = "crew:Haddad" } },
       { turn = { who = "Lindqvist", to = "crew:Haddad" } },
       { choice = { who = "teo", prompt = "You've read it. Do you believe it?",
@@ -218,6 +219,9 @@ return {
       { walk = { who = "Lindqvist", to = "mark:teomess", face = "crew:Haddad", speed = 1.1, secs = 20 } },
       { look = { who = "teo", at = "crew:Haddad" } },
       { say = { who = "teo", text = "I wrote every month. She never got them. The relay was scheduled.", with = "me" } },
+      -- (the one smile he gets all night)
+      { face = { who = "teo", emotion = "smile", secs = 6 } },
+      { say = { who = "teo", text = "Best poker player on this rock. She taught me. I never once beat her, and I think I've just found out why.", with = "me" } },
       { face = { who = "teo", emotion = "worried", secs = 14 } },
       { say = { who = "teo", text = "Seven on site. The report says six. Five evacuated and her.", with = "me" } },
       { say = { who = "me", text = "Who's Mira Hollis?", with = "teo" } },
@@ -227,7 +231,7 @@ return {
     -- ── ACT 2 ──────────────────────────────────────────────────────────────
     power_brief = {
       { say = { who = "teo", text = "The other terminal's in the workshop. Dead. Everything's dead. Her log says the camp ran on that array and one battery bank." } },
-      { say = { who = "teo", text = "You're the one with the claim papers. The tower's west of the hab. Claim it and the camp's grid is yours." } },
+      { say = { who = "teo", text = "Hendry gave you the claim papers and gave me a clipboard. The tower's west of the hab. Claim it, and the grid's yours to switch on." } },
       { walk = { who = "Lindqvist", to = "mark:teotower", face = "mark:tower", speed = 1.1, secs = 30 } },
     },
     claimed = {
@@ -237,6 +241,7 @@ return {
     },
     grid_up = {
       { look = { who = "teo", at = "mark:shop" } },
+      { face = { who = "teo", emotion = "relief", secs = 8 } },
       { say = { who = "teo", text = "There. Her bench terminal just woke up. It's been waiting eleven years for somebody to close one switch." } },
       { look = { who = "teo", at = false } },
     },
@@ -274,7 +279,8 @@ return {
     -- ── ACT 3 ──────────────────────────────────────────────────────────────
     room_brief = {
       { look = { who = "teo", at = false } },
-      { say = { who = "teo", text = "Her personal core will be in the bunk room. She kept it in a shock case under her pillow, and she only ever opened it in a sealed room. She said the dust here eats contacts." } },
+      { say = { who = "teo", text = "Her personal core will be in the bunk room. She kept it in a shock case under her pillow." } },
+      { say = { who = "teo", text = "She only ever opened it in a sealed room. She said the dust here eats contacts. She said it about people too." } },
       { say = { who = "teo", text = "The bunk room has no roof. The tower can ship one in. Mind the allowance: Hendry gave you twenty-four hundred, and Hendry counts." } },
     },
     short = {
@@ -299,7 +305,10 @@ return {
         }, default = 2, timeout = 20 } },
     },
     room_shut = {
-      { say = { who = "teo", text = "Roof's on. Listen to the door. That's the seal, the wind's going straight through it." } },
+      { look = { who = "teo", at = "mark:bunkdoor" } },
+      { gesture = { who = "Lindqvist", clip = "point", secs = 4 } },
+      { say = { who = "teo", text = "Roof's on. Listen to the door. That's the seal, the wind's going straight through it.", look = "mark:bunkdoor" } },
+      { look = { who = "teo", at = false } },
     },
     breathing = {
       { say = { who = "teo", text = "That's a room again. First time in eleven years." } },
@@ -315,7 +324,8 @@ return {
       { say = { who = "teo", text = "Hendry evacuated somebody who didn't exist, and wrote down that my mother died in the evacuation. Five names and a fatality. Six names and a decision." } },
       { look = { who = "teo", at = "crew:Haddad" } },
       { say = { who = "brennan", text = "Ms Haddad. Your tower has logged three core reads to Hendry's relay. I'll assume you've had your reasons." } },
-      { say = { who = "brennan", text = "The fourth core is in the shed. Hendry's position is that it be sealed for counsel, unread, and shipped with you at first light. I'll put it plainly, because I think you'd prefer that: reading it doesn't help Mr Lindqvist, and it doesn't help you." } },
+      { say = { who = "brennan", text = "The fourth core is in the shed. Hendry's position is that it be sealed for counsel, unread, and shipped with you at first light." } },
+      { say = { who = "brennan", text = "I'll put it plainly, because I think you'd prefer that. Reading it doesn't help Mr Lindqvist, and it doesn't help you." } },
       { choice = { who = "brennan", prompt = "Will you seal the fourth core?",
         options = {
           { text = "Understood. It'll be sealed.", var = { choice4 = "seal" }, run = "b_seal" },
@@ -404,6 +414,9 @@ return {
       { shot = { orbit = "mark:center", dist = 42, height = 12, turn = 35, start = 150, secs = 12, wait = false } },
       { caption = { "FIRST LIGHT", "Lindqvist Camp · day 4,016", 5 } },
       { say = { who = "kestrel", text = "Haddad, Kestrel. Coming over the ridge. Ten minutes." } },
+      -- (Teodor on the ridge she watched from, the camp behind him, lit for the first time)
+      -- (a crew ref is the capsule's centre, a metre up: lift 0.4 puts the look at his face, not over his head)
+      { shot = { orbit = "crew:Lindqvist", dist = 4.2, height = 0.6, lift = 0.4, turn = 30, start = 25, secs = 16, wait = false } },
       { branch = { var = "core_c4", eq = "read",
         beats = {
           { say = { who = "teo", text = "I'm taking the cores to the agency inquiry. All four. Brennan can write to me. The relay is scheduled." } },
@@ -509,7 +522,8 @@ return {
   },
 
   fail = {
-    { kind = "crew_dead", any = true, text = "Lindqvist Camp has another name to add to its report." },
+    { kind = "crew_dead", any = true, text = "Lindqvist Camp has another name to add to its report.",
+      hint = "The camp killed people once already. Read what the cores say about a place before you walk into it." },
   },
 
   score = {

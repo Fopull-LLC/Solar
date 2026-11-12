@@ -43,7 +43,7 @@ return {
   },
   vars = { cold = 20 },
   -- failure = "checkpoint" (the default: a fail goes back to the last
-  -- checkpoint with a card) | "end" (a fail ends the run: a challenge)
+  -- checkpoint, through the fail screen) | "end" (a fail ends the run: a challenge)
   failure = "checkpoint",
 
   -- METERS follow a reading into a variable; MODELS are numbers with a law
@@ -134,8 +134,11 @@ return {
     --   { kind = "terminal", read = "note" } (a log card read)
   },
 
+  -- the fail screen's words (docs/scenarios.md §4.3): `text` the story's line,
+  -- optional `title` (else YOU DIED / the kind's) and `hint` (one thing to
+  -- try); {clock}, {who} and {cause} are filled in
   fail = {
-    { kind = "crew_dead", any = true, text = "Okafor did not make it." },
+    { kind = "crew_dead", any = true, text = "Okafor did not make it.", hint = "Keep the helmet on until the ROOMS overlay says breathable." },
   },
   on_fail = {},
 

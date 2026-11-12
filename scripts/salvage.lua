@@ -322,11 +322,18 @@ local function blocked()
   if fm and fm.isOpen and fm.isOpen() then return true end
   local ip = ref("inventory_panel")
   if ip and ip.open then return true end
+  -- (storypolish) a focused panel owns the screen: the pack markers are
+  -- screen draws over every UI layer (economy shots: SUIT PACK over the Ops
+  -- Board's contracts), so they stand down while one is open
+  for _, k in ipairs({ "ops_board", "terminal", "loot_panel", "context_menu" }) do
+    local s = ref(k)
+    if s and s.isOpen and s.isOpen() then return true end
+  end
   -- (uxpolish 11-11) a scenario's BRIEFING or DEBRIEF card: the crate's
   -- tag was drawn over its GO line
   local su = ref("scenario_ui")
   local sw = su and su.showing and su.showing()
-  if sw == "brief" or sw == "debrief" then return true end
+  if sw == "brief" or sw == "debrief" or sw == "setback" then return true end
   -- …and while a scenario line is on its plate (the tag sat on the plate)
   local sg = ref("scenario_stage")
   if sg and sg.current and sg.current() ~= nil then return true end
