@@ -984,8 +984,28 @@ local function astro_medkit(t, ctx)
   return medkit_rows(id, ctx)
 end
 
+-- ENTER (Ty 2026-11-11: "right-clicking and entering that hatch"): a crewed
+-- part with a hatch, for the crew on foot at it — on its ladder by the
+-- hatch, or within reach of a hatch at standing height (a craft with no
+-- ladder: within 2 m). Greyed with the reason otherwise ("grab the ladder
+-- first (E)"). vessel_controller.canEnter / enterHatch hold the rule.
+local function part_enter(t, ctx)
+  local v, rec = t.vessel, t.rec or {}
+  if not (v and v.canEnter and v.enterHatch and rec.kind == "crewed") then return {} end
+  local C = R(ctx, "crew")
+  local def = C and C.seatDef and C.seatDef(rec)
+  if not (def and def.hatch) then return {} end
+  if not (ctx and ctx.actor and ctx.actor.kind == "crew") then return {} end
+  if v.crewAboard then return {} end
+  return { { type = "action", id = "enter", group = "HATCH", label = "Enter", hint = "E",
+             enabled = function() return (v.canEnter(t.uid)) == true end,
+             why = function() local _, why = v.canEnter(t.uid); return why end,
+             act = function() return v.enterHatch(t.uid) end } }
+end
+
 -- ── registration ────────────────────────────────────────────────────────────
 PROVIDED = {
+  { "part", "enter", part_enter, 4 },
   { "astro", "task.cancel", task_cancel_astro, 5 },
   { "astro", "medkit", astro_medkit, 8 },
   { "member", "medkit", member_medkit, 10 },

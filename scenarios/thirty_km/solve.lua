@@ -264,6 +264,8 @@ local function get_out(sr)
   local ok, why = C.eva(id, { confirmed = true })
   P("TK EVA %s %s", tostring(ok), tostring(why))
   wait_for(function() local pw = findScript("planet_walker"); return pw and pw.onFoot == true end, 10, "on foot")
+  -- (a hatch up a ladder: out onto its top; off it, as the player steps down and off)
+  do local ct = findScript("crew_task"); if ct and ct.climbState then C.cancelTask(id, "stepped off"); wait(0.5) end end
   wait(0.8)
 end
 -- stand the player beside a part of a craft (its part frame, drawn pose)

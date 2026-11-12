@@ -306,8 +306,9 @@ do_release = function(id, why)
     local st = v and v.evaState and v.evaState() or nil
     in_space = not (st and st.surface)
   end
+  local climb = t.kind == "climb"
   -- the work done so far stays on the part for a while (a re-click resumes)
-  if why ~= "done" and v and v.partSt then
+  if why ~= "done" and v and v.partSt and not climb then
     v.partSt(t.uid, "rprog", { s = t.done or 0, t = clock() }, true)
   end
   local c = ref("crew")
@@ -318,11 +319,132 @@ do_release = function(id, why)
     local ep = ref("eva_pack")
     if ep and ep.holdFor and v then pcall(ep.holdFor, P("hold_secs"), v.node) end
   end
-  if why ~= "done" then
+  if climb then
+    -- (off the ladder: said only when something pulled them off it)
+    if why ~= "let go" and why ~= "stepped off" and why ~= "cancelled" then caption("off the ladder: " .. tostring(why)) end
+  elseif why ~= "done" then
     caption(why == "cancelled" and "repair cancelled — progress kept" or ("repair stopped: " .. tostring(why)))
   end
   log(string.format("crew %s: released (%s) — %.1f of %.1f s", tostring(id), tostring(why), t.done or 0, t.secs or 0))
   return true
+end
+
+-- Through the hatch: the hold ends with NO write to the body (the craft
+-- seats them this same tick: vessel_controller.boardNow). Releasing it would
+-- hand back a dynamic capsule at the hatch for the half second the seat's
+-- kinematic flag waits, inside the hull.
+function dropHold(id)
+  local h = H[id]
+  if not h then return false end
+  H[id] = nil
+  set_align(astro(), true)
+  local c = ref("crew")
+  if c and c.patch then c.patch(id, { task = false }) end
+  local pw = ref("planet_walker")
+  if pw and pw.holdEnd then pcall(pw.holdEnd) end
+  log(string.format("crew %s: off the %s, through the hatch", tostring(id), tostring(h.task.kind)))
+  return true
+end
+
+-- ── THE HATCH LADDER (Ty 2026-11-11: "they need ladders you grab onto
+-- first, then you climb near the hatch, then you are able to board") ──────
+-- A crewed part's ladder (crew.SEATS[..].ladder, placed for this craft by
+-- vessel_controller.ladderOf, in the part's frame) is a task of its own kind:
+-- the crew is HELD on it exactly as at a repair (kinematic, placed every tick
+-- in the part's frame, drawn where the craft is drawn), W / S move them up
+-- and down it (CLIMB speeds), SPACE lets go, and the hatch at the top is
+-- the craft's to open (vessel_controller's E / F, the menu's Enter). A
+-- landed craft's ladder reaches the ground: below the part's own rails the
+-- line runs on down the stack, out past whatever is under it (`ext`).
+--   task = { kind = "climb", craft, uid, s (the suit's centre height on the
+--            line, part frame), lo, hi (its ends), a, b (the rails' centre
+--            line, bottom and top), n (outward, unit), ext = { y0, step, off },
+--            ground (the craft is landed), hatch = {x,y,z} }
+CLIMB = { up = 0.8, down = 1.1, away = 0.40, grip = 0.45, foot = 0.95, top_drop = 0.35 }
+local climb_cmd = 0          -- -1 … 1, the keys (update)
+climbState = nil             -- published: { vid, uid, s, lo, hi, top, bottom, ground } while climbing
+
+-- pure: the ladder's centre line at part-frame height y, and how far out the
+-- hull under it pushes the suit there (0 on the part's own rails)
+function ladderAt(t, y)
+  local a, b = t.a, t.b
+  local k = (b.y - a.y) ~= 0 and (y - a.y) / (b.y - a.y) or 0
+  local off = 0
+  if k < 0 then
+    k = 0
+    local e = t.ext
+    if e and e.off and #e.off > 0 then
+      local i = math.floor((y - e.y0) / e.step) + 1
+      i = math.max(1, math.min(#e.off, i))
+      off = e.off[i] or 0
+    end
+  elseif k > 1 then k = 1 end
+  return a.x + (b.x - a.x) * k, y, a.z + (b.z - a.z) * k, off
+end
+-- pure: set the task's spot (suit centre) and face point for its height s
+function climbSpot(t)
+  local x, y, z, off = ladderAt(t, t.s)
+  local n = t.n
+  local away = CLIMB.away + off
+  t.sx, t.sy, t.sz = x + n.x * away, t.s, z + n.z * away
+  local gx, gy, gz = ladderAt(t, math.min(t.b.y, t.s + CLIMB.grip))
+  t.lx, t.ly, t.lz = gx, gy, gz
+  return t.sx, t.sy, t.sz
+end
+-- pure: the climbable range of the suit's centre on ladder L (lowest rail
+-- point a.y, or the ground's `ylow` when landed; the top rung less a drop)
+function climbRange(L)
+  local hi = L.b.y - CLIMB.top_drop
+  local lo = (L.ylow and (L.ylow + CLIMB.foot)) or (L.a.y + 0.2)
+  if lo > hi then lo = hi end
+  return lo, hi
+end
+-- pure: the board / grab rule (crew-and-items §3.5). o = { open, dSeat,
+-- dHatch, ladder (the part has one), climbing (on THIS part's ladder),
+-- needLadder (the hatch is out of a standing reach, or in space), dLadder }
+-- → "enter" | "grab" | nil, and why not
+HATCH = { seat = 3.4, reach = 1.4, grab = 1.2, fallback = 2.0 }
+function hatchRule(o)
+  if o.open then
+    if (o.dSeat or 1e9) <= HATCH.seat then return "enter" end
+    return nil, "walk up to the seat"
+  end
+  if o.climbing then
+    if (o.dHatch or 1e9) <= HATCH.reach then return "enter" end
+    return nil, "climb to the hatch"
+  end
+  if o.ladder then
+    if not o.needLadder and (o.dHatch or 1e9) <= HATCH.reach then return "enter" end
+    if (o.dLadder or 1e9) <= HATCH.grab then return "grab" end
+    return nil, o.needLadder and "grab the ladder by the hatch" or "walk up to the hatch"
+  end
+  if (o.dHatch or 1e9) <= HATCH.fallback then return "enter" end
+  return nil, "walk up to the hatch"
+end
+
+-- Onto part `uid`'s ladder of craft `v` (a controller handle), at the
+-- height nearest the crew (or `s`). → ok, why
+function startClimb(id, v, uid, s)
+  local c = ref("crew")
+  if not (c and v and v.ladderOf and v.node) then return false, "no ladder" end
+  local L = v.ladderOf(uid)
+  if not L then return false, "no ladder" end
+  local lo, hi = climbRange(L)
+  if s == nil then
+    local a = c.bodyOf and c.bodyOf(id) or astro()
+    if a and v.partLocalNow then
+      local ax, ay, az = a.x, a.y, a.z
+      if v.physPosOf then ax, ay, az = v.physPosOf(a) end
+      local _, ly = v.partLocalNow(uid, ax, ay, az)
+      s = ly
+    end
+  end
+  s = math.max(lo, math.min(hi, s or lo))
+  local t = { kind = "climb", craft = v.node.id, uid = uid, s = s, lo = lo, hi = hi,
+              a = L.a, b = L.b, n = L.n, ext = L.ext, ground = L.ylow ~= nil, hatch = L.hatch,
+              name = L.label, secs = 0, done = 0 }
+  climbSpot(t)
+  return c.setTask(id, t)
 end
 
 -- What finishes a job of each kind. WS3 may replace "repair" (effects,
@@ -363,6 +485,134 @@ function aimNow(id)
   local v = h and vessel(h.vid)
   if not (v and v.partPointNow) then return nil end
   return v.partPointNow(h.task.uid, h.task.lx, h.task.ly, h.task.lz, true)
+end
+
+-- THE DRAWN PLACE (Ty 11-11: "repairing in space makes me jitter around like
+-- crazy"). A kinematic body is drawn where its last tick put it: the engine
+-- does not interpolate it between ticks, while the craft it is held to glides
+-- on between them. At 144 Hz in a 753 m orbit the suit (and the view riding
+-- it) jumped 0.47-0.66 m against the pod every frame (boardevaprobe jitter,
+-- p95 661 mm); at 60 Hz, one frame a tick, it never showed. So each frame,
+-- before the view is placed (planet_camera calls this; lateUpdate does it
+-- too in a scene without one), the body goes to its spot as the craft is
+-- DRAWN this frame: partPointNow(.., true), the same frame command_seat puts
+-- an open seat's rider in. The tick's own placement (holdTick, the physics
+-- frame) is untouched, so the hold, the release and the velocities stay the
+-- simulation's.
+local placed_at = -1
+function beforeCamera()
+  if next(H) == nil or placed_at == time then return end
+  placed_at = time
+  local a = astro()
+  if not (a and a.valid ~= false) then return end
+  for _, h in pairs(H) do
+    if not h.pending and h.lx then
+      local v = vessel(h.vid)
+      local wx, wy, wz = nil, nil, nil
+      if v and v.partPointNow then wx, wy, wz = v.partPointNow(h.task.uid, h.lx, h.ly, h.lz, true) end
+      if wx then a.x, a.y, a.z = wx, wy, wz end
+    end
+  end
+end
+-- THE LADDER'S KEYS (the active member, while climbing): W / S up and down,
+-- SPACE lets go, E or F at the foot of a landed craft's ladder steps off
+-- (E / F at the hatch is the craft's: vessel_controller boards). Read in
+-- the frame, used in the tick.
+local function hatch_dist(t)
+  local hp = t.hatch
+  if not (hp and t.sx) then return 1e9 end
+  return len(t.sx - hp.x, t.sy - hp.y, t.sz - hp.z)
+end
+KEYS = { e = true, s = true }   -- (held at the start: a key already down is no press)
+function update(node, dt)
+  climb_cmd = 0
+  if next(H) == nil then climbState = nil return end
+  local c = ref("crew")
+  local id = c and c.activeId and c.activeId()
+  local h = id and H[id]
+  if not (h and h.task.kind == "climb" and not h.pending) then climbState = nil return end
+  local t = h.task
+  local pc = ref("planet_camera")
+  local free = not (pc and pc.freecam)
+  if free and input and input.key then
+    if input.key("w") then climb_cmd = climb_cmd + 1 end
+    if input.key("s") then climb_cmd = climb_cmd - 1 end
+  end
+  local dh = hatch_dist(t)
+  climbState = { vid = h.vid, uid = t.uid, s = t.s, lo = t.lo, hi = t.hi, top = t.s >= t.hi - 0.05,
+                 bottom = t.s <= t.lo + 0.05, ground = t.ground == true, dHatch = dh, atHatch = dh <= HATCH.reach }
+  -- (edges of the held keys, kept here: input.pressed read from this node
+  -- answered true for E and F every frame of a probe run)
+  local kE = input.key("e") or input.key("f")
+  local kS = input.key("space")
+  local eE, eS = kE and not KEYS.e, kS and not KEYS.s
+  KEYS.e, KEYS.s = kE, kS
+  if not free or (h.t or 0) < 0.3 then return end
+  if eS then
+    release(id, "let go")
+  elseif eE and climbState.bottom and t.ground and not climbState.atHatch then
+    release(id, "stepped off")
+  end
+end
+
+-- Hand over hand on the rails (in the camera pass, the drawn pose): each
+-- hand on its own rail at a rung height that steps with the climb.
+local function climb_hands(dt)
+  local c = ref("crew")
+  local id = c and c.activeId and c.activeId()
+  local h = id and H[id]
+  if not (h and h.task.kind == "climb") then return end
+  local a = astro()
+  local m = nil
+  for _, ch in ipairs(a and a.children and a:children() or {}) do if ch.name == "AstroModel" then m = ch end end
+  local an = m and m.animator and m:animator()
+  if not (an and an.reach) then return end
+  local v = vessel(h.vid)
+  local t = h.task
+  if not (v and v.partPointNow) then return end
+  local n = t.n
+  -- the rails: ±half across, the line's tangent across = up × n in the part frame
+  local tx, tz = -n.z, n.x
+  local half = (t.half or 0.13)
+  local step = 0.25
+  local base = t.s + CLIMB.grip
+  for k, side in ipairs({ 1, -1 }) do
+    -- one hand a rung above the other, swapping as the climb passes each rung
+    local ph = math.floor(base / step + (k == 1 and 0 or 0.5))
+    local gy = math.min(t.b.y, ph * step + (k == 1 and 0 or step * 0.5))
+    local x, y, z = ladderAt(t, gy)
+    x, z = x + tx * half * side, z + tz * half * side
+    local wx, wy, wz = v.partPointNow(t.uid, x, y, z, true)
+    if wx then
+      pcall(an.reach, an, side == 1 and "Hand.Left" or "Hand.Right", vec3(wx, wy, wz), { weight = 1.0 })
+    end
+  end
+end
+
+function lateUpdate(node, dt)
+  beforeCamera()
+  if climbState then pcall(climb_hands, dt) end
+end
+
+-- Where the world's queries answer for the held body against where it is
+-- drawn (the craft's physics frame − its drawn frame, at the spot), for a
+-- sweep from a drawn point that must meet the craft's colliders (the
+-- camera's wall clip). → dx, dy, dz | nil (nobody held)
+function queryShift()
+  for _, h in pairs(H) do
+    if h.lx and not h.pending then
+      local v = vessel(h.vid)
+      if v and v.partPointNow then
+        local px, py, pz = v.partPointNow(h.task.uid, h.lx, h.ly, h.lz)
+        local dx, dy, dz = v.partPointNow(h.task.uid, h.lx, h.ly, h.lz, true)
+        if px and dx then
+          local sx, sy, sz = px - dx, py - dy, pz - dz
+          if sx * sx + sy * sy + sz * sz < 2500 then return sx, sy, sz end
+        end
+      end
+    end
+  end
+  return nil
 end
 
 local resume_t = -10
@@ -437,6 +687,14 @@ function holdTick(dt)
     elseif a then
       local err = nil
       h.t = h.t + dt
+      if t.kind == "climb" then
+        -- up or down the ladder by the keys (crew_task.update reads them)
+        local mv = climb_cmd
+        if mv ~= 0 then
+          t.s = math.max(t.lo, math.min(t.hi, t.s + mv * (mv > 0 and CLIMB.up or CLIMB.down) * dt))
+        end
+        climbSpot(t)
+      end
       local k = math.min(1, h.t / math.max(1e-3, P("slide")))
       k = k * k * (3 - 2 * k)
       local lx = h.s0x + (t.sx - h.s0x) * k
@@ -458,8 +716,8 @@ function holdTick(dt)
         if h.space then face_work(a, h, v, wx, wy, wz, dt) end
         lastTick = { id = id, t = h.t, k = k, err = err }
       end
-      t.done = math.min(t.secs, (t.done or 0) + dt)
-      if t.done >= t.secs then
+      if t.kind ~= "climb" then t.done = math.min(t.secs, (t.done or 0) + dt) end
+      if t.kind ~= "climb" and t.done >= t.secs then
         local fin = onDone[t.kind]
         if fin then pcall(fin, id, t, v) end
         release(id, "done")

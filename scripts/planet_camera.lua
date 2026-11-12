@@ -480,7 +480,7 @@ end
 
 -- Panels that may be absent from a scene: asked quietly, a missing one again
 -- every 2 s.
-POINTER_PANELS = { "crew_roster_panel", "fab_panel", "groups_panel", "peripheral_panel", "tracking_station" }
+POINTER_PANELS = { "crew_roster_panel", "fab_panel", "groups_panel", "peripheral_panel", "tracking_station", "exit_picker" }
 local opt_refs, opt_miss = {}, {}
 local function optional_ref(kind)
   local r = opt_refs[kind]
@@ -1472,7 +1472,7 @@ local function place_camera(node, dt)
   -- tunnel you have bored.
   -- The roof sets a CEILING on the zoom, eased, rather than a zoom: your own
   -- scroll setting is untouched and comes back when you step outside.
-  local roof = (not piloting) and raycast(target.pos, up, params.ceiling_probe, target) or nil
+  local roof = (not piloting) and not HELD_S and raycast(target.pos, up, params.ceiling_probe, target) or nil
   local cap = roof and params.indoor_distance or maxd
   if room_cap == nil or piloting then room_cap = cap end
   room_cap = room_cap + (cap - room_cap) * (1 - math.exp(-4 * dt))
@@ -1534,7 +1534,7 @@ local function place_camera(node, dt)
     -- the engine 20+ ms each — measured on the home-world arrival frame)
     local gm = lift > 0.05 and script_ref("game_manager") or nil
     if lift > 0.05 and not (gm and gm.loading) then
-      local roofhit = spherecast(target.pos, up, 0.25, lift, target)
+      local roofhit = (not HELD_S) and spherecast(target.pos, up, 0.25, lift, target) or nil
       if roofhit and roofhit.distance and not (roofhit.node and roofhit.node.id == target.id) then
         head = head - up * (lift - math.max(0.0, roofhit.distance - 0.05))
       end
@@ -1573,6 +1573,7 @@ local function place_camera(node, dt)
   local want = 0.0
   if not piloting and not firstPerson then
     want = (time - shoulder_t < 1.5) and (params.shoulder or 0) or (params.shoulder_idle or 0)
+    if HELD_S then want = 0.0 end   -- (held at a job: the view stays square behind; see HELD_S)
     -- (zoomed far out the offset means nothing; zoomed right in it would put
     -- the crew at the screen's edge)
     want = want * math.clamp((room_d - params.min_distance) / 2.0, 0.0, 1.0)
@@ -1594,7 +1595,12 @@ local function place_camera(node, dt)
   if piloting and not firstPerson then
     back, hull_floor, fwd = chase_clip(vessel, head, up, room_d, dt)
   else
-    local hit = (not firstPerson) and spherecast(head, -fwd, 0.25, room_d + 0.3, target) or nil
+    -- (held on a craft, crew_task: the craft's colliders answer at its TICK
+    -- pose, a tick's travel from where it is drawn, so the sweep starts that
+    -- far over too; from the drawn head it hit the hull at a distance that
+    -- swung 5-137 mm frame to frame against the pod in orbit at 144 Hz)
+    local o = HELD_S and (head + HELD_S) or head
+    local hit = (not firstPerson) and spherecast(o, -fwd, 0.25, room_d + 0.3, target) or nil
     -- The wall clip must see WALLS only. The astronaut is not a wall.
     if hit and hit.node then
       local astro = find("Astronaut")
@@ -2181,6 +2187,26 @@ function lateUpdate(node, dt)
   elseif hold_tick(node) then
     -- a death: the view holds on the place
   else
+    -- A body held kinematic on a craft (a repair, a hatch ladder) is put at
+    -- its spot as the craft is DRAWN this frame before the view follows it:
+    -- placed only at ticks, it stood still between them while the craft
+    -- glided on, a tick's travel (1.1 m in a low orbit) of shake at 144 Hz
+    -- (crew_task.beforeCamera; boardevaprobe jitter).
+    if not (ct_ref and ct_ref.valid) and (time or 0) - (ct_miss or -10) > 2.0 then
+      ct_ref = findScript("crew_task", { quiet = true })
+      if not ct_ref then ct_miss = time or 0 end
+    end
+    if ct_ref and ct_ref.valid and ct_ref.beforeCamera then ct_ref.beforeCamera() end
+    -- …and the world's queries answer for that craft at its TICK pose, a
+    -- tick's travel from where it is drawn, so the distances the on-foot sweeps
+    -- found swung tick by tick (5-137 mm a frame measured): held, the wall clip
+    -- starts that far over (HELD_S), and the shoulder offset and the roof stand
+    -- down (a job holds the body still against the craft)
+    HELD_S = nil
+    if ct_ref and ct_ref.valid and ct_ref.queryShift then
+      local sx, sy, sz = ct_ref.queryShift()
+      if sx then HELD_S = vec3(sx, sy, sz) end
+    end
     place_camera(node, dt)
     -- A shouldered optic turns the placed view a hair (surveyor.lua: the
     -- breath, the arms' wander, a shot's kick). Asked here so it is always

@@ -4,7 +4,8 @@
 -- Thrust is honest: applied AT each engine's blueprint offset through the
 -- compound physics — an off-CoM engine torques the stack, exactly as built.
 --
---   F        board / exit the pod (walk to the hatch ring to re-board)
+--   F        step out (two or more aboard: who, exit_picker); on foot E or F
+--            grabs the hatch ladder and goes in by the hatch (footTick)
 --   SPACE    clamped → release the launch clamps; flying → next stage
 --   SHIFT / CTRL   throttle up / down    X  cut    Z  full
 --   W/S      pitch (S pulls the nose UP)   A/D  yaw   Q/E  roll
@@ -2981,7 +2982,8 @@ function groupKeysTick(node, info)
     { id = "gear", key = "g" }, { id = "deploy", key = "u" }, { id = "rcs", key = "r" }, { id = "sas", key = "t" } }
   for _, g in ipairs(list) do
     local k = g.key
-    local skip = (DIGIT[k] and (dock.map or alt)) or (k == "backspace" and dock.plan)
+    -- (the exit picker's rows are numbered: its digits are not the groups')
+    local skip = (DIGIT[k] and (dock.map or alt or pickerOpen())) or (k == "backspace" and dock.plan)
     if not skip and input.pressed(k) then activateGroup(g.id) end
     -- Actuator setpoints ride a HELD key: angle, extension, rotor speed.
     if not skip and E and input.key(k) and elec.control ~= false then holdGroupAxes(g.id, node) end
@@ -6018,7 +6020,8 @@ function evaNow(in_tick)
   end
   local info = assembly.info(node)
   local ex, ey, ez = nil, nil, nil
-  if stationUid and not podSeat then ex, ey, ez = hatchSpot(stationUid) end
+  local exitUid = (stationUid and not podSeat) and stationUid or nil
+  if exitUid then ex, ey, ez = hatchSpot(stationUid, -1) end
   if not ex then
     local px, py, pz = pod_world(node, info)
     ex, ey, ez = exitSpot(node, info, px, py, pz)
@@ -6044,7 +6047,27 @@ function evaNow(in_tick)
   if c and c.noteAfoot then pcall(c.noteAfoot, c.activeId()) end
   local ep = findScript("eva_pack")
   if ep and ep.evaStarted then pcall(ep.evaStarted, node) end
+  -- out onto the ladder, not into the air (Ty 11-11): at the top of the
+  -- hatch's ladder when it is out of a standing reach, and in space on the
+  -- hatch's handrail (crew_task's climb: E / F back in, SPACE lets go)
+  if exitUid then climbOut(node, exitUid, c and c.activeId and c.activeId()) end
   return true
+end
+
+-- Onto part `uid`'s ladder at its top as the crew steps out of its hatch.
+function climbOut(node, uid, id)
+  local L = id and ladderOf(uid)
+  if not L then return false end
+  if L.ylow and (L.hatch.y - L.ylow) <= 1.7 then return false end   -- a hatch at standing height: out onto the ground
+  local ct = ctaskNow()
+  if not (ct and ct.startClimb) then return false end
+  local me = nil
+  for _, s in ipairs(findScripts("vessel_controller")) do
+    if s.node and s.node.valid and s.node.id == node.id then me = s break end
+  end
+  local ok, why = ct.startClimb(id, me, uid, 1e9)
+  if not ok then log("vessel: out of the hatch but not onto its ladder: " .. tostring(why)) end
+  return ok
 end
 
 -- THE FIRST MOMENTS OUT, off the ground: for 0.6 s after evaNow the crew
@@ -6079,6 +6102,35 @@ function evaGuard(node, info)
         rel, g.t1 - (time or 0)))
     end
   end
+end
+
+-- THE EXIT PICKER (scripts/exit_picker.lua; Ty 2026-11-11: "if you press F
+-- to unboard, it asks who you want to unboard"). Globals: fixedUpdate is at
+-- its upvalue ceiling.
+PICKER = { ref = nil, t = -10 }
+function pickerNow()
+  local p = PICKER.ref
+  if not (p and p.valid ~= false) then
+    p = nil
+    if (time or 0) - PICKER.t > 2.0 then
+      PICKER.t = time or 0
+      p = findScript("exit_picker", { quiet = true })
+      PICKER.ref = p
+    end
+  end
+  return p
+end
+function pickerOpen()
+  local p = pickerNow()
+  return p ~= nil and p.isOpen ~= nil and p.isOpen() == true
+end
+-- Open it for this craft. → true when it opened (two or more aboard)
+function pickerAsk(node)
+  local p = pickerNow()
+  if not (p and p.openFor and node and node.valid) then return false end
+  local ok, r = pcall(p.openFor, node.id)
+  log(string.format("vessel: F with %d aboard: the exit picker %s", crewCount(), (ok and r) and "opened" or ("did not open (" .. tostring(r) .. ")")))
+  return ok and r == true
 end
 
 -- F while flying: ask crew.lua whether the crew may go (refused with the
@@ -6267,11 +6319,37 @@ function hatchWorld(uid)
 end
 -- A clear capsule-sized spot outside part `uid`'s hatch (§3.5: 0.9 m out
 -- along its normal, 0.4 m up), else today's exitSpot round the hull.
-function hatchSpot(uid)
+function hatchSpot(uid, k)
   local node = dock.node
   if destroyed or not (node and node.valid) then return nil end
   local info = assembly.info(node)
+  -- A landed craft whose hatch is up its ladder: out at the ladder's FOOT,
+  -- standing on the ground (a crew member sent out who waits there; the one
+  -- you control climbs down it: climbOut). `k`: the k-th sent out at once
+  -- stands a little further along.
+  local L = ladderOf(uid)
+  if L and (k == nil or k >= 1) and L.ylow and (L.hatch.y - L.ylow) > 1.7 then
+    local ct = ctaskNow()
+    if ct and ct.climbSpot then
+      local t = { a = L.a, b = L.b, n = L.n, ext = L.ext, s = L.ylow + 1.0 }
+      local sx, sy, sz = ct.climbSpot(t)
+      local side = ((k or 1) - 1) * 0.75
+      sx, sz = sx + L.n.x * 0.35 - L.n.z * side, sz + L.n.z * 0.35 + L.n.x * side
+      local wx, wy, wz = partPointNow(uid, sx, sy, sz)
+      if wx then dock.lastExit = "ladder" return wx, wy, wz end
+    end
+  end
   local hx, hy, hz, nx, ny, nz = hatchWorld(uid)
+  if hx and k and k > 1 then
+    -- (side by side along the hull, each a body's width further)
+    local ux, uy, uz = radial_up(hx, hy, hz)
+    local tx, ty, tz = ny * uz - nz * uy, nz * ux - nx * uz, nx * uy - ny * ux
+    local tl = math.sqrt(tx * tx + ty * ty + tz * tz)
+    if tl > 1e-3 then
+      local s = (k - 1) * 0.8 / tl
+      hx, hy, hz = hx + tx * s, hy + ty * s, hz + tz * s
+    end
+  end
   if hx then
     local ux, uy, uz = radial_up(hx, hy, hz)
     -- off the ground the suit must float clear of every hull, feet and
@@ -7568,18 +7646,52 @@ end
 -- spine). Into a pod they vanish; into an open COMMAND SEAT they stay in view,
 -- seated (podSeat; scripts/command_seat.lua poses them). Global so a probe or a
 -- future button can do what F does. Returns true if they boarded.
-function boardNow(node, info)
+function boardNow(node, info, uid)
   node = node or dock.node
   if destroyed or not (node and node.valid) then return false end
   info = info or assembly.info(node)
   if not astronaut or not astronaut.valid then astronaut = find("Astronaut") end
-  if not (podCrewed and not crewAboard and astronaut and crewOnFoot(node.id)) then return false end
+  -- (on this craft's ladder the crew is held by it: crewOnFoot says no)
+  local ct = ctaskNow()
+  local cs = ct and ct.climbState
+  local climbing = cs ~= nil and cs.vid == node.id
+  if not (podCrewed and not crewAboard and astronaut and (climbing or crewOnFoot(node.id))) then return false end
   -- Held at a job (a repair): F doesn't pull them off it; cancel does.
   local cl = findScript("crew")
-  if cl and cl.held and cl.held() then return false end
-  -- The crew position NEAREST them: the seat they walked up to, or the pod.
+  if cl and cl.held and cl.held() and not climbing then return false end
   local d, st = board_dist(node, astronaut, info)
-  if d > params.board_range then return false end
+  if uid then
+    -- the crew position the choice named (boardChoice: the hatch they are at)
+    st = nil
+    for _, s in ipairs(crewSeats) do if s.uid == uid then st = s end end
+    if not st then return false end
+  else
+    -- (a script's or a probe's board, with no choice made: an open seat in
+    -- today's reach, a hatch within 2 m: crew_task.HATCH.fallback)
+    if d > params.board_range then return false end
+    if st and not st.seat then
+      -- the nearest hatch within reach names the part (a craft with three
+      -- cans: the one whose hatch they are at). A hatch that can't be placed:
+      -- today's reach rule alone.
+      local okp, ax, ay, az = pcall(physPosOf, astronaut)
+      local reach = (ct and ct.HATCH and ct.HATCH.fallback) or 2.0
+      local best, bd2, any = nil, nil, false
+      for _, s in ipairs(crewSeats) do
+        if not s.seat then
+          local okh, hx, hy, hz = pcall(hatchWorld, s.uid)
+          if okh and hx and okp and ax then
+            any = true
+            local dh = math.sqrt((ax - hx) ^ 2 + (ay - hy) ^ 2 + (az - hz) ^ 2)
+            if dh <= reach and (not bd2 or dh < bd2) then best, bd2 = s, dh end
+          end
+        end
+      end
+      if best then st = best elseif any then return false end
+    end
+  end
+  -- off the ladder and through the hatch: the hold ends with no write to the
+  -- body (the seat takes it this tick)
+  if climbing and cl and cl.activeId and ct.dropHold then ct.dropHold(cl.activeId()) end
   -- ...into a free slot of that part, else the nearest free one aboard (§3.5)
   local clb = crewLibNow()
   local bid = clb and clb.activeId and clb.activeId()
@@ -7745,6 +7857,267 @@ function hullReach()
     if b and b.cx + b.ex > r then r = b.cx + b.ex end
   end
   return r
+end
+
+-- ── THE HATCH AND ITS LADDER (Ty 2026-11-11: "they need ladders you grab
+-- onto first, then you climb near the hatch, then you are able to board
+-- with an interaction prompt or right-clicking and entering that hatch";
+-- docs/crew-and-items.md §3.5) ─────────────────────────────────────────────
+-- A crewed part's ladder (crew.SEATS[id].ladder: its rails' centre line and
+-- outward normal, the numbers tools/gen_part_meshes.py built the rails from)
+-- in that part's frame (partFrameNow: the craft's axes, the part's origin),
+-- turned with the part as the VAB placed it. On a landed craft it reaches
+-- the ground: `ylow` is the craft's foot, and `ext` how far out from the
+-- line the hull under the rails pushes a climber, every 0.3 m.
+-- → { a, b, n, half, hatch, label, ylow?, ext? } | nil. Globals: the main
+-- chunk is at its local ceiling.
+-- (kept a second, per part: a 1,000-part craft walks its boxes once)
+LADC = {}
+function ladderOf(uid)
+  local c = crewLibNow()
+  local d = uid and bp_by_uid[uid]
+  local def = c and d and c.seatDef(d)
+  local L0 = def and def.ladder
+  if not (L0 and seatAlive(uid)) then return nil end
+  local k = LADC[uid]
+  local now = time or 0
+  if k and k.gen == integ.gen and k.bp == bp_by_uid and now - k.t < 1.0 then return k.L end
+  local L = ladder_build(uid, d, def, L0)
+  LADC[uid] = { t = now, gen = integ.gen, bp = bp_by_uid, L = L }
+  return L
+end
+function ladder_build(uid, d, def, L0)
+  local Xx, Xy, Xz = part_axis_x(d)
+  local Yx, Yy, Yz = part_axis(d)
+  local Zx, Zy, Zz = Xy * Yz - Xz * Yy, Xz * Yx - Xx * Yz, Xx * Yy - Xy * Yx
+  local function P(p)
+    return { x = Xx * p.x + Yx * p.y + Zx * p.z, y = Xy * p.x + Yy * p.y + Zy * p.z, z = Xz * p.x + Yz * p.y + Zz * p.z }
+  end
+  local a, b, n = P(L0.a), P(L0.b), P(L0.n)
+  if a.y > b.y then a, b = b, a end
+  local nl = math.sqrt(n.x * n.x + n.z * n.z)
+  if nl < 1e-3 then return nil end
+  n = { x = n.x / nl, y = 0, z = n.z / nl }
+  local h = def.hatch and P(def.hatch) or b
+  local L = { a = a, b = b, n = n, half = L0.half or 0.11, hatch = h, label = d.label or d.id }
+  local st = evaState()
+  local node = dock.node
+  if st and st.surface and node and node.valid then
+    local low = a.y
+    for u in pairs(bp_by_uid) do
+      local bx = not integ.gone[u] and part_box(node, u)
+      if bx then low = math.min(low, bx.cy - bx.ey - d.y) end
+    end
+    L.ylow = low
+    if low < a.y - 0.05 then
+      local step, off = 0.3, {}
+      local lineoff = a.x * n.x + a.z * n.z
+      for i = 1, math.max(1, math.ceil((a.y - low) / step)) do
+        local y0 = d.y + low + (i - 1) * step
+        local y1 = y0 + step
+        local need = 0
+        for u in pairs(bp_by_uid) do
+          local bx = u ~= uid and not integ.gone[u] and part_box(node, u)
+          if bx and bx.cy + bx.ey > y0 and bx.cy - bx.ey < y1 then
+            local ext = (bx.cx - d.x) * n.x + (bx.cz - d.z) * n.z + math.abs(n.x) * bx.ex + math.abs(n.z) * bx.ez
+            need = math.max(need, ext - lineoff + 0.08)
+          end
+        end
+        off[i] = need
+      end
+      L.ext = { y0 = low, step = step, off = off }
+    end
+  end
+  return L
+end
+
+CTREF = { ref = nil, t = -10 }
+function ctaskNow()
+  local r = CTREF.ref
+  if not (r and r.valid ~= false) then
+    r = nil
+    if (time or 0) - CTREF.t > 2.0 then CTREF.t = time or 0; r = findScript("crew_task", { quiet = true }); CTREF.ref = r end
+  end
+  return r
+end
+
+-- WHAT E / F DO HERE, for the crew on foot (the tick: physics poses, rule 2):
+-- for each crew position, crew_task.hatchRule on the distances — the seat
+-- of an open seat, the hatch, the ladder's line at the crew's height — and
+-- whether the hatch is out of a standing reach (more than 1.7 m over the
+-- craft's foot when landed; always off the ground: grab the handrail first).
+-- → { act = "enter" | "grab" | nil, uid, why, label, d } (the best: an
+-- enter before a grab, then the nearest)
+function boardChoice(node, info)
+  local a = astronaut
+  if not (a and a.valid) or not podCrewed then return nil end
+  local ct = ctaskNow()
+  if not (ct and ct.hatchRule) then return nil end
+  local cs = ct.climbState
+  local ax, ay, az = physPosOf(a)
+  local best = nil
+  local bd, bst = board_dist(node, a, info)
+  for _, st in ipairs(crewSeats) do
+    if seatAlive(st.uid) then
+      local o = { open = st.seat == true }
+      local hx, hy, hz = hatchWorld(st.uid)
+      if o.open then o.dSeat = (bst and bst.uid == st.uid) and bd or 1e9 end
+      if hx then o.dHatch = math.sqrt((ax - hx) ^ 2 + (ay - hy) ^ 2 + (az - hz) ^ 2) end
+      local L = (not o.open) and ladderOf(st.uid) or nil
+      if L then
+        o.ladder = true
+        o.needLadder = not L.ylow or (L.hatch.y - L.ylow) > 1.7
+        local lx, ly, lz = partLocalNow(st.uid, ax, ay, az)
+        if lx and ct.climbRange and ct.climbSpot then
+          local lo, hi = ct.climbRange(L)
+          local t = { a = L.a, b = L.b, n = L.n, ext = L.ext, s = math.max(lo, math.min(hi, ly)) }
+          local sx, sy, sz = ct.climbSpot(t)
+          -- (the height counts for less: a hand reaches up a rung or two)
+          local dy = ly - t.s
+          dy = dy > 0 and math.max(0, dy - 0.6) or math.min(0, dy + 0.9)
+          o.dLadder = math.sqrt((lx - sx) ^ 2 + dy * dy + (lz - sz) ^ 2)
+        end
+      end
+      if cs and dock.node and cs.vid == dock.node.id and cs.uid == st.uid then
+        o.climbing = true
+        o.dHatch = cs.dHatch
+      end
+      local act, why = ct.hatchRule(o)
+      local d = o.climbing and 0 or math.min(o.dSeat or 1e9, o.dHatch or 1e9, o.dLadder or 1e9)
+      local rank = (act == "enter" and 0) or (act == "grab" and 1) or 2
+      if not best or rank < best.rank or (rank == best.rank and d < best.d) then
+        best = { act = act, uid = st.uid, why = why, d = d, rank = rank, open = o.open,
+                 label = (bp_by_uid[st.uid] and (bp_by_uid[st.uid].label or bp_by_uid[st.uid].id)) or "the pod" }
+      end
+    end
+  end
+  return best
+end
+
+-- The prompt for a choice: "E — enter Pod Mk2 (2 free)", "E — grab the ladder".
+function choicePrompt(ch)
+  if not ch then return "" end
+  if ch.act == "grab" then return "E — grab the ladder · " .. tostring(ch.label) end
+  if ch.act == "enter" then
+    local st = nil
+    for _, s in ipairs(crewSeats) do if s.uid == ch.uid then st = s end end
+    local p = boardPrompt(st)
+    -- (boardPrompt says "F — …": E and F both do it now)
+    p = p:gsub("^F — board ", "E — enter "):gsub("^F — ", "E — ")
+    if not st or not st.seat then
+      local ct = ctaskNow()
+      if ct and ct.climbState and ct.climbState.vid == (dock.node and dock.node.id) then p = p .. " · W/S climb · SPACE let go" end
+    end
+    return p
+  end
+  local ct = ctaskNow()
+  local cs = ct and ct.climbState
+  if cs and dock.node and cs.vid == dock.node.id then
+    return (cs.bottom and cs.ground) and "W/S climb · E — step off" or "W/S climb · SPACE let go"
+  end
+  return ""
+end
+
+-- E or F by a craft: climb on, or go in. → true when something happened
+function boardAct(node, info, ch)
+  ch = ch or boardChoice(node, info)
+  if not ch or not ch.act then
+    if ch and ch.why and ch.d and ch.d > 0 and ch.d < 4.0 then caption(ch.why) end
+    return false
+  end
+  if ch.act == "enter" then return boardNow(node, info, ch.uid) end
+  local ct = ctaskNow()
+  local cl = crewLibNow()
+  local id = cl and cl.activeId and cl.activeId()
+  if not (ct and ct.startClimb and id) then return false end
+  local me = nil
+  for _, s in ipairs(findScripts("vessel_controller")) do
+    if s.node and s.node.valid and s.node.id == node.id then me = s break end
+  end
+  local ok, why = ct.startClimb(id, me, ch.uid)
+  if not ok then caption("can't climb: " .. tostring(why)) end
+  return ok
+end
+
+-- THE FOOT TICK: by a craft nobody flies, E or F climbs on or goes in (and
+-- the menu's Enter lands here, dock.enterReq), and the prompt says which.
+-- FOOT.ring is where lateUpdate draws the ring: the hatch, or the ladder at
+-- the crew's height (part frame).
+FOOT = { shown = false, ch = nil, ring = nil }
+function footTick(node, info)
+  local a = astronaut
+  FOOT.ring = nil
+  if not (a and a.valid and podCrewed and not crewAboard) then
+    if FOOT.shown then set_prompt(""); FOOT.shown = false end
+    return
+  end
+  local ct = ctaskNow()
+  if not (ct and ct.hatchRule) then
+    -- (no crew_task in the scene, a harness: today's F and its prompt)
+    if input.pressed("f") and boardNow(node, info) then set_prompt(""); FOOT.shown = false return end
+    local bd, bst = board_dist(node, a, info)
+    local p = (bd <= params.board_range + 1.4 and crewOnFoot(node.id)) and boardPrompt(bst) or ""
+    set_prompt(p)
+    FOOT.shown, FOOT.ch = p ~= "", nil
+    return
+  end
+  local cs = ct and ct.climbState
+  local mine = cs ~= nil and cs.vid == node.id
+  if dock.enterReq then
+    local u = dock.enterReq
+    dock.enterReq = nil
+    if boardNow(node, info, u) then set_prompt(""); FOOT.shown = false return end
+  end
+  local bd = board_dist(node, a, info)
+  if not (mine or (bd and bd <= params.board_range + 4.0 and crewOnFoot(node.id))) then
+    if FOOT.shown then set_prompt(""); FOOT.shown = false end
+    FOOT.ch = nil
+    return
+  end
+  local ch = boardChoice(node, info)
+  FOOT.ch = ch
+  if input.pressed("e") or input.pressed("f") then
+    if boardAct(node, info, ch) then set_prompt(""); FOOT.shown = false; FOOT.ch = nil return end
+  end
+  local p = choicePrompt(ch)
+  set_prompt(p)
+  FOOT.shown = p ~= ""
+  if ch and ch.act and ch.uid then
+    if ch.act == "grab" then
+      local L = ladderOf(ch.uid)
+      local ax, ay, az = physPosOf(a)
+      local _, ly = partLocalNow(ch.uid, ax, ay, az)
+      if L and ly and ct and ct.ladderAt then
+        local y = math.max(L.a.y, math.min(L.b.y, ly + 0.4))
+        local x, _, z = ct.ladderAt({ a = L.a, b = L.b, ext = L.ext }, y)
+        FOOT.ring = { uid = ch.uid, x = x, y = y, z = z, n = L.n, r = 0.22 }
+      end
+    elseif not ch.open then
+      local cl = crewLibNow()
+      local def = cl and bp_by_uid[ch.uid] and cl.seatDef(bp_by_uid[ch.uid])
+      local h = def and def.hatch
+      if h then FOOT.ring = { uid = ch.uid, x = h.x, y = h.y, z = h.z, n = { x = h.nx, y = h.ny, z = h.nz }, r = 0.3, hatch = true } end
+    end
+  end
+end
+
+-- The menu's Enter (context_providers): may the crew go in by part `uid`'s
+-- hatch now? → ok, why
+function canEnter(uid)
+  local node = dock.node
+  if destroyed or not (node and node.valid) or crewAboard then return false, "aboard already" end
+  local ch = boardChoice(node, assembly.info(node))
+  if ch and ch.uid == uid and ch.act == "enter" then return true end
+  if ch and ch.uid == uid and ch.act == "grab" then return false, "grab the ladder first (E)" end
+  return false, (ch and ch.uid == uid and ch.why) or "walk up to the hatch"
+end
+function enterHatch(uid)
+  local node = dock.node
+  if not (node and node.valid) then return false end
+  local ok = canEnter(uid)
+  if not ok then return false end
+  dock.enterReq = uid     -- the tick's (boardNow seats a kinematic passenger)
+  return true
 end
 
 -- Mass and centre (vessel frame) of a set of uids still aboard.
@@ -15627,6 +16000,10 @@ function fixedUpdate(node, dt)
   if input.pressed("f") and astronaut then
     if piloting and not crewAboard then
       -- Flying a probe from the ground: there is no hatch to step out of.
+    elseif piloting and pickerOpen() then
+      -- (the picker's own F: you)
+    elseif piloting and crewCount() >= 2 and pickerAsk(node) then
+      -- Two or more aboard: WHO steps out (exit_picker; Ty 2026-11-11)
     elseif piloting then
       -- Out past the hull's widest reach on that side, never inside it: a crew
       -- capsule stepping out INTO a side booster is a body overlapping the
@@ -15636,9 +16013,8 @@ function fixedUpdate(node, dt)
       -- crew.evaCheck decides whether they may (evaPress; a global, so this
       -- function spends no upvalue on it).
       evaPress(node, info)
-    else
-      boardNow(node, info)
     end
+    -- (on foot F is E's twin: footTick climbs on or goes in)
   end
 
   -- The seated astronaut rides the pod as a KINEMATIC passenger. "Bodies don't
@@ -15667,14 +16043,9 @@ function fixedUpdate(node, dt)
     -- (The hatch RING is drawn in lateUpdate — the camera pass — where the
     -- node pose matches what this frame renders; drawing it here put it a
     -- rails-carry beside the visible ship.)
-    -- The prompt names the crew position F will put them in (the nearest).
-    local bd, bst = nil, nil
-    if astronaut and podCrewed and not crewAboard then bd, bst = board_dist(node, astronaut, info) end
-    if bd and bd <= params.board_range + 1.4 and crewOnFoot(node.id) then
-      set_prompt(boardPrompt(bst))
-    else
-      set_prompt("")
-    end
+    -- The prompt names what E / F will do here: grab the ladder, go in by
+    -- the hatch, sit in the seat (footTick: boardChoice).
+    footTick(node, info)
     return
   end
   set_prompt("")
@@ -16487,11 +16858,31 @@ function lateUpdate(node, dt)
     if astronaut then astronaut.visible = podSeat == true end
   end
   if piloting or crewAboard or not podCrewed or not astronaut then return end
+  -- the ring marks what E / F will do: the hatch to go in by, the ladder to
+  -- grab (footTick's choice, in the part's frame), drawn where the craft is
+  -- drawn this frame (partPointNow(.., true))
+  local R = FOOT.ring
+  if R and not cinematicUp() then
+    local x, y, z = partPointNow(R.uid, R.x, R.y, R.z, true)
+    local F = x and partFrameNow(R.uid, true)
+    if F then
+      local n = R.n
+      local nx, ny, nz = F.rx * n.x + F.ux * n.y + F.zx * n.z, F.ry * n.x + F.uy * n.y + F.zy * n.z, F.rz * n.x + F.uz * n.y + F.zz * n.z
+      if R.hatch then
+        draw.ring(x + nx * 0.03, y + ny * 0.03, z + nz * 0.03, nx, ny, nz, R.r, 0.3, 0.95, 1.0, 0.9)
+      else
+        draw.ring(x, y, z, F.ux, F.uy, F.uz, R.r, 0.3, 0.95, 1.0, 0.9)
+      end
+    end
+    return
+  end
+  if FOOT.ch ~= nil and not FOOT.ch.open then return end
   local info = assembly.info(node)
   local bd, st = board_dist(node, astronaut, info)
   if bd > params.board_range + 1.4 then return end
   if not crewOnFoot(node.id) then return end
-  -- the ring marks the crew position F will board (the nearest one)
+  -- (an open seat: the ring on the seat F sits you in)
+  if not (st and st.seat) then return end
   local q = st or pod
   local rx, up, rz = basis(node)
   local qx, qy, qz = q.x, q.y, q.z

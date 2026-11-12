@@ -225,16 +225,19 @@ end
 SEATS = {
   pod     = { command = true,
               seats = { { x = 0.0, y = -0.22, z = 0.16, yaw = 1.5708 } },
-              hatch = { x = 0.47, y = -0.02, z = 0.0, nx = 1, ny = 0, nz = 0 } },
+              hatch = { x = 0.47, y = -0.02, z = 0.0, nx = 1, ny = 0, nz = 0 },
+              ladder = { a = { x = 0.3930, y = -0.30, z = 0.3930 }, b = { x = 0.2383, y = 0.22, z = 0.2383 }, n = { x = 0.7071, y = 0, z = 0.7071 }, half = 0.11 } },
   podMk2  = { command = true,
               seats = { { x = 0.0, y = -0.28, z = 0.22, yaw = 1.5708 },
                         { x = -0.66, y = -0.28, z = 0.16, yaw = 1.8708 },
                         { x = 0.66, y = -0.28, z = 0.16, yaw = 1.2708 } },
-              hatch = { x = 0.49, y = -0.06, z = 0.0, nx = 1, ny = 0, nz = 0 } },
+              hatch = { x = 0.49, y = -0.06, z = 0.0, nx = 1, ny = 0, nz = 0 },
+              ladder = { a = { x = 0.3990, y = -0.46, z = 0.3990 }, b = { x = 0.2659, y = 0.30, z = 0.2659 }, n = { x = 0.7071, y = 0, z = 0.7071 }, half = 0.11 } },
   cabin   = { command = false,
               seats = { { x = -0.44, y = -0.3, z = 0.64, yaw = 1.5708 }, { x = 0.44, y = -0.3, z = 0.64, yaw = 1.5708 },
                         { x = 0.44, y = -0.3, z = -0.64, yaw = -1.5708 }, { x = -0.44, y = -0.3, z = -0.64, yaw = -1.5708 } },
-              hatch = { x = 0.51, y = -0.1, z = 0.0, nx = 1, ny = 0, nz = 0 } },
+              hatch = { x = 0.51, y = -0.1, z = 0.0, nx = 1, ny = 0, nz = 0 },
+              ladder = { a = { x = 0.4002, y = -0.58, z = -0.4002 }, b = { x = 0.4002, y = 0.05, z = -0.4002 }, n = { x = 0.7071, y = 0, z = -0.7071 }, half = 0.11 } },
   seat    = { command = true, open = true, seats = { { x = 0, y = 0, z = 0, yaw = 0 } } },
   saddle  = { command = true, open = true, seats = { { x = 0, y = 0, z = 0, yaw = 0 } } },
   cockpit = { command = true,
@@ -2010,7 +2013,7 @@ function eva(id, opts)
     return true, nil
   end
   if not opts.stay then remember() end
-  queue[#queue + 1] = { kind = "eva", id = id, nid = v.node.id, uid = uid, stay = opts.stay == true }
+  queue[#queue + 1] = { kind = "eva", id = id, nid = v.node.id, uid = uid, stay = opts.stay == true, k = opts.k }
   return true, nil
 end
 
@@ -2512,7 +2515,7 @@ local function do_eva(q)
   if q.stay then
     -- out as a CrewBody beside the hatch; you keep the craft
     local x, y, z = nil, nil, nil
-    if v.hatchSpot then x, y, z = v.hatchSpot(q.uid) end
+    if v.hatchSpot then x, y, z = v.hatchSpot(q.uid, q.k) end
     if not x then return end
     v.seatMember(q.uid, select(2, v.memberSlot(id)), nil)
     local d, rx, ry, rz = rel(x, y, z)

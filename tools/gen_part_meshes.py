@@ -548,7 +548,11 @@ def part_pod():
     rf = lambda y: np.interp(y, [q[1] for q in prof], [q[0] for q in prof])
     decal(m, "Stencil", "hatch", rf, RIGHT, -0.02, 0.26)
     decal(m, "Stencil", "rescue", rf, RIGHT, -0.19, 0.24)
-    for side in (-1, 1):
+    # The boarding ladder at 45° off the hatch (on the +Z side, where the
+    # right-hand grab rail was); 45° keeps it inside the hull's box, which
+    # the engine centres the part on.
+    hatch_ladder(m, rf, RIGHT + math.pi / 4, -0.30, 0.22, name="pod")
+    for side in (-1,):
         a = RIGHT + side * 0.42
         pts = []
         for y in (-0.12, 0.1):
@@ -794,6 +798,44 @@ def handrail(m, prof, theta, y0, y1, mat="Paint2", out=0.035):
         tube(m, mat, (r0 * math.cos(theta), y, r0 * math.sin(theta)), (x, y, z), 0.007, segs=6)
 
 
+def hatch_ladder(m, rf, theta, y0, y1, out=0.07, half=0.11, step=0.2, name=None):
+    """The boarding ladder beside a hatch (Ty 2026-11-11: "they need ladders
+    you grab onto first"): two galvanised rails stood `out` off the skin on
+    welded brackets, `half` either side of the line, painted rungs with dark
+    anti-slip wraps every `step`. The line follows the wall (rf: radius at a
+    height). The climb uses the same numbers (scripts/crew.lua SEATS[..].ladder,
+    printed below when `name` is given), so the hands land on these rails."""
+    c, s = math.cos(theta), math.sin(theta)
+    n = np.array([c, 0.0, s])
+    t = np.array([-s, 0.0, c])
+
+    def line(y):
+        r = float(rf(y)) + out
+        return np.array([r * c, y, r * s])
+
+    a, b = line(y0), line(y1)
+    for side in (-1, 1):
+        o = t * half * side
+        tube(m, "Metal", a + o, b + o, 0.011, segs=8, uv_m=4.0)
+        # end caps a little proud of the rail ends, and the welded brackets
+        for (yy, p) in ((y0, a), (y1, b)):
+            hull = np.array([float(rf(yy)) * c, yy, float(rf(yy)) * s]) + o
+            tube(m, "Metal", hull - n * 0.004, p + o, 0.008, segs=6, uv_m=6.0)
+            box(m, "Dark", hull + n * 0.003, (0.03, 0.05, 0.03), np.stack([t, np.array([0, 1.0, 0]), n], 1), uv_m=8.0, bevel=0.004)
+    k = 0
+    y = y0 + 0.07
+    while y <= y1 - 0.04 + 1e-9:
+        p = line(y)
+        tube(m, "Paint2", p - t * half, p + t * half, 0.0095, segs=8, uv_m=4.0)
+        # an anti-slip wrap in the middle of the rung (a sleeve, not a decal)
+        tube(m, "Dark", p - t * half * 0.45, p + t * half * 0.45, 0.0115, segs=8, uv_m=6.0)
+        k += 1
+        y += step
+    if name:
+        print(f"LADDER {name}: a=({a[0]:.4f}, {a[1]:.4f}, {a[2]:.4f}) b=({b[0]:.4f}, {b[1]:.4f}, {b[2]:.4f}) "
+              f"n=({c:.4f}, 0, {s:.4f}) half={half} rungs={k}")
+
+
 def part_pod_mk2():
     m = Model()
     p = POD2
@@ -816,9 +858,11 @@ def part_pod_mk2():
         framed_window(m, prof, a, 0.06, w, hh)
     # The hatch on +X, with handrails either side and a grab bar above it.
     hatch_door(m, prof, RIGHT, -0.06, 0.26, 0.32, wheel=True)
-    for side in (-1, 1):
-        handrail(m, prof, RIGHT + side * 0.5, -0.24, 0.12)
+    # a grab rail on the −Z side, the boarding ladder at 45° on the +Z side
+    handrail(m, prof, RIGHT - 0.5, -0.24, 0.12)
     handrail(m, prof, RIGHT + 0.0001, 0.2, 0.3)
+    rf2 = lambda y: float(np.interp(y, [q[1] for q in prof], [q[0] for q in prof]))
+    hatch_ladder(m, rf2, RIGHT + math.pi / 4, -0.46, 0.30, name="podMk2")
     # Heat shield: a thicker ablative dome under a riveted rim.
     hs = [(0.0, y_bot)] + [(0.5 * math.sin(t), y_bot + 0.07 * (1 - math.cos(t))) for t in np.linspace(0.15, math.pi / 2, 8)]
     lathe(m, "Ablative", hs, segs=segs, smooth=True, uv_m=1.5)
@@ -897,14 +941,9 @@ def part_cabin():
         m.merge(sub, frame_to(n), p)
     # The hatch on +X, rungs beside it, a floodlight-style marker lamp above.
     hatch_door(m, prof, RIGHT, -0.1, 0.3, 0.42, wheel=False)
-    for yy in np.linspace(-0.45, 0.35, 5):
-        a = RIGHT - 0.42
-        c, s = math.cos(a), math.sin(a)
-        p0 = np.array([r * c, yy, r * s])
-        t = np.array([-s, 0, c])
-        tube(m, "Paint2", p0 + np.array([c, 0, s]) * 0.04 - t * 0.05, p0 + np.array([c, 0, s]) * 0.04 + t * 0.05, 0.008, segs=8)
-        for k in (-1, 1):
-            tube(m, "Paint2", p0 + t * 0.05 * k, p0 + np.array([c, 0, s]) * 0.04 + t * 0.05 * k, 0.006, segs=6)
+    # The boarding ladder at 45° off the hatch on the −Z side (it was a line
+    # of grab rungs), stopping under the porthole there.
+    hatch_ladder(m, cyl_r(r - 0.004), RIGHT - math.pi / 4, -0.58, 0.05, name="cabin")
     # Air bottles on the −X flank (they keep the box centred against the hatch).
     for zz in (-0.1, 0.1):
         tube(m, "Paint2", (-r - 0.045, -0.4, zz), (-r - 0.045, 0.05, zz), 0.029, segs=12, uv_m=3.0)

@@ -190,6 +190,8 @@ function SOLVE(SP)
   P("HV core %s; output now %s", tostring(sr.var("core")), tostring(v.partSt(4, "output")))
   local okE, whyE = C.eva(C.activeId(), { confirmed = true })
   wait(2.0)
+  -- out onto the hab's hatch handrail (boarding by the hatch, 11-11): let go, as SPACE does
+  do local ct = findScript("crew_task"); if ct and ct.climbState then C.cancelTask(C.activeId(), "let go"); wait(0.5) end end
   SP.check("eva", okE and not v.crewAboard, "out of the hab (%s %s)", tostring(okE), tostring(whyE))
   SP.wait_step("out", 10)
   wait(1.0)

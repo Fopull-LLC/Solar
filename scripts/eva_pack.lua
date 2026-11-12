@@ -251,7 +251,12 @@ local function surroundings(a, pw)
     -- out of an orbiting station with its hull below the hatch is space
     -- (evaprobe 2026-10-27: read as ground, rails warp was allowed on EVA)
     local x, y, z, left = a.x, a.y, a.z, P("space_ray")
-    for _ = 1, 4 do
+    -- (perfmap 2026-11-11: standing on something is not space, and the
+    -- ray down cost 8-14 ms a frame now and then in Dust Season's act 4.
+    -- Not while the walker itself calls it floating: a hull in orbit under
+    -- the boots reads as grounded and is still space, as above.)
+    if pw and pw.grounded == true and pw.floating ~= true then left = 0 sp = false end
+    for _ = 1, (left > 0) and 4 or 0 do
       local hit = raycast and raycast(x, y, z, -ux, -uy, -uz, left, a) or nil
       if hit == nil then break end
       if not craft_in_flight(hit.node) then sp = false break end
@@ -270,8 +275,9 @@ end
 -- confirm (WS2) replaces it later with the same calls.
 local ask = nil   -- { id, text, t, n }
 asking = false
-function askEva(id, text)
-  ask = { id = id, text = text or "No RCS Pack.", t = time }
+function askEva(id, text, opts)
+  -- opts.stay: the member goes alone and you keep the craft (exit_picker, SHIFT)
+  ask = { id = id, text = text or "No RCS Pack.", t = time, stay = type(opts) == "table" and opts.stay == true }
   asking = true
   if input and input.setMouseLocked then pcall(input.setMouseLocked, false) end
 end
@@ -279,12 +285,12 @@ end
 -- Probes: answer the open confirm as a click would.
 function answer(go)
   if not ask then return false end
-  local id = ask.id
+  local id, stay = ask.id, ask.stay
   ask, asking = nil, false
   if go then
     local c = crew()
     if c and c.eva then
-      local ok, why = c.eva(id, { confirmed = true })
+      local ok, why = c.eva(id, { confirmed = true, stay = stay })
       if not ok then log("EVA: " .. tostring(why)) end
       return ok
     end

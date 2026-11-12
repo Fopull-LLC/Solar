@@ -535,11 +535,51 @@ No member aboard has a rigid body. Each one is a **CrewDoll**: the suit model
   4. **In space**, the member leaves the hatch with the craft's velocity at the hatch
      point (`vel + angVel × r`), so they start at rest relative to the craft and 1 m
      out. The pack's **HOLD** (§5.7) is on for the first 2 s.
-- **Boarding (F on foot)** goes into the **nearest free slot** of the nearest crewed
-  part within `board_range`. For pods this is measured to the hatch (not the spine);
-  climbing the ladder still counts through today's spine rule.
-- The prompt names the target: "F — board Pod Mk2 (2 free)", "F — sit in the seat",
-  or "Pod Mk1 is full".
+- **Boarding is by the hatch, in the player's hands** (Ty, playtest 2026-11-11).
+  E and F on foot do the same thing; the prompt says what it is
+  (`vessel_controller.footTick` / `boardChoice`, the rule is
+  `crew_task.hatchRule`, tested in `tests/smoke_boarding.lua`):
+  - **The ladder.** The Pod Mk1, Pod Mk2 and Crew Cabin carry a boarding ladder
+    45° off the hatch: two galvanised rails on welded brackets, painted rungs
+    with anti-slip sleeves (`tools/gen_part_meshes.py` `hatch_ladder`, whose
+    numbers are `crew.SEATS[id].ladder`). On a landed craft the climb reaches
+    the ground: below the part's rails the line runs on down the stack, pushed
+    out past whatever hull is under it (`ladderOf`: `ylow`, `ext`).
+  - **E — grab the ladder** within 1.2 m of its line (any height you can reach).
+    Climbing is a held task (`crew_task` kind `climb`): kinematic in the part's
+    frame like a repair, W / S up (0.8 m/s) and down (1.1 m/s), SPACE lets go,
+    E at the foot of a landed craft's ladder steps off. The hands go hand over
+    hand on the rails.
+  - **E — enter Pod Mk2 (2 free)** within 1.4 m of the hatch, on its ladder.
+    A hatch at standing height (a pod on the ground, a rover's cabin) is
+    walked up to and entered without climbing. The right-click menu has the
+    same **Enter** row (greyed with the reason: "grab the ladder first (E)").
+  - **In space**, the hatch's handrail is the ladder: grab it, then Enter.
+  - **No ladder** (a crewed part that has none: a cockpit, a modded part):
+    Enter within 2 m of the hatch. A script's or probe's `boardNow()` with no
+    choice made keeps this 2 m rule too.
+  - An open seat is sat in from today's reach, as before.
+- **Stepping out reverses it:** the member you control comes out onto the
+  ladder's top when the hatch is out of a standing reach, and in space onto
+  the hatch's handrail (`climbOut`), never into the air; a member sent out
+  who waits by the craft (SHIFT, or EVERYONE) stands at the ladder's foot.
+  Cabin air (§13) vents as the hatch opens, as before.
+- **Who steps out:** F in a craft with two or more aboard opens the exit
+  picker (`scripts/exit_picker.lua`): a row a member with their live picture
+  and a number, and EVERYONE. A click, the number or the pad's d-pad and A
+  picks; F again picks you; SHIFT sends them alone and you stay aboard; Esc or
+  the pad's B closes. A member who can't go is greyed with the reason. On the
+  crew strip, hovering a portrait shows **EVA** in the picture's top-right
+  corner (SHIFT as above); the keyboard's way is the picker.
+- The prompt names the target: "E — enter Pod Mk2 (2 free)", "E — grab the
+  ladder · Pod Mk1", "F — sit in the seat", or "Pod Mk1 is full".
+- **Held on a craft, drawn with it.** A held body (a repair, a ladder) is placed
+  each tick in the craft's physics frame and, each frame before the view
+  follows it, where the craft is DRAWN (`crew_task.beforeCamera`): the engine
+  does not interpolate a kinematic body, so at 144 Hz in a low orbit the suit
+  and the view shook 0.47–0.66 m against the pod every frame (Ty: "repairing in
+  space makes me jitter around like crazy"; `tools/perf/boardevaprobe.sh
+  jitter`).
 
 ## 4. Control switching (C)
 

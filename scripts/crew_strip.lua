@@ -354,6 +354,16 @@ function confirmOpen() return confirm end
 -- Probes: show the hover controls on member `id`'s portrait (nil: the pointer).
 local forced_hover = nil
 function forceHover(id) forced_hover = id end
+-- The live picture of member `id` (exit_picker shows it), or nil when the
+-- strip has no camera filming them. (The list is crew.aboard's order, as
+-- the strip's own.)
+local last_list_ids = {}
+function portraitTex(id)
+  local i = last_list_ids[id]
+  local c = i and cams[i]
+  if c and c.node and c.node.valid ~= false then return "rt:crew" .. i end
+  return nil
+end
 
 -- ⇄: the member moves to the next free slot aboard (an IVA transfer).
 function moveSeat(v, m)
@@ -425,15 +435,20 @@ local function portrait(i, m, L, hov, v)
   local letter = C and C.roleLetter and C.roleLetter(m.id)
   if letter then plate[#plate + 1] = roleChip("rl" .. i, letter) end
   plate[#plate + 1] = nm
+  local eva_btn = nil
   if hov then
     local ok, why, warn = true, nil, nil
     if C and C.evaCheck then ok, why, warn = C.evaCheck(m.id) end
-    plate[#plate + 1] = { "button", key = "eva" .. i, style = "hud/button", w = 34, h = PLATE_H - 2, text = "EVA",
-                          textAlign = "center", opacity = ok and 1.0 or 0.45,
-                          onClicked = function()
-                            if not ok then say(why or "can't EVA now") return end
-                            evaMember(m.id, input and input.key and (input.key("shift") or input.key("lshift")), false)
-                          end }
+    -- EVA in the picture's top-right corner (Ty 11-11: "hover over their
+    -- portrait and an EVA button appears in the corner"); SHIFT: they go and
+    -- you stay. The keyboard's way is F's picker (exit_picker).
+    eva_btn = { "button", key = "eva" .. i, style = "hud/button", pin = "topRight", margin = 4, w = 40, h = 20, text = "EVA",
+                textAlign = "center", textValign = "center", opacity = ok and 1.0 or 0.45, focusable = false,
+                tooltip = ok and "Step out (SHIFT: they go, you stay aboard)" or why,
+                onClicked = function()
+                  if not ok then say(why or "can't EVA now") return end
+                  evaMember(m.id, input and input.key and (input.key("shift") or input.key("lshift")), false)
+                end }
     plate[#plate + 1] = { "button", key = "mv" .. i, style = "hud/button", w = 22, h = PLATE_H - 2, text = "⇄",
                           textAlign = "center", onClicked = function() moveSeat(v, m) end }
     if not ok and why then
@@ -446,6 +461,10 @@ local function portrait(i, m, L, hov, v)
   local tex = (c and c.node and c.node.valid ~= false) and ("rt:crew" .. i) or nil
   local img = tex and { "image", key = "img" .. i, texture = tex, w = L.w, h = L.h, imageFit = "contain" }
     or { "box", key = "img" .. i, style = "hud/bezel", w = L.w, h = L.h }
+  if eva_btn then
+    img.pin = "topLeft"
+    img = { "box", key = "ib" .. i, w = L.w, h = L.h, img, eva_btn }
+  end
   local chips = chipsFor(a, m)
   local col = { "col", key = "pt" .. i, style = "hud/chip", w = L.w + 2 * FRAME_PAD, h = "fit", gap = 1, pad = FRAME_PAD,
                 align = "start",
@@ -685,6 +704,8 @@ function lateUpdate(node, dt)
   local v = piloted()
   if mode == "hidden" or blocked() or not C then return hide(node) end
   local list = (v and C.aboard and C.aboard(v)) or {}
+  last_list_ids = {}
+  for i, m in ipairs(list) do last_list_ids[m.id] = i end
   local afoot = afoot_entries(v)
   local others = (C.living and C.living() or 0) > 1
   if #list == 0 and #afoot == 0 and not confirm and not (others or pickerOpen) then return hide(node) end
@@ -735,7 +756,7 @@ function lateUpdate(node, dt)
   end
   last_L = L
   -- hover: which portrait the pointer is over (its id), for EVA/⇄ and the rate
-  local hk = hovered_key("pt") or hovered_key("img") or hovered_key("pl") or hovered_key("eva") or hovered_key("mv")
+  local hk = hovered_key("pt") or hovered_key("img") or hovered_key("ib") or hovered_key("pl") or hovered_key("eva") or hovered_key("mv")
     or hovered_key("nm")
   local hm = hk and L.vis[hk] and list[hk]
   if forced_hover then hover_id, hover_t = forced_hover, now()

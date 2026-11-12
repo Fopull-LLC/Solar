@@ -190,6 +190,9 @@ local function something_else_is_up()
   -- A right-click menu is a rung too: Esc backs out of it (context_menu.lua).
   local cm = ref("context_menu")
   if cm and cm.isOpen and (cm.isOpen() or cm.escTakenAt == time) then return true end
+  -- Who steps out (exit_picker.lua): Esc cancels it.
+  local xp = ref("exit_picker")
+  if xp and xp.isOpen and (xp.isOpen() or xp.escTakenAt == time) then return true end
   -- Talking to a scientist (lab_talk.lua): Esc backs out of the close-up, then the talk.
   local lt = ref("lab_talk")
   if lt and lt.isOpen and (lt.isOpen() or lt.escTakenAt == time) then return true end

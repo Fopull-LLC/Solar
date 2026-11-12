@@ -2484,6 +2484,18 @@ local function run_gameplay()
           -- it, so the crew steps out of the pod and walks
           P("recover not ready: %s; the crew steps out (f)", tostring(rw))
           tap("f")
+          -- (out of a hatch up its ladder the crew is on the ladder's top,
+          -- boardeva 11-11: off it, as the player climbs down and steps off)
+          wait(1.0)
+          local ct = findScript("crew_task")
+          local cl = findScript("crew")
+          if ct and ct.climbState and cl then
+            input.simulate { key = "s", down = true }
+            local t0 = time
+            while time - t0 < 8 and ct.climbState and not ct.climbState.bottom do coroutine.yield() end
+            input.simulate { key = "s", down = false }
+            cl.cancelTask(cl.activeId(), "stepped off")
+          end
         end
         wait(3)
         local a3 = astro()

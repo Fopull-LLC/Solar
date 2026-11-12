@@ -3292,6 +3292,37 @@
                 order: 2,
             )),
         ),
+        // ── who steps out (F with two or more aboard; scripts/exit_picker.lua) ──
+        (
+            name: "Exit Picker",
+            transform: (
+                translation: (0.0, 0.0, 0.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            matter: Empty,
+            scripts: [
+                (
+                    kind: "exit_picker",
+                    enabled: true,
+                    params: [],
+                ),
+            ],
+            id: Some(7311),
+            parent_id: Some(16),
+            parent: Some(15),
+            ui: Some((
+                place: Pin(
+                    anchor: Center,
+                    offset: (0.0, 40.0),
+                ),
+                size: (Fit, Fit),
+                visible: false,
+                opacity: 1.0,
+                // over the flight HUD (order 1) and the crew strip
+                order: 10,
+            )),
+        ),
         // the crew's warning chips, alarms, blackout dim and the death caption
         (
             name: "Crew Alerts",
