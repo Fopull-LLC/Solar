@@ -258,9 +258,11 @@ local function look_tick(node, ex, ey, ez, dc, dt)
   -- made again), and digging round sea level flipped it every look: thawed
   -- at once in real water, frozen after half a second dry under the sea's
   -- level, and left as it is above it, where the volume holds nothing anyway.
+  -- (frozen after one dry look, 0.15 s: a pit dug under the sea's radius
+  -- showed the murky look for half a second each time its reach was asked)
   local want = vol_frozen
   if wet then want, dry_t = false, 0
-  elseif dry then dry_t = dry_t + 0.15; if dry_t >= 0.5 then want = true end
+  elseif dry then dry_t = dry_t + 0.15; if dry_t >= 0.15 then want = true end
   else dry_t = 0 end
   if v and water and water.setFrozen and want ~= vol_frozen then
     vol_frozen = want

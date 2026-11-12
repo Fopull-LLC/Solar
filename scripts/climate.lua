@@ -283,6 +283,170 @@ local function surface_open(bx, by, bz, ux, uy, uz, sea)
   return open * 2 >= n
 end
 
+-- ── the sea's reach ─────────────────────────────────────────────────────────
+-- THERE IS NO SET WATER LEVEL (Ty, 2026-11-12). The sea is a sphere, but a
+-- hollow under its radius holds sea only when the sea can REACH it across the
+-- surface: a trench cut from the beach floods, a quarry dug inland below sea
+-- level is a dry quarry. (The ring test above, 8 m of the surface round the
+-- point, called any pit wider than 16 m "sea", wherever it was dug: with the
+-- colony sited metres over the sea's radius, digging always found water.)
+--
+-- The reach is a bounded flood over the sea's surface from the point's own
+-- cell, through cells that are open air at the sea's radius: it is SEA when
+-- it has found REACH_WIDE open cells (a basin that size at the sea's level is
+-- sea, not a pit: a dug hole is called sea only past ~3,600 m² of open water)
+-- or gets REACH_BOUND m from where it started, and DRY when ground closes it
+-- in first. (A "deep water under the cell" shortcut was tried and dropped:
+-- a laser pit 5 m deep read as sea.)
+-- Every open cell a finished flood visited is kept (REACH_CELL cube-face
+-- cells of the sea sphere), so a swimmer's reads are a table lookup; a dig or
+-- fill that lands near the sea's radius forgets the body's cells, and the
+-- next read floods again. A fresh question spends up to REACH_INLINE field
+-- reads on the spot (a shore finds its shelf in a handful), and a bigger one
+-- goes on as a job (REACH_SLICE reads a frame); while it runs, the point
+-- reads dry (the WET HOLD below carries a swimmer over it). Where the field is
+-- cold (streaming ground) the ring test stands in, as before.
+local REACH_CELL = 3.0
+local REACH_BOUND = 100.0
+local REACH_WIDE = 400
+-- (enough for an open-sea cell to be called sea on the spot: a swimmer put
+-- down mid-ocean is wet the same frame; about 0.6 ms once per cached region)
+local REACH_INLINE = 440
+local REACH_SLICE = 600
+local REACH_KEEP = 180.0
+local REACH_JOBS = 3
+local reach = { body = nil, cells = {}, jobs = {}, njobs = 0, R = 0 }
+reachStats = { floods = 0, wet = 0, dry = 0, cold = 0, deferred = 0, cells = 0 }
+
+local function tangent_basis(ux, uy, uz)
+  local ax, ay, az = 0, 1, 0
+  if math.abs(uy) > 0.9 then ax, ay, az = 1, 0, 0 end
+  local t1x, t1y, t1z = uy * az - uz * ay, uz * ax - ux * az, ux * ay - uy * ax
+  local l = len(t1x, t1y, t1z)
+  t1x, t1y, t1z = t1x / l, t1y / l, t1z / l
+  return t1x, t1y, t1z, uy * t1z - uz * t1y, uz * t1x - ux * t1z, ux * t1y - uy * t1x
+end
+
+-- The cube-face cell (a number) of unit direction (ux,uy,uz), REACH_CELL m
+-- wide at radius R (a little narrower toward a face's corners).
+local function rkey(ux, uy, uz, R)
+  local ax, ay, az = math.abs(ux), math.abs(uy), math.abs(uz)
+  local f, u, v
+  if ax >= ay and ax >= az then f = ux > 0 and 0 or 1; u, v = uy / ax, uz / ax
+  elseif ay >= az then f = uy > 0 and 2 or 3; u, v = ux / ay, uz / ay
+  else f = uz > 0 and 4 or 5; u, v = ux / az, uy / az end
+  local n = math.max(4, math.floor(R * 1.5708 / REACH_CELL))
+  local i = math.min(n - 1, math.floor((u + 1) * 0.5 * n))
+  local j = math.min(n - 1, math.floor((v + 1) * 0.5 * n))
+  return (f * 4096 + i) * 4096 + j
+end
+
+local function reach_reset(name, R)
+  reach.body, reach.R, reach.cells, reach.jobs, reach.njobs = name, R, {}, {}, 0
+  reachStats.cells = 0
+end
+
+-- One slice of a reach flood: `budget` field reads. Sets J.done, J.wet
+-- (true/false) or J.cold (the field did not answer).
+local function reach_step(J, budget)
+  local b = J.b
+  local R, ux, uy, uz = J.R, J.ux, J.uy, J.uz
+  local t1x, t1y, t1z, t2x, t2y, t2z = J.t1x, J.t1y, J.t1z, J.t2x, J.t2y, J.t2z
+  local bound2 = REACH_BOUND * REACH_BOUND
+  while J.head <= #J.queue and budget > 0 do
+    local c = J.queue[J.head]
+    J.head = J.head + 1
+    local a, cc = c[1] * REACH_CELL, c[2] * REACH_CELL
+    if a * a + cc * cc >= bound2 then J.wet, J.done = true, true return budget end
+    local dx, dy, dz = ux + (t1x * a + t2x * cc) / R, uy + (t1y * a + t2y * cc) / R, uz + (t1z * a + t2z * cc) / R
+    local l = len(dx, dy, dz)
+    dx, dy, dz = dx / l, dy / l, dz / l
+    local q = terrain.query(b.x + dx * R, b.y + dy * R, b.z + dz * R)
+    budget = budget - 1
+    if q == nil then J.cold, J.done = true, true return budget end
+    if q > 0.05 then
+      J.open[#J.open + 1] = rkey(dx, dy, dz, R)
+      -- Open water REACH_WIDE cells wide at the sea's level is sea (a hole
+      -- that size is a basin, not a pit), whatever closes it in further out.
+      if #J.open >= REACH_WIDE then J.wet, J.done = true, true return budget end
+      local i, j = c[1], c[2]
+      for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+        local ni, nj = i + d[1], j + d[2]
+        local k = ni * 100000 + nj
+        if not J.seen[k] then
+          J.seen[k] = true
+          J.queue[#J.queue + 1] = { ni, nj }
+        end
+      end
+    end
+  end
+  if J.head > #J.queue then J.wet, J.done = false, true end
+  return budget
+end
+
+local function reach_finish(key, J)
+  reach.jobs[key] = nil
+  reach.njobs = reach.njobs - 1
+  if J.cold then reachStats.cold = reachStats.cold + 1 return end
+  reachStats.floods = reachStats.floods + 1
+  if J.wet then reachStats.wet = reachStats.wet + 1 else reachStats.dry = reachStats.dry + 1 end
+  local now = reach.clock or 0
+  for _, k in ipairs(J.open) do
+    if not reach.cells[k] then reachStats.cells = reachStats.cells + 1 end
+    reach.cells[k] = { wet = J.wet, t = now }
+  end
+end
+
+-- Can the sea reach the surface point over unit direction (ux,uy,uz) of body
+-- `name` (position b, sea radius R)? → true / false, and a second value:
+-- "pending" (a flood is running: the caller treats the point as dry for now)
+-- or "cold" (the field is not answering there: no verdict).
+local function reach_query(name, b, R, ux, uy, uz)
+  if reach.body ~= name or reach.R ~= R then reach_reset(name, R) end
+  local key = rkey(ux, uy, uz, R)
+  local c = reach.cells[key]
+  local now = reach.clock or 0
+  if c and now - c.t < REACH_KEEP then return c.wet end
+  if reach.jobs[key] then return false, "pending" end
+  if reach.njobs >= REACH_JOBS then reachStats.deferred = reachStats.deferred + 1 return false, "pending" end
+  local t1x, t1y, t1z, t2x, t2y, t2z = tangent_basis(ux, uy, uz)
+  local J = { b = { x = b.x, y = b.y, z = b.z }, R = R, ux = ux, uy = uy, uz = uz,
+    t1x = t1x, t1y = t1y, t1z = t1z, t2x = t2x, t2y = t2y, t2z = t2z,
+    queue = { { 0, 0 } }, head = 1, seen = { [0] = true }, open = {}, done = false }
+  reach_step(J, REACH_INLINE)
+  if J.done then
+    reach.njobs = reach.njobs + 1
+    reach.jobs[key] = J
+    reach_finish(key, J)
+    if J.cold then return nil, "cold" end
+    return J.wet
+  end
+  reach.jobs[key] = J
+  reach.njobs = reach.njobs + 1
+  reachStats.deferred = reachStats.deferred + 1
+  return false, "pending"
+end
+
+-- The floods under way, REACH_SLICE reads a frame between them. The body
+-- moves on its rails between frames, so each job reads it again.
+local function reach_tick(budget)
+  if reach.njobs == 0 then return end
+  local b = reach.body and space.body(reach.body)
+  if not b then reach_reset(nil, 0) return end
+  for key, J in pairs(reach.jobs) do
+    if budget <= 0 then return end
+    J.b.x, J.b.y, J.b.z = b.x, b.y, b.z
+    budget = reach_step(J, budget)
+    if J.done then reach_finish(key, J) end
+  end
+end
+
+-- A dig or a fill that landed near the sea's radius: the cells are forgotten
+-- (a channel may have opened or closed), the floods under way with them.
+local function reach_forget()
+  if reach.body then reach_reset(reach.body, reach.R) end
+end
+
 -- ── flooded caves ───────────────────────────────────────────────────────────
 -- flood.cells["i,j,k"] = { wet = bool, t = time } for every cell a finished
 -- fill visited (the whole cave, as far as it went); flood.jobs are fills
@@ -332,8 +496,12 @@ local function flood_step(budget)
       local col = columnOpen(b.x, b.y, b.z, px, py, pz, sea)
       budget = budget - 4
       if col then
-        local so = surface_open(b.x, b.y, b.z, px / r, py / r, pz / r, sea)
+        -- Open to the sky under the sea's radius: sea only where the sea
+        -- reaches (reach_query); a flood still running there is waited for.
+        local so, state = reach_query(flood.body, b, sea, px / r, py / r, pz / r)
         budget = budget - 8
+        if state == "pending" then J.head = J.head - 1 break end
+        if state == "cold" then so = surface_open(b.x, b.y, b.z, px / r, py / r, pz / r, sea) end
         if so ~= false then J.wet, J.done = true, true end
       end
       if not J.done then
@@ -423,7 +591,12 @@ function seaDepth(x, y, z)
       -- Roofed: a cave. Wet only if it is a flooded one.
       if cave_wet(d, b, px, py, pz, sea) ~= true then depth = -1 end
     elseif col == true then
-      if surface_open(b.x, b.y, b.z, px / r, py / r, pz / r, sea) == false then depth = -1 end
+      -- Under the open sky: sea only where the sea reaches this surface
+      -- (reach_query). While its flood runs the point is dry; where the field
+      -- is cold the old ring test stands in.
+      local so, state = reach_query(d, b, sea, px / r, py / r, pz / r)
+      if state == "cold" then so = surface_open(b.x, b.y, b.z, px / r, py / r, pz / r, sea) end
+      if so == false then depth = -1 end
     end
     if depth > 0 then
       wet_note(d, px, py, pz)
@@ -704,6 +877,18 @@ function waterLevelAt(name, dx, dy, dz, g)
       local c = (L.x * dx + L.y * dy + L.z * dz) / ll
       local arc = math.acos(math.max(-1, math.min(1, c))) * Rl
       if arc < L.reach * 1.15 + 6 and (not level or Rl > level) then level = Rl end
+    end
+  end
+  -- The pools found on this world (pits that seeped full, cave sumps).
+  if name == water.body then
+    for _, p in pairs(water.pools or {}) do
+      local Rp = R + (p.target or p.level)
+      if g < Rp and g > Rp - (p.depth or 2) - 3 then
+        local ll = len(p.x, p.y, p.z)
+        local c = (p.x * dx + p.y * dy + p.z * dz) / ll
+        local arc = math.acos(math.max(-1, math.min(1, c))) * Rp
+        if arc < p.reach * 1.15 + 3 and (not level or Rp > level) then level = Rp end
+      end
     end
   end
   return level
@@ -1418,16 +1603,16 @@ local function clear_water()
   build_co, water.job = nil, nil
   for _, l in pairs(water.lakes) do if l then free(l) end end
   for _, r in pairs(water.rivers) do if r then free(r) end end
+  for _, p in pairs(water.plakes or {}) do if p then free(p) end end
   water.lakes, water.rivers, water.hydro, water.body = {}, {}, nil, nil
+  water.plakes, water.pools, water.levels, water.targets, water.breach, water.rim = {}, {}, {}, {}, {}, {}
+  water.edit_serial, water.pools_loaded = nil, false
 end
 
--- Metres below a lake's surface at a WORLD point on body `name`, or nil when
--- the point is in no lake that is standing near the eye.
-function lakeDepth(name, x, y, z)
-  if name ~= water.body then return nil end
-  local b = space.body(name)
-  if not b then return nil end
-  for _, l in pairs(water.lakes) do
+-- Metres below a lake's (or a pool's) surface at a WORLD point on body `name`,
+-- or nil when the point is in no lake or pool standing near the eye.
+local function lake_depth_in(list, b, x, y, z)
+  for _, l in pairs(list) do
     if l and l.state then
       local px, py, pz = x - b.x, y - b.y, z - b.z
       local r = len(px, py, pz)
@@ -1449,15 +1634,445 @@ function lakeDepth(name, x, y, z)
   end
   return nil
 end
+function lakeDepth(name, x, y, z)
+  if name ~= water.body then return nil end
+  local b = space.body(name)
+  if not b then return nil end
+  local d = lake_depth_in(water.lakes, b, x, y, z)
+  if d == nil and water.plakes then d = lake_depth_in(water.plakes, b, x, y, z) end
+  return d
+end
 
 -- The lakes and river water standing near the eye right now (for the HUD and
--- the probes): { lakes = n, rivers = n, volumes = n, body = name } — volumes
--- is how many engine water discs they declared.
+-- the probes): { lakes = n, rivers = n, pools = n, volumes = n, body = name }
+-- — volumes is how many engine water discs they declared.
 function waterNear()
-  local nl, nr, nv = 0, 0, 0
+  local nl, nr, nv, np = 0, 0, 0, 0
   for _, l in pairs(water.lakes) do if l then nl = nl + 1; nv = nv + #(l.vols or {}) end end
   for _, r in pairs(water.rivers) do if r then nr = nr + 1; nv = nv + #(r.vols or {}) end end
-  return { lakes = nl, rivers = nr, volumes = nv, body = water.body, stats = water.stats }
+  for _, p in pairs(water.plakes or {}) do if p then np = np + 1; nv = nv + #(p.vols or {}) end end
+  return { lakes = nl, rivers = nr, pools = np, volumes = nv, body = water.body, stats = water.stats,
+           levels = water.levels, targets = water.targets, poolSpecs = water.pools, reach = reachStats }
+end
+
+-- ── live levels and pools ───────────────────────────────────────────────────
+-- Water COMES FROM THE TERRAIN and follows it when the terrain changes:
+--
+--   * a LAKE has a live level. A dig that cuts its rim below the water
+--     (rim_check, asked where the edit feed says ground moved near a built
+--     lake's shore) is a breach: the lake drains toward the breach's height,
+--     LEVEL_DRAIN m/s, and rises back (its rivers refill it) once the breach
+--     is filled in. Levels that differ from the generator's are kept in
+--     `lakeLevel.<body>`.
+--   * a POOL is a small basin found on the real ground: a PIT the laser dug
+--     within PIT_SOURCE m of water standing higher than its floor (the sea, a
+--     lake, a river, another pool) seeps full over 20–90 s, to the lower of
+--     the source's level and its own rim; a pit on dry high ground stays dry.
+--     A SUMP is the lowest floor of a wet cave kind (SUMP_KINDS) that holds
+--     water: found as the eye moves through caves (sump_search), the highest
+--     level up to 2.4 m above the floor that stays closed within SUMP_BOUND.
+--     Pools are kept in `pools.<body>` and built, read (lakeDepth), floated
+--     and swum exactly like lakes (build_lake with a pool's spec).
+--
+-- The edit feed is terrain.editsSince (engine 0.118): what landed, where, in
+-- the body's own frame, so nothing here keeps a world point.
+local LEVEL_DRAIN = 0.06
+local LEVEL_FILL = 0.015
+local LEVEL_REBUILD = 0.2
+local POOL_MAX = 64
+local PIT_SOURCE = 60
+local PIT_SOURCE_RIVER = 40
+local PIT_MIN_R = 0.8
+local SUMP_EVERY = 6.0
+local SUMP_MOVE = 8.0
+local SUMP_KINDS = { karst = true, ice = true, chasm = true, collapse = true }
+local SUMP_BOUND = 24.0
+local SUMP_CELL = 1.0
+water.plakes, water.pools, water.levels, water.targets, water.breach, water.rim = {}, {}, {}, {}, {}, {}
+water.pool_next, water.pools_dirty, water.pools_dirty_t = 1, false, 0
+water.sump_t, water.sump_u = -100, nil
+poolStats = { pits = 0, sumps = 0, dry = 0, rebuilt = 0, breaches = 0, searches = 0 }
+
+local function clampc(c) return math.max(-1, math.min(1, c)) end
+
+-- Whether this world's standing water is liquid (frozen seas and dry worlds
+-- have no pools; a methane world's pools are methane, which is fine).
+local function liquid_world(w)
+  if not w then return false end
+  if w.water and w.water.state == "ice" then return false end
+  return (w.sea or 0) > 0 or w.hydro == true or ((w.atmo or 0) > 0.3 and (w.climMoist or 0) > 0.35)
+end
+
+-- Levels and pools kept in the save (lists, so the keys survive the trip).
+local function levels_load(name)
+  water.levels = {}
+  local l = save.get("lakeLevel." .. name)
+  if type(l) == "table" then
+    for _, e in ipairs(l) do if e.i and e.level then water.levels[e.i] = e.level; water.targets[e.i] = e.level end end
+  end
+end
+local function levels_save(name)
+  local out = {}
+  for i, lv in pairs(water.levels) do out[#out + 1] = { i = i, level = lv } end
+  save.set("lakeLevel." .. name, out)
+end
+local function pools_load(name)
+  water.pools, water.pool_next = {}, 1
+  local l = save.get("pools." .. name)
+  if type(l) == "table" then
+    for _, p in ipairs(l) do
+      if p.id and p.x and p.level then
+        water.pools[p.id] = p
+        water.pool_next = math.max(water.pool_next, p.id + 1)
+      end
+    end
+  end
+  water.pools_loaded = true
+end
+local function pools_save(name)
+  local out = {}
+  for _, p in pairs(water.pools) do out[#out + 1] = p end
+  save.set("pools." .. name, out)
+  water.pools_dirty = false
+end
+
+-- The spec a lake is built from: the generator's, or the same basin at its
+-- live level (the centre lifted to it, the depth what is left under it).
+local function lake_level(i, L) return water.levels[i] or L.level end
+local function lake_spec(R, i, L)
+  local lv = lake_level(i, L)
+  if lv == L.level then return L end
+  local Rl = R + lv
+  local ll = len(L.x, L.y, L.z)
+  return { x = L.x / ll * Rl, y = L.y / ll * Rl, z = L.z / ll * Rl, level = lv, reach = L.reach,
+           depth = math.max(0.5, (L.depth or 4) - (L.level - lv)), area = L.area }
+end
+
+-- Arc distance (m, at radius R) between two body-relative directions/points.
+local function arc_between(ax, ay, az, bx, by, bz, R)
+  local al, bl = len(ax, ay, az), len(bx, by, bz)
+  if al < 1e-9 or bl < 1e-9 then return 1e9 end
+  return math.acos(clampc((ax * bx + ay * by + az * bz) / (al * bl))) * R
+end
+
+local function pool_add(w, p)
+  local n = 0
+  local oldest, oldest_t = nil, 1e18
+  for id, q in pairs(water.pools) do
+    n = n + 1
+    if (q.t or 0) < oldest_t then oldest, oldest_t = id, q.t or 0 end
+  end
+  if n >= POOL_MAX and oldest then
+    local have = water.plakes[oldest]
+    if have then free(have) end
+    water.plakes[oldest], water.pools[oldest] = nil, nil
+  end
+  p.id = water.pool_next
+  p.t = water.t_total or 0
+  water.pool_next = water.pool_next + 1
+  water.pools[p.id] = p
+  water.pools_dirty = true
+  return p
+end
+
+-- The ground under a river's nearest bed point to direction u: distance along
+-- the ground (m), the river's width there, and the bed's radius; nil without.
+local function river_near(b, w, h, ux, uy, uz)
+  local R = w.radius
+  local best, bw, bp = nil, nil, nil
+  for _, rv in ipairs(h and h.rivers or {}) do
+    if rv.river then
+      local p = rv.points
+      for i = 1, #p / 3 do
+        local x, y, z = p[i * 3 - 2], p[i * 3 - 1], p[i * 3]
+        local d = arc_between(ux, uy, uz, x, y, z, R)
+        if not best or d < best then best, bw, bp = d, rv.widths[i] or 6, i * 3 - 2; bp = { x, y, z } end
+      end
+    end
+  end
+  if not best then return nil end
+  local l = len(bp[1], bp[2], bp[3])
+  slice(b)
+  local g = ground_r(b, bp[1] / l, bp[2] / l, bp[3] / l, R + (w.relief or 30) + 20, R - (w.shape and w.shape.low or 40) - 20)
+  return best, bw, g
+end
+
+-- A dig landed at body-relative (e.x,e.y,e.z), radius e.r: is there a pit
+-- here that water nearby would seep into? Run as a build job.
+local function pit_check(b, w, h, e)
+  local R = w.radius
+  local el = len(e.x, e.y, e.z)
+  if el < 1 then return end
+  local ux, uy, uz = e.x / el, e.y / el, e.z / el
+  local er = math.max(e.r or 1, PIT_MIN_R)
+  local gf = ground_r(b, ux, uy, uz, el + er + 3, el - er - 8)
+  if not gf then return end
+  -- Water already standing here: a pool deepened or widened is built again.
+  for id, p in pairs(water.pools) do
+    if arc_between(ux, uy, uz, p.x, p.y, p.z, R) <= p.reach + er + 2 then
+      local have = water.plakes[id]
+      if have then free(have) end
+      water.plakes[id] = nil
+      p.depth = math.max(p.depth or 1, R + p.level - gf)
+      water.pools_dirty = true
+      poolStats.rebuilt = poolStats.rebuilt + 1
+      return
+    end
+  end
+  if (w.sea or 0) > gf then
+    local so, state = reach_query(water.body, b, w.sea, ux, uy, uz)
+    if so == true or state == "pending" then return end
+  end
+  if lakeDepth(water.body, b.x + ux * (gf + 0.3), b.y + uy * (gf + 0.3), b.z + uz * (gf + 0.3)) then return end
+  -- A source: the sea, a lake, a pool or a river standing higher than the
+  -- floor, and how far away it is.
+  local src_level, src_d = nil, nil
+  local function offer(level, d)
+    if level <= gf + 0.3 then return end
+    d = math.max(d, 2)
+    if not src_d or d < src_d then src_level, src_d = level, d end
+  end
+  local t1x, t1y, t1z, t2x, t2y, t2z = tangent_basis(ux, uy, uz)
+  if (w.sea or 0) > gf + 0.3 then
+    local S = w.sea
+    for k = 0, 11 do
+      local a = k * math.pi / 6
+      local ca, sa = math.cos(a), math.sin(a)
+      for dist = 6, PIT_SOURCE, 6 do
+        slice(b)
+        local dx = ux + (t1x * ca + t2x * sa) * dist / R
+        local dy = uy + (t1y * ca + t2y * sa) * dist / R
+        local dz = uz + (t1z * ca + t2z * sa) * dist / R
+        local l = len(dx, dy, dz)
+        dx, dy, dz = dx / l, dy / l, dz / l
+        -- (open at the sea's radius and a hand's depth under it: a shelf a
+        -- few decimetres deep is sea too, and the reach rule says whether
+        -- it is the sea's; a 1.5 m test here missed a whole shallow beach)
+        local q = terrain.query(b.x + dx * S, b.y + dy * S, b.z + dz * S)
+        if q and q > 0.05 then
+          local qd = terrain.query(b.x + dx * (S - 0.3), b.y + dy * (S - 0.3), b.z + dz * (S - 0.3))
+          if qd and qd > 0 and reach_query(water.body, b, S, dx, dy, dz) == true then offer(S, dist) break end
+        end
+      end
+    end
+  end
+  for i, L in ipairs(h and h.lakes or {}) do
+    local Rl = R + lake_level(i, L)
+    local d = arc_between(ux, uy, uz, L.x, L.y, L.z, R) - L.reach
+    if d <= PIT_SOURCE then offer(Rl, d) end
+  end
+  for _, p in pairs(water.pools) do
+    local d = arc_between(ux, uy, uz, p.x, p.y, p.z, R) - p.reach
+    if d <= PIT_SOURCE then offer(R + (p.target or p.level), d) end
+  end
+  local rd, rw, rg = river_near(b, w, h, ux, uy, uz)
+  if rd and rg and rd - (rw or 4) * 0.5 <= PIT_SOURCE_RIVER then offer(rg + 0.4, rd - (rw or 4) * 0.5) end
+  if not src_level then poolStats.dry = poolStats.dry + 1 return end
+  -- The pit's rim: the lowest pass out of it (twelve rays, the highest ground
+  -- along each); the pool can stand no higher.
+  local rim = nil
+  for k = 0, 11 do
+    local a = k * math.pi / 6
+    local ca, sa = math.cos(a), math.sin(a)
+    local hi = nil
+    local rho = er * 0.6
+    while rho <= er * 1.8 + 2.5 do
+      slice(b)
+      local dx = ux + (t1x * ca + t2x * sa) * rho / R
+      local dy = uy + (t1y * ca + t2y * sa) * rho / R
+      local dz = uz + (t1z * ca + t2z * sa) * rho / R
+      local l = len(dx, dy, dz)
+      local g = ground_r(b, dx / l, dy / l, dz / l, gf + 40, gf - 6)
+      if g and (not hi or g > hi) then hi = g end
+      rho = rho + 1.5
+    end
+    if hi and (not rim or hi < rim) then rim = hi end
+  end
+  if not rim then return end
+  local target = math.min(src_level, rim - 0.15)
+  if target < gf + 0.3 then poolStats.dry = poolStats.dry + 1 return end
+  local seconds = 20 + src_d * 1.2
+  local start = gf + 0.25
+  local Rs = start
+  poolStats.pits = poolStats.pits + 1
+  return pool_add(w, { x = ux * Rs, y = uy * Rs, z = uz * Rs, level = Rs - R, target = target - R,
+    rate = (target - start) / seconds, reach = er * 1.3 + 1.5, depth = Rs - gf + 0.5, floor = gf - R, kind = "pit" })
+end
+
+-- From the eye at body-relative (px,py,pz), inside a wet cave kind: walk the
+-- floor downhill to its lowest point near, and find the highest level up to
+-- 2.4 m over it that stays closed. Run as a build job; nil = no sump here.
+local function sump_search(b, w, px, py, pz)
+  local R = w.radius
+  local r = len(px, py, pz)
+  if r < 1 then return nil end
+  local ux, uy, uz = px / r, py / r, pz / r
+  local g = ground_r(b, ux, uy, uz, r + 0.5, r - 14)
+  if not g then return nil end
+  for _ = 1, 14 do
+    slice(b)
+    local t1x, t1y, t1z, t2x, t2y, t2z = tangent_basis(ux, uy, uz)
+    local best, bx, by, bz = g, nil, nil, nil
+    for k = 0, 5 do
+      local a = k * math.pi / 3
+      local ca, sa = math.cos(a), math.sin(a)
+      local dx, dy, dz = ux + (t1x * ca + t2x * sa) * 2 / g, uy + (t1y * ca + t2y * sa) * 2 / g, uz + (t1z * ca + t2z * sa) * 2 / g
+      local l = len(dx, dy, dz)
+      dx, dy, dz = dx / l, dy / l, dz / l
+      local gg = ground_r(b, dx, dy, dz, g + 3, g - 5)
+      if gg and gg < best - 0.08 then best, bx, by, bz = gg, dx, dy, dz end
+    end
+    if not bx then break end
+    ux, uy, uz, g = bx, by, bz, best
+  end
+  -- Not under the open sky: a sump is a cave's.
+  if columnOpen(b.x, b.y, b.z, ux * (g + 0.3), uy * (g + 0.3), uz * (g + 0.3), R + (w.relief or 30) + 30) ~= false then return nil end
+  for _, p in pairs(water.pools) do
+    if arc_between(ux, uy, uz, p.x, p.y, p.z, R) <= p.reach + 3 and math.abs(R + p.level - g) < 6 then return nil end
+  end
+  local t1x, t1y, t1z, t2x, t2y, t2z = tangent_basis(ux, uy, uz)
+  local bound2 = SUMP_BOUND * SUMP_BOUND
+  for _, h in ipairs({ 2.4, 1.6, 0.9 }) do
+    local Rl = g + h
+    local queue, seen, head = { { 0, 0 } }, { [0] = true }, 1
+    local n, leak, far2 = 0, false, 0
+    while head <= #queue do
+      local c = queue[head]
+      head = head + 1
+      local a, cc = c[1] * SUMP_CELL, c[2] * SUMP_CELL
+      if a * a + cc * cc >= bound2 then leak = true break end
+      slice(b)
+      local dx, dy, dz = ux + (t1x * a + t2x * cc) / Rl, uy + (t1y * a + t2y * cc) / Rl, uz + (t1z * a + t2z * cc) / Rl
+      local l = len(dx, dy, dz)
+      local q = terrain.query(b.x + dx / l * Rl, b.y + dy / l * Rl, b.z + dz / l * Rl)
+      if q == nil then leak = true break end
+      if q > 0.1 then
+        n = n + 1
+        if a * a + cc * cc > far2 then far2 = a * a + cc * cc end
+        for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+          local k = (c[1] + d[1]) * 100000 + (c[2] + d[2])
+          if not seen[k] then seen[k] = true; queue[#queue + 1] = { c[1] + d[1], c[2] + d[2] } end
+        end
+        if n > 1500 then leak = true break end
+      end
+    end
+    if not leak and n >= 6 then
+      poolStats.sumps = poolStats.sumps + 1
+      local reach = math.sqrt(far2) + SUMP_CELL
+      return pool_add(w, { x = ux * Rl, y = uy * Rl, z = uz * Rl, level = Rl - R, target = Rl - R, rate = 0,
+        reach = reach, depth = h + 0.5, floor = g - R, kind = "cave" })
+    end
+  end
+  return nil
+end
+
+-- A built lake's shore ring where edits landed: ring cells whose ground is
+-- now below the water and leads on downhill are a breach. Updates
+-- water.breach[i] (cell key → the breach's ground radius). A build job.
+local function rim_check(b, w, lake, L, i, edits)
+  local Rl = lake.Rl
+  local N, s, off = lake.N, lake.s, lake.off
+  local br = water.breach[i] or {}
+  water.breach[i] = br
+  local function dir(ii, jj)
+    local a, c = (ii - off) * s / Rl, (jj - off) * s / Rl
+    local x = lake.ux + lake.t1[1] * a + lake.t2[1] * c
+    local y = lake.uy + lake.t1[2] * a + lake.t2[2] * c
+    local z = lake.uz + lake.t1[3] * a + lake.t2[3] * c
+    local l = len(x, y, z)
+    return x / l, y / l, z / l
+  end
+  local bottom = Rl - (L.depth or 4) - 12
+  for k, st in pairs(lake.state) do
+    if st == 2 then
+      local ii, jj = k % N, math.floor(k / N)
+      local dx, dy, dz = dir(ii, jj)
+      local near = false
+      for _, e in ipairs(edits) do
+        if arc_between(dx, dy, dz, e.x, e.y, e.z, Rl) <= (e.r or 1) + s + 2 then near = true break end
+      end
+      if near then
+        slice(b)
+        local g = ground_r(b, dx, dy, dz, Rl + 6, bottom)
+        local hit = nil
+        if g and g < Rl - 0.3 then
+          local a, c = ii - off, jj - off
+          local l2 = math.max(1, math.sqrt(a * a + c * c))
+          local ox, oy, oz = dir(ii + a / l2 * 1.5, jj + c / l2 * 1.5)
+          local g2 = ground_r(b, ox, oy, oz, Rl + 6, bottom)
+          if g2 and g2 <= g + 0.3 then hit = g end
+        end
+        if hit then
+          if not br[k] then poolStats.breaches = poolStats.breaches + 1 end
+          br[k] = hit
+        else
+          br[k] = nil
+        end
+      end
+    end
+  end
+  local spill = nil
+  for _, g in pairs(br) do if not spill or g < spill then spill = g end end
+  local R = w.radius
+  water.targets[i] = spill and math.max(spill - R, L.level - (L.depth or 4) + 0.3) or L.level
+end
+
+-- Every half second: levels and pools move toward their targets; a built
+-- sheet that lags its level by LEVEL_REBUILD is built again.
+local function levels_tick(name, w, h, step)
+  local changed = false
+  for i, L in ipairs(h.lakes or {}) do
+    local tgt = water.targets[i]
+    if tgt then
+      local lv = lake_level(i, L)
+      if math.abs(tgt - lv) > 1e-3 then
+        local rate = (tgt < lv) and LEVEL_DRAIN or LEVEL_FILL
+        local nl = lv + math.max(-rate * step, math.min(rate * step, tgt - lv))
+        if math.abs(nl - L.level) < 1e-3 then nl = L.level end
+        water.levels[i] = (nl ~= L.level) and nl or nil
+        changed = true
+        local have = water.lakes[i]
+        if have and have.level and math.abs(have.level - nl) > LEVEL_REBUILD then free(have); water.lakes[i] = nil end
+      elseif tgt == L.level then
+        water.targets[i] = nil
+      end
+    end
+  end
+  if changed then levels_save(name) end
+  for id, p in pairs(water.pools) do
+    if p.target and math.abs(p.target - p.level) > 1e-3 and (p.rate or 0) > 0 then
+      local nl = p.level + math.max(-p.rate * step, math.min(p.rate * step, p.target - p.level))
+      local R = w.radius
+      local ll = len(p.x, p.y, p.z)
+      local Rl = R + nl
+      p.x, p.y, p.z, p.level = p.x / ll * Rl, p.y / ll * Rl, p.z / ll * Rl, nl
+      p.depth = nl - (p.floor or (nl - 1))
+      local have = water.plakes[id]
+      if have and have.level and math.abs(have.level - nl) > LEVEL_REBUILD then free(have); water.plakes[id] = nil end
+      if math.abs(p.target - p.level) <= 1e-3 then water.pools_dirty = true end
+    end
+  end
+  if water.pools_dirty and (water.t_total or 0) - (water.pools_dirty_t or 0) > 3 then
+    water.pools_dirty_t = water.t_total or 0
+    pools_save(name)
+  end
+end
+
+-- What landed in the ground since last asked (the body's own frame), paint
+-- left out; "all" when the feed ran ahead of us (everything looks again).
+local function read_edits(name)
+  if not (terrain.editSerial and terrain.editsSince) then return nil end
+  local s = terrain.editSerial()
+  if water.edit_serial == nil then water.edit_serial = s return nil end
+  if s == water.edit_serial then return nil end
+  local recs = terrain.editsSince(water.edit_serial, { body = name })
+  water.edit_serial = s
+  if recs == nil then return "all" end
+  local out = {}
+  for _, r in ipairs(recs) do
+    if r.kind ~= "paint" and r.x then out[#out + 1] = { x = r.x, y = r.y, z = r.z, r = r.r or 1, kind = r.kind } end
+  end
+  return out
 end
 
 -- Resume the lake/river build job for this frame's BUILD_MS.
@@ -1489,11 +2104,14 @@ end
 
 function update(node, dt)
   flood.clock = flood.clock + dt
+  reach.clock = flood.clock
   if next(flood.jobs) then flood_step(FLOOD_SLICE) end
+  reach_tick(REACH_SLICE)
   run_build()
   water.t = water.t + dt
   water.t_total = (water.t_total or 0) + dt
   if water.t < 0.5 then return end
+  local step = water.t
   water.t = 0
   if not (mesh and mesh.build and terrain and terrain.query) then return end
   local ex, ey, ez = eye()
@@ -1502,7 +2120,7 @@ function update(node, dt)
   if name ~= water.body then clear_water(); water.body = name end
   if not name then return end
   local w = worldOf(name)
-  if not (w and w.hydro and w.shape) then return end
+  if not (w and w.shape) then return end
   local b = space.body(name)
   if not b then return end
   local alt = len(ex - b.x, ey - b.y, ez - b.z) - w.radius
@@ -1510,15 +2128,115 @@ function update(node, dt)
   -- Only once the ground is here to fit the water to.
   if not terrain.query(b.x, b.y + w.radius, b.z) then return end
   if not water.hydro then
-    -- The home world's rivers and lakes are being worked out off the script
-    -- thread (system_generator hydroWarm): wait for them rather than asking
-    -- the same question again on this one.
-    if not (gen_ref and gen_ref.valid) then gen_ref = findScript and findScript("system_generator") end
-    if gen_ref and gen_ref.hydroPending and gen_ref.hydroPending(name) then return end
-    water.hydro = hydroOf(name) or { lakes = {}, rivers = {} }
+    if w.hydro then
+      -- The home world's rivers and lakes are being worked out off the
+      -- script thread (system_generator hydroWarm): wait for them rather
+      -- than asking the same question again on this one.
+      if not (gen_ref and gen_ref.valid) then gen_ref = findScript and findScript("system_generator") end
+      if gen_ref and gen_ref.hydroPending and gen_ref.hydroPending(name) then return end
+      water.hydro = hydroOf(name) or { lakes = {}, rivers = {} }
+    else
+      -- A world without rivers and lakes still has pools and a sea's reach.
+      water.hydro = { lakes = {}, rivers = {} }
+    end
   end
   local h = water.hydro
   b.node = b.node or find(name)
+  if not water.pools_loaded then levels_load(name); pools_load(name) end
+  local liquid = liquid_world(w)
+  local bb = { x = b.x, y = b.y, z = b.z, node = b.node, name = b.name }
+  local built = water.job ~= nil
+  -- THE EDIT FEED: ground that moved since last asked. Near the sea's radius
+  -- the sea's reach is worked out again; a dig is looked at as a pit (one
+  -- job each, queued); a dig or fill at a built lake's shore is a rim check.
+  local edits = read_edits(name)
+  if edits == "all" then
+    reach_forget()
+    for i, l in pairs(water.lakes) do if l and l.state then water.rim[i] = water.rim[i] or {}; water.rim[i].all = true end end
+  elseif edits then
+    water.pits = water.pits or {}
+    for _, e in ipairs(edits) do
+      local el = len(e.x, e.y, e.z)
+      if (w.sea or 0) > 0 and math.abs(el - w.sea) < e.r + 10 then reach_forget() end
+      if e.kind == "dig" and liquid and e.r >= PIT_MIN_R then
+        -- (bites land in bursts: one pit check per spot, the last bite's)
+        local merged = false
+        for _, q in ipairs(water.pits) do
+          if arc_between(q.x, q.y, q.z, e.x, e.y, e.z, w.radius) < q.r + e.r + 1 then
+            q.x, q.y, q.z, q.r, q.t = e.x, e.y, e.z, math.max(q.r, e.r), water.t_total
+            merged = true
+            break
+          end
+        end
+        if not merged and #water.pits < 24 then
+          water.pits[#water.pits + 1] = { x = e.x, y = e.y, z = e.z, r = e.r, t = water.t_total }
+        end
+      end
+      for i, l in pairs(water.lakes) do
+        if l and l.state and arc_between(e.x, e.y, e.z, l.ux, l.uy, l.uz, w.radius) < (h.lakes[i] and h.lakes[i].reach or 0) * 1.4 + 12 + e.r then
+          water.rim[i] = water.rim[i] or {}
+          local q = water.rim[i]
+          q[#q + 1] = e
+        end
+      end
+      for id, p in pairs(water.pools) do
+        -- A pool's ground moved: it is built again (the lattice follows).
+        if arc_between(e.x, e.y, e.z, p.x, p.y, p.z, w.radius) < p.reach + e.r + 2 and e.kind ~= "dig" then
+          local have = water.plakes[id]
+          if have then free(have); water.plakes[id] = nil end
+        end
+      end
+    end
+  end
+  -- Pit checks, a second after the last bite there (the ground has landed).
+  if water.pits and not built then
+    for k = #water.pits, 1, -1 do
+      local q = water.pits[k]
+      if water.t_total - q.t > 1.0 then
+        table.remove(water.pits, k)
+        start_build("pit", function() return pit_check(bb, w, h, q) end, function() end)
+        built = true
+        break
+      end
+    end
+  end
+  -- Rim checks on built lakes where the ground moved.
+  if not built then
+    for i, q in pairs(water.rim) do
+      local l = water.lakes[i]
+      if l and l.state and h.lakes[i] then
+        water.rim[i] = nil
+        local L = h.lakes[i]
+        local list = q
+        if q.all then
+          -- everything: every ring cell is "near" a pretend edit at the centre
+          list = { { x = l.ux, y = l.uy, z = l.uz, r = (L.reach or 10) * 1.4 + 12 } }
+        end
+        start_build("rim " .. i, function() return rim_check(bb, w, l, L, i, list) end, function() end)
+        built = true
+        break
+      elseif not h.lakes[i] then
+        water.rim[i] = nil
+      end
+    end
+  end
+  levels_tick(name, w, h, step)
+  -- Cave sumps: in a wet cave kind, from where the eye is, every SUMP_EVERY s
+  -- and SUMP_MOVE m of movement.
+  if liquid and not built and water.t_total - water.sump_t > SUMP_EVERY then
+    local ug = findScript and findScript("underground")
+    local kind = ug and ug.kindNow
+    if kind and SUMP_KINDS[kind] then
+      local px, py, pz = ex - b.x, ey - b.y, ez - b.z
+      local su = water.sump_u
+      if not su or len(px - su[1], py - su[2], pz - su[3]) > SUMP_MOVE then
+        water.sump_t, water.sump_u = water.t_total, { px, py, pz }
+        poolStats.searches = poolStats.searches + 1
+        start_build("sump", function() return sump_search(bb, w, px, py, pz) end, function() end)
+        built = true
+      end
+    end
+  end
   -- The wind on the water (weather.lua): lakes are sheltered, so they feel
   -- about two thirds of it.
   local wx = findScript and findScript("weather")
@@ -1535,30 +2253,38 @@ function update(node, dt)
   end
   -- Lakes: build what came near, give back what fell far. One build at a
   -- time, as a job (`run_build`): the slot reads `false` until it lands.
-  local built = water.job ~= nil
-  for i, L in ipairs(h.lakes or {}) do
-    local lx, ly, lz = b.x + L.x, b.y + L.y, b.z + L.z
-    local d = len(ex - lx, ey - ly, ez - lz) - L.reach
-    local have = water.lakes[i]
-    -- A lake built while its ground was still streaming in is built again
-    -- once the terrain has settled, so its outline follows the real ground.
-    if have and have.provisional and not built and water.t_total - (have.built_t or 0) > 4
-        and not (terrain.busy and terrain.busy()) then
-      free(have)
-      water.lakes[i] = nil
-      have = nil
+  -- Pools are the same, from their own specs (`water.pools`).
+  local function tend(list, specs, near, far)
+    for i, L in pairs(specs) do
+      local lx, ly, lz = b.x + L.x, b.y + L.y, b.z + L.z
+      local d = len(ex - lx, ey - ly, ez - lz) - L.reach
+      local have = list[i]
+      -- A lake built while its ground was still streaming in is built again
+      -- once the terrain has settled, so its outline follows the real ground.
+      if have and have.provisional and not built and water.t_total - (have.built_t or 0) > 4
+          and not (terrain.busy and terrain.busy()) then
+        free(have)
+        list[i] = nil
+        have = nil
+      end
+      if have == nil and d < near and not built then
+        list[i] = false
+        local spec = (list == water.lakes) and lake_spec(w.radius, i, L) or L
+        start_build("lake " .. i, function() return build_lake(bb, w, spec) end,
+          function(r) if list[i] == false then list[i] = r elseif r then free(r) end end)
+        built = true
+      elseif have and d > far then
+        free(have)
+        list[i] = nil
+      end
     end
-    if have == nil and d < LAKE_NEAR and not built then
-      water.lakes[i] = false
-      local bb = { x = b.x, y = b.y, z = b.z, node = b.node, name = b.name }
-      start_build("lake " .. i, function() return build_lake(bb, w, L) end,
-        function(r) if water.lakes[i] == false then water.lakes[i] = r elseif r then free(r) end end)
-      built = true
-    elseif have and d > LAKE_FAR then
-      free(have)
-      water.lakes[i] = nil
+    -- (a spec that is gone: its sheet with it)
+    for i, have in pairs(list) do
+      if have and specs[i] == nil then free(have); list[i] = nil end
     end
   end
+  tend(water.lakes, h.lakes or {}, LAKE_NEAR, LAKE_FAR)
+  tend(water.plakes, water.pools, 300, 450)
   -- Engine water for what the eye is near.
   local function near_vols(t)
     if t and t.vspec then
@@ -1567,6 +2293,7 @@ function update(node, dt)
     end
   end
   for _, l in pairs(water.lakes) do near_vols(l) end
+  for _, p in pairs(water.plakes) do near_vols(p) end
   for _, r in pairs(water.rivers) do near_vols(r) end
   -- Rivers: the stretch of each river near the eye, in pieces of 24 points.
   for ri, rv in ipairs(h.rivers or {}) do
