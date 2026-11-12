@@ -76,6 +76,7 @@ LABEL = {
   drive_km       = "a kilometre driven",
   bulk_hauled    = "a bulk haul delivered",
   storm_held     = "a grid held through a storm",
+  medevac        = "a survivor brought to the Medical Bay",     -- (missions M1, medical.admit)
 }
 -- A counted feat's words at a count (the lock line: "needs 1 km driven").
 UNIT = { drive_km = { k = 1000, u = "km driven" }, machine_worked = { k = 1, u = "kg refined" } }

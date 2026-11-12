@@ -1,0 +1,67 @@
+// STRETCHER — a folding rescue litter, folded: the Depot's item card and the pack show it
+// (items.lua `stretcher`, missions N1). Written by tools/gen_stretcher.py — edit the generator, not this file.
+[
+    (
+        name: "ItemStretcher",
+        tags: ["item"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/items/stretcher.glb",
+        ),
+        object_materials: {
+            "Alu": (
+                color: (0.74, 0.75, 0.76),
+                texture: Some("textures/parts/metal_albedo.png"),
+                normal_map: Some("textures/parts/metal_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/metal_orm.png"),
+                roughness: 0.5,
+                metallic_map: Some("textures/parts/metal_orm.png"),
+                metallic: 0.85,
+                ao_map: Some("textures/parts/metal_orm.png"),
+                shading: Physical,
+            ),
+            "Canvas": (
+                color: (0.78, 0.3, 0.08),
+                texture: Some("textures/parts/rubber_albedo.png"),
+                normal_map: Some("textures/parts/rubber_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/rubber_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/rubber_orm.png"),
+                metallic: 0.0,
+                ao_map: Some("textures/parts/rubber_orm.png"),
+                shading: Physical,
+            ),
+            "Grip": (
+                color: (0.05, 0.05, 0.05),
+                texture: Some("textures/parts/rubber_albedo.png"),
+                normal_map: Some("textures/parts/rubber_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/rubber_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/rubber_orm.png"),
+                metallic: 0.0,
+                ao_map: Some("textures/parts/rubber_orm.png"),
+                shading: Physical,
+            ),
+            "Webbing": (
+                color: (0.1, 0.11, 0.12),
+                texture: Some("textures/parts/rubber_albedo.png"),
+                normal_map: Some("textures/parts/rubber_normal.png"),
+                normal_strength: 1.0,
+                roughness_map: Some("textures/parts/rubber_orm.png"),
+                roughness: 1.0,
+                metallic_map: Some("textures/parts/rubber_orm.png"),
+                metallic: 0.0,
+                ao_map: Some("textures/parts/rubber_orm.png"),
+                shading: Physical,
+            ),
+        },
+        scripts: [],
+    ),
+]

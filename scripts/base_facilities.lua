@@ -65,7 +65,9 @@ RUNWAY = { v = -62.0, u0 = -131.0, u1 = 131.0, blast = 6.0, half = 9.0, shoulder
 OVERRUN = { len = 150.0, half = 18.0 }
 -- What `base.graded` records once the grade holds: the layout, and .1 for the
 -- overrun (a save graded before it reads 3 and is checked again).
-GRADED = LAYOUT_VERSION + 0.1
+-- .2: the Medical Bay's lot (missions M1): an old save's grade is checked
+-- once more, now with a point on it, and laid again only if it is off.
+GRADED = LAYOUT_VERSION + 0.2
 -- How far from the base centre the overruns' far corners reach.
 OVERRUN_REACH = math.sqrt((RUNWAY.u1 + OVERRUN.len) ^ 2 + (math.abs(RUNWAY.v) + OVERRUN.half) ^ 2)
 -- The taxiway from the runway's north shoulder to the VAB apron.
@@ -86,6 +88,10 @@ STRIPS = {
   { "Command Walk", 50.0, -4.0, 50.0,   1.7,  4.0, "walk" },
   { "Power Yard",  84.0,  -4.0,  84.0,  8.0,  3.0, "walk" },
   { "Fuel Spur",   -8.0, 104.0, -31.0, 104.0,  3.0, "road" },
+  -- (missions M1) the Medical Bay's drive-in: the 8 m alley between the
+  -- depot's east wall and the VAB's west wall, from Road West's north edge
+  -- up to the bay's slab lip (strips touch, never overlap)
+  { "Medical Alley", -29.75, -4.0, -29.75, 24.3, 4.0, "yard" },
 }
 
 -- The buildings. face = the layout direction the model's FRONT (+Z) turns to
@@ -121,6 +127,15 @@ FACILITIES = {
   -- (prefabs/LabInterior) shares its origin, switched on only from inside.
   { prefab = "FacLab",      u = -58.0, v = 34.0,  face = "S", seat = 4.240,  ox = 0.000, oz = 2.050,  lot = { 23.26, 18.90 }, lift = 0.15,
     interior = "LabInterior" },
+  -- THE MEDICAL BAY (missions M1, Ty 2026-11-11) stands between the lab and
+  -- the VAB, its roller door south onto Medical Alley (a rover drives in),
+  -- joined to the lab's east wall by a glazed link (prefabs/MedLink, on the
+  -- bay's origin) whose far end meets the lab's Med Door. Its interior
+  -- (prefabs/MedInterior, the same origin) is drawn only near it;
+  -- scripts/medical.lua runs on it. `site`: on an old save it keeps clear of
+  -- the player's own structures (medical_site).
+  { prefab = "FacMedical",  u = -34.0, v = 34.0,  face = "S", seat = 3.430,  ox = -0.141, oz = 0.425, lot = { 13.98, 18.55 }, lift = 0.15,
+    interior = "MedInterior", extra = "MedLink", site = "medical" },
 }
 -- Launch Complex 1, in its own ground frame (tools/gen_base.py): the mount is
 -- the lot centre, the hardstand top HS_H over the ground.
@@ -246,6 +261,16 @@ FOUNDATIONS = {
     { -11.50, 11.50, -7.50, 7.50, -0.610 },
     { 6.25, 9.75, 7.50, 11.75, -0.610 },
     { 9.75, 10.75, 8.00, 10.50, -0.310 },
+  },
+  FacMedical = {
+    { -7.00, 7.00, -9.00, 9.75, -0.610 },
+  },
+  MedLink = {
+    { -13.25, -12.75, -1.50, -1.00, -0.510 },
+    { -12.75, -6.75, -1.50, 1.75, -0.610 },
+    { -6.75, -6.25, -1.50, -1.00, -0.510 },
+    { -13.25, -12.75, 1.25, 1.75, -0.510 },
+    { -6.75, -6.25, 1.25, 1.75, -0.510 },
   },
 }
 -- FOUNDATIONS end
@@ -1376,6 +1401,14 @@ local function place_facility(f, body, Fr, planet_node)
     -- the body-relative offset (never add the body position).
     inst.x, inst.y, inst.z = o.x, o.y, o.z
   end, planet_node)
+  -- (M1) a part on the same origin that is only there on the building's own
+  -- lot (the Medical Bay's link to the lab)
+  if f.extra and f.link ~= false then
+    spawn(f.extra, vec3(body.x + o.x, body.y + o.y, body.z + o.z), function(inst)
+      inst:setUp(vec3(up.x, up.y, up.z), vec3(-fwd.x, -fwd.y, -fwd.z))
+      inst.x, inst.y, inst.z = o.x, o.y, o.z
+    end, planet_node)
+  end
   -- The VAB's interior shares the shell's origin and rotation (tools/gen_vab.py).
   if f.interior then
     spawn(f.interior, vec3(body.x + o.x, body.y + o.y, body.z + o.z), function(inst)
@@ -1808,11 +1841,20 @@ local function lay_footings(M, O, Fr)
   local FT = FOUNDATIONS
   if not FT then return 0 end
   local n, T, col = 0, CONCRETE_TILE, FOOTING_COL
+  local rows = {}
   for _, f in ipairs(FACILITIES) do
-    local list = FT[f.prefab]
+    -- (M1) the Medical Bay where it was actually placed, its link's footings
+    -- only on its first lot
+    local fu, fv, ff, link = f.u, f.v, f.face, true
+    if f.site == "medical" and medicalSite then fu, fv, ff, link = medicalSite.u, medicalSite.v, medicalSite.face, medicalSite.link end
+    rows[#rows + 1] = { f = f, list = FT[f.prefab], u = fu, v = fv, face = ff }
+    if f.extra and link and FT[f.extra] then rows[#rows + 1] = { f = f, list = FT[f.extra], u = fu, v = fv, face = ff } end
+  end
+  for _, row in ipairs(rows) do
+    local f, list = row.f, row.list
     if list and #list > 0 then
-      local up = dirAt(Fr, f.u, f.v)
-      local fwd = face_at(Fr, up, f.face)
+      local up = dirAt(Fr, row.u, row.v)
+      local fwd = face_at(Fr, up, row.face)
       local right = cross(up, fwd)
       local g = add(mul(up, Fr.R + (f.lift or 0)), O, -1)
       local function P(x, y, z) return add(add(add(g, right, x), fwd, z), up, y) end
@@ -2279,6 +2321,7 @@ local function try_place()
   -- THE BUILDINGS, the floodlights, and the paving.
   for _, f in ipairs(FACILITIES) do
     if not done[f.prefab] then
+      if f.site == "medical" then f = medical_site(f, F, body.name) end
       place_facility(f, body, F, planet_node)
       done[f.prefab] = true
       placed = placed + 1
@@ -2302,13 +2345,87 @@ local function try_place()
   return true
 end
 
+-- ── MEDICAL BAY SITE (missions M1) ──────────────────────────────────────────
+-- An old save may have the player's own structures (kit builds) where the
+-- Medical Bay now stands. Nothing of theirs is moved or buried: the bay
+-- goes to the first lot in MEDICAL_SITES with none of their structures on
+-- it (the lot plus MEDICAL_CLEAR m; on the first, the link's run too), and
+-- `medicalSite` says which, so medical.lua can tell the player where it is.
+-- Off its first lot it has no link (the lab's Med Door stays shut) and its
+-- west door opens to the yard.
+MEDICAL_CLEAR = 4.0
+MEDICAL_SITES = {
+  { u = -34.0, v = 34.0, face = "S", where = "between the Research Lab and the VAB" },
+  { u = -36.0, v = -28.0, face = "N", where = "south of Road West, across from the Commerce Depot", link = false },
+  { u = 112.0, v = 30.0, face = "W", where = "east of the Power Yard", link = false },
+}
+MEDICAL_LINK_LOT = { lot = { 6.7, 3.1 }, ox = -9.8, oz = 0.15 }   -- the link's run, in the bay's frame
+medicalSite = nil          -- { i, u, v, face, where, link, blockedBy } once placed
+-- (pure) does the lot of `f` at (su, sv, face) hold the layout point (pu, pv)?
+function lotHolds(f, su, sv, face, pu, pv, margin)
+  local du, dv = pu - su, pv - sv
+  -- the model's x / z (its front, +z, toward `face`) in layout metres
+  local fx, fz
+  if face == "S" then fx, fz = du, -dv elseif face == "N" then fx, fz = -du, dv
+  elseif face == "E" then fx, fz = -dv, du else fx, fz = dv, -du end
+  fx, fz = fx - (f.ox or 0), fz - (f.oz or 0)
+  return math.abs(fx) <= f.lot[1] / 2 + (margin or 0) and math.abs(fz) <= f.lot[2] / 2 + (margin or 0)
+end
+-- (pure) the first of `sites` that none of `pts` ({ u, v, name }) stands on
+-- → index (nil if none), the name of what blocked the first lot
+function pickSite(f, sites, pts, margin)
+  local blocked = nil
+  for i, s in ipairs(sites) do
+    local hit = nil
+    for _, p in ipairs(pts) do
+      if lotHolds(f, s.u, s.v, s.face, p.u, p.v, margin)
+        or (s.link ~= false and f.extra and lotHolds(MEDICAL_LINK_LOT, s.u, s.v, s.face, p.u, p.v, margin)) then
+        hit = p
+        break
+      end
+    end
+    if not hit then return i, blocked end
+    blocked = blocked or hit.name
+  end
+  return nil, blocked
+end
+function medical_site(f, Fr, bname)
+  local pts = {}
+  local ST = findScript and findScript("structures", { quiet = true })
+  for _, r in ipairs((ST and ST.list and ST.list()) or {}) do
+    if r.b == bname and type(r.x) == "number" and not r.ru then
+      local u, v = uvOf(Fr, V(r.x, r.y, r.z))
+      pts[#pts + 1] = { u = u, v = v, name = r.n or ("structure " .. tostring(r.id)) }
+    end
+  end
+  local i, blocked = pickSite(f, MEDICAL_SITES, pts, MEDICAL_CLEAR)
+  if not i then
+    i = #MEDICAL_SITES
+    log("base: something of the player's stands on every Medical Bay lot; it takes the last one anyway")
+  end
+  local s = MEDICAL_SITES[i]
+  medicalSite = { i = i, u = s.u, v = s.v, face = s.face, where = s.where, link = s.link ~= false,
+                  blockedBy = i > 1 and blocked or nil }
+  if i == 1 then return f end
+  log(string.format("base: the Medical Bay's lot holds %s: it stands %s instead", tostring(blocked), s.where))
+  local g = {}
+  for k, v in pairs(f) do g[k] = v end
+  g.u, g.v, g.face, g.link = s.u, s.v, s.face, false
+  return g
+end
+
 -- Tear the base down and forget where it was, so the next tick re-sites it
 -- wherever the crew is standing. The debug key (`cheats.lua`, F6) calls this.
 function resite()
   for _, f in ipairs(FACILITIES) do
     local n = find(f.prefab)
     if n and n.valid then n:destroy() end
+    for _, k in ipairs({ f.interior, f.extra }) do
+      local m = k and find(k)
+      if m and m.valid then m:destroy() end
+    end
   end
+  medicalSite = nil
   for _ = 1, #APRON_FLOODS do
     local n = find("BaseFlood")
     if n and n.valid then n:destroy() end

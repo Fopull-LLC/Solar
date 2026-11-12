@@ -166,6 +166,10 @@ TECH = {
   quarry       = { cost = 2500, label = "Quarry (Posts, Drive)", feat = "machine_worked", rp = 20, scnOpen = true },
   shoring      = { cost = 0, label = "Mine Shoring Frame", grantOnly = true, featGrant = "cave_kinds", scnOpen = true,
                    grantLabel = "a cave explored" },
+  -- (missions N1/M1) the Depot's Stretcher, once the Medical Bay has taken
+  -- in its first survivor
+  stretcher    = { cost = 0, label = "Stretcher", grantOnly = true, featGrant = "medevac", scnOpen = true,
+                   grantLabel = "a survivor brought to the Medical Bay" },
 }
 
 -- BASE parts behind a craft part's research (the BASE section's ids are not

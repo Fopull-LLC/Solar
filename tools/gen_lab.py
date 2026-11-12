@@ -526,11 +526,19 @@ def room(K):
     lining("x", -ZI, -XI, XI, 1)                          # north
     lining("x", ZI, -XI, XI, -1, gaps=[(dx0, dx1, dh)])   # south, the doorway
     lining("z", -XI, -ZI + 0.013, ZI - 0.013, 1)          # west
-    lining("z", XI, -ZI + 0.013, ZI - 0.013, -1)          # east
+    mz0, mz1 = L["med_z0"], L["med_z1"]
+    lining("z", XI, -ZI + 0.013, ZI - 0.013, -1, gaps=[(mz0, mz1, dh)])   # east, the Medical Bay's doorway (M1)
     # the doorway's reveal: steel lining the cut through the wall
     for xx in (dx0, dx1):
         Bx(m, "LabSteel", STEEL, xx - 0.015, xx + 0.015, FT, dh, ZI - 0.02, ZI + L["t"] + 0.03)
     Bx(m, "LabSteel", STEEL, dx0 + 0.016, dx1 - 0.016, dh - 0.015, dh + 0.015, ZI - 0.02, ZI + L["t"] + 0.03)
+    # (M1) the east doorway's reveal and threshold, out to the shell's face
+    # (the Medical Bay's link meets it there: base_buildings MedLink)
+    for zz in (mz0, mz1):
+        Bx(m, "LabSteel", STEEL, XI - 0.02, L["W"] + 0.004, FT, dh, zz - 0.015, zz + 0.015)
+    Bx(m, "LabSteel", STEEL, XI - 0.02, L["W"] + 0.004, dh - 0.015, dh + 0.015, mz0 + 0.016, mz1 - 0.016)
+    Bx(m, "LabSteel", (0.52, 0.53, 0.54), XI, L["W"], 0.12, FT, mz0 + 0.016, mz1 - 0.016)
+    solid(sh, XI, L["W"], 0.12, FT, mz0, mz1)
 
     # THE CEILING: 600 mm tiles in a white T-bar grid; flush LED panels
     m.color = WALL
@@ -1160,30 +1168,24 @@ def west_east(K):
     Bx(m, "LabWall", SAFETY_Y, -XI, -XI + 0.55, FT, 1.2, 2.4, 3.15, sh=sh)
     Bx(m, "LabWall", (0.70, 0.54, 0.04), -XI + 0.55, -XI + 0.56, FT + 0.05, 1.15, 2.42, 3.13)
     plate(m, "l_flam", (-XI + 0.562, 0.9, 2.775), (0, 0, -1), (0, 1, 0), 0.5, depth=0.003)
-    # EAST: the -80 freezer, a lab fridge, the whiteboard
-    Bx(m, "LabWall", (0.93, 0.93, 0.92), XI - 0.85, XI, FT, 2.0, 1.8, 2.75, sh=sh, bevel=0.02)
-    Bx(m, "LabWall", (0.86, 0.87, 0.87), XI - 0.87, XI - 0.85, FT + 0.12, 1.85, 1.85, 2.7)
-    screen(m, "l_s_freezer", (XI - 0.875, 1.7, 2.25), (0, 0, 1), (0, 1, 0), 0.22, bezel=0.01, depth=0.02)
-    Tb(m, "LabSteel", STEEL, (XI - 0.9, 0.9, 1.9), (XI - 0.9, 1.4, 1.9), 0.012, segs=8)
-    plate(m, "l_minus80", (XI - 0.871, 1.95, 2.25), (0, 0, 1), (0, 1, 0), 0.7, depth=0.003)
-    Bx(m, "LabWall", (0.93, 0.93, 0.92), XI - 0.7, XI, FT, 1.7, 0.6, 1.5, sh=sh, bevel=0.02)
-    g.color = (1, 1, 1)
-    box(g, "LabGlass", (XI - 0.705, 1.0, 1.05), (0.008, 1.2, 0.8))
-    for y in (0.6, 0.95, 1.3):
-        Bx(m, "LabSteel", STEEL_D, XI - 0.65, XI - 0.05, y, y + 0.01, 0.66, 1.44)
-        for k in range(5):
-            Tb(m, "LabResin", ((0.85, 0.86, 0.86), (0.62, 0.15, 0.10), (0.15, 0.35, 0.65))[k % 3],
-               (XI - 0.5 + k * 0.09, y + 0.01, 1.2), (XI - 0.5 + k * 0.09, y + 0.12, 1.2), 0.02, segs=8)
-    # the whiteboard and its tray, a wall clock
-    wz0, wz1 = -1.6, 0.2
-    Bx(m, "LabSteel", ALU, XI - 0.03, XI, 1.0, 2.1, wz0 - 0.03, wz1 + 0.03)
-    cuboid(m, (XI - 0.031, 1.55, (wz0 + wz1) / 2), (0, 0, 1), (0, 1, 0), wz1 - wz0, 1.04, 0.002,
+    # EAST: the -80 freezer, and the whiteboard over it, north of the
+    # vestibule (M1: the Medical Bay's doorway took the wall where they stood,
+    # with its leaves' run; the lab fridge went)
+    fz0 = 2.3
+    Bx(m, "LabWall", (0.93, 0.93, 0.92), XI - 0.85, XI, FT, 2.0, fz0, fz0 + 0.95, sh=sh, bevel=0.02)
+    Bx(m, "LabWall", (0.86, 0.87, 0.87), XI - 0.87, XI - 0.85, FT + 0.12, 1.85, fz0 + 0.05, fz0 + 0.9)
+    screen(m, "l_s_freezer", (XI - 0.875, 1.7, fz0 + 0.45), (0, 0, 1), (0, 1, 0), 0.22, bezel=0.01, depth=0.02)
+    Tb(m, "LabSteel", STEEL, (XI - 0.9, 0.9, fz0 + 0.1), (XI - 0.9, 1.4, fz0 + 0.1), 0.012, segs=8)
+    plate(m, "l_minus80", (XI - 0.871, 1.95, fz0 + 0.45), (0, 0, 1), (0, 1, 0), 0.7, depth=0.003)
+    # the whiteboard over the freezer (no tray: the freezer's top is under it)
+    wz0, wz1 = fz0 - 0.05, fz0 + 1.0
+    Bx(m, "LabSteel", ALU, XI - 0.03, XI, 2.12, 2.92, wz0 - 0.03, wz1 + 0.03)
+    cuboid(m, (XI - 0.031, 2.52, (wz0 + wz1) / 2), (0, 0, 1), (0, 1, 0), wz1 - wz0, 0.74, 0.002,
            faces={"front": ("LabSign", (1, 1, 1), "l_whiteboard")}, col=(0.9, 0.9, 0.9), mat="LabWall")
-    Bx(m, "LabSteel", ALU, XI - 0.09, XI - 0.03, 0.98, 1.0, wz0, wz1)
-    for k, col in enumerate(((0.05, 0.1, 0.4), (0.4, 0.05, 0.03), (0.05, 0.05, 0.06))):
-        Tb(m, "LabResin", col, (XI - 0.06, 1.007, wz0 + 0.2 + k * 0.15), (XI - 0.06, 1.007, wz0 + 0.32 + k * 0.15), 0.007, segs=6)
-    Tb(m, "LabWall", (0.95, 0.95, 0.94), (XI - 0.01, 2.75, -0.7), (XI - 0.05, 2.75, -0.7), 0.15, segs=24)
-    Tb(m, "LabResin", DARKP, (XI - 0.051, 2.75, -0.7), (XI - 0.053, 2.75, -0.7), 0.13, segs=24)
+    # the wall clock over the Medical Bay's doorway
+    mzc = (L["med_z0"] + L["med_z1"]) / 2
+    Tb(m, "LabWall", (0.95, 0.95, 0.94), (XI - 0.01, 3.0, mzc), (XI - 0.05, 3.0, mzc), 0.15, segs=24)
+    Tb(m, "LabResin", DARKP, (XI - 0.051, 3.0, mzc), (XI - 0.053, 3.0, mzc), 0.13, segs=24)
     # the fire extinguisher by the lab door, a first-aid box
     solid(sh, 5.7, 5.9, FT, 1.0, ZI - 0.21, ZI)
     Tb(m, "LabWall", RED, (5.8, FT + 0.35, ZI - 0.12), (5.8, FT + 0.92, ZI - 0.12), 0.08, segs=16)
@@ -1231,6 +1233,20 @@ def doors(K):
         m.merge(gm)
         Bx(m, "LabSteel", STEEL, -0.02 * s - 0.01 + (w / 2 - 0.08) * -s, -0.02 * s + 0.01 + (w / 2 - 0.08) * -s, 0.85, 1.25, 0.03, 0.045)
         out["Lab Door " + side] = (m, (cx, FT, zc), "z", s)
+    # (M1) the Medical Bay's pair in the east doorway, on the wall's inside
+    # face: each leaf slides 1.0 m along z (north -z, south +z) clear of it
+    mz0, mz1 = L["med_z0"], L["med_z1"]
+    mw = (mz1 - mz0) / 2
+    xc = XI - 0.06
+    for side, s in (("N", -1), ("S", 1)):
+        m = CModel(420 + s); m.ground = False
+        zc = (mz0 + mz1) / 2 + s * mw / 2
+        Bx(m, "LabSteel", ALU, -0.025, 0.025, 0.0, dh - FT - 0.02, -mw / 2, mw / 2)
+        gm = CModel(); gm.ground = False; gm.color = (1, 1, 1)
+        box(gm, "LabGlass", (0.0, (dh - FT) / 2 + 0.05, 0.0), (0.03, dh - FT - 0.35, mw - 0.12))
+        m.merge(gm)
+        Bx(m, "LabSteel", STEEL, -0.045, -0.03, 0.85, 1.25, -s * (mw / 2 - 0.09), -s * (mw / 2 - 0.07))
+        out["Med Door " + side] = (m, (xc, FT, zc), "z", s)
     for name, (a0, a1), axis, fixed in (("Inner Door", INNER_DOOR, "zaxis", VX), ("Instr Door", INSTR_DOOR, "xaxis", IZ)):
         m = CModel(410); m.ground = False
         ww = a1 - a0

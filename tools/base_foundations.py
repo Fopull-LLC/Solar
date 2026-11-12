@@ -61,6 +61,11 @@ STRUCTURES = [
     ("FacIntake", "intake.glb", 0.15),
     ("FacRepair", "repair.glb", 0.15),
     ("FacLab", "lab.glb", 0.15),
+    # (M1) the Medical Bay, and its link to the lab: MedLink's rows are in
+    # FacMedical's ground frame (its prefab's seat / ox / oz say so), laid with
+    # the bay only where the link stands
+    ("FacMedical", "medical.glb", 0.15),
+    ("MedLink", "medical_link.glb", 0.15),
 ]
 
 

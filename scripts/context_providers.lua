@@ -984,6 +984,42 @@ local function astro_medkit(t, ctx)
   return medkit_rows(id, ctx)
 end
 
+-- (missions N1) CARRYING AND FOLLOWING: on someone lying on the ground (a
+-- crew member down, a survivor) "Carry"; on a survivor who can walk "Follow
+-- me" / "Wait here"; on yourself while carrying, "Set <name> down". Each
+-- dimmed with crew.lua's sentence when it can't be done.
+local function member_carry(t, ctx)
+  local c = R(ctx, "crew")
+  if not (t.id and c and c.carryWhyNot) then return {} end
+  local r = c.get(t.id)
+  if not r or r.status ~= "afoot" then return {} end
+  local out = {}
+  if r.downed or r.client or (r.hp or 1) < ((c.CARRY and c.CARRY.follow_hp) or 0.35) then
+    out[#out + 1] = { type = "action", id = "carry", group = "CREW", label = "Carry " .. tostring(r.name or ""),
+      hint = "on your back", enabled = function() return c.carryWhyNot(t.id) == nil end,
+      why = function() return c.carryWhyNot(t.id) end, act = function() return c.carry(t.id) end }
+  end
+  if r.client and c.follow then
+    if r.follow then
+      out[#out + 1] = { type = "action", id = "follow_off", group = "CREW", label = "Wait here",
+        act = function() return c.follow(t.id, false) end }
+    else
+      out[#out + 1] = { type = "action", id = "follow", group = "CREW", label = "Follow me",
+        enabled = function() return c.followWhyNot(t.id) == nil end, why = function() return c.followWhyNot(t.id) end,
+        act = function() return c.follow(t.id, true) end }
+    end
+  end
+  return out
+end
+local function astro_carry(t, ctx)
+  local c = R(ctx, "crew")
+  local who = c and c.carrying and c.carrying()
+  if not who then return {} end
+  local r = c.get(who)
+  return { { type = "action", id = "putdown", group = "CREW", label = "Set " .. tostring(r and r.name or "them") .. " down",
+    hint = "in front of you", act = function() return c.putDown() end } }
+end
+
 -- ENTER (Ty 2026-11-11: "right-clicking and entering that hatch"): a crewed
 -- part with a hatch, for the crew on foot at it — on its ladder by the
 -- hatch, or within reach of a hatch at standing height (a craft with no
@@ -1007,8 +1043,10 @@ end
 PROVIDED = {
   { "part", "enter", part_enter, 4 },
   { "astro", "task.cancel", task_cancel_astro, 5 },
+  { "astro", "carry", astro_carry, 6 },
   { "astro", "medkit", astro_medkit, 8 },
   { "member", "medkit", member_medkit, 10 },
+  { "member", "carry", member_carry, 11 },
   { "astro", "suit", astro_provider, 10 },
   { "part", "task.cancel", task_cancel_part, 5 },
   { "part", "held.repair", held_repair, 15 },

@@ -50,8 +50,12 @@ local function find_parts(node)
   anim = model and model.animator and model:animator() or nil
 end
 
-function bind(i, st, frame, hands, look)
+-- (missions M1) `root`: the building whose frame `frame` is (the Medical
+-- Bay's medic); nil = the Research Lab's
+local root_ = nil
+function bind(i, st, frame, hands, look, root)
   idx, staff, F, hands_m, look_m = i, st, frame, hands, look
+  root_ = root
   seed = (st and st.seed) or i
 end
 
@@ -74,9 +78,11 @@ function start(node)
 end
 
 local function to_world(lx, ly, lz)
-  local root = nil
-  local lab = findScript and findScript("lab")
-  root = lab and lab.ROOT
+  local root = root_
+  if not (root and root.valid ~= false) then
+    local lab = findScript and findScript("lab")
+    root = lab and lab.ROOT
+  end
   if not (valid(root) and F) then return nil end
   local pw = root.parent and root.parent.worldPos
   if not pw then return nil end
@@ -240,6 +246,11 @@ local function crew_head()
   return astro:toWorld(vec3(0, 0.62, 0))
 end
 local function talking_to_me()
+  -- (missions M1) the Medical Bay's medic, while you talk to her
+  if root_ then
+    local md = findScript and findScript("medical")
+    return md and md.isTalking and md.isTalking() or false
+  end
   local lt = findScript and findScript("lab_talk")
   return lt and lt.isOpen and lt.isOpen() and lt.talkingTo and lt.talkingTo() == idx
 end

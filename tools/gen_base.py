@@ -152,6 +152,8 @@ MATERIALS = {
                              ("metallic_map", f'Some("{TEX}signs_orm.png")'), ("metallic", "1.0"),
                              ("ao_map", f'Some("{TEX}signs_orm.png")')))
                          + '                shading: Physical,\n            )'),
+    # (M1) the Medical Bay's plates: their own small atlas (tools/med_signs.py)
+    "MedSign":  lambda: __import__("med_signs").MED_SIGN,
     # The intake's conveyor belt: worn rubber with chevron cleats that scroll
     # toward the hole (shaders/conveyor_belt.flsl; material_intake.lua feeds
     # `phase`, the metres the belt has run, so the cleats move with the load).
@@ -326,8 +328,8 @@ def prefab(name, glb, model, about, shell=None, lights=(), shift=(0, 0, 0), root
     return "".join(out)
 
 
-from base_buildings import (command_centre, depot, fuel_farm, intake, lab, launch_complex, pad_clamps,  # noqa: E402
-                            power, repair_bay, tracking, vab)
+from base_buildings import (command_centre, depot, fuel_farm, intake, lab, launch_complex, medical,  # noqa: E402
+                            medical_link, pad_clamps, power, repair_bay, tracking, vab)
 from base_models import CModel, zcheck  # noqa: E402
 
 BUILDS = [
@@ -356,7 +358,82 @@ BUILDS = [
     ("FacLab", "lab.glb", lab,
      "RESEARCH LAB — joined to the Commerce Depot by a glazed link; the intake's samples arrive up the tube "
      "(scripts/lab.lua; the interior is prefabs/LabInterior, tools/gen_lab.py).", ["base_works", "lab"], ["lab"]),
+    ("FacMedical", "medical.glb", medical,
+     "MEDICAL BAY — drive in from Medical Alley, walk in from the lab's link; the medic heals the crew "
+     "(scripts/medical.lua; the link is prefabs/MedLink, the interior prefabs/MedInterior, tools/gen_medical.py).",
+     ["base_works", "medical"], ["medical"]),
 ]
+
+
+def write_med_link(c_bay):
+    """MED LINK — the Medical Bay's glazed link to the lab (base_buildings
+    medical_link): a root on FacMedical's origin (the bay's box centre
+    `c_bay`, in the bay's ground frame), its mesh and collider boxes under it.
+    base_facilities spawns it with the bay's position and rotation, only on
+    the bay's own lot. Its prefab comment carries the seat / ox / oz that put
+    its glb back into the BAY's ground frame (base_foundations: FOUNDATIONS
+    MedLink is in FacMedical's frame)."""
+    m, sh = medical_link()
+    fights = zcheck(m, "MedLink")
+    mn, mx = m.bounds()
+    c = (mn + mx) / 2
+    print(f"MedLink      ({(mx - mn)[0]:6.2f}, {(mx - mn)[1]:6.2f}, {(mx - mn)[2]:6.2f})  box centre {np.round(c, 3)} "
+          f"{m.tris():7d} tris {len(sh.boxes):3d} boxes")
+    if fights:
+        return fights, m
+    write_glb(m.shifted(c), os.path.join(MODELS, "medical_link.glb"))
+    d = np.asarray(c_bay, float)
+    mats = ",\n".join(f'            "{n}": {MATERIALS[n]()}' for n in sorted(m.parts.keys()))
+    out = [f'''// MED LINK — the Medical Bay's glazed link to the Research Lab's east wall (tools/base_buildings.py medical_link).
+// Written by tools/gen_base.py — edit the generator, not this file. Same origin as FacMedical.
+// Ground frame → mesh: seat {c[1]:.3f} m, lot offset ox {c[0]:.3f}, oz {c[2]:.3f} (the bay's ground frame).
+[
+    (
+        name: "MedLink",
+        tags: ["med_link"],
+        transform: (
+            translation: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+    ),
+    (
+        name: "MedLinkModel",
+        transform: (
+            translation: {f3(c - d)},
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Mesh(
+            asset_path: "models/base/medical_link.glb",
+        ),
+        object_materials: {{
+{mats},
+        }},
+        scripts: [],
+        parent: Some(0),
+    ),
+''']
+    for i, (bc, bs, q) in enumerate(sh.boxes):
+        out.append(f'''    (
+        name: "Shell {i + 1}",
+        transform: (
+            translation: {f3(bc - d)},
+            rotation: ({q[0]:.5f}, {q[1]:.5f}, {q[2]:.5f}, {q[3]:.5f}),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+{collider_block(bs / 2)}    ),
+''')
+    out.append("]\n")
+    with open(os.path.join(PREFABS, "MedLink.prefab.ron"), "w") as f:
+        f.write("".join(out))
+    return 0, m
 
 
 def write_sign_uv():
@@ -377,11 +454,25 @@ def write_sign_uv():
 
 def main():
     dry = "--dry" in sys.argv
+    # --keep-tex: the models and prefabs only. textures/base/* is left alone
+    # (base_tex does not regenerate byte for byte: a full run rewrites every
+    # picture); the atlas is laid out again in a scratch folder for its
+    # regions, which depend only on the plates' sizes.
+    keep_tex = "--keep-tex" in sys.argv
     os.makedirs(MODELS, exist_ok=True)
-    if dry:
+    import med_signs
+    if dry or keep_tex:
+        import shutil
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="gen_base_")
+        for fn in ("concrete_albedo.png",):
+            shutil.copy(os.path.join(base_tex.OUT, fn), tmp)
+        base_tex.OUT = tmp        # (signs() writes its atlas there, not over the real one)
         base_tex.signs()          # the atlas regions are needed to lay the plates
+        med_signs.signs()
     else:
         base_tex.main()
+        med_signs.signs(os.path.join(ROOT, "textures", "medical"))
     print("prefab        size (x, y, z)                seat     ox      oz     tris  boxes  mats")
     fights = 0
     only = None
@@ -419,6 +510,12 @@ def main():
             umn, umx = np.min(mns, 0), np.max(mxs, 0)
             print(f"{'':12s} whole building ({umx[0] - umn[0]:6.2f}, {umx[1] - umn[1]:6.2f}, {umx[2] - umn[2]:6.2f}),"
                   f" box centre {np.round((umn + umx) / 2 - c, 3)} off the origin; {len(subs)} fading parts")
+        if name == "FacMedical":
+            # (the bay, its link and its interior where they share planes)
+            lm, _ = medical_link()
+            allm = CModel()
+            allm.merge(m); allm.merge(lm)
+            fights += zcheck(allm, "FacMedical + MedLink")
         if dry or fights:
             continue
         write_glb(mc, os.path.join(MODELS, glb))
@@ -433,6 +530,10 @@ def main():
         with open(os.path.join(PREFABS, name + ".prefab.ron"), "w") as f:
             f.write(prefab(name, glb, mc, about2, shell=sh, lights=lights, shift=c, markers=markers, subs=sub_nodes,
                            tags=tags, scripts=scripts))
+        if name == "FacMedical":
+            # its link to the lab: a prefab of its own on the bay's origin
+            fl, _ = write_med_link(c)
+            fights += fl
     if not dry:
         # BaseFlood: one apron floodlight (a spot down its −Z). The mast and
         # the lamp housing are in base_facilities' fixtures mesh; this is only
@@ -461,8 +562,9 @@ def main():
     if fights:
         print(f"!! {fights} z-fighting face pairs: nothing written")
         sys.exit(1)
-    if not dry:
+    if not dry and not keep_tex:
         write_sign_uv()
+    if not dry:
         # the footings under every structure, read back from the models just
         # written (tools/base_foundations.py -> base_facilities FOUNDATIONS)
         import base_foundations
@@ -471,7 +573,7 @@ def main():
     mn, mx = pc.bounds()
     c = (mn + mx) / 2
     print(f"PadClamps    ({(mx - mn)[0]:6.2f}, {(mx - mn)[1]:6.2f}, {(mx - mn)[2]:6.2f})  centre {np.round(c, 3)}")
-    if not dry:
+    if not dry and not keep_tex:
         # The posts sit on the deck: the root is the deck box's centre (1.245
         # under its top), so the posts' local y is 1.245 + their half height.
         pcs = pc.shifted(c)

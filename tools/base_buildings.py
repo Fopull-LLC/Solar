@@ -1198,7 +1198,10 @@ LAB = dict(W=11.0, D=7.0, H=5.6, t=0.35,
            # the outside door in the corridor's east wall
            xdoor_z0=8.5, xdoor_z1=10.0,
            # where the tube comes through the south wall
-           tube_x=-8.0, tube_y=3.2)
+           tube_x=-8.0, tube_y=3.2,
+           # (missions M1) the Medical Bay's link comes in through the east
+           # wall: the doorway's z span (the interior's Med Door leaves close it)
+           med_z0=-0.85, med_z1=1.15)
 WHITE_CLAD = (0.84, 0.85, 0.84)    # the lab's cladding: clean white, a shade cool
 LAB_TRIM = (0.30, 0.38, 0.46)      # the blue-grey band and trim
 
@@ -1216,11 +1219,15 @@ def lab():
     lx0, lx1, lz1, lh = L["link_x0"], L["link_x1"], L["link_z1"], L["link_h"]
     dx0, dx1, dh = L["door_x0"], L["door_x1"], L["door_h"]
     B(m, "Concrete", CONC, -W - 0.4, W + 0.4, -0.6, 0.12, -D - 0.4, D + 0.3, sh=sh)
-    # walls: west, east, north whole; the south one holes for the link door
-    for sx in (-1, 1):
-        x0, x1 = (W - t, W) if sx > 0 else (-W, -W + t)
-        B(m, "Clad", WHITE_CLAD, x0, x1, -0.5, H, -D, D)
-        sh.add(((x0 + x1) / 2, H / 2, 0.0), (t, H, 2 * D))
+    # walls: west and north whole; the south one holes for the link door,
+    # the east one for the Medical Bay's link (M1)
+    mz0, mz1 = L["med_z0"], L["med_z1"]
+    B(m, "Clad", WHITE_CLAD, -W, -W + t, -0.5, H, -D, D)
+    sh.add(((-W + -W + t) / 2, H / 2, 0.0), (t, H, 2 * D))
+    for (za, zb) in ((-D, mz0), (mz1, D)):
+        B(m, "Clad", WHITE_CLAD, W - t, W, -0.5, H, za, zb)
+        sh.add((W - t / 2, H / 2, (za + zb) / 2), (t, H, zb - za))
+    B(m, "Clad", WHITE_CLAD, W - t, W, dh, H, mz0, mz1, sh=sh)
     B(m, "Clad", WHITE_CLAD, -W + t, W - t, -0.5, H, -D, -D + t, sh=sh)
     z0, z1 = D - t, D
     for (xa, xb) in ((-W + t, dx0), (dx1, W - t)):
@@ -1240,6 +1247,8 @@ def lab():
     m.color = (0.07, 0.09, 0.11)
     for z in (-4.5, -1.5, 1.5, 4.5):
         for sx in (-1, 1):
+            if sx > 0 and abs(z) < 2.0:
+                continue        # (the Medical Bay's doorway is there)
             xo = sx * (W + 0.01)
             box(m, "Glass", (xo, 1.95, z), (0.02, 1.25, 2.2))
             B(m, "Steel", DARK, sx * W, sx * (W + 0.07), 1.25, 1.32, z - 1.18, z + 1.18, var=False)
@@ -1373,3 +1382,226 @@ def link_depot_half(m, sh, W, D, H):
     B(m, "Steel", (0.52, 0.53, 0.54), -hw + 0.25, hw - 0.25, 0.12, 0.135, zj - 0.25, zj + 0.25, var=False)
     m.color = LAMP_COOL
     box(m, "Lamp", (0.0, L["link_h"] - 0.04, -D - 2.2), (0.3, 0.04, 1.2))
+
+
+# ── THE MEDICAL BAY (missions M1, Ty 2026-11-11) ────────────────────────────
+# Between the Research Lab and the VAB (base_facilities FACILITIES FacMedical,
+# u -34, v 34, facing S): a drive-in bay off Medical Alley under a roller door
+# in the south wall, a treatment area with two beds on the west, and a glazed
+# link (prefabs/MedLink, its own model on the bay's origin) from the west
+# wall's walk-in doorway to the lab's east wall (base_buildings LAB med_z0..1,
+# the lab's "Med Door" leaves). The interior (tools/gen_medical.py, prefab
+# MedInterior on the same origin) is visual only: every solid is here, in the
+# shell's collider boxes, so nothing that collides is ever switched off.
+MED = dict(W=6.5, D=8.5, H=5.2, t=0.35,
+           # the drive-in door in the south wall (x span, height)
+           door_x0=0.55, door_x1=4.95, door_h=4.0,
+           # the walk-in doorway in the west wall (z span, height): the lab's
+           # Med Door is on the same line (both frames share their axes)
+           walk_z0=-0.85, walk_z1=1.15, walk_h=2.6,
+           # the link: from the bay's west wall out to the lab's east wall face
+           # (lab x 11 = bay x -13), its walls' outer z, the glazing's head
+           link_x0=-13.0, link_lab_slab=-12.6, link_z0=-1.30, link_z1=1.60, link_h=3.2,
+           # the treatment area's dropped ceiling, and its east edge
+           ceil=3.2, treat_x1=-0.6)
+MED_RED = (0.46, 0.13, 0.11)       # the band: a dull oxide red
+MED_FT = 0.12                      # the slab's top (the floor)
+BEDS = (-4.6, -1.9)                # the beds' centre lines (x), heads to the north wall
+BED = dict(hw=0.48, z0=-8.0, z1=-5.85, top=0.66)
+# Every piece of furniture's solid volume (x0, x1, y0, y1, z0, z1): the shell's
+# collider boxes; tools/gen_medical.py draws them to the same numbers.
+MED_SOLIDS = {
+    "bed1": (BEDS[0] - BED["hw"], BEDS[0] + BED["hw"], MED_FT, BED["top"], BED["z0"], BED["z1"]),
+    "bed2": (BEDS[1] - BED["hw"], BEDS[1] + BED["hw"], MED_FT, BED["top"], BED["z0"], BED["z1"]),
+    "cart": (-3.62, -2.88, MED_FT, 0.93, -4.40, -3.90),          # the crash cart (Med 1 Hands)
+    "iv1": (BEDS[0] + 0.66, BEDS[0] + 0.80, MED_FT, 2.0, -7.20, -7.06),
+    "iv2": (BEDS[1] + 0.66, BEDS[1] + 0.80, MED_FT, 2.0, -7.20, -7.06),
+    "o2": (-1.15, -0.65, MED_FT, 1.55, -8.13, -7.63),             # the oxygen cylinders' rack
+    "cab": (-6.15, -5.72, MED_FT, 2.10, -5.30, -2.30),            # glass-front supply cabinets
+    "sink": (-6.15, -5.62, MED_FT, 0.92, -2.05, -1.25),
+    "desk": (-6.15, -5.40, MED_FT, 0.76, 2.20, 4.00),
+    "chair": (-5.22, -4.78, MED_FT, 0.52, 2.88, 3.32),
+    "lockers": (-6.10, -3.70, MED_FT, 1.95, 7.70, 8.15),
+    "bucket": (-3.52, -3.12, MED_FT, 0.45, 7.25, 7.65),
+    "trolley": (-1.18, -0.56, MED_FT, 0.86, 3.00, 5.00),          # the stretcher trolley
+    "shelf": (5.65, 6.15, MED_FT, 2.20, -2.00, 2.00),             # the bay's east-wall shelving
+    "boards": (5.98, 6.15, MED_FT, 1.95, 3.00, 4.60),             # spine boards on the wall
+    "chairw": (1.05, 1.75, MED_FT, 0.95, -7.95, -7.25),           # a wheelchair, parked
+}
+
+
+def medical():
+    """MEDICAL BAY — a 13 × 17 m single-storey block in the lab's white
+    cladding with a dull red band: a 4.4 m roller door south (always open,
+    a rover drives in to the stop line), a walk-in doorway west into the
+    glazed link to the lab, tinted clerestory windows, a red cross plate, an
+    oxygen store's vent and two air handlers on the roof. The furniture's
+    solids are this model's collider boxes (MED_SOLIDS)."""
+    M_ = MED
+    import med_signs
+    m, sh = CModel(31), Shell()
+    W, D, H, t = M_["W"], M_["D"], M_["H"], M_["t"]
+    dx0, dx1, dh = M_["door_x0"], M_["door_x1"], M_["door_h"]
+    wz0, wz1, wh = M_["walk_z0"], M_["walk_z1"], M_["walk_h"]
+    B(m, "Concrete", CONC, -W - 0.35, W + 0.35, -0.6, MED_FT, -D - 0.35, D + 1.2, sh=sh)
+    # walls: east and north whole; the west holes for the walk-in, the south
+    # for the roller door
+    B(m, "Clad", WHITE_CLAD, W - t, W, -0.5, H, -D, D)
+    sh.add((W - t / 2, H / 2, 0.0), (t, H, 2 * D))
+    B(m, "Clad", WHITE_CLAD, -W + t, W - t, -0.5, H, -D, -D + t, sh=sh)
+    for (za, zb) in ((-D, wz0), (wz1, D)):
+        B(m, "Clad", WHITE_CLAD, -W, -W + t, -0.5, H, za, zb)
+        sh.add((-W + t / 2, H / 2, (za + zb) / 2), (t, H, zb - za))
+    B(m, "Clad", WHITE_CLAD, -W, -W + t, wh, H, wz0, wz1, sh=sh)
+    z0, z1 = D - t, D
+    for (xa, xb) in ((-W + t, dx0 - 0.3), (dx1 + 0.3, W - t)):
+        B(m, "Clad", WHITE_CLAD, xa, xb, -0.5, H, z0, z1)
+        sh.add(((xa + xb) / 2, H / 2, (z0 + z1) / 2), (xb - xa, H, t))
+    B(m, "Clad", WHITE_CLAD, dx0 - 0.3, dx1 + 0.3, dh + 0.3, H, z0, z1, sh=sh)
+    # the walk-in doorway's steel reveal (the link's collar covers its face)
+    for zz in (wz0, wz1):
+        B(m, "Steel", GREY, -W - 0.005, -W + t + 0.005, MED_FT, wh - 0.02, zz if zz < 0 else zz - 0.02, zz + 0.02 if zz < 0 else zz,
+          var=False)
+    B(m, "Steel", GREY, -W - 0.005, -W + t + 0.005, wh - 0.02, wh, wz0, wz1, var=False)
+    # the red band at the head of the walls
+    for (xa, xb, za, zb) in ((-W - 0.06, W + 0.06, D, D + 0.06), (-W - 0.06, W + 0.06, -D - 0.06, -D),
+                             (W, W + 0.06, -D, D), (-W - 0.06, -W, -D, D)):
+        B(m, "Clad", MED_RED, xa, xb, H - 0.95, H - 0.35, za, zb, var=False)
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            B(m, "Steel", GREY, sx * (W - 0.46), sx * (W + 0.15), -0.3, H + 0.5, sz * (D - 0.46), sz * (D + 0.15))
+    # tinted clerestory windows: north over the beds and the bay, west either
+    # side of the link, south over the treatment area (nothing to see in)
+    def window_x(xc, zf, n_out, w=2.2):
+        m.color = (0.07, 0.09, 0.11)
+        box(m, "Glass", (xc, 2.45, zf + n_out * 0.01), (w, 0.9, 0.02))
+        for yy in (2.0, 2.9):
+            B(m, "Steel", DARK, xc - w / 2 - 0.02, xc + w / 2 + 0.02, yy - 0.035, yy + 0.035, zf, zf + n_out * 0.07, var=False)
+        for xx in (xc - w / 2, xc, xc + w / 2):
+            B(m, "Steel", DARK, xx - 0.035, xx + 0.035, 2.035, 2.865, zf, zf + n_out * 0.055, var=False)
+
+    def window_z(zc, xf, n_out, w=2.2):
+        m.color = (0.07, 0.09, 0.11)
+        box(m, "Glass", (xf + n_out * 0.01, 2.45, zc), (0.02, 0.9, w))
+        for yy in (2.0, 2.9):
+            B(m, "Steel", DARK, xf, xf + n_out * 0.07, yy - 0.035, yy + 0.035, zc - w / 2 - 0.02, zc + w / 2 + 0.02, var=False)
+        for zz in (zc - w / 2, zc, zc + w / 2):
+            B(m, "Steel", DARK, xf, xf + n_out * 0.055, 2.035, 2.865, zz - 0.035, zz + 0.035, var=False)
+    for xc in (-4.4, -1.6, 2.4):
+        window_x(xc, -D, -1)
+    window_x(-4.2, D, 1)
+    for zc in (-5.0, 5.0):
+        window_z(zc, -W, -1)
+    # THE ROLLER DOOR: striped posts, the head beam, the drum and its curtain
+    # rolled up, the guides; bollards outside, a lamp over it
+    for sx, xp in ((-1, dx0), (1, dx1)):
+        xa, xb = sorted((xp, xp - sx * 0.3))
+        B(m, "Steel", DARK, xa, xb, 0.0, dh, z0 - 0.05, z1 + 0.1, var=False)
+        cuboid(m, ((xa + xb) / 2, 1.0, z1 + 0.111), (1, 0, 0), (0, 1, 0), 0.26, 1.8, 0.02,
+               faces={"front": ("Sign", (1, 1, 1), "hazard")}, col=DARK)
+        bollard(m, xp + sx * 0.75, D + 0.75)
+        # the curtain's guide inside the post
+        B(m, "Steel", GREY, xp - sx * 0.02 - 0.03, xp - sx * 0.02 + 0.03, MED_FT, dh, z0 - 0.16, z0 - 0.05, var=False)
+    B(m, "Steel", DARK, dx0 - 0.3, dx1 + 0.3, dh, dh + 0.3, z0 - 0.05, z1 + 0.1, var=False)
+    T(m, "Steel", GREY, (dx0, dh + 0.48, z0 - 0.5), (dx1, dh + 0.48, z0 - 0.5), 0.36, segs=16)
+    for xx in (dx0 - 0.08, dx1 + 0.08):
+        B(m, "Steel", DARK, xx - 0.06, xx + 0.06, dh + 0.05, dh + 0.9, z0 - 0.9, z0 - 0.06, var=False)
+    for k in range(4):
+        ya = dh - 0.42 + k * 0.105
+        B(m, "Steel", (0.58, 0.60, 0.62), dx0 + 0.03, dx1 - 0.03, ya, ya + 0.095, z0 - 0.13, z0 - 0.07, var=False)
+    # the plates: the name over the door, the red cross, the building number,
+    # keep clear by the door (tools/med_signs.py, material MedSign)
+    med_signs.plate(m, "m_name", ((dx0 + dx1) / 2, dh + 0.70, z1), (1, 0, 0), (0, 1, 0), 3.4, depth=0.09)
+    med_signs.plate(m, "m_cross", (-1.85, 2.45, z1), (1, 0, 0), (0, 1, 0), 0.95, depth=0.04, back=(0.84, 0.85, 0.84))
+    med_signs.plate(m, "m_bldg", (-0.62, 2.25, z1), (1, 0, 0), (0, 1, 0), 0.55, depth=0.04)
+    med_signs.plate(m, "m_keep", (dx1 + 0.82, 1.75, z1), (1, 0, 0), (0, 1, 0), 0.8, depth=0.03)
+    med_signs.plate(m, "m_cross", (-W, 3.4, -3.2), (0, 0, 1), (0, 1, 0), 0.7, depth=0.04, back=(0.84, 0.85, 0.84))
+    lamp_head(m, ((dx0 + dx1) / 2, dh + 0.12, z1 + 0.55), (0, -0.8, 0.6), w=0.8, h=0.3)
+    for x in (-3.0, W - 0.5):
+        wall_pack(m, (x, 3.7, z1), (0, 0, 1))
+    wall_pack(m, (-W, 3.7, 5.0), (-1, 0, 0))
+    wall_pack(m, (-W, 3.7, -5.0), (-1, 0, 0))
+    # the roof: slab, parapet and coping, two air handlers, the medical gas
+    # store's vent stack, a hatch
+    B(m, "Concrete", CONC_DARK, -W + t, W - t, H - 0.3, H, -D + t, D - t, sh=sh)
+    for (xa, xb, za, zb) in ((-W + 0.46, W - 0.46, D - 0.2, D), (-W + 0.46, W - 0.46, -D, -D + 0.2),
+                             (W - 0.2, W, -D + 0.46, D - 0.46), (-W, -W + 0.2, -D + 0.46, D - 0.46)):
+        B(m, "Clad", WHITE_CLAD, xa, xb, H, H + 0.45, za, zb)
+    for (xa, xb, za, zb) in ((-W + 0.4, W - 0.4, D - 0.25, D + 0.05), (-W + 0.4, W - 0.4, -D - 0.05, -D + 0.25),
+                             (W - 0.25, W + 0.05, -D + 0.4, D - 0.4), (-W - 0.05, -W + 0.25, -D + 0.4, D - 0.4)):
+        B(m, "Steel", GREY, xa, xb, H + 0.45, H + 0.53, za, zb, var=False)
+    hvac(m, -3.2, H, -3.6, 2.6, 1.8, 1.2, fans=1)
+    hvac(m, 3.0, H, 2.8, 2.2, 1.6, 1.0, fans=1)
+    T(m, "Steel", LIGHT, (-1.0, H, 4.0), (-1.0, H + 2.2, 4.0), 0.11, segs=12)
+    T(m, "Steel", GREY, (-1.0, H + 2.2, 4.0), (-1.0, H + 2.26, 4.0), 0.15, segs=12)
+    B(m, "Steel", GREY, 3.6, 4.4, H, H + 0.8, -5.2, -4.4)
+    cable_tray(m, (-W + 1.0, H + 0.25, -6.8), (W - 1.0, H + 0.25, -6.8), w=0.3)
+    for x in (-W + 0.7, W - 0.7):
+        T(m, "Steel", GREY, (x, 0.15, -D - 0.12), (x, H, -D - 0.12), 0.07, segs=8)
+    # THE FURNITURE'S SOLIDS (drawn by MedInterior); the treatment area's
+    # dropped ceiling (a jump on a light world lifts the feet 3-4 m)
+    for k in sorted(MED_SOLIDS):
+        x0_, x1_, y0_, y1_, z0_, z1_ = MED_SOLIDS[k]
+        sh.add(((x0_ + x1_) / 2, (y0_ + y1_) / 2, (z0_ + z1_) / 2), (x1_ - x0_, y1_ - y0_, z1_ - z0_))
+    tx1 = M_["treat_x1"]
+    sh.add(((-W + t + tx1) / 2, M_["ceil"] + 0.15, 0.0), (tx1 + W - t, 0.3, 2 * (D - t)))
+    lights = []
+    bx, bz0 = (dx0 + dx1) / 2, 2.6
+    markers = [
+        ("Bay Floor", (bx, MED_FT, bz0)),
+        ("Bay Stop", (bx, MED_FT, -2.8)),
+        ("Bay Door Pos", (bx, MED_FT, D)),
+        ("Link Door Pos", (-W, MED_FT, (wz0 + wz1) / 2)),
+        ("Bed 1", (BEDS[0], BED["top"], -6.9)),
+        ("Bed 1 Head", (BEDS[0], BED["top"], -7.7)),
+        ("Bed 2", (BEDS[1], BED["top"], -6.9)),
+        ("Bed 2 Head", (BEDS[1], BED["top"], -7.7)),
+        ("Med 1", (-3.25, MED_FT, -4.72)),
+        ("Med 1 Look", (-2.2, 1.5, 0.0)),
+        ("Med 1 Hands", (-3.25, 0.96, -4.46)),
+        ("Med Centre", (-2.5, MED_FT, -2.0)),
+        ("Desk", (-5.55, 0.76, 3.1)),
+    ]
+    return m, sh, lights, markers
+
+
+def medical_link():
+    """The glazed link from the Medical Bay's walk-in (its west wall) to the
+    Research Lab's east wall, in the BAY's ground frame (prefabs/MedLink stands
+    on FacMedical's origin). It stops short of the lab's slab lip; a threshold
+    plate rides over the joint and a flashing collar closes it against the
+    lab's wall (the two buildings stand on the sphere at their own lots, so
+    their planes meet at a few centimetres and a degree or two)."""
+    M_ = MED
+    import med_signs
+    m, sh = CModel(32), Shell()
+    W = M_["W"]
+    x0, xl, x1 = M_["link_x0"], M_["link_lab_slab"], -W
+    za, zb, lh = M_["link_z0"], M_["link_z1"], M_["link_h"]
+    xe = x0 - 0.15             # tucked into the lab's wall (its face leans away up high)
+    B(m, "Concrete", CONC, xl, -W - 0.35, -0.6, MED_FT, za - 0.1, zb + 0.1, sh=sh)
+    for (ya, yb) in ((za, za + 0.25), (zb - 0.25, zb)):
+        B(m, "Clad", WHITE_CLAD, xe, x1, -0.5, 0.95, ya, yb)
+        B(m, "Clad", WHITE_CLAD, xe, x1, 2.65, lh, ya, yb)
+        sh.add(((xe + x1) / 2, lh / 2, (ya + yb) / 2), (x1 - xe, lh, yb - ya))
+        m.color = (0.07, 0.09, 0.11)
+        box(m, "Glass", ((xe + x1) / 2, 1.8, (ya + yb) / 2), (x1 - xe, 1.7, 0.04))
+        for xx in np.linspace(x0, x1, 5)[1:-1]:
+            B(m, "Steel", DARK, xx - 0.04, xx + 0.04, 0.97, 2.63, ya - 0.02, yb + 0.02, var=False)
+    B(m, "Clad", WHITE_CLAD, xe, x1, lh, lh + 0.25, za, zb, sh=sh)
+    B(m, "Steel", GREY, xe, x1 - 0.12, lh + 0.25, lh + 0.31, za - 0.05, zb + 0.05, var=False)
+    # the flashing collars: at the lab's wall and at the bay's
+    for (xa, xb) in ((x0 - 0.02, x0 + 0.10), (x1 - 0.12, x1 + 0.0)):
+        for (ya, yb) in ((za - 0.08, za), (zb, zb + 0.08)):
+            B(m, "Steel", GREY, xa, xb, 0.0, lh + 0.30, ya, yb, var=False)
+        B(m, "Steel", GREY, xa, xb, lh + 0.31, lh + 0.38, za - 0.09, zb + 0.09, var=False)
+    # the threshold plate over the lab's slab lip (1.5 cm proud of this floor)
+    B(m, "Steel", (0.52, 0.53, 0.54), xe, xl + 0.18, MED_FT + 0.002, MED_FT + 0.017, za + 0.25, zb - 0.25, var=False)
+    sh.add(((xe + xl + 0.18) / 2, MED_FT + 0.0095, (za + zb) / 2), (xl + 0.18 - xe, 0.015, zb - za - 0.5))
+    # the way: "Research Lab" read leaving the bay, "Medical Bay" leaving the lab
+    med_signs.plate(m, "m_lab", (x1 - 0.9, 2.95, za + 0.25), (1, 0, 0), (0, 1, 0), 0.9, depth=0.02, back=WHITE_CLAD)
+    med_signs.plate(m, "m_med", (x0 + 1.1, 2.95, za + 0.25), (1, 0, 0), (0, 1, 0), 0.9, depth=0.02, back=WHITE_CLAD)
+    m.color = LAMP_COOL
+    for xx in (x0 + 1.6, x1 - 1.6):
+        box(m, "Lamp", (xx, lh - 0.04, (za + zb) / 2), (1.2, 0.04, 0.3))
+    return m, sh

@@ -3,7 +3,8 @@
 // machine, beats, fail and score; docs/scenarios.md). Spawned by
 // game_manager.lua in every system scene, as CrewLib is; idle unless the slot
 // is `scn` and holds `g_scenario`. Reached with findScript("scenario") /
-// ("scenario_run").
+// ("scenario_run"). scripts/mission_story.lua (missions S0) rides it too: the
+// career missions' story lines as data, played through scenario_run.runBeats.
 [
     (
         name: "ScenarioLib",
@@ -21,6 +22,11 @@
             ),
             (
                 kind: "scenario_run",
+                enabled: true,
+                params: [],
+            ),
+            (
+                kind: "mission_story",
                 enabled: true,
                 params: [],
             ),

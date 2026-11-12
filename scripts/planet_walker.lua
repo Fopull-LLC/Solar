@@ -312,6 +312,7 @@ end
 packKg = 0
 encumbrance = 0.0
 packOverride = nil      -- probes: a pack weight (kg) in place of the pack's own
+extraLoad = 0           -- (missions N1) kg borne beside the pack: someone carried (crew.carry)
 crouching = false
 crouchAmount = 0.0
 eyeDrop = 0.0
@@ -2191,7 +2192,7 @@ function update(node, dt)
   end
   -- THE LOAD ON THE LEGS (playtest 2026-11-05, "heavy pack should slow your
   -- walking"): what the pack holds, over the 100 kg of person and suit.
-  packKg = packOverride or math.max(0, (bodyMass() - ((params and params.mass) or 0.10)) * 1000)
+  packKg = packOverride or (math.max(0, (bodyMass() - ((params and params.mass) or 0.10)) * 1000) + (extraLoad or 0))
   encumbrance = encumbranceOf(packKg, params.pack_free, params.pack_heavy)
   local m_walk, m_run, m_jump, m_acc = loadMults(encumbrance, params)
   local cam_hides = cam ~= nil and cam.hidesBody == true

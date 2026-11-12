@@ -216,6 +216,15 @@ ITEMS.buildkit = { name = "Build Kit", kind = "device", kg = 1.6, L = 3, cost = 
                    hold = { prefab = "ItemBuildKit", grip = "left" }, hintFrom = "field_builder", role = "engineer",
                    about = "an Engineer's field tablet: pick a part, see its ghost on the ground, click to buy and ship it out (B)" }
 
+-- THE STRETCHER (missions N1): a folding rescue litter, carried in the pack.
+-- With it, someone carried weighs half on your back (crew.CARRY: 30 kg
+-- effective, not 60) and a rope can be gone DOWN slowly. The Depot stocks
+-- it once the Medical Bay has taken in its first survivor (research
+-- `stretcher`, featGrant medevac).
+ITEMS.stretcher = { name = "Stretcher", kind = "device", kg = 12.0, L = 14, cost = 260, shop = true, tech = "stretcher",
+                    show = "ItemStretcher",      -- (tools/gen_stretcher.py: folded, the card's model)
+                    about = "a folding rescue litter: someone carried weighs half on your back, and a rope can be gone down slowly" }
+
 -- ── CRATED PARTS (deep-space addendum N2; expansion X4; scripts/recipes.lua) ──
 -- A part in its crate is an item of kind "part", id "part:<part id>"
 -- ("part:wall.steel", "part:padPlate", "part:vab.locker"): it weighs the part's
@@ -294,7 +303,7 @@ end })
 
 -- The belt's order: tools first, then devices and deployables, then
 -- consumables with a hold. (Worn items are never on the belt.)
-ORDER = { "gravgun", "laser", "surveyor", "buildkit", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "fuelRod", "fuelRodNU", "fuelRodHALEU", "spentRod", "rcspack", "o2tank", "o2mask", "flashlight" }
+ORDER = { "gravgun", "laser", "surveyor", "buildkit", "beacon", "flag", "rope", "repairkit", "medkit", "gascan", "fuelRod", "fuelRodNU", "fuelRodHALEU", "spentRod", "rcspack", "o2tank", "o2mask", "flashlight", "stretcher" }
 
 -- The Medkit's work (crew.lua runs it): seconds held at it, what it gives,
 -- and the reach from the medic to the patient (m).

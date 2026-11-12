@@ -683,6 +683,7 @@ end
 -- Merge fields into a record (other crew scripts use this; panels poll
 -- `version`). `nil` can't be merged, so a field is cleared with `false`.
 local CLEAR = { task = true, hand = true, craft = true, died = true, body = true, x = true, y = true, z = true,
+                hurtBy = true, carriedBy = true, follow = true, admitted = true,
                 yaw = true, anchor = true, face = true, downed = true, retrain = true, leftAt = true, blackout = true,
                 pose = true, title = true, gesture = true, npc = true }
 function patch(id, fields)
@@ -1962,6 +1963,7 @@ function control(id)
   local r = get(id)
   if not r then return false, "no such crew member" end
   if r.npc and id ~= activeId() then return false, r.name .. " is " .. NOT_YOURS end
+  if r.client then return false, "not one of ours" end     -- (missions N1) a survivor (newClient sets npc too)
   if r.status == "dead" then return false, r.name .. " is dead" end
   if r.status == "base" then return false, r.name .. " is at the base" end
   if r.downed then return false, r.name .. " is down — bring a Medkit" end
@@ -2079,7 +2081,8 @@ function switchList(range)
       local d = cx and len(b.x - cx, b.y - cy, b.z - cz) or 0
       -- (not the downed: control() refuses them, so the strip's CONTROL chip
       -- and [ ] would offer what can't be done; the DOWN chip lists them)
-      if r and r.status == "afoot" and not r.downed and not r.npc and d <= range then
+      -- (missions N1: nor a survivor, who is not ours to play)
+      if r and r.status == "afoot" and not r.downed and not r.npc and not r.client and d <= range then
         out[#out + 1] = { kind = "crew", id = id, name = r.name, dist = d }
       end
     end
@@ -2210,6 +2213,7 @@ end
 function canSwitch(id)
   local r = get(id)
   if not r then return false, "no such crew member" end
+  if r.client then return false, "not one of ours" end     -- (missions N1) a survivor
   if r.status == "dead" then return false, (r.name or "they") .. " is lost" end
   local active = activeId()
   local ride = avatarCraft()
@@ -2392,7 +2396,7 @@ function recordTick(force)
   local t = clock()
   local su = ref("suit")
   local active = activeId()
-  for _, r in ipairs(roster()) do
+  for _, r in ipairs(everyone()) do
     if r.status == "afoot" and r.id ~= active and not (bodies[r.id] and bodies[r.id].valid ~= false) then
       local dt = t - (tonumber(r.leftAt) or t)
       if dt >= 1.0 or (force and dt > 0) then
@@ -2415,7 +2419,8 @@ function recordTick(force)
         else
           recordAlerts[r.id] = nil
         end
-        if st.dead then kill(r.id, "air", "the suit ran out where they were left") end
+        if st.dead and r.client then clientDied(r.id, "air")
+        elseif st.dead then kill(r.id, "air", "the suit ran out where they were left") end
       elseif not r.leftAt then
         patch(r.id, { leftAt = t })
       end
@@ -2913,6 +2918,9 @@ CAUSE_TEXT = {
   impact = "impact", cabin = "the cabin failed", oxygen = "out of oxygen", drowned = "drowned",
   crushed = "crushed", heat = "burned on re-entry", lost = "lost with the craft", shot = "shot",
   explosion = "caught in an explosion", radiation = "radiation sickness",
+  -- (missions M1) the causes the air, the caves and the weather hurt with
+  air = "out of air", hypoxia = "hypoxia (air too thin to breathe)", gas = "bad air (a gas pocket)",
+  cold = "exposure to the cold", hotair = "scalded by hot air",
 }
 
 -- ── RADIATION DOSE (deep-space A4; scripts/thermal.lua) ────────────────────
@@ -3108,6 +3116,7 @@ function kill(id, cause, detail, opts)
   opts = opts or {}
   local r = get(id)
   if not r or r.status == "dead" then return false end
+  if r.client then return clientDied(id, cause, detail) end     -- (missions N1) a survivor: not one of ours
   if invincible() then
     if cause == "cabin" then return walk_away(id, cause, opts) end
     return false
@@ -3224,7 +3233,7 @@ function hurt(id, amount, cause, detail, opts)
     kill(id, cause or "shot", detail, o)
     return 0
   end
-  patch(id, { hp = hp })
+  patch(id, { hp = hp, hurtBy = cause or "shot" })     -- (M1: the medic names it)
   return hp
 end
 
@@ -3304,6 +3313,15 @@ down_monitor = function(dt)
   down_t = 0
   for _, r in ipairs(roster()) do
     local dn = r.downed
+    -- (missions M1) at the base someone is looking after them: an old save's
+    -- Recall brought members home still bleeding, and they died there
+    if dn and r.status == "base" then
+      r.downed = nil
+      r.hp = math.max(r.hp or 0, P("rescue_hp"))
+      put(r)
+      log_(string.format("crew: #%d is at the base: stabilised (%d%%)", r.id, math.floor(r.hp * 100 + 0.5)))
+      dn = nil
+    end
     if dn and r.status ~= "dead" then
       if r.id == activeId() and not avatarCraft() and #queue == 0 and not MON.dying then
         -- (a save loaded with the avatar's member down: lie down, pass on)
@@ -3652,7 +3670,7 @@ local function body_sync()
   if not fx and cam then fx, fy, fz = cam.x, cam.y, cam.z end
   if not fx then return end
   local active = activeId()
-  for _, r in ipairs(roster()) do
+  for _, r in ipairs(everyone()) do
     if r.status == "afoot" and r.id ~= active then
       local b = bodies[r.id]
       if b and b.valid ~= false then
@@ -3694,6 +3712,332 @@ local function heal(dt)
   end
 end
 
+-- ── (missions M1) THE MEDICAL BAY: treatment, and the roster's Recall ───────
+-- (pure) what a record needs from a medic: { hp, dose, downed, heat, o2, any }
+function medNeeds(r)
+  if type(r) ~= "table" or r.status == "dead" then return nil end
+  local n = { hp = tonumber(r.hp) or 1, dose = tonumber(r.dose) or 0, downed = r.downed ~= nil,
+              heat = tonumber(r.heat) or 0, o2 = tonumber(r.o2) or 1 }
+  n.any = n.downed or n.hp < 0.995 or n.dose > 0.005 or n.heat > 0.05
+  return n
+end
+-- The cause a medic names: the wound they went down with, the last hit, the
+-- record's own (hurt keeps it), a dose, the heat. nil: nothing to name.
+function lastCause(id)
+  local r = get(id)
+  if not r then return nil end
+  if type(r.downed) == "table" and r.downed.cause then return r.downed.cause end
+  local lh = lastHit[id]
+  if lh and lh.cause then return lh.cause end
+  if r.hurtBy then return r.hurtBy end
+  if (tonumber(r.dose) or 0) > 0.05 then return "radiation" end
+  if (tonumber(r.heat) or 0) > 0.2 then return "heat" end
+  return nil
+end
+-- MEDICAL TREATMENT (scripts/medical.lua; Ty 2026-11-11: "when you go in
+-- there and talk to them they heal you for free"): everything back — hp, the
+-- radiation dose, a downed wound, the heat, a blackout, a full suit. Free,
+-- whatever the CREW SAFETY. → before = { hp, dose, downed, heat, cause, any }
+-- | nil, why. (The passive heal at the base, `heal`, stays for the field.)
+lastMed = nil
+function medTreat(id, by)
+  local r = get(id)
+  if not r then return nil, "nobody there" end
+  if r.status == "dead" then return nil, (r.name or "they") .. " is dead" end
+  local n = medNeeds(r)
+  local before = { hp = n.hp, dose = n.dose, downed = n.downed, heat = n.heat, cause = lastCause(id), any = n.any }
+  r.hp, r.dose, r.heat, r.downed, r.blackout, r.hurtBy = 1.0, 0, 0, nil, nil, nil
+  r.o2, r.breath = 1.0, 1.0
+  put(r)
+  lastHit[id], doseSeen[id] = nil, nil
+  if TREAT and TREAT.target == id then cancel_treat("the medic took over") end
+  lastMed = { id = id, by = by, before = before, t = now() }
+  log_(string.format("crew: #%d treated at the Medical Bay%s (hp %.2f, dose %.2f%s, %s)", id, by and (" by " .. tostring(by)) or "",
+    before.hp, before.dose, before.downed and ", down" or "", tostring(before.cause)))
+  return before
+end
+
+-- THE RECALL (the roster panel's Recall: a shuttle fetches someone on foot).
+-- The panel called crew.recall, which did not exist, and fell back on a bare
+-- patch to status "base": a DOWNED member came home still bleeding (down_
+-- monitor ticks every record) and died at the base. Someone who can't walk
+-- to a pickup isn't recalled; the reason is a sentence.
+function recallWhyNot(id)
+  local r = get(id)
+  if not r then return "no such crew member" end
+  if r.status == "dead" then return (r.name or "they") .. " is dead" end
+  if r.client then return "not one of ours: the client's own people fetch them" end
+  if r.status ~= "afoot" then return (r.name or "they") .. " is not out on foot" end
+  if id == activeId() then return "you are " .. (r.name or "them") .. ": walk or fly home" end
+  if r.downed then return (r.name or "they") .. " can't walk to a pickup: carry them home, or treat them with a Medkit first" end
+  return nil
+end
+function recall(id)
+  local why = recallWhyNot(id)
+  if why then return false, why end
+  local r = get(id)
+  if r.task then cancelTask(id, "recalled") end
+  despawn_body(id)
+  patch(id, { status = "base", craft = false, body = false, x = false, y = false, z = false, anchor = false,
+              pose = false, gesture = false, follow = false })
+  log_(string.format("crew: #%d recalled to the base", id))
+  return true, nil
+end
+
+-- ── (missions N1) SURVIVORS AND CARRYING ────────────────────────────────────
+-- A SURVIVOR is a crew record with `client` (the contract's id, or true),
+-- kept OFF the roster in `crew.clients`: not on the roster panel, not
+-- counted by living() or hireFee, never chosen by handoff or the switcher.
+-- On foot they are a CrewBody like anyone (body_sync), they breathe from
+-- their suit (recordTick), a Medkit treats them (treatWhyNot reads any
+-- record), and lying downed they do not bleed out (down_monitor walks the
+-- roster: a rescue's clock is the contract's). A survivor who dies goes by
+-- clientDied: no memorial, the death-rep rule of crew.deathRep.
+-- CARRIED (Ty: "strap them on your back which weighs you down"):
+-- `status = "carried"`, `carriedBy`, no body; the carrier's walk takes
+-- CARRY.kg more (planet_walker.extraLoad through its encumbrance curve), half
+-- with a Stretcher in the pack. E (the context menu) sets them down in front;
+-- F at a craft with a free seat seats them (seatCarried). FOLLOWING: a
+-- survivor who can walk (hp ≥ CARRY.follow_hp, not down) walks 2.5 m behind
+-- the avatar (crew_body.steerSelf re-aimed at 2 Hz) and boards when you do.
+CARRY = { kg = 60, stretcher_kg = 30, reach = 2.2, follow_hp = 0.35, behind = 2.5, follow_far = 40 }
+local function client_ids() local t = save.get("crew.clients"); return type(t) == "table" and t or {} end
+function clients()
+  local out = {}
+  for _, id in ipairs(client_ids()) do local r = get(id); if r then out[#out + 1] = r end end
+  return out
+end
+-- the roster and the survivors (what has a body, breathes, is drawn)
+function everyone()
+  local out = roster()
+  for _, r in ipairs(clients()) do out[#out + 1] = r end
+  return out
+end
+function isClient(id) local r = get(id); return r ~= nil and r.client ~= nil end
+-- a survivor: a name (or one rolled), and fields (client = contract id,
+-- body/x/y/z on foot, hp, downed = { cause } …) → id
+function newClient(name, fields)
+  ensure()
+  fields = fields or {}
+  local id = (save.get("crew.seq") or 0) + 1
+  save.set("crew.seq", id)
+  -- (npc: gy3's scenario cast flag, which the switcher and the picker honour too)
+  local rec = newRecord(id, name or nameFor(id * 7919 + 13, 1), { status = "afoot", role = "civilian", client = true, npc = true,
+                                                           title = "Survivor" })   -- (the tag over them: roleTitle)
+  for k, v in pairs(fields) do rec[k] = v end
+  if rec.downed == true then rec.downed = { cause = "impact", left = 0, secs = 0 } end
+  put(rec)
+  local t = client_ids()
+  t[#t + 1] = id
+  save.set("crew.clients", t)
+  log_(string.format("crew: survivor %s (#%d) for %s", rec.name, id, tostring(rec.client)))
+  return id
+end
+function removeClient(id)
+  if carrying() == id then save.set("crew.carrying", false) end
+  despawn_body(id)
+  local keep = {}
+  for _, x in ipairs(client_ids()) do if x ~= id then keep[#keep + 1] = x end end
+  save.set("crew.clients", keep)
+  save.set(key(id), false)
+  bump()
+  return true
+end
+lastClientDeath = nil
+function clientDied(id, cause, detail)
+  local r = get(id)
+  if not (r and r.client) or r.status == "dead" then return false end
+  if carrying() == id then save.set("crew.carrying", false) end
+  despawn_body(id)
+  patch(id, { status = "dead", died = { cause = cause, detail = detail, t = clock() }, downed = false, carriedBy = false, follow = false })
+  lastClientDeath = { id = id, name = r.name, cause = cause, client = r.client, t = now() }
+  -- (D1) a client lost costs the company as one of ours does, when it does
+  local co = ref("company")
+  if deathRep() and co and co.addRep then co.addRep(-2, "client lost: " .. tostring(r.name)) end
+  local bc = ref("big_caption")
+  if bc and bc.show then bc.show("SURVIVOR LOST", string.format("%s died: %s", tostring(r.name), CAUSE_TEXT[cause] or tostring(cause)), 5.0, "alarm") end
+  log_(string.format("crew: survivor #%d died (%s)", id, tostring(cause)))
+  return true
+end
+
+-- (pure) the load a carried person puts on the carrier, kg
+function carryLoad(stretcher) return stretcher and CARRY.stretcher_kg or CARRY.kg end
+-- (pure) what a carry refuses, as a sentence (nil: allowed). action "rope"
+-- (climbing a rope; a Stretcher allows a slow descent), "ladder" (v = how
+-- high the craft's hatch is: the hatch only within 1.2 m of a floor), "jump"
+-- (v = the height, m: nothing over 0.4)
+function carryRefusal(action, v, stretcher)
+  if action == "rope" then
+    if v == "down" and stretcher then return nil end
+    return stretcher and "with someone on a stretcher, only down a rope (slowly)" or "you can't climb a rope with someone on your back"
+  end
+  if action == "ladder" then
+    if (tonumber(v) or 99) > 1.2 then return "no ladder with someone on your back: their hatch must be within 1.2 m of the ground" end
+    return nil
+  end
+  if action == "jump" then
+    if (tonumber(v) or 0) > 0.4 then return "not with someone on your back" end
+    return nil
+  end
+  return nil
+end
+function carrying() local c = save.get("crew.carrying"); return type(c) == "number" and c or nil end
+local function stretcher_on(id)
+  local inv = ref("inventory")
+  if not (inv and inv.itemCount and id) then return false end
+  local ok, n = pcall(inv.itemCount, packOf(id), "stretcher")
+  return ok and (n or 0) > 0
+end
+local carry_load_set = false
+local function apply_load()
+  local pw = ref("planet_walker")
+  if not pw then return end
+  local who = carrying()
+  local kg = who and carryLoad(stretcher_on(activeId())) or 0
+  if (pw.extraLoad or 0) ~= kg then pw.extraLoad = kg end
+  carry_load_set = kg > 0
+end
+function carryWhyNot(who)
+  local by = activeId()
+  local r = get(who)
+  if not (by and r) then return "nobody there" end
+  if who == by then return "you can't carry yourself" end
+  if r.status == "dead" then return (r.name or "they") .. " is dead" end
+  if r.status ~= "afoot" then return "only someone on the ground" end
+  if carrying() then return "you are carrying someone already" end
+  if avatarCraft() then return "step out first" end
+  local pw = ref("planet_walker")
+  if pw and pw.onFoot == false then return "on foot only" end
+  if not (r.downed or r.client or (r.hp or 1) < CARRY.follow_hp) then return (r.name or "they") .. " can walk" end
+  local d = dist_to(by, who)
+  if not d then return "out of range" end
+  if d > CARRY.reach then return string.format("walk up to them (%.0f m away)", d) end
+  return nil
+end
+function carry(who)
+  local why = carryWhyNot(who)
+  if why then return false, why end
+  local r = get(who)
+  despawn_body(who)
+  if TREAT and TREAT.target == who then cancel_treat("picked up") end
+  patch(who, { status = "carried", carriedBy = activeId(), pose = false, gesture = false, follow = false })
+  save.set("crew.carrying", who)
+  apply_load()
+  caption(string.format("CARRYING %s — right-click yourself to set them down", string.upper(r.name or "")))
+  log_(string.format("crew: #%s carries #%d", tostring(activeId()), who))
+  return true
+end
+-- Set the carried person down in front of the avatar (on the ground, lying
+-- if they are down). → true | false, why
+function putDown()
+  local who = carrying()
+  if not who then return false, "carrying nobody" end
+  local a = astro()
+  local r = get(who)
+  save.set("crew.carrying", false)
+  if not (a and r) then apply_load() return false, "nowhere to set them" end
+  local pc = ref("planet_camera")
+  local fx, fy, fz = 0, 0, 0
+  if pc and pc.fwd_x then fx, fy, fz = pc.flat_x or pc.fwd_x, pc.flat_y or pc.fwd_y, pc.flat_z or pc.fwd_z end
+  local x, y, z = a.x + fx * 1.0, a.y + fy * 1.0, a.z + fz * 1.0
+  if freeSpot then x, y, z = freeSpot(x, y, z) end
+  local d, rx, ry, rz = rel(x, y, z)
+  patch(who, { status = "afoot", carriedBy = false, body = d, x = rx, y = ry, z = rz, leftAt = clock() })
+  spawn_body(who, x, y, z)
+  apply_load()
+  log_(string.format("crew: #%d set down", who))
+  return true
+end
+-- F at a craft with someone on your back: they take its free seat.
+function seatCarried(v)
+  local who = carrying()
+  if not who then return false, "carrying nobody" end
+  if not (v and v.seatMember) then return false, "not a craft" end
+  local uid, slot = nil, nil
+  if v.freeSeat then uid, slot = v.freeSeat(nil) end
+  if not uid then return false, "no free seat" end
+  local ok, why = v.seatMember(uid, slot, who)
+  if not ok then return false, why end
+  save.set("crew.carrying", false)
+  patch(who, { status = "aboard", craft = v.craftName or false, carriedBy = false, body = false, x = false, y = false, z = false })
+  apply_load()
+  return true
+end
+function followWhyNot(who)
+  local r = get(who)
+  if not r then return "nobody there" end
+  if r.status ~= "afoot" then return "only someone on foot" end
+  if r.downed or (r.hp or 1) < CARRY.follow_hp then return (r.name or "they") .. " can't walk: carry them" end
+  if not r.client then return "crew go where you send them" end
+  return nil
+end
+function follow(who, on)
+  if on == false then return patch(who, { follow = false }) end
+  local why = followWhyNot(who)
+  if why then return false, why end
+  return patch(who, { follow = true })
+end
+-- (pure) where a follower heads: `behind` m back along the avatar's flat
+-- facing (fx, fz in its ground plane), or nil when they are close enough
+function followPoint(ax, ay, az, fx, fy, fz, bx, by, bz, behind)
+  behind = behind or CARRY.behind
+  local tx, ty, tz = ax - fx * behind, ay - fy * behind, az - fz * behind
+  local d = len(bx - ax, by - ay, bz - az)
+  if d < behind + 0.8 then return nil, d end
+  return { x = tx, y = ty, z = tz }, d
+end
+local carry_t = 0
+function carry_tick(dt)
+  local who = carrying()
+  if not who and carry_load_set then apply_load() end
+  carry_t = carry_t + dt
+  if carry_t < 0.5 then return end
+  carry_t = 0
+  if who then
+    local r = get(who)
+    if not r or r.status ~= "carried" then save.set("crew.carrying", false); apply_load()
+    elseif avatarCraft() and r.carriedBy == activeId() then
+      -- boarded with them on your back: they take a free seat (F at the hatch), else down outside
+      local ok = seatCarried(avatarCraft())
+      if not ok then putDown() end
+    elseif r.carriedBy ~= activeId() then putDown()       -- the carrier is not the avatar now
+    else
+      -- the record rides the carrier: refs, the bay's admit and a save find them
+      local a = astro()
+      if a then
+        local d, x, y, z = rel(a.x, a.y, a.z)
+        if d then r.body, r.x, r.y, r.z = d, x, y, z; save.set(key(who), r) end
+      end
+      apply_load()
+    end
+  end
+  -- followers: 2 Hz, a point behind the avatar; aboard with you when you board
+  local a = astro()
+  local v = avatarCraft()
+  for _, r in ipairs(clients()) do
+    if r.follow and r.status == "afoot" then
+      local b = bodies[r.id]
+      local cb = b and b.valid ~= false and b.getScript and b:getScript("crew_body") or nil
+      if v and b then
+        if len(b.x - v.node.x, b.y - v.node.y, b.z - v.node.z) < 25 then
+          local ok = board(r.id, v)
+          if ok then patch(r.id, { follow = false }) end
+        end
+      elseif a and cb and cb.steerSelf and not (ref("planet_walker") and ref("planet_walker").onFoot == false) then
+        local pc = ref("planet_camera")
+        local fx, fy, fz = 0, 0, 0
+        if pc and pc.fwd_x then fx, fy, fz = pc.flat_x or pc.fwd_x, pc.flat_y or pc.fwd_y, pc.flat_z or pc.fwd_z end
+        local p, d = followPoint(a.x, a.y, a.z, fx, fy, fz, b.x, b.y, b.z)
+        if d and d > CARRY.follow_far then patch(r.id, { follow = false })
+        elseif p then
+          local dn, rx, ry, rz = rel(p.x, p.y, p.z)
+          if dn then pcall(cb.steerSelf, dn, rx, ry, rz, { arrive = 0.6 }) end
+        elseif cb.steerStop and cb.walking and cb.walking() then pcall(cb.steerStop) end
+      end
+    end
+  end
+end
+
 -- ── the manager ────────────────────────────────────────────────────────────
 function start(node)
   ensure()
@@ -3718,6 +4062,7 @@ function update(node, dt)
   -- the Medkit's work: in the frame, where the avatar and the bodies are
   -- read at the same moment (a physics tick sees them a rails carry apart)
   treat_tick(dt or 0.016)
+  carry_tick(dt or 0.016)       -- (missions N1)
   -- ` : back to the last thing you controlled
   if input and input.pressed and input.pressed("`") then
     local gm = ref("game_manager")

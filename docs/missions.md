@@ -87,3 +87,105 @@ dropped pack are untouched; abandoning a contract is not under it. Rows:
 Settings ▸ Agency "Deaths cost rep" (hidden while the crew are Invincible) and
 the new-save panel's "Losses" (Deaths cost rep / Standing spared). Tests:
 `smoke_crew_death`, `smoke_settings`, `smoke_sandbox`.
+
+## S0 — career story beats (2026-11-11)
+
+Ty wants story in career missions: named people, dialogue, immersive moments,
+few popups. The scenario runner's beat engine now plays in a career save
+(`scenario_run.lua`, the marked `CAREER BEATS` section): `runBeats(list, ctx)`
+with `ctx = { id, cast, vars, refs, marks, crew, sequences, hooks, onDone }`.
+Only the beats in `CAREER_BEATS` run (say, ops, caption, choice, shot/camera,
+wait, sound, var, add, branch, face, look, turn, gesture, pose, walk, board,
+drive, place, charge, give, wear, weather, mark, hook, run, cutscene); a
+scenario's goals, steps, objectives and structures are dropped and named in
+`lastCareer.dropped`. Nothing writes `scn.*` while a career run plays (the one
+choke point is `sset`); the variables are the caller's table; marks and refs
+are the run's own (`mark:<name>`, a function re-read every frame for a moving
+point). One run at a time, the next waits its turn; `stopBeats(why, id)`
+ends one. A scenario save refuses (the scenario owns the runner). The plate is
+scenario_stage's (the cast's portrait, a live render target too); a radio
+voice (cast `radio`, or Ops) goes to the Ops strip, garbled when its `link`
+reads no comms path, as in a scenario.
+
+The people and their lines are data in `scripts/mission_story.lua` (on
+ScenarioLib): families (buyer, survey, flight, rescue), each with a cast and
+a few variants per event (`accept`, `delivered`, `failed`; for rescues `near`,
+`contact` with the one choice, `carried`, `admitted`), with `{name}`,
+`{company}`, `{dispatcher}`, `{body}` filled in. The contract's id picks the
+client company (eight of them, each with a dispatcher) and the variant.
+`missions.storyEvent(m, event, extra)` plays them; generated contracts fire
+accept, delivered and failed (abandoned). Tests: `smoke_scenario_career`
+(beats in a career save, the plate and the strip, garble, a choice into the
+caller's vars and a hook, a shot riding the moving planet, a survivor found
+off the roster, nothing written to `scn.*`, the queue, a scenario save
+refusing); `smoke_scenarios` unchanged.
+
+## N1 — survivors and carrying (2026-11-11)
+
+A **survivor** is a crew record with `client` (the contract's id), kept off
+the roster in `crew.clients` (`newClient`, `removeClient`, `clients`,
+`everyone`): not on the roster panel, not counted by `living()` or the hire
+fee, never chosen by the handoff or the switcher; on foot a CrewBody like
+anyone (`body_sync`), breathing from the suit (`recordTick`), treatable with
+a Medkit, lying downed without bleeding out (the contract's clock is the
+danger). A survivor who dies goes by `clientDied` (no memorial; −2 rep only
+while `crew.deathRep` is on).
+
+**Carrying** (Ty: "strap them on your back which weighs you down"):
+right-click someone lying on the ground → Carry (`crew.carry`): no body, the
+record rides the carrier (2 Hz), and `planet_walker.extraLoad` adds
+`CARRY.kg` = 60 kg effective (30 with a Stretcher in the pack) to the pack
+through the walker's encumbrance curve. Right-click yourself → Set them down
+(`putDown`, in front, lying if down). Boarding a craft with them on your back
+seats them in a free seat (`seatCarried`), else sets them down. A survivor
+who can walk (hp ≥ 0.35, not down) gets Follow me / Wait here: they walk
+2.5 m behind you (`followPoint`, `crew_body.steerSelf` at 2 Hz) and board when
+you do. `carryRefusal` holds the refusals as sentences (a rope up; a ladder to
+a hatch over 1.2 m; a jump over 0.4 m); wiring them into the rope and hatch
+code is R1's. The **Stretcher** (items, 12 kg, $260) is stocked once the
+Medical Bay has taken in its first survivor (research `stretcher`, featGrant
+`medevac`). **Recall** (the roster panel): `crew.recall` did not exist and the
+fallback set a downed member to "base" still bleeding, so they died at the
+base; now `recallWhyNot` refuses the downed ("carry them home, or treat them
+with a Medkit first") and the one you are, the fee is taken only after it is
+allowed, and a member found at the base still downed (an old save) is
+stabilised. `CAUSE_TEXT` has air, hypoxia, gas, cold and hotair. Tests:
+`smoke_medical` (the crew half).
+
+## M1 — the Medical Bay (2026-11-11)
+
+Ty: "a new medical bay building on the home base that should be connected to
+the lab. It should have a drive-in area and a walk-in from the lab … when you
+go in there and talk to them they heal you for free." `FacMedical` stands at
+u −34, v 34, face S, between the Research Lab and the VAB
+(`base_facilities.lua` FACILITIES; `tools/base_buildings.py medical()`). Its
+roller door (4.4 × 4.0 m) opens south onto **Medical Alley** (a yard strip
+from Road West's north edge between the depot and the VAB); its west doorway
+meets the glazed link (`prefabs/MedLink`, the bay's origin) that runs to the
+lab's new east door (`Med Door N/S` in LabInterior, opened by `lab.lua` only
+while the link stands). Inside (`prefabs/MedInterior`, `tools/gen_medical.py`,
+drawn within 60 m): a treatment area with two beds, curtains, monitors, a
+crash cart, cabinets, a desk; the sealed bay floor with its box and stop line.
+Its own signs are `textures/medical/signs.png` (`tools/med_signs.py`); the
+base atlas is untouched.
+
+`scripts/medical.lua` runs on it. **Dr Imke Rao** (LabScientist, bound to the
+bay) stands at Bed 1. E at her (or right-click → Talk): a medium shot, and the
+talk plays as a career beat run on the plate with her live portrait (a render
+target). Hurt, dosed or burned, "Patch me up": a line, a 5 s shot of her at
+work, `crew.medTreat` (hp, dose, a downed wound, the heat, a full suit, free),
+and she names what it was (`crew.lastCause`: hurt keeps `hurtBy`). A member
+hurt at the base: "See to <name>". Nothing wrong: a line and no menu.
+**Admit**: a survivor carried in, walking in or seated in a craft on the bay
+floor is laid on Bed 2, treated, recorded (`medical.admitted`), the feat
+`medevac` is marked and `missions.survivorAdmitted(id, client)` is called
+(R1's survivor goal); her line and the client's (`mission_story` admitted)
+play. The drive-in box (`inBay`) is the repair bay's over the bay floor;
+`craftIn` names a craft standing there. **Old saves**: the grade is checked
+once more (GRADED .2); `medical_site` puts the bay on the first of
+`MEDICAL_SITES` with none of the player's structures on it (the link's run
+included) and Ops says once where it stands (one strip line). Sounds: the
+recorded fan (room air) and a pneumatic hiss at the treatment. Tests:
+`smoke_medical` (the bay half, the lot and site, the lab's zones);
+engine: `tools/perf/medprobe.sh` (`med`: walk in from the lab, talk, heal,
+carry a survivor in, a story run; `medrover`: drive into the bay).

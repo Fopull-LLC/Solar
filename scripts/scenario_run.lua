@@ -47,6 +47,10 @@ lastStage = nil        -- what staging wrote, for probes: { ms, records = { … 
 PROF = { evals = 0, eval_ms = 0, stage_ms = 0 }
 
 local SLOT = "scn"
+-- (missions S0) CAREER: beats run by runBeats in a save that is not a
+-- scenario's (the CAREER BEATS section below); nil when none is playing
+local CAREER = nil
+local CRB = {}          -- (missions S0) the CAREER BEATS section's own functions and state (one local: the chunk is near Lua's 200)
 local active = nil     -- nil = not decided yet; false = idle this scene
 local sc = nil         -- the scenario table
 local R = nil          -- the rulebook (scenario.lua)
@@ -111,7 +115,11 @@ function hooks_of()
   return nil
 end
 local function sget(k) return save.get(k) end
-local function sset(k, v) save.set(k, v) end
+local function sset(k, v)
+  -- (missions S0) a career run never writes the scenario's keys
+  if CAREER and type(k) == "string" and k:sub(1, 4) == "scn." then return end
+  save.set(k, v)
+end
 
 -- ── refs and points (body-relative, re-read every use) ──────────────────────
 local function home_name() return save.get("base.body") end
@@ -137,6 +145,9 @@ local function crew_ids() local t = sget("scn.crew"); return type(t) == "table" 
 local function member_id(name)
   if type(name) == "number" then return name end
   if name == nil then local C = ref("crew"); return C and C.activeId and C.activeId() end
+  -- (missions S0) a career run's people: survivors and clients are crew
+  -- records off the roster, named by the contract
+  if CAREER and CAREER.crew and CAREER.crew[name] then return CAREER.crew[name] end
   local id = crew_ids()[name]
   if id then return id end
   local C = ref("crew")
@@ -167,6 +178,7 @@ end
 
 -- A ref → { body, x, y, z } body-relative now, or nil
 local function pos_of(r)
+  if CAREER then local p = CRB.ref(r); if p ~= nil then return p or nil end end
   local R_ = rulebook()
   local k, n = R_.parseRef(r)
   if not k and type(r) == "string" then k, n = "crew", r end
@@ -211,6 +223,8 @@ local function pos_of(r)
     local rec = C.get(id)
     if not rec then return nil end
     if rec.status == "afoot" and rec.body and rec.x then return { body = rec.body, x = rec.x, y = rec.y, z = rec.z } end
+    -- (missions S0/N1) a survivor: a client record lying or standing where it is
+    if rec.status == "client" and rec.body and rec.x then return { body = rec.body, x = rec.x, y = rec.y, z = rec.z } end
     local v = C.craftOf and C.craftOf(id)
     if v then return node_rel(v.node) end
     if id == (C.activeId and C.activeId()) then return node_rel(find("Astronaut")) end
@@ -362,7 +376,9 @@ local alarm_on = false
 local cs_seq = 0
 local esc_t = nil
 
-local function vars() local v = sget("scn.vars"); if type(v) ~= "table" then v = {}; for k, x in pairs((sc and sc.vars) or {}) do v[k] = x end; sset("scn.vars", v) end return v end
+local function vars()
+  if CAREER then return CAREER.vars end      -- (missions S0) the caller's own table
+  local v = sget("scn.vars"); if type(v) ~= "table" then v = {}; for k, x in pairs((sc and sc.vars) or {}) do v[k] = x end; sset("scn.vars", v) end return v end
 function var(name) return vars()[name] end
 function setVar(name, v) local t = vars(); t[name] = v; sset("scn.vars", t); bump() end
 W.var = function(name) return var(name) end
@@ -1873,6 +1889,12 @@ local function run_beat(b, e)
   elseif k == "give" then give(v)
   elseif k == "funds" then local co = ref("company"); if co then if v >= 0 then co.earn(v, "scenario") else co.spend(-v, "scenario") end end
   elseif k == "unlock" then local rs = ref("research"); if rs and rs.grant then rs.grant(v, "scenario") end
+  elseif k == "mark" and CAREER then
+    -- (missions S0) a career mark lives in the run (the contract's own)
+    if v.at then
+      local g = resolve_at(v.at, v.offset)
+      if g then CAREER.marks[v.name] = { b = g.body, x = g.x, y = g.y, z = g.z } end
+    end
   elseif k == "mark" then
     local m = sget("scn.marks") or {}
     if v.at then
@@ -4311,6 +4333,220 @@ function start_portraits()
   end
 end
 
+-- ── CAREER BEATS (missions S0) ──────────────────────────────────────────────
+-- The beat engine above, in a career save (no `scn` slot, no scenario):
+-- missions, the Medical Bay and the client stories play lines, a choice, a
+-- shot, a walk or the weather from DATA (scripts/mission_story.lua).
+--
+--   runBeats(list, ctx) → true | false, why     stopBeats(why)     careerActive()
+--   ctx = { id, cast = { key = { name, tag, color, portrait, radio, link, crew } },
+--           vars = {} (the caller's table: choices and `var` beats write it;
+--                      the caller saves it if it should outlive the scene),
+--           refs = { name = { body, x, y, z } | fn() → that },   (a beat's ref)
+--           marks = { name = { b, x, y, z } },                   (mark:<name>)
+--           crew = { name = record id },     (survivors: off the roster)
+--           sequences = { name = beats }, hooks = { name = fn(api) },
+--           onDone = fn(vars, why) }
+--
+-- RULES. Only the beats in CAREER_BEATS run (a scenario's goals, steps,
+-- objectives, structures and checkpoints are not there to drive): anything
+-- else is dropped when the run starts and named in lastCareer.dropped.
+-- Nothing writes `scn.*` while it plays (sset). One run at a time; another
+-- waits its turn. A scenario save owns the runner: runBeats refuses there.
+-- Dialogue goes to scenario_stage's plate (the cast's portrait, the say's
+-- `with`), a radio voice (cast `radio`, or Ops) to the Ops strip, garbled
+-- when its `link` reads no comms path (link_up), as in a scenario.
+CAREER_BEATS = { say = true, ops = true, caption = true, choice = true, shot = true, camera = true, wait = true,
+                 sound = true, var = true, add = true, branch = true, face = true, look = true, turn = true,
+                 gesture = true, pose = true, walk = true, board = true, drive = true, place = true, charge = true,
+                 give = true, wear = true, weather = true, mark = true, hook = true, run = true, cutscene = true }
+lastCareer = nil          -- (probes, tests) { id, beats, dropped, t, done, why }
+CRB.q = {}
+
+-- (pure) a beat list made fit for a career run: what is not a career beat is
+-- dropped (its name added to `dropped`); a choice's options and a branch's
+-- beats are cleaned the same way; an option's `hook` runs as a beat; an
+-- option's `step` (a scenario's goto) is dropped.
+function careerClean(list, dropped)
+  dropped = dropped or {}
+  local out = {}
+  for _, b in ipairs(type(list) == "table" and list or {}) do
+    local k, v = next(type(b) == "table" and b or {})
+    if k and CAREER_BEATS[k] then
+      if k == "choice" and type(v) == "table" then
+        local c = {}
+        for kk, x in pairs(v) do c[kk] = x end
+        c.options = {}
+        for i, o in ipairs(v.options or {}) do
+          local bl = {}
+          if o.hook then bl[#bl + 1] = { hook = o.hook } end
+          for _, x in ipairs(careerClean(o.beats, dropped)) do bl[#bl + 1] = x end
+          if o.step then dropped[#dropped + 1] = "choice.step" end
+          c.options[i] = { text = o.text, var = o.var, run = o.run, beats = #bl > 0 and bl or nil }
+        end
+        out[#out + 1] = { choice = c }
+      elseif k == "branch" and type(v) == "table" then
+        local c = {}
+        for kk, x in pairs(v) do c[kk] = x end
+        c.beats = v.beats and careerClean(v.beats, dropped) or nil
+        c.elseBeats = v.elseBeats and careerClean(v.elseBeats, dropped) or nil
+        out[#out + 1] = { branch = c }
+      else
+        out[#out + 1] = b
+      end
+    else
+      dropped[#dropped + 1] = tostring(k)
+    end
+  end
+  return out, dropped
+end
+
+-- a career run's own ref → { body, x, y, z }, false (its mark is not
+-- there: nothing, never a scenario's), or nil (not the run's: the world's)
+CRB.ref = function(r)
+  local C = CAREER
+  local x = C.refs[r]
+  if type(x) == "function" then local ok, p = pcall(x); return (ok and type(p) == "table") and p or false end
+  if type(x) == "table" then return x end
+  if type(r) == "string" then
+    local n = r:match("^mark:(.+)$")
+    if n then
+      local m = C.marks[n]
+      if not m then return false end
+      return { body = m.b or m.body, x = m.x, y = m.y, z = m.z }
+    end
+  end
+  return nil
+end
+
+CRB.api = function()
+  return { vars = CAREER and CAREER.vars or {}, var = var, setVar = setVar, ctx = CAREER and CAREER.ctx,
+           say = function(who, text, opts)
+             local b = { who = who, text = text }
+             for k2, x in pairs(opts or {}) do b[k2] = x end
+             queue_beats({ { say = b } }, "career", true, cut and cut.id or nil)
+           end,
+           beats = function(list) queue_beats(careerClean(list), "career", true, cut and cut.id or nil) end }
+end
+
+-- the plate and the strip, as scenario_ui hands them over in a scenario
+-- (scenario_ui stands down in a career save)
+CRB.hooked = false
+CRB.listen = function()
+  if CRB.hooked then return end
+  CRB.hooked = true
+  local function stage() return ref("scenario_stage") end
+  if not listeners.say then
+    listeners.say = function(l)
+      local os_ = ref("ops_strip")
+      local st = stage()
+      if type(l) == "table" and (l.who == "ops" or l.radio) and os_ and os_.say
+        and not (st and st.cutsceneOn and st.cutsceneOn()) then
+        os_.say(l.text, l.name or "Ops", function() lineDone() end)
+        return
+      end
+      if st and st.onSay then st.onSay(l) end
+    end
+  end
+  if not listeners.choice then listeners.choice = function(c) local st = stage(); if st and st.onChoice then st.onChoice(c) end end end
+  if not listeners.cutscene then listeners.cutscene = function(on) local st = stage(); if st and st.onCutscene then st.onCutscene(on) end end end
+end
+
+CRB.begin = function(list, ctx)
+  local dropped = {}
+  local beats = careerClean(list, dropped)
+  local seqs = {}
+  for nm, sq in pairs(ctx.sequences or {}) do seqs[nm] = careerClean(sq, dropped) end
+  local hooks = {}
+  for nm, f in pairs(ctx.hooks or {}) do
+    if type(f) == "function" then hooks[nm] = function() return f(CRB.api()) end end
+  end
+  sc = { id = "career:" .. tostring(ctx.id or "beats"), cast = ctx.cast or {}, sequences = seqs, vars = {},
+         _dir = ctx.dir or "", hooks = "career", _hooks = hooks, _career = true }
+  CAREER = { ctx = ctx, id = ctx.id, vars = type(ctx.vars) == "table" and ctx.vars or {}, refs = ctx.refs or {},
+             marks = ctx.marks or {}, crew = ctx.crew, t0 = now() }
+  CRB.listen()
+  local cs = nil
+  if beats[1] and beats[1].cutscene then cs_seq = cs_seq + 1; cs = cs_seq end
+  queue_beats(beats, "career", false, cs)
+  lastCareer = { id = ctx.id, beats = #beats, dropped = dropped, t = now() }
+  say_log(string.format("career beats %s: %d%s", tostring(ctx.id), #beats,
+    #dropped > 0 and (" (dropped: " .. table.concat(dropped, ", ") .. ")") or ""))
+  bump()
+end
+
+CRB.finish = function(why)
+  local C = CAREER
+  if not C then return end
+  CAREER = nil
+  sc = nil
+  if lastCareer and lastCareer.id == C.id then lastCareer.done, lastCareer.why, lastCareer.t1 = true, why or "done", now() end
+  say_log("career beats " .. tostring(C.id) .. " " .. tostring(why or "done"))
+  bump()
+  if C.ctx.onDone then local ok, err = pcall(C.ctx.onDone, C.vars, why or "done"); if not ok then say_log("onDone: " .. tostring(err)) end end
+  local nxt = table.remove(CRB.q, 1)
+  if nxt then CRB.begin(nxt.list, nxt.ctx) end
+end
+
+function runBeats(list, ctx)
+  ctx = ctx or {}
+  -- (a scenario's save owns the runner, decided or not yet)
+  local scn_save = save and save.slot and save.slot() == SLOT and type(save.get("g_scenario")) == "string"
+  if active == true or (active == nil and scn_save) then return false, "a scenario is running" end
+  if type(list) ~= "table" or #list == 0 then return false, "no beats" end
+  if CAREER then CRB.q[#CRB.q + 1] = { list = list, ctx = ctx }; return true, "queued" end
+  CRB.begin(list, ctx)
+  return true
+end
+
+-- the run stops where it is (a contract abandoned, the bay walked out of):
+-- the line, the choice and the shot go, and `onDone(vars, why)` is told
+function stopBeats(why, id)
+  if not CAREER or (id and CAREER.id ~= id) then
+    if id then
+      local keep = {}
+      for _, q in ipairs(CRB.q) do if q.ctx.id ~= id then keep[#keep + 1] = q end end
+      CRB.q = keep
+    end
+    return false
+  end
+  beatq, beat_busy = {}, nil
+  if choice then choice = nil end
+  line = nil
+  if cam then camera_end() end
+  if cut then cut_end() end
+  for id2 in pairs(walks) do walks[id2] = nil end
+  local st = ref("scenario_stage")
+  if st and st.dropSays then pcall(st.dropSays) end
+  CRB.finish(why or "stopped")
+  return true
+end
+function careerActive() return CAREER ~= nil, CAREER and CAREER.id or nil, #CRB.q end
+function careerLine() return CAREER and line or nil, CAREER and choice or nil end
+
+CRB.sync_t = 0
+CRB.tick = function(dt)
+  -- (a beat that throws ends the run, never the frame after frame)
+  local okb, errb = pcall(beats_tick)
+  if not okb then say_log("career beat error: " .. tostring(errb)); stopBeats("error") return end
+  if CAREER == nil then return end
+  if next(walks) then walks_tick() end
+  if delayed and #delayed > 0 then delays_tick() end
+  weather_tick()
+  input_tick()
+  -- the plate follows the runner (a line timed out, a choice answered)
+  CRB.sync_t = CRB.sync_t + (dt or 0)
+  if CRB.sync_t >= 0.25 then
+    CRB.sync_t = 0
+    local st = ref("scenario_stage")
+    if st and st.sync then pcall(st.sync, { line = line, choice = choice }) end
+  end
+  if #beatq == 0 and not beat_busy and not choice and not cam and not cut and not line and not next(walks) then
+    CRB.finish("done")
+  end
+end
+-- ── end CAREER BEATS ────────────────────────────────────────────────────────
+
 -- ── the frame ───────────────────────────────────────────────────────────────
 local function decide()
   if active ~= nil then return active end
@@ -4372,8 +4608,8 @@ local repair_reg = false
 
 function update(node, dt)
   node_ref = node
-  if active == false then return end
-  if active == nil and not decide() then return end
+  if active == false then if CAREER then CRB.tick(dt) end return end
+  if active == nil and not decide() then if CAREER then CRB.tick(dt) end return end
   if not repair_reg then
     local reg = ref("context_registry")
     if reg and reg.register then reg.register("prop", repair_provider, { id = "scn_repair", order = 4 }); repair_reg = true end
@@ -4439,7 +4675,7 @@ function lateUpdate(node, dt)
     if pcam.f0 then PROF.portrait_worst_ms = math.max(PROF.portrait_worst_ms or 0, (t - pcam.f0) * 1000) end
     pcam.f0 = t
   end
-  if active and (line or choice or cut or alarm_on) then draw_builtin() end
+  if (active or CAREER) and (line or choice or cut or alarm_on) then draw_builtin() end
   if not (active and overlay and draw and draw.text and sc) then return end
   local lines = { string.format("SCENARIO %s · %s · step %s", sc.id, tostring(phase), tostring(state().stepId)) }
   local open = rulebook().openSteps(sc, done_tbl())

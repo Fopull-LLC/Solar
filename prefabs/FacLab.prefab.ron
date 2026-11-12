@@ -163,7 +163,7 @@
     (
         name: "Shell 3",
         transform: (
-            translation: (10.8250, -1.4400, -2.0500),
+            translation: (10.8250, -1.4400, -5.9750),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
             scale: (1.0, 1.0, 1.0),
         ),
@@ -176,7 +176,7 @@
             mode: Static,
             radius: 0.5,
             height: 1.0,
-            half_extents: (0.1750, 2.8000, 7.0000),
+            half_extents: (0.1750, 2.8000, 3.0750),
             restitution: 0.0,
             friction: 0.9,
             gravity: false,
@@ -186,6 +186,54 @@
     ),
     (
         name: "Shell 4",
+        transform: (
+            translation: (10.8250, -1.4400, 2.0250),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.1750, 2.8000, 2.9250),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Shell 5",
+        transform: (
+            translation: (10.8250, -0.1400, -1.9000),
+            rotation: (0.00000, 0.00000, 0.00000, 1.00000),
+            scale: (1.0, 1.0, 1.0),
+        ),
+        matter: Empty,
+        scripts: [],
+        parent: Some(0),
+        cast_shadow: false,
+        rigidbody: Some((
+            boxed: true,
+            mode: Static,
+            radius: 0.5,
+            height: 1.0,
+            half_extents: (0.1750, 1.5000, 1.0000),
+            restitution: 0.0,
+            friction: 0.9,
+            gravity: false,
+            lock_pos: (false, false, false),
+            lock_rot: (false, false, false),
+        )),
+    ),
+    (
+        name: "Shell 6",
         transform: (
             translation: (0.0000, -1.6900, -8.8750),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
@@ -209,7 +257,7 @@
         )),
     ),
     (
-        name: "Shell 5",
+        name: "Shell 7",
         transform: (
             translation: (-1.8250, -1.4400, 4.7750),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
@@ -233,7 +281,7 @@
         )),
     ),
     (
-        name: "Shell 6",
+        name: "Shell 8",
         transform: (
             translation: (9.8250, -1.4400, 4.7750),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
@@ -257,7 +305,7 @@
         )),
     ),
     (
-        name: "Shell 7",
+        name: "Shell 9",
         transform: (
             translation: (8.0000, -0.1400, 4.7750),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
@@ -281,7 +329,7 @@
         )),
     ),
     (
-        name: "Shell 8",
+        name: "Shell 10",
         transform: (
             translation: (0.0000, 1.2100, -2.0500),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
@@ -305,7 +353,7 @@
         )),
     ),
     (
-        name: "Shell 9",
+        name: "Shell 11",
         transform: (
             translation: (8.0000, -4.4800, 7.3400),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
@@ -329,7 +377,7 @@
         )),
     ),
     (
-        name: "Shell 10",
+        name: "Shell 12",
         transform: (
             translation: (6.6250, -2.6400, 7.2000),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
@@ -353,7 +401,7 @@
         )),
     ),
     (
-        name: "Shell 11",
+        name: "Shell 13",
         transform: (
             translation: (9.3750, -2.6400, 5.7000),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
@@ -377,7 +425,7 @@
         )),
     ),
     (
-        name: "Shell 12",
+        name: "Shell 14",
         transform: (
             translation: (9.3750, -2.6400, 8.7000),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
@@ -401,7 +449,7 @@
         )),
     ),
     (
-        name: "Shell 13",
+        name: "Shell 15",
         transform: (
             translation: (10.1500, -4.3350, 7.2000),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),
@@ -425,7 +473,7 @@
         )),
     ),
     (
-        name: "Shell 14",
+        name: "Shell 16",
         transform: (
             translation: (8.0000, -0.9150, 7.2000),
             rotation: (0.00000, 0.00000, 0.00000, 1.00000),

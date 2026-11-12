@@ -184,8 +184,9 @@ assert(not cutfill.lower and not cutfill.raise, "a flat site needs no cut or fil
 -- 0. time-sliced: no frame does more than its budget of field queries (the
 -- engine stops a script that runs 2 s; a loaded machine got there)
 local per_frame = math.ceil(BF.WORK_MS / QUERY_MS) + BF.WORK_CHECK
--- (+ the grade check's ~100 point reads, made at once in update, as before)
-assert(worst_frame <= per_frame + 120,
+-- (+ the grade check's ~100 point reads, made at once in update, as before;
+-- +10: the Medical Bay's lot, missions M1)
+assert(worst_frame <= per_frame + 130,
   string.format("one frame made %d field queries (budget %d)", worst_frame, per_frame))
 
 -- 2. structures

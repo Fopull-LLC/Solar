@@ -2555,6 +2555,23 @@ local function has_goal(m, kind)
   return false
 end
 
+-- (missions S0) A contract's people say their lines: mission_story's data
+-- for the event, played by scenario_run's career beat runner (radio voices
+-- on the Ops strip, nothing on screen). Generated contracts only: the
+-- ladder's milestones keep their own words. `extra`: { name, body, crew }.
+function storyEvent(m, event, extra)
+  if type(m) ~= "table" or not m.gen then return false end
+  local MS, run = ref("mission_story"), ref("scenario_run")
+  if not (MS and MS.beatsFor and run and run.runBeats) then return false end
+  extra = extra or {}
+  extra.byId = byId
+  local ok, beats, cast = pcall(MS.beatsFor, m, event, extra)
+  if not (ok and type(beats) == "table" and #beats > 0) then return false end
+  local ok2, r = pcall(run.runBeats, beats, { id = "story:" .. tostring(m.id) .. ":" .. event, cast = cast, crew = extra.crew })
+  return ok2 and r == true
+end
+local story_event = storyEvent
+
 -- (runs with the empty slot swapped in: `accept` below)
 local function accept_here(m, id)
   -- Signing a generated contract takes it off the board (the board refills).
@@ -2589,6 +2606,7 @@ local function accept_here(m, id)
   log("CONTRACT ACCEPTED — " .. m.title)
   local c = company()
   if adv > 0 and c and c.earn then c.earn(adv, "advance: " .. m.title) end
+  story_event(m, "accept")
   return true
 end
 
@@ -2613,6 +2631,7 @@ local function abandon_here()
   save.set(K("mission.adv"), false)
   local c = company()
   local title = (m and m.title) or "contract"
+  if m then story_event(m, "failed") end
   -- The advance goes back; what the balance can't cover is owed, and then
   -- walking away costs 2 reputation instead of 1.
   local short = 0
@@ -3198,6 +3217,7 @@ local function payout(m)
   save.set(K("mission.adv"), false)
   slot_ids[cur_slot] = nil
   announce(m.id, m.title, pay, adv > 0 and adv or nil)
+  story_event(m, "delivered")
   refill()
 end
 

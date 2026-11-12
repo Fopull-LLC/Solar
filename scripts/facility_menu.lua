@@ -995,6 +995,23 @@ function talk_prompt(astro)
     if prompt_el then prompt_el.visible = false end
     return true
   end
+  -- (missions M1) the Medical Bay's medic: E talks to her (medical.lua; the
+  -- career beat runner's plate has the keys while it plays)
+  local md = ref("medical")
+  if md and md.isTalking and md.isTalking() then
+    if prompt_el then prompt_el.visible = false end
+    return true
+  end
+  local mn = md and md.nearMedic and md.nearMedic(astro, 2.4) or nil
+  if mn then
+    show_prompt("Talk to Dr Imke Rao  ·  Medical Bay   ·   E")
+    if prompt_el then prompt_el.visible = true end
+    if interact_pressed() and md.talk then
+      if prompt_el then prompt_el.visible = false end
+      md.talk()
+    end
+    return true
+  end
   local lab = ref("lab")
   local s = lab and lab.nearAstro and lab.nearAstro(astro, 2.2) or nil
   talk_near = s

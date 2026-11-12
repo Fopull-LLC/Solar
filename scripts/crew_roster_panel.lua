@@ -188,16 +188,23 @@ function recallFee(r)
   return call(fo, "pickupFee", d)
 end
 
+-- (missions M1) crew.recall, which did not exist: the fallback patched the
+-- status to "base" and a downed member came home still bleeding out. Asked
+-- first (before the fee), refused with its reason.
 local function recall(r)
+  local c = ref("crew")
+  local why = call(c, "recallWhyNot", r.id)
+  if why then say(why) return false end
   local fee = recallFee(r) or 0
   local co = ref("company")
   if fee > 0 and co and co.spend then
     if not co.spend(fee, "crew recall: " .. tostring(r.name)) then say("not enough money for the pickup") return false end
   end
-  local c = ref("crew")
-  local ok = call(c, "recall", r.id)
-  if ok == nil then ok = call(c, "patch", r.id, { status = "base", craft = false }) end
-  say(ok and (r.name .. " is on the shuttle home") or "the recall did not go through")
+  local ok, why2 = call(c, "recall", r.id)
+  -- (an older crew without recall: the bare patch it always did)
+  if ok == nil and not (c and type(c.recall) == "function") then ok = call(c, "patch", r.id, { status = "base", craft = false }) end
+  if not ok and fee > 0 and co and co.earn then co.earn(fee, "crew recall refunded: " .. tostring(r.name)) end
+  say(ok and (r.name .. " is on the shuttle home") or (why2 or "the recall did not go through"))
   return ok
 end
 
@@ -281,8 +288,9 @@ local function roster_rows(c, rows)
               if ok then sfx("click"); close() else say("can't switch — " .. tostring(w2 or "no answer")) end
             end)
           end)(),
-          small_button("rc", armed and ("Confirm · " .. money(fee or 0)) or "Recall", not afoot_away or not fee,
-            afoot_away and string.format("Bring them home on the shuttle: %s", money(fee or 0)) or "Only someone on foot elsewhere",
+          small_button("rc", armed and ("Confirm · " .. money(fee or 0)) or "Recall", not afoot_away or not fee or r.downed ~= nil,
+            (afoot_away and r.downed and call(c, "recallWhyNot", r.id))
+              or (afoot_away and string.format("Bring them home on the shuttle: %s", money(fee or 0))) or "Only someone on foot elsewhere",
             function()
               if st.armed == r.id and now() < st.armedT then
                 st.armed = nil

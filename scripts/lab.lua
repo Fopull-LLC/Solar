@@ -99,6 +99,11 @@ ZONES = {
   { 6.2, 9.8, 7.0, 17.0 },           -- the link corridor
   { -0.6, 16.6, 16.0, 28.8 },        -- the depot (the link door shows through)
   { 9.4, 16.0, 6.0, 12.5 },          -- outside the link's outside door
+  -- (missions M1) the Medical Bay's glazed link off the east wall, and the
+  -- bay itself (the lab shows down the link from there); the bay's frame is
+  -- the lab's moved 24 m east (base_facilities FacMedical)
+  { 10.6, 17.6, -1.3, 1.6 },         -- the Med link
+  { 17.5, 31.0, -9.0, 9.8 },         -- the Medical Bay
 }
 GROUND_Y = -4.24                     -- the slab's top in the box-centre frame
 GROUND_Z = 2.05
@@ -423,6 +428,11 @@ local DOOR_DEF = {
   { "Inner Door", "int", { 0.06, 0, 1.12 } },
   { "Instr Door", "int", { 1.12, 0, 0.06 } },
   { "Link Door", "ext", { -0.07, 0, 1.30 } },
+  -- (missions M1) the east wall's pair into the Medical Bay's link: shut
+  -- while the bay has no link (it stands on another lot: base_facilities
+  -- medical_site)
+  { "Med Door N", "int", { 0, 0, -1.0 }, "med" },
+  { "Med Door S", "int", { 0, 0, 1.0 }, "med" },
 }
 local function find_doors()
   local out = {}
@@ -430,10 +440,19 @@ local function find_doors()
     local par = d[2] == "int" and interior or ROOT
     local n = child(par, d[1])
     if n then
-      out[#out + 1] = { node = n, rest = { x = n.x, y = n.y, z = n.z }, slide = d[3], open = 0 }
+      out[#out + 1] = { node = n, rest = { x = n.x, y = n.y, z = n.z }, slide = d[3], open = 0, gate = d[4] }
     end
   end
   return out
+end
+-- (M1) is the Medical Bay's link there? (asked every 2 s)
+local med_t, med_ok = -10, false
+local function med_linked()
+  if (time or 0) - med_t < 2 then return med_ok end
+  med_t = time or 0
+  local md = ref("medical")
+  med_ok = md ~= nil and md.linked == true
+  return med_ok
 end
 local function step_doors(dt, alx, aly, alz)
   if not DOORS then return end
@@ -445,6 +464,7 @@ local function step_doors(dt, alx, aly, alz)
         local dd = len(alx - cx, 0, alz - cz)
         if dd < (params.door_near or 2.8) and math.abs(aly - cy) < 3.0 then want = 1 end
       end
+      if d.gate == "med" and want > 0 and not med_linked() then want = 0 end
       if forceDoors then want = 1 end
       local k = 1 - math.exp(-6 * dt)
       d.open = d.open + (want - d.open) * k
