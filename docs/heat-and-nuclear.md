@@ -572,3 +572,31 @@ primary's inventory and rings the break.
 - **The press** makes only the 3 % rod. The other two come from the Depot.
 - **S8 logic:** scram and pump sensors. The seams are `scram`,
   `setPump` and `page`.
+
+## 9. Under warp, and at the console (playtest 11-11)
+
+Ty: "you can't speed up the automatic transferring with the rods when you
+change the setpoint... you just have to wait", and "can't time warp when
+accessing computers".
+
+- **The plant follows game time.** reactor_plant steps every plant on the
+  agency clock, which includes warp. `smoke_reactor_warp` checks a setpoint
+  change at ×1, ×10, ×100 and ×1000: after 600 game seconds the power and the
+  rods agree to the solver's tolerance, and the per-tick step budget is never
+  short. At ×10000 the budget runs out, and what is left over is carried to the
+  next tick, so no game time is lost.
+- **Why it felt real-time.** A console's terminal holds the keyboard, so the
+  warp keys did nothing while it was open. warp_chip now reads `.` and `,` raw
+  while a terminal is open: the warp works with the screen up, and the screen
+  stays live. Its key line shows the rate.
+- **What the plant sounds like** (`plant_av.lua`, docs/base-building.md §38):
+  - the core's hum rises with its power;
+  - the pumps' whine follows their flow, and they coast down when switched off;
+  - the turbine's whine follows its load;
+  - steam leaks as the primary nears boiling, and the relief valve lifts when it
+    boils;
+  - the pumps rattle when they cavitate;
+  - the floor shakes near a stressed vessel;
+  - two gauges sit on the vessel's face;
+  - the annunciator's red lines sound the klaxon at the vessel, and the amber
+    ones the bell.

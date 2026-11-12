@@ -20,6 +20,7 @@
 | (reused) | a loaded Build Kit piece (kit_load.lua, progression W2): over 0.7 of its capacity a timber piece creaks with `ambience/cave_creak_1..3` (craigsmith's "Big Wood Creaks", a real timber, played at 0.62–0.74×) and a steel one groans with `ambience/cave_groan_1..2`; while it gives, `kenney/impact/impactWood_light_000/002/004` tick as splinters; it breaks with `kenney/impact/impactWood_heavy_001/003` and a creak at 0.5× | the recordings above (no new files) | CC0 |
 | `sfx/` | `breath_calm`, `breath_heavy`, `suit_hum` (seamless loops): the suit, soundscape.lua | real recordings, `tools/build_grit_audio.py` (table below) | CC0 (freesound.org) |
 | `foley/` | `leak_hiss` (a seamless mono loop: a 3D source on a craft part with a hole, cabin_air.lua, G1) | a real recording, cut by hand with ffmpeg (section below) | CC0 (freesound.org) |
+| `plant/` | `alarm_klaxon`, `alarm_buzzer`, `pump_motor`, `pump_whine`, `turbine_whine`, `transformer_hum`, `steam_leak`, `bearing_rattle`, `fan_loop`, `crusher_loop`, `furnace_roar`, `vent_roar` (seamless mono loops), `relief_valve`, `airlock_chime` (mono one-shots): airlocks, alarms and machinery, 3D sources in the base | real recordings, cut and levelled by `tools/build_plant_audio.py` (section below) | CC0 (freesound.org) |
 
 Levels (from `python3 tools/gen_soundscape_audio.py --stats`, confirmed with ffmpeg's
 `ebur128`): music ≈ −24 LUFS with peaks near −12 dBFS; ambience −25 to −29 LUFS
@@ -193,3 +194,59 @@ Drop sounds found by hand here (see audio/incoming/README.md for the list the ga
 
 Rebuild: `ffmpeg -i fs_615667.mp3 -filter_complex "[0:a]aresample=44100,pan=mono|c0=0.5*c0+0.5*c1,highpass=f=180,lowpass=f=10000,atrim=0.4:7.4,asetpts=PTS-STARTPTS,asplit=2[a][b];[a]atrim=0.5:7.0,asetpts=PTS-STARTPTS[body];[b]atrim=0:0.5,asetpts=PTS-STARTPTS[head];[body][head]acrossfade=d=0.5:c1=qsin:c2=qsin[o]" -map "[o]" leak_raw.wav`, then `ffmpeg -i leak_raw.wav -af volume=9.7dB -c:a libvorbis -q:a 5 leak_hiss.ogg`.
 Seen and not used: "MrM_Gas_Steam_Escape.wav" #182359 (an air duster, CC0: bursts, not a steady leak); "Air Hiss" #367125 (2 s); "R17-35-Steam or Compressed Air" #479292 (an optical-track transfer with its noise); "Compressed Gas Leak SFX" on OpenGameArt (synthesised white noise).
+
+## audio/plant — airlocks, alarms and machinery (2026-11-11)
+
+All mono 44.1 kHz Ogg Vorbis q5 (3D sources in the base), cut from the HQ previews
+(`https://cdn.freesound.org/previews/…-hq.mp3`; the curl lines are in the docstring of
+`tools/build_plant_audio.py`). Every licence is CC0 1.0, read on the sound's own page on
+2026-11-11, and every description was read to make sure it is a recording of the real thing.
+Channels are averaged to mono (the quarry's M/S pair sums to its mid). Loops: the crossfade's
+worth after the loop's end is faded into its head (equal power); "seam" is the half-second RMS
+just before / across / just after the loop point, with the loop's own range of half-second RMS
+in brackets. Loudness is the mono cut before levelling → the file (ffmpeg `ebur128=peak=true`);
+every true peak is under −1 dBFS (−6.1 dBFS at most), so no file was held below its target.
+
+| file | source | what it was | licence | processing | loudness |
+|---|---|---|---|---|---|
+| `plant/alarm_klaxon` (4.4 s loop) | "Submarine submersion alarm_mono_wave.wav" by Guialgarve, https://freesound.org/people/Guialgarve/sounds/480898/ | the dive alarm of an old Brazilian submarine, recorded aboard | CC0 1.0 | 150 Hz–9 kHz, 7.90–12.30 s (one 3 s blast and the gap after it), 0.2 s crossfade inside the gap; seam −54.9/−56.3/−55.9 dB (the gap's floor) | −15.2 → −20.0 LUFS, true peak −9.1 dBFS |
+| `plant/alarm_buzzer` (4 s loop) | "G20-24-Fire Alarm.wav" by craigsmith, https://freesound.org/people/craigsmith/sounds/438239/ | a fire alarm bell, long steady mechanical ringing with a slight buzz | CC0 1.0 | 300 Hz–12 kHz, 8–12 s, 0.5 s crossfade; seam −24.0/−24.1/−24.1 dB (−24.1 to −22.0) | −29.5 → −20.0 LUFS, −10.0 dBFS |
+| `plant/pump_motor` (10 s loop) | "20121228 kijjaz - Swimming Pool Pump 02.flac" by kijjaz, https://freesound.org/people/kijjaz/sounds/172603/ | a swimming pool's electric water pump running (Zoom H1) | CC0 1.0 | 60 Hz–9 kHz, 1–11 s, 1 s crossfade; seam −24.3/−24.0/−24.0 dB (−24.7 to −23.1) | −15.3 → −24.0 LUFS, −9.7 dBFS |
+| `plant/pump_whine` (10 s loop) | "motor turbine loud mono.flac" by kyles, https://freesound.org/people/kyles/sounds/637714/ | an electric motor-driven turbine (a blower), a steady whine at 1.0 kHz over a 236 Hz body | CC0 1.0 | 80 Hz–10 kHz, 0.5–10.5 s (before the whine steps up to 1.36 kHz at 13 s), 1 s crossfade; seam −25.1/−25.6/−25.0 dB (−26.1 to −23.3) | −9.8 → −24.0 LUFS, −13.5 dBFS |
+| `plant/turbine_whine` (10 s loop) | "S28-19 Engine room; high whine from turbines.wav" by craigsmith, https://freesound.org/people/craigsmith/sounds/675727/ | a ship's engine room, the turbines' high whine with the room's body under it | CC0 1.0 | 50 Hz–10 kHz, 3–13 s, 1 s crossfade; seam −25.1/−24.9/−24.9 dB (−25.6 to −24.2) | −24.0 → −24.0 LUFS, −11.6 dBFS |
+| `plant/transformer_hum` (10 s loop) | "hum electric transformer in large room2.flac" by kyles, https://freesound.org/people/kyles/sounds/453445/ | an electrical transformer humming in a large room (60 Hz mains: lines at 360 and 720 Hz) | CC0 1.0 | 50 Hz–6 kHz, 6–16 s, 1 s crossfade; seam −23.5/−23.7/−23.8 dB (−23.9 to −23.2) | −22.2 → −24.0 LUFS, −11.2 dBFS |
+| `plant/steam_leak` (7 s loop) | "d_s478_idlesteamhiss.wav" by relwin, https://freesound.org/people/relwin/sounds/686057/ | steam locomotive 478 idling; from 23 s a valve stands open and steam roars out steadily | CC0 1.0 | 300 Hz–15 kHz, 24–31 s (after the whistle; peaks there −0.9 dBFS, unclipped), 1 s crossfade; seam −27.6/−27.3/−27.4 dB (−27.6 to −27.0) | −7.9 → −24.0 LUFS, −13.9 dBFS |
+| `plant/bearing_rattle` (8 s loop) | "MACHFan_industrial_fan_defect_bearing_rough_noise_Olympus_LS-P4.wav" by DBS_Sounds, https://freesound.org/people/DBS_Sounds/sounds/613157/ | an industrial fan with a broken bearing, a rough grinding run | CC0 1.0 | 50 Hz–10 kHz, 4–12 s, 1 s crossfade; seam −24.1/−23.8/−23.6 dB (−24.3 to −23.6) | −16.8 → −24.0 LUFS, −11.3 dBFS |
+| `plant/fan_loop` (10 s loop) | "Noisy Fan.wav" by Beethovenboy, https://freesound.org/people/Beethovenboy/sounds/384335/ | a large industrial fan in a powder-coating warehouse (blade tone 247 Hz) | CC0 1.0 | 40 Hz–8 kHz, 3–13 s, 1 s crossfade; seam −23.3/−23.1/−23.3 dB (−24.0 to −22.5) | −23.1 → −24.0 LUFS, −9.8 dBFS |
+| `plant/crusher_loop` (12 s loop) | "quarry_close_up.aif" by f_ilippo, https://freesound.org/people/f_ilippo/sounds/59244/ | the machine breaking rocks into gravel and sand at a quarry on the Sava near Belgrade (Schoeps M/S, recorded for the film "Tranzit") | CC0 1.0 | 35 Hz–10 kHz, 2–14 s, 1 s crossfade; seam −23.9/−23.6/−23.3 dB (−24.9 to −22.9) | −19.9 → −24.0 LUFS, −10.2 dBFS |
+| `plant/furnace_roar` (10 s loop) | "Gas Forge" by SoundDesigner0101, https://freesound.org/people/SoundDesigner0101/sounds/765947/ | a gas forge burning | CC0 1.0 | 40 Hz–10 kHz, 3–13 s, 1 s crossfade; seam −22.3/−22.3/−23.5 dB (−24.6 to −22.3) | −22.1 → −24.0 LUFS, −11.3 dBFS |
+| `plant/vent_roar` (7 s loop) | "air compressor hose" by mycompasstv, https://freesound.org/people/mycompasstv/sounds/708043/ | air rushing out of an industrial compressor's jackhammer hose, the hose whistling near 790 Hz | CC0 1.0 | 120 Hz–14 kHz, 0.8–7.8 s (the full-bore release, before it is throttled at 10 s), 1 s crossfade; seam −26.3/−26.3/−26.2 dB (−27.3 to −25.9) | −13.6 → −24.0 LUFS, −12.5 dBFS |
+| `plant/relief_valve` (4 s one-shot) | "steam_safety_valve.wav" by Engineer_815, https://freesound.org/people/Engineer_815/sounds/493558/ | the safety valve of an industrial 1000 hp boiler lifting at high pressure (Samsung S9) | CC0 1.0 | 120 Hz–14 kHz, 1.35–5.35 s (the lift and the blow), 10 ms in, 0.6 s fade out | −14.1 → −20.0 LUFS, −6.1 dBFS |
+| `plant/airlock_chime` (1.9 s one-shot) | "service bell ring" by AlaskaRobotics, https://freesound.org/people/AlaskaRobotics/sounds/221515/ | one sustained ring of a metal service bell (Marantz PMD660, Roland DR-20) | CC0 1.0 | 200 Hz–14 kHz, 0.15–2.05 s (the strike and its ring), 2 ms in, 0.5 s fade out | −20.6 → −20.0 LUFS, −6.7 dBFS |
+
+Rebuild: fetch the previews into one folder, then `python3 tools/build_plant_audio.py <folder> --stats`
+(`--source` also prints each cut's loudness before levelling).
+
+Seen and not used: klaxons — "Klaxon off axis long.wav" #514983 (jameswrowles, a real HEK E/75
+hooter, but one unbroken tone, not a repeating alarm), "General Fusion industrial workshop factory
+warning alarm" #450130 (kyles; voices over it), "G45-15-Hornlike Sub Alarm" #438717 (quiet, interior
+noise), "dive.wav" #156672 (4.5 s), "Red Alert Klaxon Re-Creation" #125714 (a processed square
+wave), "16 bit Klaxon / Alarm Synth Loop" #808538, "Industrial Alarm" #558242, "Alarm No. 2" #345814
+and the BeepBox alarms #686859–686861 (all synthesised, as their pages say); bells — "Bell better
+mic off axis2" #323238 (an under-dome bell, fine, but the fire bell is steadier), "Buzzer_Alarm.wav"
+#524909 (clips); pumps — "motor water pump steady" #637715 (clipped), "Pump_engine.wav" #342414
+(mostly water hiss), "pump steady" #568860 (a 100 Hz drone only), "Under Pump Room Nuclear Power
+Plant" #362246 (a 75 Hz rumble, no whine), "pumps industrial in large room" #453508,
+"electric_air_compressor_close_mono" #338970 (a piston chug), "dry_scroll_pump" #477409; turbines —
+"motor industrial turbine large fan blades" #453476 (a low fan); transformers — "transformer-hum.aif"
+#125168 (clipped hard), "EDF_Electrical_substation" #547900 (clean 100 Hz lines but 45 dB down);
+steam — "R19-40-Steam Hiss" #479297 (fades after 4 s), "NYC steam radiator hiss" #265013 (thin),
+"Train_steam_exhaust" #699758 and "d_s478_blowboiler" #686055 (both clip), "Compressed Air Pressure
+Release Valve Loop (Synthetic)" #861613 (synthesised); bearings — "Faulty Extractor Fan" #828636 (a
+100 Hz hum more than a rattle); fans — "Industrial fan 4" #319414, "room tone large industrial
+ventilation fan" #453546; crushers — "stonemachine.wav" #243355 (a real stone crusher, but clipped
+throughout); furnaces — "Furnace.WAV" #173991 (a gas bronze furnace, mostly its bellows' 100 Hz),
+"oil gas furnace heater" #637734; vents — "DEFLATING TYRE" #457443 (thin, all above 8 kHz), "Fire
+Extinguisher Spraying" #750166 (AI-generated, as its page says); chimes — "SILENCYO_DESKBELL" #148844
+(room noise before the strike), "220516 desk bell rings" #717564. BigSoundBank's search page
+refused the automated fetch, so nothing came from there this time.

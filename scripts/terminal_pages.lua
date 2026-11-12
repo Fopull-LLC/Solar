@@ -152,6 +152,12 @@ local function page_status(scope)
   local KL = ref("kit_live")
   local S = KL and KL.screenLines and KL.screenLines(scope.sid)
   rows[#rows + 1] = { type = "header", label = S and S.title or "BASE STATUS", col = 1 }
+  -- (playtest 11-11) the alarms standing on what this console reaches, and the silence key
+  local PA = ref("plant_av")
+  if PA and PA.terminalRows and not scope.readonly then
+    local ar, any = PA.terminalRows(scope.sids or { scope.sid }, 1)
+    if any then for _, r in ipairs(ar) do rows[#rows + 1] = r end end
+  end
   for _, l in ipairs(S and S.lines or {}) do rows[#rows + 1] = { type = "line", text = l[1], level = l[2] and 1 or 0, col = 1 } end
   if #(scope.sids or {}) > 1 then
     local ST = ref("structures")
@@ -1017,6 +1023,15 @@ local function page_alarms(scope)
     end
   end
   if na == 0 then rows[#rows + 1] = { type = "line", text = "every sealed room holds", col = 2 } end
+  -- (playtest 11-11) every alarm sounding on what this console reaches: SILENCE
+  local PA = ref("plant_av")
+  if PA and PA.terminalRows then
+    local ar, any = PA.terminalRows(scope.sids or { scope.sid }, 2)
+    if any then
+      rows[#rows + 1] = { type = "header", label = "SOUNDING", col = 2 }
+      for _, r in ipairs(ar) do rows[#rows + 1] = r end
+    end
+  end
   return rows
 end
 

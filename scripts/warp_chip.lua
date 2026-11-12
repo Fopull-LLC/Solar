@@ -175,8 +175,17 @@ local function foot_tick(pw, dt)
       warp = down
     end
   end
-  if not typing() and (input.pressed(".") or input.pressed(",")) then
-    local dir = input.pressed(".") and 1 or -1
+  -- (playtest 11-11: "can't time warp when accessing computers") a console's
+  -- terminal holds the keyboard (input_guard), so its . and , are read raw:
+  -- the warp works with the screen up, and the screen stays live
+  local tm = ref("terminal")
+  local term = tm ~= nil and tm.isOpen ~= nil and tm.isOpen() == true
+  local function pr(k)
+    if term and input.rawPressed then return input.rawPressed(k) == true end
+    return input.pressed(k) == true
+  end
+  if not typing() and (pr(".") or pr(",")) then
+    local dir = pr(".") and 1 or -1
     local nxt, capped = stepWarp(warp, dir, cap)
     if capped then
       say(why and ("Warp limited · " .. why) or string.format("Warp limited to ×%d out here", math.floor(cap)))

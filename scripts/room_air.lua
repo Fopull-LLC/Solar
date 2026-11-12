@@ -57,9 +57,17 @@
 -- chamber's chosen door may open, only with every other door of it shut and
 -- the chamber at the pressure on that door's far side. A crew member outside
 -- by a door asks for that door; inside the chamber, for the door they did not
--- come in by. While the pressures differ the chamber CYCLES: a pump moves air
--- between the chamber and the hab (PUMP atm·m³/s; a 9 m³ chamber in ~25 s),
--- with the pump's hiss, and a chime when it is done.
+-- come in by (the side it was last open to, if they are found in it with
+-- every door shut). While the pressures differ the chamber CYCLES: a pump
+-- moves air between the chamber and the hab (PUMP_S; a 9 m³ chamber in ~5 s
+-- down, ~6 s up), with the air's hiss, the pump's motor, vapour in the
+-- chamber, frost out of the vent, and the latch and a bell when it is done.
+-- (Playtest 11-11.) The door the crew came in by never shuts on them while
+-- they stand in it. A door's panel and menu show its state (airlockStatus:
+-- READY, CYCLING, EQUALISING, VENTING, CLOSING, HELMET, NO POWER, OVERRIDE,
+-- STANDBY), "Cycle to this door" (cycleTo) works from inside, outside and
+-- the chamber, and the MANUAL OVERRIDE (overrideDoor) opens a door against
+-- the pressure, warned, never refused.
 --
 -- Every OTHER door is held shut by a pressure difference across it (HOLD_DP)
 -- until its menu forces it ("Force it open (vents Room 2)").
@@ -117,14 +125,17 @@ KH = 1.429 * 4.032 / 31.999
 G_OPEN = 1 / VENT_S          -- m³/s per atm through an open door or a gap (τ = V / G)
 EQ_DOOR = 0.1                -- a door's own equalising valve, m³/s per atm (a bulkhead names its own)
 SEAL_C = 0.03                -- a fully failed seal's leak, m³/s per atm
-PUMP_S = 0.5                 -- an airlock pump's speed, m³/s at the chamber's pressure (a 9 m³ chamber: ~41 s to 0.1 atm)
+-- (playtest 11-11: "sometimes it just takes forever to open": a 9 m³ lock took ~55 s
+-- out and ~30 s in. A small lock's cycle is a few seconds now: a bigger pump,
+-- valves sized to it; a bigger chamber still takes longer, in proportion)
+PUMP_S = 4.0                 -- an airlock pump's speed, m³/s at the chamber's pressure (a 9 m³ chamber: ~5 s to 0.1 atm)
 P_RESID = 0.1                -- it pumps down to this; the rest is vented
 P_PURGE = 0.01               -- (scn_dust) coming in, foreign gas is pumped overboard to this first
-PURGE_S = 1.0                -- …at this many m³/s at the chamber's pressure (a 9 m³ chamber, 0.8 → 0.01 atm in ~40 s)
+PURGE_S = 4.0                -- …at this many m³/s at the chamber's pressure (a 9 m³ chamber, 0.8 → 0.01 atm in ~10 s)
 PURGE_CO2, PURGE_O2 = 0.01, 0.15   -- foreign: CO2 over this share of the gas, or O2 under this one
-REC_C = 0.5                  -- the receiver's return valve, m³/s per atm
-CYC_C = 1.0                  -- the chamber's equalising valve to the hab (or the room ahead), m³/s per atm
-VENT_C = 0.6                 -- the chamber's vent valve, m³/s per atm (no pump: the air is lost)
+REC_C = 4.0                  -- the receiver's return valve, m³/s per atm
+CYC_C = 5.0                  -- the chamber's equalising valve to the hab (or the room ahead), m³/s per atm (9 m³: ~6 s)
+VENT_C = 4.0                 -- the chamber's vent valve, m³/s per atm (no pump: the air is lost)
 FORCE_S = 3.0                -- forcing a door: s, plus FORCE_K s per atm across it
 FORCE_K = 6.0
 WARN_S = 5.0                 -- the warning crew in a room get before it vents (a forced or failing door)
@@ -1187,6 +1198,9 @@ function gate(sid, uid, want)
     local C = s.cham[rid]
     if not C then return want end
     if want and want > 0 then C.wants[uid] = now() end
+    -- (playtest 11-11) a hand's override: it opens to the crew whatever the
+    -- pressures, until it shuts again (doorMoved), warned, never refused
+    if s.forced[uid] then return want end
     return (C.allow == uid) and 1 or 0
   end
   if not (want and want > 0) then return want end
@@ -1362,77 +1376,279 @@ local function ch_world(s, C)
          b.z + fr.O.z + fr.R.z * r.cx + fr.U.z * r.cy + fr.F.z * r.cz
 end
 
+-- ── THE AIRLOCK'S SIGHT AND SOUND (playtest 11-11: "there's no particles or
+-- sound effects in depressurization, so it's hard to tell what's going on") ──
+-- While a chamber cycles, near the crew (AV_R): the air's hiss (a loop at the
+-- chamber, loud while the pressures are far apart), the pump's motor while it
+-- pumps (a recorded electric pump), vapour in the chamber as its air thins or
+-- rushes back in (the cold of expansion), a puff of frost out of the lock's
+-- vent while gas goes overboard (dust kicked up off the ground under it on a
+-- world with air), and when it is done the latch and a struck bell. The door
+-- leaves' motors are kit_live's. Nothing is kept in the world: every point is
+-- placed from the structure's frame and this frame's body read when it is
+-- used (frames doc rule 1).
+AV_R = 25.0
+PUFF_EVERY = 0.3
+SND = { hiss = "audio/foley/hiss_cylinder.ogg", pump = "audio/plant/pump_motor.ogg", chime = "audio/plant/airlock_chime.ogg",
+        clunk = "audio/foley/latch_clunk.ogg", servo = "audio/foley/servo_run.ogg" }
+lastPuff = nil
+local function frame_pt(s, lx, ly, lz)
+  local KS = ref("kit_snap")
+  local b = space and space.body and space.body(s.rec.b)
+  if not (KS and b) then return nil end
+  local fr = KS.frameOf(s.rec)
+  return b.x + fr.O.x + fr.R.x * lx + fr.U.x * ly + fr.F.x * lz,
+         b.y + fr.O.y + fr.R.y * lx + fr.U.y * ly + fr.F.y * lz,
+         b.z + fr.O.z + fr.R.z * lx + fr.U.z * ly + fr.F.z * lz, fr
+end
+-- A point `off` m off door uid's middle, `up` m up, on the side of room
+-- `toward` (0: the outside), and the normal pointing that way: x, y, z, nx, ny, nz
+local function door_pt(s, uid, toward, off, up)
+  local ds = s.dside and s.dside[uid]
+  if not ds then return nil end
+  local sg = (ds.front == toward) and 1 or -1
+  local x, y, z, fr = frame_pt(s, ds.x + ds.nx * sg * off, ds.y + (up or 0) + ds.ny * sg * off, ds.z + ds.nz * sg * off)
+  if not x then return nil end
+  local nx, ny, nz = ds.nx * sg, ds.ny * sg, ds.nz * sg
+  return x, y, z, fr.R.x * nx + fr.U.x * ny + fr.F.x * nz, fr.R.y * nx + fr.U.y * ny + fr.F.y * nz, fr.R.z * nx + fr.U.z * ny + fr.F.z * nz
+end
+doorPoint = function(sid, uid, toward, off, up) local s = S[sid]; if s then return door_pt(s, uid, toward, off, up) end end
+local function crew_near(x, y, z, r)
+  local a = find and find("Astronaut")
+  if not (valid(a) and x) then return false end
+  return (a.x - x) ^ 2 + (a.y - y) ^ 2 + (a.z - z) ^ 2 < r * r
+end
+local function V3(x, y, z) if vec3 then return vec3(x, y, z) end return { x = x, y = y, z = z } end
+local function snd_stop(h) if type(h) == "table" or type(h) == "userdata" then pcall(function() h:stop() end) end end
+local function puff(key, x, y, z, nx, ny, nz, sc, inten, dust, vel)
+  local V = ref("vfx")
+  if V and V.emit then pcall(V.emit, key, x, y, z, { normal = V3(nx, ny, nz), scale = sc, intensity = inten, dust = dust, vel = vel })
+  elseif spawnEffect then pcall(spawnEffect, key, V3(x, y, z), { normal = V3(nx, ny, nz), scale = sc }) end
+  lastPuff = { key = key, x = x, y = y, z = z, t = now() }
+  PROF.puffs = (PROF.puffs or 0) + 1
+end
+-- the outside's door of a chamber (nil: it opens only onto rooms)
+local function outer_of(s, C)
+  for _, u in ipairs(C.doors) do
+    local d = s.R.doors[u]
+    local o = d and ((d.a == C.rid) and d.b or d.a)
+    if d and (o == 0 or (s.R.byId[o] and s.R.byId[o].leaky)) then return u end
+  end
+  return nil
+end
 local function cycle_sound(s, C, on)
+  local x, y, z = ch_world(s, C)
   if on and not C.snd then
-    local x, y, z = ch_world(s, C)
     if x and audio and audio.play then
-      local ok, h = pcall(audio.play, "audio/foley/hiss_cylinder.ogg", x, y, z, { loop = true, maxDistance = 25, track = "SFX", volume = 0.45 })
+      local ok, h = pcall(audio.play, SND.hiss, x, y, z, { loop = true, maxDistance = AV_R, track = "SFX", volume = 0.5 })
       C.snd = ok and h or true
-      pcall(audio.play, "audio/foley/servo_run.ogg", x, y, z, { maxDistance = 25, track = "SFX", volume = 0.35 })
-    end
+      pcall(audio.play, SND.servo, x, y, z, { maxDistance = 20, track = "SFX", volume = 0.35 })
+    else C.snd = true end
+    C.puff_t = -10
     local fx = ref("sfx")
     if fx and fx.caption then fx.caption(C.dir == "down" and "airlock: depressurising" or "airlock: pressurising") end
   elseif not on and C.snd then
-    if type(C.snd) == "table" or type(C.snd) == "userdata" then pcall(function() C.snd:stop() end) end
-    C.snd = nil
-    local x, y, z = ch_world(s, C)
+    snd_stop(C.snd); C.snd = nil
+    snd_stop(C.pump); C.pump = nil
     if x and audio and audio.play then
-      pcall(audio.play, "audio/foley/hiss_seal.ogg", x, y, z, { maxDistance = 20, track = "SFX", volume = 0.4 })
-      pcall(audio.play, "audio/sfx/crew_chime.ogg", x, y, z, { maxDistance = 20, track = "SFX", volume = 0.35 })
+      pcall(audio.play, SND.clunk, x, y, z, { maxDistance = 20, track = "SFX", volume = 0.55 })
+      pcall(audio.play, SND.chime, x, y, z, { maxDistance = 22, track = "SFX", volume = 0.5 })
+    end
+  end
+  if not (on and x) then return end
+  -- the pump's motor: on while it pumps, its note rising a little as the chamber thins
+  if C.pumping and not C.pump and audio and audio.play then
+    local ok, h = pcall(audio.play, SND.pump, x, y, z, { loop = true, maxDistance = AV_R, track = "SFX", volume = 0.55 })
+    C.pump = ok and h or nil
+  elseif not C.pumping and C.pump then snd_stop(C.pump); C.pump = nil end
+  local pc = ch_p(s, C)
+  if C.pump and C.pump.setPitch then pcall(C.pump.setPitch, C.pump, 0.92 + 0.16 * math.max(0, math.min(1, 1 - pc))) end
+  -- the hiss follows the flow: loud while the pressures are far apart
+  local gap = math.abs(pc - (C.pT or pc))
+  if type(C.snd) ~= "boolean" and C.snd.setVolume then pcall(C.snd.setVolume, C.snd, 0.15 + 0.5 * math.min(1, gap)) end
+  -- the vapour and the vent, near the crew only
+  local t = now()
+  if t - (C.puff_t or -10) < PUFF_EVERY or not crew_near(x, y, z, AV_R) then return end
+  C.puff_t = t
+  local r = s.R.byId[C.rid]
+  local inten = math.min(1, 0.25 + gap)
+  local cx, cy, cz, fr = frame_pt(s, r and r.cx or 0, (r and r.cy or 1.2) + 0.7, r and r.cz or 0)
+  if cx and gap > 0.03 then
+    -- (in the chamber: a fog of condensing moisture under its vent, down or up)
+    puff("LockFog", cx, cy, cz, -fr.U.x, -fr.U.y, -fr.U.z, 0.7, inten)
+  end
+  local out = outer_of(s, C)
+  local overboard = C.dir == "down" and (not C.pumping or C.purging)
+  if out and overboard and fr then
+    local vx, vy, vz, nx, ny, nz = door_pt(s, out, 0, 0.35, 0.9)
+    if vx then
+      puff("LockVent", vx, vy, vz, nx, ny, nz, 0.6 + 0.6 * math.min(1, pc), inten)
+      -- (a world with air: the jet kicks up the ground's dust under the vent)
+      if out_of(s, s.rec) > 0.05 then
+        local gx, gy, gz = door_pt(s, out, 0, 0.9, -0.9)
+        if gx then puff("LockDust", gx, gy, gz, fr.U.x, fr.U.y, fr.U.z, 0.8, inten, true) end
+      end
     end
   end
 end
 
+-- The airlock's state as its door panel shows it, for door uid:
+--   label   READY · CYCLING · EQUALISING · VENTING · CLOSING · HELMET ·
+--           NO POWER · OVERRIDE · STANDBY
+--   col     "go" (green), "busy" (amber), "stop" (red), "idle" (dim)
+--   pc, pT  the chamber's pressure and the pressure beyond this door
+-- → { label, col, pc, pT, secs (the cycle's time so far) } | nil (no airlock)
+function airlockStatus(sid, uid)
+  local s = S[sid]
+  local rid = s and s.dch and s.dch[uid]
+  local C = rid and s.cham[rid]
+  if not (C and s.R and s.R.byId[C.rid] and s.air[C.rid]) then return nil end
+  local pc = ch_p(s, C)
+  local pT = side_p(s, C, uid)
+  local t = now()
+  local o = { pc = pc, pT = pT, secs = C.cyc and (t - (C.cyc_t or t)) or nil }
+  if s.forced[uid] then o.label, o.col = "OVERRIDE", "stop"
+  elseif C.allow == uid then o.label, o.col = "READY", "go"
+  elseif C.target == uid and C.state == "helmet" then o.label, o.col = "HELMET", "stop"
+  elseif C.target == uid and C.state == "closing" then o.label, o.col = "CLOSING", "busy"
+  elseif C.target == uid and C.cyc then
+    if C.dir == "down" then
+      if C.pumping then o.label, o.col = "CYCLING", "busy"
+      elseif not s.pow then o.label, o.col = "NO POWER", "stop"
+      else o.label, o.col = "VENTING", "busy" end
+    else o.label, o.col = "EQUALISING", "busy" end
+  elseif C.cyc then o.label, o.col = "CYCLING", "busy"
+  else o.label, o.col = "STANDBY", "idle" end
+  return o
+end
+
+-- Is the crew (in the chamber) standing in door uid's doorway? (structure frame)
+local function in_doorway(s, uid)
+  local ds = s.dside and s.dside[uid]
+  if not (ds and crew.lx) then return false end
+  local dx, dz = crew.lx - ds.x, crew.lz - ds.z
+  local along = math.abs(dx * ds.nx + dz * ds.nz)
+  local side = math.abs(dx * ds.nz - dz * ds.nx)
+  return along < 0.7 and side < 0.9
+end
+REQ_S = 20.0      -- a panel's "Cycle to this door" holds this long
 local function chamber_tick(sid, s, C, dt)
   local t = now()
   local inside = crew.sid == sid and crew.rid == C.rid
   local target = nil
+  -- (a door that is open now is the side the chamber is at: remembered, so a
+  -- crew member found in it with every door shut came in by that one)
+  for _, u in ipairs(C.doors) do if door_open(sid, u) then C.home = u end end
+  local req = C.req and t - C.req.t < REQ_S and C.req.uid or nil
+  if not req then C.req = nil end
   if inside then
     if not C.entered then
       for _, u in ipairs(C.doors) do if door_open(sid, u) then C.entered = u end end
+      -- (playtest 11-11, Graveyard: "the first door opened and the second one
+      -- wouldn't". In the chamber with every door shut, the entry was guessed
+      -- by the nearest room's middle, and the outside has none: it always
+      -- picked the hab's door and cycled back out. Now: the side the chamber
+      -- was last open to, else the side whose pressure it holds)
+      if not C.entered and C.home then
+        for _, u in ipairs(C.doors) do if u == C.home then C.entered = u end end
+      end
       if not C.entered then
-        -- (in the chamber with every door shut: they came in by the one nearest them)
+        local pc0 = ch_p(s, C)
         local best, bd = nil, 1e18
         for _, u in ipairs(C.doors) do
-          local _, o = side_p(s, C, u)
-          local r = o and s.R.byId[o]
-          local d = r and ((r.cx - (crew.lx or 0)) ^ 2 + (r.cz - (crew.lz or 0)) ^ 2) or 1e17
+          local d = math.abs(side_p(s, C, u) - pc0)
           if d < bd then best, bd = u, d end
         end
         C.entered = best
       end
     end
     for _, u in ipairs(C.doors) do if u ~= C.entered then target = target or u end end
+    if req then target = req end
   else
     C.entered = nil
     local bt = -1
     for u, w in pairs(C.wants) do if t - w < 0.3 and w > bt then target, bt = u, w end end
+    if not target and req then target = req end
   end
   C.target = target
   C.allow = nil
+  C.state = nil
   if not target then
     if C.cyc then C.cyc = nil; cycle_sound(s, C, false) end
     return
   end
-  for _, u in ipairs(C.doors) do if u ~= target and door_open(sid, u) then return end end
+  -- (the door they came in by stays open while they stand in it: it never
+  -- shuts on a crew member mid-step)
+  if inside and C.entered and C.entered ~= target and door_open(sid, C.entered) and in_doorway(s, C.entered) then
+    C.allow = C.entered
+    C.state = "closing"
+    return
+  end
+  for _, u in ipairs(C.doors) do if u ~= target and door_open(sid, u) then C.state = "closing" return end end
   local pT = side_p(s, C, target)
   local pc, Vc = ch_p(s, C)
+  C.pT = pT
   -- (S7) the suit rule: inside with the helmet off, it won't cycle to low pressure
   if inside and pT < P_MIN and pc > pT + 0.04 and suit_refuses(s, sid, target, pT) then
     if C.cyc then C.cyc = nil; cycle_sound(s, C, false) end
+    C.state = "helmet"
     return
   end
   if math.abs(pc - pT) <= 0.04 then
     C.allow = target
-    if C.cyc then C.cyc = nil; C.done_t = t; cycle_sound(s, C, false); C.mode = nil; C.pumping = false end
+    if C.req and C.req.uid == target then
+      -- (asked from inside: the chamber now faces that door, so the crew in it
+      -- are taken to be going out by it, not back the way they came)
+      if inside then for _, u in ipairs(C.doors) do if u ~= target then C.entered = u end end end
+      C.req = nil
+    end
+    if C.cyc then
+      C.cyc = nil; C.done_t = t; cycle_sound(s, C, false); C.mode = nil
+      if C.pumping then C.pumping = false; local BG = ref("base_grid"); if BG and BG.markDirty then BG.markDirty() end end
+      lastCycleSecs = t - (C.cyc_t or t)
+    end
     return
   end
   if not C.cyc then C.cyc = target; C.cyc_t = t; C.saved, C.vented, C.back, C.said = 0, 0, 0, nil end
   local was = C.pumping
+  C.purging = nil
   cycleStep(sid, s, C, target, pT, dt)
   if was ~= C.pumping then local BG = ref("base_grid"); if BG and BG.markDirty then BG.markDirty() end end
   cycle_sound(s, C, true)
   s.netsDirty = true
+end
+lastCycleSecs = nil
+-- (playtest 11-11) an airlock door's MANUAL OVERRIDE (its panel, its menu):
+-- it opens to the crew now whatever the chamber holds, the other door's
+-- interlock kept. Never refused: what it does is said. → true, warning | false, why
+function overrideDoor(sid, uid)
+  local s = S[sid]
+  local rid = s and s.dch and s.dch[uid]
+  local C = rid and s.cham[rid]
+  if not C then return false, "not an airlock's door" end
+  advance_struct(sid, s, agency_now())
+  local pc, pT = ch_p(s, C), side_p(s, C, uid)
+  s.forced[uid] = true
+  local warn = nil
+  if math.abs(pc - pT) > 0.04 then
+    warn = string.format("OVERRIDE: %.2f atm in the chamber against %.2f beyond: it %s as the door opens", pc, pT,
+      pc > pT and "vents" or "floods")
+    local x, y, z = door_pt(s, uid, (pc > pT) and ((s.R.doors[uid].a == C.rid) and s.R.doors[uid].b or s.R.doors[uid].a) or C.rid, 0.3, 0.2)
+    if x and audio and audio.play then pcall(audio.play, "audio/foley/buzz_denied.ogg", x, y, z, { maxDistance = 15, track = "SFX", volume = 0.5 }) end
+  end
+  local BL = ref("base_log")
+  if BL and BL.add then pcall(BL.add, sid, warn and "warn" or "door", string.format("airlock door overridden by hand%s", warn and (": " .. warn) or "")) end
+  return true, warn
+end
+-- (a panel's key, the menu's "Cycle to this door") the chamber cycles to door
+-- uid and holds it there for REQ_S, from inside or out. → ok, why
+function cycleTo(sid, uid)
+  local s = S[sid]
+  local rid = s and s.dch and s.dch[uid]
+  local C = rid and s.cham[rid]
+  if not C then return false, "not an airlock's door" end
+  C.req = { uid = uid, t = now() }
+  return true
 end
 
 -- (S7) THE CYCLE, exact for any dt:
@@ -1463,6 +1679,44 @@ local function cyc_say(C, msg)
   lastCycle = msg
 end
 lastCycle = nil
+-- (playtest 11-11) the Air Tank Racks an airlock's chamber can fill from or
+-- pump back into: the racks (on, with the base's power: their valves) in the
+-- network of room `rid`
+local function racks_of(sid, s, rid)
+  if not rid then return {} end
+  local _, byRoom = nets(sid, s)
+  local n = byRoom and byRoom[rid]
+  local out = {}
+  for _, L in ipairs(s.life) do
+    if L.life.store and L.rid and not L.off and byRoom and n and byRoom[L.rid] == n then out[#out + 1] = L end
+  end
+  return out
+end
+-- take up to `amt` atm·m³ of the racks' air → taken
+function rack_take(sid, s, rid, amt)
+  if not (amt and amt > EPS) then return 0 end
+  local got = 0
+  for _, L in ipairs(racks_of(sid, s, rid)) do
+    local q = s.tanks[L.uid] or 0
+    local k = math.min(q, amt - got)
+    if k > 0 then s.tanks[L.uid] = q - k; got = got + k end
+    if got >= amt - EPS then break end
+  end
+  return got
+end
+-- put `amt` atm·m³ of air A's gas into the racks while they have room → put
+function rack_put(sid, s, rid, A, amt)
+  if not (amt and amt > EPS) then return 0 end
+  local put = 0
+  for _, L in ipairs(racks_of(sid, s, rid)) do
+    local q = s.tanks[L.uid] or 0
+    local k = math.min(math.max(0, L.life.store - q), amt - put)
+    if k > 0 then s.tanks[L.uid] = q + k; put = put + k end
+    if put >= amt - EPS then break end
+  end
+  if put > 0 then move_air(A, nil, put) end
+  return put
+end
 function cycleStep(sid, s, C, target, pT, dt)
   local inner = nil
   for _, u in ipairs(C.doors) do
@@ -1513,9 +1767,13 @@ function cycleStep(sid, s, C, target, pT, dt)
         C.saved = (C.saved or 0) + amt
         cyc_say(C, "airlock: pumping the chamber's air into its receiver")
       else
-        move_air(A, sink, amt)
+        -- (playtest 11-11: a lock cycles in seconds now, so its air goes back
+        -- into the hab's Air Tank Racks while they have room, as a station's
+        -- does: a 9 m³ chamber dumped into an 18 m³ hab put it at 1.5 atm)
+        local into = rack_put(sid, s, inner, A, amt)
+        if amt - into > EPS then move_air(A, sink, amt - into) end
         C.saved = (C.saved or 0) + amt
-        cyc_say(C, "airlock: pumping the chamber's air back into the hab")
+        cyc_say(C, into > 0.5 * amt and "airlock: pumping the chamber's air back into the racks" or "airlock: pumping the chamber's air back into the hab")
       end
     else
       -- the vent valve: what's left (under the pump's floor), or all of it
@@ -1541,6 +1799,7 @@ function cycleStep(sid, s, C, target, pT, dt)
     if foreign and tr and tr.sealed and pc > P_PURGE + 1e-6 and s.pow then
       C.dir = "down"
       C.pumping = true
+      C.purging = true
       local n1 = math.max(P_PURGE * Vc, tot * math.exp(-PURGE_S * dt / Vc))
       local f = (tot > EPS) and (n1 / tot) or 0
       C.vented = (C.vented or 0) + (tot - n1)
@@ -1566,7 +1825,23 @@ function cycleStep(sid, s, C, target, pT, dt)
       C.back = (C.back or 0) + math.max(0, got - math.max(0, over))
     end
     pc = ch_p(s, C)
+    -- (playtest 11-11) then the hab's Air Tank Racks through the chamber's
+    -- fill valve: a lock that fills in seconds would otherwise take a third
+    -- of a small hab's air at once (18 m³ at 1 atm to 0.67: under the 0.16
+    -- atm of O2 a crew breathes) faster than its regulator makes it up
+    local racked = false
     if pc < pT - 0.04 then
+      local want = (pT * Vc - (A.N + A.x + A.c)) * (1 - math.exp(-CYC_C * dt / Vc))
+      local got = rack_take(sid, s, (tr and tr.sealed and tside) or inner, want)
+      if got > 0 then
+        A.N, A.x = A.N + got * (1 - O2N), A.x + got * O2N
+        C.racked = (C.racked or 0) + got
+        racked = got >= want - 1e-9
+      end
+      pc = ch_p(s, C)
+    end
+    -- (the room's own air only for what the racks could not give)
+    if pc < pT - 0.04 and not racked then
       local src = (tr and tr.sealed and s.air[tside]) or (inner and s.air[inner]) or nil
       local sV = src and ((tr and tr.sealed and s.air[tside] == src) and tr.m3 or (inner and s.R.byId[inner].m3)) or nil
       if src and sV then
@@ -1640,6 +1915,7 @@ local function alarm_tick(sid, s)
         if fx and fx.caption then fx.caption("DEPRESSURISATION: " .. cause) end
         if log then log(string.format("room_air: DEPRESSURISATION in structure %s room %d (%.1f m³): %s", tostring(sid), r.id, r.m3, cause)) end
       elseif al and not venting then
+        for _, h in pairs(al.roar or {}) do snd_stop(h) end
         alarms_[k] = nil
         if a.p < 0.8 then s.pres[r.id] = false end
       end
@@ -1657,10 +1933,72 @@ local function alarm_tick(sid, s)
   end
 end
 
+-- THE ALARM'S SOUND is plant_av's (a recorded klaxon at the room's door, the
+-- structure's lights as beacons, a silence key); without it, the old one-shot.
+-- THE BREACH (playtest 11-11: "the same for any depressurisation"): while a
+-- room vents through a door open to the outside or a blown seal, near the
+-- crew, the hole roars (a recorded compressor blow-off, louder with the
+-- pressure behind it), grit, dust and flecks are drawn toward it from the
+-- room, and frost and vapour jet out of it. Points are placed from the door's
+-- side and this frame's body read when each puff is fired; the roar rides the
+-- door's node.
+BREACH_R = 30.0
+BREACH_EVERY = 0.25
+lastBreach = nil
+local function breach_av(t, a)
+  local ST = ref("structures")
+  for k, al in pairs(alarms_) do
+    local s = S[al.sid]
+    al.roar = al.roar or {}
+    local live = {}
+    if s and s.R and valid(a) then
+      local _, byRoom = nets(al.sid, s)
+      local mine = byRoom and byRoom[al.rid]
+      local x0, y0, z0 = ch_world(s, { rid = al.rid })
+      local near = x0 and (x0 - a.x) ^ 2 + (y0 - a.y) ^ 2 + (z0 - a.z) ^ 2 < (BREACH_R + 10) ^ 2
+      if near and mine then
+        local n = 0
+        for uid, d in pairs(s.R.doors) do
+          local st = part_state(al.sid, uid)
+          local open_out = (d.a == 0 or d.b == 0) and door_open(al.sid, uid)
+          local inner = (d.a == 0) and d.b or d.a
+          if (open_out or (st and st.blown)) and inner ~= 0 and byRoom[inner] == mine and n < 2 then
+            n = n + 1
+            live[uid] = true
+            local p_in = side_pressure(s, inner)
+            local dp = math.max(0, p_in - out_of(s, s.rec))
+            local node = ST and ST.nodeOf and ST.nodeOf(al.sid, uid)
+            if not al.roar[uid] and valid(node) and audio and audio.play then
+              local ok, h = pcall(audio.play, "audio/plant/vent_roar.ogg", node, { loop = true, minDistance = 2, maxDistance = BREACH_R + 10, track = "SFX", volume = 0.3 + 0.7 * math.min(1, dp) })
+              al.roar[uid] = ok and h or true
+            elseif type(al.roar[uid]) ~= "boolean" and al.roar[uid] and al.roar[uid].setVolume then
+              pcall(al.roar[uid].setVolume, al.roar[uid], 0.15 + 0.85 * math.min(1, dp))
+            end
+            if dp > 0.03 and t - (al.puff_t or -10) >= BREACH_EVERY then
+              -- (drawn toward the hole from the room; frost out of it)
+              local ix, iy, iz, inx, iny, inz = door_pt(s, uid, inner, 1.4, -0.5)
+              if ix then
+                -- (the effect's +Y is its normal: pointed at the hole)
+                puff("BreachDraw", ix, iy, iz, -inx, -iny, -inz, 0.6 + 0.4 * math.min(1, dp), math.min(1, 0.3 + dp), true)
+              end
+              local ox, oy, oz, onx, ony, onz = door_pt(s, uid, 0, 0.3, 0.2)
+              if ox then puff("LockVent", ox, oy, oz, onx, ony, onz, 0.8 + math.min(1, dp), math.min(1, 0.3 + dp)) end
+              lastBreach = { sid = al.sid, rid = al.rid, uid = uid, dp = dp, t = t }
+            end
+          end
+        end
+        if n > 0 and t - (al.puff_t or -10) >= BREACH_EVERY then al.puff_t = t end
+      end
+    end
+    for uid, h in pairs(al.roar) do if not live[uid] then snd_stop(h); al.roar[uid] = nil end end
+  end
+end
 local function alarm_sound()
   local a = find and find("Astronaut")
   if not valid(a) then return end
   local t = now()
+  breach_av(t, a)
+  if ref("plant_av") then return end
   for _, al in pairs(alarms_) do
     local s = S[al.sid]
     if s and t - al.snd_t >= ALARM_EVERY then
@@ -1673,7 +2011,21 @@ local function alarm_sound()
     end
   end
 end
-
+-- (plant_av) the sealed rooms whose air has gone bad, that held good air: →
+-- { { sid, rid, why } … } (an airlock's chamber is thin by design; a venting
+-- room is the depressurisation alarm's)
+function airAlarms()
+  local out = {}
+  for sid, s in pairs(S) do
+    for _, r in ipairs(s.R and s.R.rooms or {}) do
+      if r.sealed and not r.airlock and s.pres[r.id] then
+        local q = airOf(sid, r.id)
+        if q and not q.venting and not q.purging and not q.breathable and q.p >= P_MIN then out[#out + 1] = { sid = sid, rid = r.id, why = q.why } end
+      end
+    end
+  end
+  return out
+end
 -- ── save ────────────────────────────────────────────────────────────────────
 local function save_struct(sid, s)
   if not (save and save.set) then return end
@@ -1863,10 +2215,26 @@ local function provider(t, ctx)
     local C = s.cham[s.dch[uid]]
     out[#out + 1] = { id = "ra_lock", type = "info", label = "Airlock", group = "Fitting",
       value = function()
-        local pc = ch_p(s, C)
-        if C.cyc then return string.format("%s · %.2f atm", C.dir == "down" and "depressurising" or "pressurising", pc) end
-        return string.format("interlocked · chamber %.2f atm", pc)
-      end }
+        local o = airlockStatus(sid, uid)
+        if not o then return "—" end
+        return string.format("%s · chamber %.2f atm · beyond %.2f atm", o.label, o.pc, o.pT)
+      end,
+      warn = function() local o = airlockStatus(sid, uid); return o ~= nil and o.col == "stop" end }
+    -- (playtest 11-11: it works from either side and from inside: the panel's
+    -- key cycles the chamber to this door and holds it there a while)
+    out[#out + 1] = { id = "ra_cycle", type = "action", label = "Cycle to this door", group = "Fitting",
+      hint = function() local o = airlockStatus(sid, uid); return o and o.label or nil end,
+      act = function() return cycleTo(sid, uid) end }
+    -- the manual override: allowed, with what it does said
+    if not s.forced[uid] then
+      out[#out + 1] = { id = "ra_override", type = "action", group = "Fitting",
+        label = function()
+          local o = airlockStatus(sid, uid)
+          if o and math.abs(o.pc - o.pT) > 0.04 then return string.format("Override: open now (%.2f atm against %.2f)", o.pc, o.pT) end
+          return "Override: open now"
+        end,
+        act = function() return overrideDoor(sid, uid) end }
+    end
   end
   return out, (#out > 0) and d.label or nil
 end
@@ -2164,7 +2532,12 @@ function warnVent(sid, uid, why, secs)
     lastWarning.crew = true
   end
   local x, y, z = door_world(s, uid)
-  if x and audio and audio.play then pcall(audio.play, "audio/sfx/crew_alarm.ogg", x, y, z, { maxDistance = 45, track = "SFX", volume = 0.6 }) end
+  -- (the warning sounds as an alarm at the door: plant_av's klaxon and beacons, till it vents)
+  local PA = ref("plant_av")
+  if PA and PA.raise then
+    pcall(PA.raise, "vent:" .. tostring(sid) .. ":" .. tostring(uid), { sid = sid, kind = "depress", level = 2, uid = uid,
+      text = string.format("VENTING IN %d s: %s", math.floor((secs or WARN_S) + 0.5), tostring(why)) })
+  elseif x and audio and audio.play then pcall(audio.play, "audio/sfx/crew_alarm.ogg", x, y, z, { maxDistance = 45, track = "SFX", volume = 0.6 }) end
 end
 -- Force door uid open now (the menu's job, when it is through): it opens and
 -- the rooms vent, the gust and the pull, and its seal is damaged by the

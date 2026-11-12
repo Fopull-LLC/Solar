@@ -588,8 +588,12 @@ local function tree(list, sub)
   if #list == 0 then body[#body + 1] = { "text", key = "none", style = "hud/valueDim", w = 200, h = 20, text = "NO DATA" } end
   -- the foot: the toast, else the keys
   local recent = T.msg and now() - T.msg_t < 4.0
-  local foot = recent and words(T.msg) or ((#T.stack > 0) and "1–0 / TAB  pages   ·   ↑ ↓ ENTER  press   ·   ESC  back"
-    or "1–0 / TAB  pages   ·   ↑ ↓ ENTER  press   ·   ESC or E  leave the console")
+  -- (playtest 11-11: "can't time warp when accessing computers") . and , warp
+  -- with the console open (warp_chip reads them raw); the rate is shown here
+  local w = space and space.warp and space.warp() or 1
+  local wtxt = (w > 1.001) and string.format("   ·   . ,  warp ×%d", math.floor(w + 0.5)) or "   ·   . ,  warp"
+  local foot = recent and words(T.msg) or ((#T.stack > 0) and ("1–0 / TAB  pages   ·   ↑ ↓ ENTER  press   ·   ESC  back" .. wtxt)
+    or ("1–0 / TAB  pages   ·   ↑ ↓ ENTER  press   ·   ESC or E  leave the console" .. wtxt))
   return { "col", key = "term", style = "panel/frame", w = W_PANEL, h = "fit", gap = 8, pad = 12, align = "stretch",
     { "row", key = "hd", w = "100%", h = 26, gap = 10, pad = 0, align = "center",
       { "text", key = "h", style = "panel/heading", w = "grow", h = "fit",

@@ -4487,3 +4487,133 @@ By how a piece carries (`kindOf`):
 - The inspector's LOAD line and the ghost's amber hint (plan §3.4): `kit_load.lastResult(sid)[uid]` has `load` and `cap` for a piece under a live load.
 - W3 reads `cap × hp` already: weathering only has to lower hp.
 - Engine card draft: per-instance bend of a static instanced mesh (so a beam curves under load instead of dropping whole).
+
+## 38. Airlocks, alarms and machinery you can hear (playtest 11-11)
+
+Ty, 11-11: "airlock seems to only open door from one side", "sometimes it just
+takes forever to open, others it won't open at all", Graveyard: "the first door
+opened and the second one wouldn't", "there's no particles or sound effects in
+depressurization", "the alarms don't make any sound or have lights", and the
+reactor room should tell you by ear and eye when something is stressed.
+
+### The airlock cycle (`room_air.lua`)
+
+- **Which door, from anywhere.** Outside a chamber (in the hab or outside) the
+  crew asks for the door they stand by. In the chamber, for the door they did
+  not come in by. Found in it with every door shut (the crew's room caught up
+  late), the way in is the side the chamber was last open to, else the side
+  whose pressure it holds. It used to guess by the nearest room's middle, and
+  the outside has none: it always picked the hab's door and cycled back out.
+  That was Graveyard's "the second door wouldn't".
+- **Never on someone.** The door the crew came in by stays open while they
+  stand in its doorway (the panel says CLOSING).
+- **A few seconds.** `PUMP_S` 4 m³/s (a 9 m³ chamber reaches 0.1 atm in 5 s),
+  the vent, the chamber's equalising valve and the receiver's valve sized to
+  it: a small lock is out in about 7 s and in in about 6 s. A bigger chamber
+  takes longer in proportion.
+- **The racks.** Going out, the pump puts the chamber's air back into the
+  hab's Air Tank Racks while they have room; with no room it goes into the
+  hab. Coming in, the chamber fills from the racks through its fill valve, and
+  from the hab's own air only for what the racks cannot give. A lock that
+  fills in seconds would otherwise take a third of a small hab's air at once
+  (18 m³ from 1 atm down to 0.67, under the 0.16 atm of O2 a crew needs),
+  faster than its regulator can make it up.
+- **The panel.** Each face of an Airlock Wall has its indicator lamp: green
+  READY, amber CYCLING / EQUALISING / VENTING / CLOSING (blinking), red HELMET /
+  NO POWER / OVERRIDE (blinking fast), dim STANDBY. Within 4.5 m, a label above
+  it gives the state and the pressures. Drawn by kit_live from the piece's drawn
+  pose, only for the doors stepped this frame (`room_air.airlockStatus`).
+- **Cycle to this door** (its menu): from inside the chamber, the hab or
+  outside, the chamber cycles to it and holds there for 20 s (`cycleTo`).
+- **Manual override** (its menu): the door opens to the crew whatever the
+  pressures (`overrideDoor`). It is never refused. The warning says what
+  happens ("0.98 atm in the chamber against 0.00 beyond: it vents"), the base
+  log records it, and the override lasts until the door shuts.
+- **Sight and sound**, near the crew only: the air's hiss (louder while the
+  pressures are far apart), the pump's motor while it pumps (a recorded pool
+  pump), vapour condensing in the chamber, frost out of the vent while gas
+  goes overboard, dust kicked up under it on a world with air, and the latch
+  and a struck bell when the cycle is done. The leaves' servos are kit_live's.
+
+### A breach (`room_air.lua`)
+
+While a room vents through a door open to the outside or a blown seal, near
+the crew, the hole roars (a recorded compressor blow-off, louder with the
+pressure behind it). Grit, dust and flecks are drawn toward it from the room
+(`BreachDraw`, its velocity pointed at the hole), and frost jets out of it.
+A forced or failing door's pre-vent warning is an alarm at that door.
+
+### Alarms (`plant_av.lua`)
+
+Found every 0.5 s from what the systems already know:
+
+- DEPRESSURISATION: `room_air.alarms`.
+- Bad air in a sealed room that held good air: `room_air.airAlarms`.
+- A reactor's annunciator, red or amber: `reactor.alarms`. PROTECTION BYPASSED
+  alone does not sound.
+- Any script's `raise(key, …)`, for a fire or anything else.
+
+How they show:
+
+- **Sound.** Each alarm sounds a recorded loop on its piece's node: the
+  klaxon (a submarine's dive alarm) for venting and a reactor's warnings, the
+  bell (a mechanical fire bell) for air, fire and cautions. The nearest three
+  play.
+- **Beacons.** The structure's light fittings that hold a slot in the light
+  pool turn rotating beacons, red for a warning and amber for a caution
+  (kit_live).
+- **SILENCE.** On the terminal's STATUS and ALARMS pages, and in the menu of
+  any piece of the structure. It stops the sound but not the alarm: the
+  beacons stay until the cause is gone, and a new alarm sounds again. The
+  base log records both.
+
+An Alarm Beacon piece on a signal now sounds the recorded klaxon too
+(logic_net).
+
+### Machinery (`plant_av.lua`)
+
+Each running piece has a loop on its node, tied to its state:
+
+| piece | sound |
+|---|---|
+| reactor vessel | a transformer's hum, with its power |
+| coolant pumps | a whine with their flow (they coast down) |
+| feed pumps | an electric motor |
+| turbine | a whine with its load |
+| cooling tower | a fan |
+| scrubbers and O2 generators | a fan, while they run on power |
+| process pumps | a motor while they draw |
+| crusher | rock crushing, with dust off its jaws |
+| furnace and kiln | a gas burner |
+
+Stress you can hear, see and feel:
+
+- **Near boiling.** Steam leaks off the pressuriser as the primary comes
+  within 25 K of boiling.
+- **Boiling.** The relief valve lifts (a recorded boiler safety valve and a
+  plume).
+- **Cavitation.** The primary pumps rattle when they cavitate (within 12 K of
+  boiling).
+- **A damaged pump.** A pump knocked askew rattles while it runs. So does one
+  a script marks with `stress(sid, uid, "bearing", v)`. Graveyard's FW-2 needs
+  a hook line for this (work/airlockav/gy3patch).
+- **Shaking.** The floor shakes near a vessel whose fuel nears its trip or
+  whose core boils, and near a rattling pump.
+- **Gauges.** Two dials on the face of the nearest vessel you look at:
+  PRIMARY (300 K to boiling, the last 25 K red) and POWER (0–120 %).
+
+Cost and limits:
+
+- At most 8 loops play, the loudest nearest. Structures are scanned every
+  0.25 s, and only those within 60 m.
+- Nothing is kept in the world.
+- No work per frame except the shake and the gauges' draw when near.
+
+Sounds: `audio/plant/` (14 real CC0 recordings, `tools/build_plant_audio.py`,
+audio/SOURCES.md). Effects: `LockFog`, `LockVent`, `LockDust`, `BreachDraw`,
+`SteamJet` and `MachineDust` (`python3 tools/gen_vfx.py plant`).
+
+Tests: `smoke_airlock` (the cycle from each side, the panel, the override),
+`smoke_plant_av` (the cues, the pool, the alarms and silence),
+`smoke_reactor_warp` (a setpoint change under warp). Probe: `kitprobe.sh
+<engine> airlock`.

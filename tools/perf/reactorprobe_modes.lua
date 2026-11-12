@@ -54,6 +54,21 @@ RXP.CORE = { ".RWR.", "WFFFW", "WFRFW", "WFFFW", ".RWR." }
 local KIND = { F = "fuelChannel.steel", W = "modWater.steel", R = "controlRod.steel", G = "modGraphite.graphite", H = "modHeavy.steel" }
 
 -- warp the game clock on by `secs` game seconds (the real warp keys), then back to 1×
+-- a fixed picture with the world's draw shapes in it (the vessel's gauges)
+function RXP.dview(nm, rec, eye, tgt)
+  local b = home()
+  local e, t = KIT.w(rec, eye[1], eye[2], eye[3]), KIT.w(rec, tgt[1], tgt[2], tgt[3])
+  VP.cam_fixed(sub(e, b), sub(t, b))
+  wait(1.0)
+  local done = false
+  pcall(camera.capture, { w = 1280, h = 720, ui = true, draws = true }, function(bytes, why)
+    if bytes then assets.writeBytes("user://buildshots/" .. nm .. ".png", bytes); P("BK SHOT %s t=%.3f", nm, time) end
+    done = true
+  end)
+  wait_for(function() return done end, 5, "shot " .. nm)
+  VP.cam_off()
+  wait(0.3)
+end
 function RXP.warp(secs, tag)
   local DP = findScript("deployables")
   local a0 = DP.agencyClock()
@@ -246,6 +261,68 @@ function RXP.run()
   KIT.view("rx2b_plant_daylight", rec, { OX + 15, 3.5, OZ - 9 }, { OX + 3, 2.0, OZ + 2 })
   local pg = page_line(RP, e, "at power")
   BK.check("console", (RP.consoleText(sid, cn) or ""):find("TURBINE", 1, true) ~= nil, "the console's screen shows the plant")
+  -- (playtest 11-11) the reactor room heard and seen at power: plant_av's
+  -- loops on the vessel, pumps and turbine, the vessel's gauges, the cost
+  local PA = findScript("plant_av")
+  local function av_loops(tag)
+    local names, has = {}, {}
+    for k, L in pairs(PA and PA.loops() or {}) do
+      local nm = tostring(L.path):match("([%w_]+)%.ogg") or "?"
+      names[#names + 1] = k .. "=" .. nm; has[nm] = true
+    end
+    table.sort(names)
+    P("RX AV %s: %d loops (%s) · emitters %d · scan %.3f ms", tag, #names, table.concat(names, " "), PA and PA.PROF.emitters or -1, PA and PA.PROF.scan_ms or -1)
+    return has, #names
+  end
+  if PA then
+    KIT.tp(rec, OX + 2.6, OZ - 1.6)
+    wait(2.0)
+    local has, nl = av_loops("at power by the vessel")
+    BK.check("av_loops", has.transformer_hum and has.pump_whine and has.turbine_whine and nl <= PA.MAX_LOOPS,
+      "at power by the vessel: the core's hum, the coolant pump's whine and the turbine's whine play on their pieces (%d loops)", nl)
+    local fr0 = FRAME
+    sc_begin("reactor_room"); wait(4); sc_end("reactor_room")
+    local ms = (perf.scriptMs("plant_av") or 0) + (perf.scriptMs("room_air") or 0) + (perf.scriptMs("kit_live") or 0)
+    P("RX PERF reactor room at power: plant_av %.4f, room_air %.4f, kit_live %.4f, reactor_plant %.4f ms/frame (%d frames)",
+      perf.scriptMs("plant_av") or -1, perf.scriptMs("room_air") or -1, perf.scriptMs("kit_live") or -1, perf.scriptMs("reactor_plant") or -1, FRAME - fr0)
+    BK.check("av_cost", (perf.scriptMs("plant_av") or 0) < 0.2, "the loud reactor room costs plant_av %.4f ms a frame (≤ 0.2; with room_air and kit_live %.4f)", perf.scriptMs("plant_av") or -1, ms)
+    RXP.dview("rx2c_vessel_gauges", rec, { OX + 2.9, Y + 1.15, OZ - 0.4 }, { OX + 1.2, Y + 0.62, OZ + 0.0 })
+    BK.check("gauges", PA.lastGauge and math.abs((PA.lastGauge.P or 0) - o.P) < 0.1, "the vessel's gauges read %.0f %% and %.0f K", (PA.lastGauge and PA.lastGauge.P or 0) * 100, PA.lastGauge and PA.lastGauge.Tp or -1)
+  end
+  -- (playtest 11-11) a setpoint change rebalances in WARPED time, with the
+  -- console's terminal open and the warp asked by its . key (read raw)
+  do
+    local TM, WC, DP = findScript("terminal"), findScript("warp_chip"), findScript("deployables")
+    KIT.tp(rec, cpart.x + 0.9, cpart.z)
+    local pc0 = findScript("planet_camera")
+    wait(1.0)
+    local okT = TM and TM.openAt and TM.openAt(sid, cn)
+    wait(1.0)
+    RP.setPoint(key, 0.6, "hand")
+    local a0, t0 = DP.agencyClock(), time
+    for _ = 1, 3 do
+      if input.simulate then input.simulate({ key = ".", down = true }); yield(); yield(); input.simulate({ key = ".", down = false }) end
+      wait(0.4)
+    end
+    local wk = space.warp()
+    P("RX TERMINAL WARP: terminal open %s, warp ×%.0f after three . presses (%s)", tostring(TM and TM.isOpen()), wk, tostring(WC and WC.lastNotice))
+    BK.check("term_warp", okT and TM.isOpen() and wk >= 9, "with the console's terminal open, . warps (×%.0f) and the terminal stays open", wk)
+    while DP.agencyClock() - a0 < 900 and time - t0 < 120 do
+      if space.warp() < 50 then space.warp(100) end
+      yield()
+    end
+    space.warp(1)
+    wait(0.5)
+    e = RP.plant(key)
+    local game, real = DP.agencyClock() - a0, time - t0
+    BK.check("warp_setpoint", math.abs((e.o.P or 0) - 0.6) < 0.05 and game > 5 * real,
+      "setpoint 100 → 60 %% under warp: %.0f %% after %.0f game s in %.0f real s", (e.o.P or 0) * 100, game, real)
+    if TM and TM.close then TM.close() end
+    RP.setPoint(key, 1.0, "hand")
+    RXP.warp(1800, "back to 100 %")
+    e = RP.plant(key)
+    o = e.o
+  end
   -- the dose: the shield wall's side against the open side, 6 m out
   local TH = findScript("thermal")
   local rad = RP.radOf(sid, U.vessel)
@@ -297,6 +374,24 @@ function RXP.run()
   BK.check("overheat", hot and (e.o.Tp or 0) > e.M.tsat - 25, "decay heat with nothing cooling it: the primary at %.0f K (boils at %.0f): the overheat alarm", e.o.Tp or -1, e.M.tsat)
   RP.paintConsoles(); wait(1.0)
   KIT.view("rx5_console_overheat", rec, { cpart.x + 0.62, Y + 1.14, cpart.z }, { cpart.x - 0.35, Y + 1.12, cpart.z })
+  if PA then
+    -- (playtest 11-11) stressed: steam off the pressuriser, the alarm sounding
+    local pp = ST.getPart(sid, U.press)
+    KIT.tp(rec, pp.x + 3.0, pp.z - 1.5)
+    wait(3.0)
+    local has = av_loops("overheated by the pressuriser")
+    local al = 0
+    for _, a in pairs(PA.alarms()) do if a.kind == "reactor" then al = al + 1 end end
+    BK.check("av_stress", has.steam_leak and al > 0 and (PA.alarmLevel(sid) or 0) >= 1,
+      "overheated: steam leaks off the pressuriser (%s), the reactor alarm sounds (%d, level %s)", tostring(has.steam_leak), al, tostring(PA.alarmLevel(sid)))
+    for i = 1, 3 do RXP.dview("rx5c_pressuriser_steam_" .. i, rec, { pp.x + 3.2, Y + 3.0, pp.z - 3.0 }, { pp.x, Y + 3.8, pp.z }) end
+    RXP.dview("rx5d_vessel_gauges_hot", rec, { OX + 2.9, Y + 1.15, OZ - 0.4 }, { OX + 1.2, Y + 0.62, OZ + 0.0 })
+    local n = PA.silence(sid, "hand")
+    wait(1.0)
+    local loud = 0
+    for _, a in pairs(PA.alarms()) do if a.sid == sid and not a.silenced then loud = loud + 1 end end
+    BK.check("silence", n > 0 and loud == 0 and (PA.alarmLevel(sid) or 0) >= 1, "SILENCE: %d alarm(s) silenced, still standing", n)
+  end
   RP.overlay, RP.overlayAlways = true, true
   PW.view("rx5b_overlay_overheat", rec, { OX + 16, 9, OZ - 12 }, { OX + 3, 1.0, OZ + 2 })
   RP.overlayAlways = false

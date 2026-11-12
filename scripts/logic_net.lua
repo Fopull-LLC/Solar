@@ -1400,7 +1400,8 @@ local function lamps_tick(t)
           local w = e.node.worldPos
           e.klax = true
           if audio and audio.play then
-            local ok, hh = pcall(audio.play, "audio/sfx/crew_alarm_loop.ogg", w.x, w.y, w.z, { loop = true, maxDistance = 45, track = "SFX", volume = 0.55 })
+            -- (playtest 11-11: a recorded klaxon, on the beacon's node so it rides the planet)
+            local ok, hh = pcall(audio.play, "audio/plant/alarm_klaxon.ogg", e.node, { loop = true, minDistance = 3, maxDistance = 60, track = "SFX", volume = 0.7 })
             if ok and hh then e.klax = hh end
           end
         elseif not on and e.klax then

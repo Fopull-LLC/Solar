@@ -32,7 +32,12 @@
 --           the pressure behind it), and any other door is held shut by a
 --           pressure difference across it until its menu forces it; a door
 --           opening or shutting past room_air's OPEN_T tells room_air
---           (doorMoved), so the air vents from then.
+--           (doorMoved), so the air vents from then. (11-11) An Airlock
+--           Wall's lamp shows its chamber's state for that door, with a
+--           label within PANEL_R (lateUpdate, below).
+--   BEACONS (11-11) while plant_av holds an alarm on a structure, its pooled
+--           light fittings sweep red (amber for a caution) like a rotating
+--           beacon; when it clears the pool makes them lights again.
 --   SWITCH  a switch plate's menu switches every light of its structure.
 --   SCREEN  a wall screen's "Screen" quad shows its base: the grid's in/out,
 --           the battery, the crew there, what's wrong. Drawn into a picture
@@ -435,6 +440,133 @@ local function step_door(e, dt, pts)
       end
     end
   end
+end
+
+-- ── an airlock door's panel (playtest 11-11: "hard to tell what's going on") ─
+-- The Airlock Wall's indicator lamp, beside the door on both faces, shows the
+-- chamber's state for that door (room_air.airlockStatus): green READY, amber
+-- CYCLING / EQUALISING / CLOSING (blinking), red HELMET / NO POWER / OVERRIDE
+-- (blinking fast), dim on STANDBY; and within PANEL_R of the face you stand
+-- on, a short label above it with the pressures. Drawn in lateUpdate from the
+-- piece's drawn pose (frames doc rule 2), only for the doors stepped this
+-- frame (within REACH): nothing is drawn or read for a door further away.
+PANEL_R = 4.5
+local LAMP = { x = 0.28, y = 1.475, hw = 0.04, hh = 0.025, z = 0.2 / 2 + 0.04 + 0.006 }
+local PCOL = { go = { 0.25, 1.0, 0.35 }, busy = { 1.0, 0.62, 0.12 }, stop = { 1.0, 0.16, 0.1 }, idle = { 0.18, 0.3, 0.22 } }
+lastPanel = nil
+local function lamp_on(col, t)
+  if col == "busy" then return (t * 2.0) % 1 < 0.6 end
+  if col == "stop" then return (t * 4.0) % 1 < 0.5 end
+  return true
+end
+local function draw_panel(e, cam, t)
+  local RA = ref("room_air")
+  local o = RA and RA.airlockStatus and RA.airlockStatus(e.sid, e.uid)
+  if not o then return end
+  local c = PCOL[o.col] or PCOL.idle
+  local on = lamp_on(o.col, t)
+  local k = on and 1 or 0.18
+  local n = e.node
+  -- (the piece's drawn frame read once: four toWorld calls, the rest arithmetic)
+  local ok0, O = pcall(n.toWorld, n, vec3(0, 0, 0))
+  local ok1, PX = pcall(n.toWorld, n, vec3(1, 0, 0))
+  local ok2, PY = pcall(n.toWorld, n, vec3(0, 1, 0))
+  local ok3, PZ = pcall(n.toWorld, n, vec3(0, 0, 1))
+  if not (ok0 and ok1 and ok2 and ok3 and O and PX and PY and PZ) then return end
+  local ax, ay, az = PX.x - O.x, PX.y - O.y, PX.z - O.z
+  local bx, by, bz = PY.x - O.x, PY.y - O.y, PY.z - O.z
+  local cx_, cy_, cz_ = PZ.x - O.x, PZ.y - O.y, PZ.z - O.z
+  local function TW(x, y, zz) return true, { x = O.x + ax * x + bx * y + cx_ * zz, y = O.y + ay * x + by * y + cy_ * zz, z = O.z + az * x + bz * y + cz_ * zz } end
+  for _, s in ipairs({ 1, -1 }) do
+    local z = s * LAMP.z
+    local okc, ctr = TW(LAMP.x, LAMP.y, z)
+    local okn, nrm = TW(LAMP.x, LAMP.y, z + s)
+    if okc and okn and ctr and nrm then
+      local nx, ny, nz = nrm.x - ctr.x, nrm.y - ctr.y, nrm.z - ctr.z
+      -- (the face the camera is on only: the other is behind the wall)
+      local facing = cam and ((cam.x - ctr.x) * nx + (cam.y - ctr.y) * ny + (cam.z - ctr.z) * nz) > 0
+      if facing then
+        local p = {}
+        for i, q in ipairs({ { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } }) do
+          local okq, w = TW(LAMP.x + q[1] * LAMP.hw, LAMP.y + q[2] * LAMP.hh, z)
+          if okq and w then p[i] = w end
+        end
+        if #p == 4 then
+          draw.tri(p[1].x, p[1].y, p[1].z, p[2].x, p[2].y, p[2].z, p[3].x, p[3].y, p[3].z, c[1] * k, c[2] * k, c[3] * k, 1)
+          draw.tri(p[1].x, p[1].y, p[1].z, p[3].x, p[3].y, p[3].z, p[4].x, p[4].y, p[4].z, c[1] * k, c[2] * k, c[3] * k, 1)
+        end
+        local d2 = (cam.x - ctr.x) ^ 2 + (cam.y - ctr.y) ^ 2 + (cam.z - ctr.z) ^ 2
+        if d2 < PANEL_R * PANEL_R and camera and camera.worldToScreen then
+          local okt, top = TW(LAMP.x, LAMP.y + 0.14, z)
+          local sx, sy, vis
+          if okt and top then local a1, a2, _d, a4 = camera.worldToScreen(top.x, top.y, top.z); sx, sy, vis = a1, a2, a4 end
+          if sx and vis ~= false then
+            local line = o.label
+            if o.label ~= "READY" and o.label ~= "STANDBY" then line = string.format("%s  %.2f / %.2f atm", o.label, o.pc, o.pT) end
+            local sz = 13
+            local tw = sz * #line * 0.6 + 14
+            draw.rect(sx - tw / 2, sy - 20, tw, 20, 0.03, 0.03, 0.025, 0.72, 3)
+            draw.text(sx, sy - 17, line, sz, c[1], c[2], c[3], 1.0, "center")
+            lastPanel = { sid = e.sid, uid = e.uid, label = o.label, line = line, sx = sx, sy = sy, t = t }
+          end
+        end
+      end
+    end
+  end
+end
+local panel_cam = nil
+local function late_panels()
+  local t = now()
+  local cam = nil
+  local pc = ref("planet_camera")
+  if pc and pc.cam_x then cam = { x = pc.cam_x, y = pc.cam_y, z = pc.cam_z } end
+  if not cam and camera and camera.position then local ok, p = pcall(camera.position); if ok and p then cam = p end end
+  if not cam then return end
+  draw.depthTest(true)
+  for _, e in ipairs(near) do
+    if e.def.door and e.def.door.airlock and valid(e.node) then draw_panel(e, cam, t) end
+  end
+  draw.depthTest(false)
+end
+local pc_late = nil
+local function after_camera(node, dt, fn)
+  if not (pc_late and pc_late.valid) then pc_late = findScript("planet_camera", { quiet = true }) end
+  if pc_late and pc_late.valid and pc_late.deferLate then pc_late.deferLate(node, dt, fn) else fn(node, dt) end
+end
+function lateUpdate(node, dt)
+  local any = false
+  for _, e in ipairs(near) do if e.def.door and e.def.door.airlock then any = true break end end
+  if any and draw and draw.tri then after_camera(node, dt, late_panels) end
+end
+
+-- ── the alarm beacons (playtest 11-11: "the alarms don't make any sound or
+-- have lights it seems") ─────────────────────────────────────────────────────
+-- While plant_av holds an alarm on a structure, the light fittings of it that
+-- hold a slot in the light pool turn beacons: a red (amber for a caution)
+-- lobe sweeping round like a rotating beacon, the lens with it. Only the
+-- pooled lights (POOL at most) are touched, once a frame each; when the alarm
+-- clears the pool is re-run and they are lights again.
+local strobing = false
+local function beacons(t)
+  local PA = ref("plant_av")
+  local any = false
+  for k in pairs(LIT) do
+    local e = A[k]
+    local lv = e and PA and PA.alarmLevel and PA.alarmLevel(e.sid)
+    if lv and valid(e.light) then
+      any = true
+      local L = e.def.light
+      -- a rotating beacon seen from the room: a sharp bright lobe 1.5 turns a second
+      local ph = (t * 1.5 + (e.uid % 7) * 0.13) % 1
+      local lobe = math.max(0, math.cos(ph * 2 * math.pi)) ^ 6
+      local col = lv >= 2 and { 1.0, 0.12, 0.06 } or { 1.0, 0.55, 0.1 }
+      pcall(e.light.setPointLight, e.light, { color = col, intensity = (L.intensity or 1) * (0.08 + 1.6 * lobe), range = L.range })
+      if valid(e.lamp) then pcall(e.lamp.setTint, e.lamp, { color = { col[1] * (0.3 + lobe), col[2] * (0.3 + lobe), col[3] * (0.3 + lobe) } }) end
+      e.lit = "alarm"
+    end
+  end
+  if strobing and not any then pool_t = -10 end
+  strobing = any
 end
 
 -- ── screens ─────────────────────────────────────────────────────────────────
@@ -876,4 +1008,5 @@ function update(node, dt)
   end
   for _, e in ipairs(near) do if valid(e.node) then step_door(e, dt, pts) end end
   if t - pool_t >= 0.5 then pool_t = t; pool(a) end
+  if next(LIT) then beacons(t) end
 end

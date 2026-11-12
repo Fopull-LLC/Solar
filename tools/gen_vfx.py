@@ -1301,6 +1301,77 @@ The cloud base lit from inside where a lightning bolt leaves it (weather.lua
 fires it at the top of the bolt, in step with Lightning, on the same FLASH).""")
 
 
+# =====================================================================================
+# AIRLOCKS, BREACHES AND MACHINERY (playtest 2026-11-11: room_air, plant_av)
+# =====================================================================================
+def plant_fx():
+    """The airlock's cycle, a breach and a stressed plant. All one-shots, +Y the `normal`.
+
+    LockFog     in an airlock chamber, under its vent: moisture condensing as the
+                air thins (or rushes back in) — a soft white fog falling and spreading
+    LockVent    the lock's vent overboard: a short jet of frost and vapour out of it
+    LockDust    the ground's dust kicked up under the vent on a world with air (tinted)
+    BreachDraw  a breach: grit, dust and flecks drawn toward the hole (fired with
+                its normal at the hole) and a dust haze
+    SteamJet    a reactor's steam leak or relief: a hot white plume off a valve or
+                a gland, rising and spreading
+    MachineDust a crusher's dust off its jaws
+    """
+    fog = [
+        T("Fog", TX + "smoke/soft.png", forces=[wind(1.5)], clips=burst(9, 0, 1.6, 0.4), shape=sphere(0.45),
+          vel=R((-0.4, 0.2, -0.4), (0.4, 0.9, 0.4)), gravity=-0.02,
+          size=K([(0, 0.35), (0.4, 1.1), (1, 1.9)]), rot=R((0, 0, 0), RAD), spin=R((0, 0, -0.4), (0, 0, 0.4)),
+          color=K([(0, (0.9, 0.93, 0.97, 0)), (0.15, (0.9, 0.93, 0.97, 0.55)), (0.6, (0.88, 0.91, 0.95, 0.3)), (1, (0.86, 0.89, 0.93, 0))]), soft=0.6),
+    ]
+    effect("LockFog", 1.4, fog, header="An airlock chamber cycling: moisture condensing under its vent as the air thins or rushes back (room_air).")
+    vent = [
+        T("Jet", TX + "smoke/puff_a.png", forces=[wind(2.5)], clips=burst(18, 0, 1.3, 0.35), shape=cone(16, 0.1),
+          vel=R((0, 1.5, 0), (0, 4.5, 0)), size=K([(0, 0.25), (0.3, 0.8), (1, 1.7)]), rot=R((0, 0, 0), RAD),
+          spin=R((0, 0, -1.0), (0, 0, 1.0)),
+          color=K([(0, (0.94, 0.96, 1.0, 0)), (0.05, (0.94, 0.96, 1.0, 0.85)), (0.5, (0.9, 0.92, 0.96, 0.4)), (1, (0.86, 0.88, 0.92, 0))]),
+          soft=0.4),
+        T("Frost", TX + "spark/dot.png", clips=burst(24, 0, 1.0, 0.4), shape=cone(20, 0.08),
+          vel=R((0, 1.5, 0), (0, 4.0, 0)), gravity=0.4, size=0.05,
+          color=K([(0, (0.9, 0.95, 1.0, 0.9)), (1, (0.9, 0.95, 1.0, 0))])),
+    ]
+    effect("LockVent", 1.0, vent, header="An airlock's vent dumping gas overboard: a jet of frost and vapour (room_air).")
+    dust = [
+        T("Dust", TX + "smoke/billow_b.png", lamp=0.3, forces=[wind(2.0)], clips=burst(6, 0, 1.6, 0.3), shape=sphere(0.3),
+          vel=R((-0.8, 0.2, -0.8), (0.8, 1.0, 0.8)), gravity=0.05,
+          size=K([(0, 0.3), (1, 1.3)]), rot=R((0, 0, 0), RAD), squash=R(0.75, 1.3),
+          color=K([(0, (0.66, 0.6, 0.52, 0)), (0.1, (0.64, 0.58, 0.5, 0.5)), (1, (0.62, 0.58, 0.52, 0))]), soft=0.3),
+    ]
+    effect("LockDust", 1.6, dust, header="Dust kicked up under an airlock's vent on a world with air (room_air; tinted to the ground).")
+    breach = [
+        # (+Y is the way to the hole: the effect is fired with its normal at it)
+        T("Haze", TX + "smoke/soft.png", forces=[wind(1.0)], clips=burst(10, 0, 1.2, 0.3), shape=cone(35, 0.6),
+          vel=R((0, 1.0, 0), (0, 3.0, 0)), size=K([(0, 0.4), (1, 1.6)]), rot=R((0, 0, 0), RAD),
+          color=K([(0, (0.72, 0.68, 0.62, 0)), (0.1, (0.72, 0.68, 0.62, 0.6)), (1, (0.7, 0.67, 0.62, 0))]), soft=0.5),
+        T("Grit", TX + "debris/grit.png", clips=burst(16, 0, 1.0, 0.3), shape=cone(30, 0.8),
+          vel=R((0, 3.0, 0), (0, 7.0, 0)), size=0.25, rot=R((0, 0, 0), RAD),
+          color=K([(0, (0.5, 0.46, 0.4, 0)), (0.1, (0.5, 0.46, 0.4, 0.9)), (1, (0.5, 0.46, 0.4, 0))])),
+        T("Flecks", mesh=ROCK, space="World", clips=burst(5, 0, 1.0, 0.3), shape=cone(30, 0.8),
+          vel=R((0, 3.0, 0), (0, 8.0, 0)), size=R(0.015, 0.04), rot=R((0, 0, 0), (6.28, 6.28, 6.28)),
+          spin=R((-10, -10, -10), (10, 10, 10)), color=C((0.32, 0.31, 0.3, 1)), lit=True),
+    ]
+    effect("BreachDraw", 1.0, breach, header="A room venting through a breach: grit, flecks and dust drawn toward the hole by the flow (room_air; +Y points at the hole).")
+    steam = [
+        T("Steam", TX + "smoke/billow_a.png", lamp=0.45, forces=[wind(1.2)], clips=burst(9, 0, 1.8, 0.4), shape=cone(16, 0.08),
+          vel=R((0, 1.5, 0), (0, 3.5, 0)), gravity=-0.08,
+          size=K([(0, 0.12), (0.3, 0.55), (1, 1.4)]), rot=R((0, 0, 0), RAD), spin=R((0, 0, -0.6), (0, 0, 0.6)),
+          color=K([(0, (0.95, 0.96, 0.97, 0)), (0.08, (0.95, 0.96, 0.97, 0.7)), (0.6, (0.92, 0.93, 0.95, 0.32)), (1, (0.9, 0.9, 0.92, 0))]),
+          soft=0.6),
+    ]
+    effect("SteamJet", 1.6, steam, header="A reactor's steam: a leaking gland or the pressuriser's relief valve lifting (plant_av).")
+    mdust = [
+        T("Dust", TX + "smoke/billow_b.png", lamp=0.3, forces=[wind(2.0)], clips=burst(4, 0, 2.0, 0.3), shape=sphere(0.5),
+          vel=R((-0.3, 0.3, -0.3), (0.3, 0.9, 0.3)), gravity=0.02,
+          size=K([(0, 0.3), (1, 1.2)]), rot=R((0, 0, 0), RAD),
+          color=K([(0, (0.62, 0.58, 0.52, 0)), (0.1, (0.62, 0.58, 0.52, 0.35)), (1, (0.6, 0.57, 0.52, 0))]), soft=0.3),
+    ]
+    effect("MachineDust", 2.0, mdust, header="Rock dust off a running crusher's jaws (plant_av).")
+
+
 def main():
     import sys
     if "weather" in sys.argv[1:]:
@@ -1308,6 +1379,9 @@ def main():
         return
     if "rifle" in sys.argv[1:]:
         rifle()
+        return
+    if "plant" in sys.argv[1:]:
+        plant_fx()
         return
     flame()
     pad_blast()
@@ -1333,6 +1407,7 @@ def main():
     rifle()
     water()
     weather()
+    plant_fx()
 
 
 if __name__ == "__main__":
