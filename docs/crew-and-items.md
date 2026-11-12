@@ -683,6 +683,27 @@ back). Also the texture seam (`unseam`): u runs round the head from
 texture width into one face; those faces take their own copies of their low-u
 corners at the seam's high side.
 
+### 4.1.3 Long hair on spring bones (2026-11-11, engine 0693)
+
+Six long styles beside the eight short ones, worn by anyone (crew_faces
+`STYLES`: every human is random, no list per gender): **long** (straight, a
+centre parting), **wavy** (a side parting), **shoulder** (a lob), **lowtail**
+(a low ponytail tied at the left of the nape), **braid** (a plait from the
+same place) and **halfup** (the top gathered to a knot at the crown). They are
+shown with the helmet off, hidden under it like the short ones (the Cap shows
+instead).
+
+| Piece | What |
+|---|---|
+| Models | `tools/gen_faces_longhair.py` → `models/astronaut/faces/hair_<style>.glb`: 13–32 k triangles of hair cards (alpha-cut strips of strands) rooted inside the hairline, laid over the scalp along the style's combing, then down between GUIDES; a solid under-layer on the scalp. Rigged: `HairRoot` (the head's centre), `HairBody` (the body's colliders ride it) and 24 chains `S00..S23` of up to 9 bones (6–8 cm). A card between two guides is skinned to both by how near it is to each, so the sheet bends as one. A style with fewer chains (tail, braid) keeps the rest as stubs nothing is skinned to |
+| Worn forward | Loose long hair falls forward over the shoulders, the ponytail and the plait over the left one: behind the head is the life-support pack, and hair lying across its top read as a shelf. The shoulder cut rests on the collar ring all round |
+| Rest = the engine's rest | Each guide is laid by a sliding walk against the colliders, then hung by a port of the engine's own spring solver (`spring_rest`, floptle-anim spring.rs) until the solver no longer moves it. So the drawn rest pose is what the springs hold at rest (measured offline: under 1 cm), and a chain that comes back from culling starts where it already hangs |
+| Texture | `textures/faces/hair_long.png` (self-made, CC0): 8 columns, v root → tip: five clump columns (narrow at the root, spreading, gathering at the tips; edges thinning out), fine flyaways, a plait's lobe, the solid under-layer. Grey: face.lua tints the material ("HairLong", the person's colour, grey with age). Vertex colour darkens the inner layers and the roots |
+| Material | "HairLong" on the Hair node (`gen_faces.MATS`): Physical, cutout at 0.35 (the coverage survives the mips), roughness 0.76, backlight 0.15. A strand normal map was tried and dropped: on cards it lit as a grey plastic sheen |
+| Springs | The Hair node's `spring_bones` (`gen_faces_longhair.spring_spec`, written by `gen_faces.py --scene` into CrewBody, CrewDoll, Remains and system.ron, in place): 24 chains, stiffness 3 Hz, drag 0.4, max angle 35° (at 60° a jump threw locks behind the shoulder, where the collider kept them), thickness 1.6 cm; 15 colliders: the cranium, the nape, the jaw, the neck (on HairRoot); the collar ring (6 capsules fat enough to close the gap to the neck), the neck dam and chest, the shoulders, the pack (on HairBody). One spec fits every style (no Lua setter for the component: same bone names in every model); a short style has no rig and ignores it |
+| face.lua | `hair_springs`: the gravity they feel is this world's, toward its centre at mu/r² (twice a second); weightless in orbit (crew_faces `weightlessFor`) almost none, so the hair floats; the animator culls `whenVisible`, so hidden hair (a helmet, first person: the Face is put away) costs nothing and starts afresh; a crew switch resets them (`face.resetHair()` for a teleport; the engine also resets after a jump of more than a couple of metres) |
+| Probe | `tools/perf/hairstudio.sh <engine> styles\|motion\|perf\|helmet\|rest [n] [style]` (actors on a plain stage) |
+
 ### 4.2 What is switchable
 
 The **switch list** contains:

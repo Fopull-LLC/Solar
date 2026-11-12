@@ -99,8 +99,10 @@ EYES = {
   brown = { 0.30, 0.18, 0.09 }, dark = { 0.16, 0.10, 0.06 }, hazel = { 0.42, 0.33, 0.16 },
   green = { 0.30, 0.42, 0.26 }, blue = { 0.32, 0.46, 0.62 }, grey = { 0.46, 0.50, 0.53 },
 }
-MASC_STYLES = { "buzz", "crop", "side", "swept", "curls", "receding" }
-FEM_STYLES = { "bun", "tail", "crop", "side", "curls", "swept" }
+-- Hair styles: anyone may wear any of them (every human is random). The six
+-- after "receding" are long and hang on spring bones (tools/gen_faces_longhair.py).
+STYLES = { "buzz", "crop", "side", "swept", "bun", "tail", "curls", "receding",
+           "long", "wavy", "shoulder", "lowtail", "braid", "halfup" }
 
 local function pick(list, u) return list[math.floor(u * #list) % #list + 1] end
 local function lerp3(a, b, t) return { a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t } end
@@ -157,7 +159,7 @@ function lookFor(seed, id, name, taken)
   elseif sx >= 4 then hc = (r < 0.45) and "dark" or (r < 0.8 and "black" or (r < 0.93 and "brown" or "chestnut"))
   else hc = pick({ "dark", "brown", "brown", "chestnut", "blond", "ash", "auburn", "red", "black" }, r) end
   local hair = HAIR[hc]
-  local styles = fem and FEM_STYLES or MASC_STYLES
+  local styles = STYLES
   local st
   do
     local k = math.floor(u(5) * #styles)
@@ -168,7 +170,7 @@ function lookFor(seed, id, name, taken)
       if n < bestn2 then st, bestn2 = s, n end
     end
   end
-  if (sx >= 7.5 and u(13) < 0.5) then st = fem and "curls" or (u(14) < 0.5 and "buzz" or "curls") end
+  if (sx >= 7.5 and u(13) < 0.5) then st = pick({ "curls", "curls", "braid", "buzz", "lowtail" }, u(14)) end
   -- eyes: brown for most; light ones on lighter skin
   local ec
   local e = u(6)
@@ -460,6 +462,8 @@ function force(id, name, w, secs)
 end
 
 function drives(id) return states[id] and states[id].d or nil end
+-- seconds member id has been weightless (face.lua: long hair floats), 0 if not
+function weightlessFor(id) return states[id] and states[id].weightless or 0 end
 function moodOf(id) return states[id] and states[id].mood or "neutral" end
 function channels(id) return states[id] and states[id].mix or nil end
 

@@ -2,8 +2,9 @@
 --
 -- Rides the "Face" node: a skinned head (models/astronaut/faces/head_<n>.glb,
 -- tools/gen_faces.py) hung on the suit's Head bone as an attachment, with
--- two children, "Hair" (the style's shell) and "Cap" (the comm cap, worn
--- only under a helmet). The node is in every body a member has: the
+-- two children, "Hair" (the style's shell, or a long style's rigged cards
+-- on spring bones) and "Cap" (the comm cap, worn only under a helmet). The
+-- node is in every body a member has: the
 -- Astronaut (scenes/system.ron), prefabs/CrewBody, prefabs/CrewDoll and
 -- prefabs/Remains.
 --
@@ -41,6 +42,8 @@
 --                                  eyes follow it and the head is the owner's to turn
 --                                  (scientist.lua); unset, the head and eyes turn to a
 --                                  near camera
+--   face.resetHair()               the long hair's spring bones start afresh (after a teleport)
+--   face.hairGravity               the gravity last handed to them { x, y, z } (probes)
 
 defaults = {
   near_m = 30.0,
@@ -75,7 +78,7 @@ RIG = {
     { name = "heart", fem = 1.0, model = "models/astronaut/faces/head_8.glb", lidUp = 0.6280, lidLo = 0.1771,
       rest = { -0.49989, 1.72475, -0.01310, 0.00000, -0.01775, -0.01200, 0.00000, -0.05300, 0.10517, 0.00000, -0.05475, 0.09565, 0.02307, -0.06175, 0.08317, -0.02307, -0.06175, 0.08317, 0.03600, -0.03275, 0.07441, -0.03600, -0.03275, 0.07438, 0.01500, 0.03124, 0.08347, -0.01500, 0.03124, 0.08345, 0.04200, 0.02924, 0.07501, -0.04200, 0.02924, 0.07506, 0.03295, 0.00924, 0.06629, -0.03303, 0.00924, 0.06629, 0.03295, 0.00924, 0.06629, -0.03303, 0.00924, 0.06629, 0.03295, 0.00924, 0.06629, -0.03303, 0.00924, 0.06629 } },
   },
-  hair = { "buzz", "crop", "side", "swept", "bun", "tail", "curls", "receding" },
+  hair = { "buzz", "crop", "side", "swept", "bun", "tail", "curls", "receding", "long", "wavy", "shoulder", "lowtail", "braid", "halfup" },
   -- channel = { { bone, dx, dy, dz, yaw, pitch [, scale] } … } (see CHANNEL_MAP)
   map = {
     jaw_open = { { "Jaw", 0, 0, 0, 0, 0.34 } },
@@ -205,6 +208,64 @@ local function find_kids(node)
   end
 end
 
+-- ── long hair on spring bones (tools/gen_faces_longhair.py) ─────────────────
+-- The long styles are rigged: 24 chains, S00..S23, that the engine swings
+-- (the Hair node's spring_bones; one spec fits every style). Here only:
+--   * the gravity they feel is this world's, toward its centre at its own
+--     strength (Solar's down is not -Y), and almost none weightless in orbit;
+--   * the animator skips the hair while it is hidden (a helmet, first
+--     person: whenVisible) and the chains start afresh when it shows again;
+--   * a crew switch (another member in this body) starts them afresh, as
+--     the engine does by itself after a jump of more than a couple of metres.
+LONG_HAIR = { long = true, wavy = true, shoulder = true, lowtail = true, braid = true, halfup = true }
+local hair_anim, hair_model, hair_owner = nil, nil, nil
+local hair_g_t, hair_reset = -10, false
+hairGravity = nil          -- the last gravity handed to the springs { x, y, z } (probes)
+
+function resetHair() hair_reset = true end
+
+local function hair_springs()
+  if not (hair_node and hair_node.valid ~= false and look and LONG_HAIR[look.hairStyle]) then
+    hair_anim = nil
+    return
+  end
+  if hair_model ~= hair_node.model then hair_model, hair_anim = hair_node.model, nil end
+  if not hair_anim then
+    hair_anim = hair_node.animator and hair_node:animator() or nil
+    if not hair_anim then return end
+    pcall(hair_anim.setCulling, hair_anim, "whenVisible")
+    hair_reset, hair_g_t = true, -10
+  end
+  if hair_owner ~= memberId then hair_owner, hair_reset = memberId, true end
+  if hair_reset then
+    pcall(hair_anim.resetSprings, hair_anim)
+    hair_reset = false
+  end
+  -- the gravity, twice a second (where you are changes that slowly); body
+  -- and node read in the same pass, and only the direction kept
+  local t = time or 0
+  if t - hair_g_t < 0.5 then return end
+  hair_g_t = t
+  local x, y, z = self_node.x, self_node.y, self_node.z
+  local gx, gy, gz = 0, -9.81, 0
+  local d = space and space.dominant and space.dominant(x, y, z)
+  local b = d and space.body and space.body(d)
+  if b then
+    local dx, dy, dz = b.x - x, b.y - y, b.z - z
+    local r = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if r > 1 then
+      local ga = b.mu and b.mu / (r * r) or 9.81
+      ga = math.max(0, math.min(30, ga))
+      gx, gy, gz = dx / r * ga, dy / r * ga, dz / r * ga
+    end
+  end
+  local F = ref("crew_faces")
+  local wl = memberId and F and F.weightlessFor and F.weightlessFor(memberId) or 0
+  if wl > 0.5 then gx, gy, gz = gx * 0.03, gy * 0.03, gz * 0.03 end
+  hairGravity = { gx, gy, gz }
+  pcall(hair_anim.setSpringGravity, hair_anim, gx, gy, gz)
+end
+
 -- Who is this? The Astronaut is the active member; a CrewBody/CrewDoll its
 -- bound one; Remains nobody (a neutral, still face).
 local function owner()
@@ -281,7 +342,9 @@ local function apply_look(l)
   -- the scalp's shading under the hair, by style: where the line sits, how
   -- much shows, how coarse (coily hair throws more shadow at its sections)
   local SCALP = { buzz = { 0, 0.9, 0 }, crop = { 0, 0.85, 0 }, side = { 0, 0.8, 0 }, swept = { 0.35, 0.8, 0 },
-                  bun = { -0.12, 0.8, 0 }, tail = { -0.12, 0.8, 0 }, curls = { 0, 0.95, 1 }, receding = { 0.35, 0.75, 0 } }
+                  bun = { -0.12, 0.8, 0 }, tail = { -0.12, 0.8, 0 }, curls = { 0, 0.95, 1 }, receding = { 0.35, 0.75, 0 },
+                  long = { 0, 0.85, 0 }, wavy = { 0, 0.85, 0 }, shoulder = { 0, 0.85, 0 }, lowtail = { -0.12, 0.8, 0 },
+                  braid = { -0.12, 0.8, 0 }, halfup = { 0, 0.85, 0 } }
   local sc_ = SCALP[l.hairStyle or "crop"] or SCALP.crop
   knob(sk, "scalp", "scalp", sc_[1], sc_[2], sc_[3])
   local ey = mat(self_node, "FaceEye")
@@ -292,11 +355,11 @@ local function apply_look(l)
   -- look, then made linear: a material's colour is linear light, the same as
   -- the skin shader's "hair" knob the scalp and stubble draw with (handed the
   -- sRGB value the cards came out lighter than the scalp under them)
-  local hm = mat(hair_node, "Hair")
-  if hm then
-    local g = (l.grey or 0) * 0.6
-    local function ch(x) return lin(math.min(1, x * (1 - g) + 0.42 * g)) end
-    pcall(function() hm.color = { ch(h[1]), ch(h[2]), ch(h[3]) } end)
+  local g = (l.grey or 0) * 0.6
+  local function ch(x) return lin(math.min(1, x * (1 - g) + 0.42 * g)) end
+  for _, mn in ipairs({ "Hair", "HairLong" }) do        -- the short styles' cards, the long styles'
+    local hm = mat(hair_node, mn)
+    if hm then pcall(function() hm.color = { ch(h[1]), ch(h[2]), ch(h[3]) } end) end
   end
   -- the suit's neck: the same skin. A material's colour is linear light, as
   -- the face shader's knob is (handed the sRGB look it drew every neck a
@@ -438,6 +501,7 @@ function lateUpdate(node, dt)
   if forceHelmet ~= nil then helmet = forceHelmet end
   if cap_node and cap_node.visible ~= helmet then cap_node.visible = helmet end
   if hair_node and hair_node.visible ~= (not helmet) then hair_node.visible = not helmet end
+  hair_springs()
   -- seen?
   local how = seen()
   live = how ~= nil

@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 import gen_faces  # noqa: E402
 
 out, n, case = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+kind = sys.argv[4] if len(sys.argv) > 4 else "facestudio"     # the probe script (hairstudio.sh: "hairstudio")
 sol = os.path.join(HERE, "..", "..")
 doll = open(os.path.join(sol, "prefabs", "CrewDoll.prefab.ron")).read()
 # the suit's object_materials, from the CrewDoll prefab (prefab depth → scene depth)
@@ -33,7 +34,7 @@ def node(name, t, matter, parent=None, extra="", scripts="[]", rot=(0.0, 0.0, 0.
 nodes = []
 nodes.append(node("Camera", (0, 1.6, 3), "Camera( fov_y: 0.5, active: true )"))
 nodes.append(node("Studio", (0, 0, 0), "Empty",
-                  scripts=f'[ ( kind: "facestudio", enabled: true, params: [("n", {n}.0)], strs: [("case", "{case}")] ) ]'))
+                  scripts=f'[ ( kind: "{kind}", enabled: true, params: [("n", {n}.0)], strs: [("case", "{case}")] ) ]'))
 nodes.append(node("CrewLib", (0, 0, 0), "Empty", scripts='[ ( kind: "crew_faces", enabled: true, params: [] ) ]'))
 nodes.append(node("Key Light", (1.5, 2.6, 2.2), "PointLight( color: (1.0, 0.93, 0.85), intensity: 6.0, range: 12.0 )"))
 nodes.append(node("Fill Light", (-2.5, 1.9, 1.6), "PointLight( color: (0.75, 0.85, 1.0), intensity: 2.0, range: 12.0 )"))
@@ -54,7 +55,7 @@ def sys_node(name):
 HELMET = [sys_node("Helmet"), sys_node("Helmet Visor"), sys_node("Helmet Lamps")]
 count = len(nodes)          # nodes so far (face_nodes adds three in one string)
 for k in range(n):
-    x = (k - (n - 1) / 2) * (1.5 if case == "review" else 0.62)
+    x = (k - (n - 1) / 2) * (1.5 if case == "review" or kind == "hairstudio" else 0.62)
     root = count
     nodes.append(node(f"Actor {k + 1}", (round(x, 3), 1.0, 0.0), "Empty"))
     model = root + 1

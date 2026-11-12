@@ -381,6 +381,8 @@
     "textures/suit/fabric_height.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/suit/shell_height.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/faces/skin_height.png": (filter: SmoothMipmaps, wrap: Repeat),
+    "textures/faces/hair_cards.png": (filter: SmoothMipmaps, wrap: Clamp),
+    "textures/faces/hair_long.png": (filter: SmoothMipmaps, wrap: Clamp),
     "textures/base/concrete_height.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/base/signs_height.png": (filter: SmoothMipmaps, wrap: Repeat),
     "textures/vab/signs_height.png": (filter: SmoothMipmaps, wrap: Repeat),

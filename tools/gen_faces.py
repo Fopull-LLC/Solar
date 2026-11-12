@@ -941,7 +941,8 @@ def write_lua(heads_meta, scar_u):
                      f'lidUp = {m["up"]:.4f}, lidLo = {m["lo"]:.4f},')
         lines.append("      rest = { " + ", ".join(f"{x:.5f}" for x in m["rest"]) + " } },")
     lines.append("  },")
-    lines.append("  hair = { " + ", ".join(f'"{k}"' for k in STYLES) + " },")
+    import gen_faces_longhair as LH        # the long styles (rigged, on spring bones) after the short
+    lines.append("  hair = { " + ", ".join(f'"{k}"' for k in list(STYLES) + list(LH.LONG)) + " },")
     lines.append("  -- channel = { { bone, dx, dy, dz, yaw, pitch [, scale] } … } (see CHANNEL_MAP)")
     lines.append("  map = {")
     for ch, ents in channel_entries().items():
@@ -976,6 +977,12 @@ MATS = {
                   ' shader: Some("shaders/face_mouth.flsl"),\n shading: Physical,\n)'),
     "Hair": ('(\n color: (0.2, 0.15, 0.1),\n texture: Some("textures/faces/hair_cards.png"),\n roughness: 0.78,\n'
              ' metallic: 0.0,\n shading: Physical,\n)'),
+    # the long styles' cards (tools/gen_faces_longhair.py): round strands in
+    # the normal map, a little light through them from behind
+    "HairLong": ('(\n color: (0.2, 0.15, 0.1),\n texture: Some("textures/faces/hair_long.png"),\n'
+                 ' roughness: 0.76,\n'
+                 ' metallic: 0.0,\n backlight: 0.15,\n shading: Physical,\n alpha_cutoff: 0.35,\n'
+                 ' blend: Some(Cutout),\n)'),
     "CapCloth": ('(\n color: (1.0, 1.0, 1.0),\n texture: Some("textures/suit/fabric_albedo.png"),\n'
                  ' normal_map: Some("textures/suit/fabric_normal.png"),\n normal_strength: 1.0,\n'
                  ' roughness_map: Some("textures/suit/fabric_orm.png"),\n roughness: 1.0,\n'
@@ -1020,10 +1027,17 @@ def face_nodes(parent, first, ind="        ", ids=None):
          f"{ind}        translation: ({_f(t[0])}, {_f(t[1])}, {_f(t[2])}),\n"
          f"{ind}        rotation: ({_f(q[0])}, {_f(q[1])}, {_f(q[2])}, {_f(q[3])}),\n"
          f"{ind}        scale: ({_f(s)}, {_f(s)}, {_f(s)}),\n{ind}    ),\n{ind})),\n{o}),\n")
-    for k, (nm, model, mats) in enumerate((("Hair", "hair_crop", ["Hair"]), ("Cap", "cap", ["CapCloth", "CapShell"])), 1):
+    for k, (nm, model, mats) in enumerate((("Hair", "hair_crop", ["Hair", "HairLong"]),
+                                           ("Cap", "cap", ["CapCloth", "CapShell"])), 1):
+        # the Hair node's spring bones: the long styles' chains and colliders
+        # (one spec for all of them; a short style has no rig and ignores it)
+        spring = ""
+        if nm == "Hair":
+            import gen_faces_longhair as LH
+            spring = LH.spring_spec(ind)
         r += (f"{o}(\n{ind}name: \"{nm}\",\n" + ident +
               f"{ind}matter: Mesh(\n{ind}    asset_path: \"models/astronaut/faces/{model}.glb\",\n{ind}),\n" +
-              _mats(mats, ind) + f"{ind}scripts: [],\n" + idl(k, ids[0] if ids else 0) +
+              _mats(mats, ind) + spring + f"{ind}scripts: [],\n" + idl(k, ids[0] if ids else 0) +
               f"{ind}parent: Some({first}),\n{o}),\n")
     return r
 
@@ -1063,6 +1077,18 @@ def write_scene(path=os.path.join(ROOT, "scenes", "system.ron")):
         e = src.index('name: "Cap",', a)
         e = src.index("\n        ),\n", e) + len("\n        ),\n")
         keep_ids = [int(x.split(")")[0]) for x in src[a:e].split("            id: Some(")[1:]]
+        if not os.environ.get("FACE_MOVE"):
+            # in place: the block where it is, with its ids and indices (the
+            # nodes after it keep theirs); FACE_MOVE=1 rebuilds it at the end
+            old = src[a:e]
+            astro = int(old.split("            parent: Some(")[1].split(")")[0])
+            first = int(old.split("            parent: Some(")[2].split(")")[0])     # the Hair's parent: the Face
+            astro_id = int(old.split("            parent_id: Some(")[1].split(")")[0])
+            block = face_nodes(astro, first, ind, ids=(keep_ids[0], keep_ids[1], keep_ids[2], astro_id))
+            src = src[:a] + block + src[e:]
+            open(path, "w").write(src)
+            print("system.ron face nodes in place, ids", keep_ids, "Face at index", first)
+            return
         src = src[:a] + src[e:]
     names = [n.split('"')[1] for n in src.split("\n        (\n            name: ")[1:]]
     astro = names.index("AstroModel")
