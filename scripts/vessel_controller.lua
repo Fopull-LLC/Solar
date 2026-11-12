@@ -250,6 +250,17 @@ local ANIMS = {
 -- lit (playtest 2026-11, tools/perf/jumpprobe.sh vlight); a vehicle's lamp
 -- has to light the road to 40–60 m as a real headlight does.
 FLOOD_INTENSITY = 55.0
+-- What each light part is lit at, and how much of it the fog scatters
+-- (Ty 2026-11-12: "rover light blinding"). At 55 the Floodlight's own
+-- cone was fine at range but the ground a few metres ahead of the lamp,
+-- and the Rover Body's 18 m bulb (an omni lamp in those days), blew out to
+-- pure white and bloomed. A road lit as a headlight lights it reads about
+-- the daylight's brightness in the pool 6-10 m out (intensity x cos x
+-- (1 - d/range)^2 ~ 1), a third of it at 25 m and a glow at the end of
+-- the range. In fog a lamp's own glow is a fraction of its throw (engine
+-- 0710: the per-lamp `fog`, written where the engine has it).
+LAMP_INTENSITY = { roverBody = 20.0, light = 22.0 }
+LAMP_FOG = { roverBody = 0.35, light = 0.35 }
 
 -- The device KINDS the peripherals console and the old per-kind calls see:
 -- each is a SET of parts (by module), switched together by `setPeripheral` and
@@ -2751,8 +2762,13 @@ local function update_peripherals(node, dt)
               if lamp and lamp.valid then
                 local l = lamp:getcomponent("PointLight")
                 if l then
-                  local want = lit and FLOOD_INTENSITY or 0.0
-                  if math.abs((l.intensity or 0) - want) > 0.01 then l.intensity = want end
+                  local want = lit and (LAMP_INTENSITY[d.id] or FLOOD_INTENSITY) or 0.0
+                  if math.abs((l.intensity or 0) - want) > 0.01 then
+                    l.intensity = want
+                    -- (an engine without per-lamp fog raises on the field)
+                    local fk = LAMP_FOG[d.id]
+                    if fk then pcall(function() if l.fog ~= fk then l.fog = fk end end) end
+                  end
                 end
               end
             end

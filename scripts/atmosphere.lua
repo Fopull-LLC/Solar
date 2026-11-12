@@ -155,6 +155,34 @@ defaults = {
   --- How much of the scene's light the volumetric haze scatters (fogLight).
   --@range 0 2
   fogLight = 0.75,
+  --- The share of fogLight a full fog bank keeps (Ty 2026-11-12: a new save
+  --- spawned into "completely blinding white fog"). The haze's colour is
+  --- already the lit horizon's, and the engine multiplies it again by the
+  --- light reaching the media, so a dense bank under the day's sun went to
+  --- 2-4x its colour and clipped to white (renderfix fog: 52-65 % of the
+  --- picture at 255). A bank is lit by the whole sky, not by a beam: it
+  --- reads about its own colour, brighter toward the sun.
+  --@range 0 1
+  mistLight = 0.15,
+  --- The mist's colour at full day, as a share of white.
+  --@range 0.4 1
+  mistWhite = 0.74,
+  --- Engine 0710 (written only where the engine has them): how strongly the
+  --- sun, the lamps and the sky's ambient scatter in the volumetric haze, and
+  --- a ceiling on what it scatters, in multiples of the haze's colour
+  --- (0 = none). The ceiling is what keeps a fog bank toward the sun, or a
+  --- lamp's glow, from washing out to white; with it the lit share can stay
+  --- higher (mistLightClamped).
+  --@range 0 2
+  fogSun = 0.7,
+  --@range 0 2
+  fogLamps = 0.45,
+  --@range 0 2
+  fogAmbient = 1.0,
+  --@range 0 8
+  fogClamp = 1.35,
+  --@range 0 1
+  mistLightClamped = 0.45,
   --- How fast the haze follows the world, per second. The altitude curve is
   --- already continuous; this smooths the jumps that are not — the camera
   --- cutting to the map and back, an SOI hand-off to a world of another colour.
@@ -176,9 +204,11 @@ defaults = {
   --@range 0 20
   mistThick = 7.0,
   --- A fog bank's own density at full mist (per metre, volumetric): you see
-  --- tens of metres into it, not across the valley.
+  --- tens of metres into it, not across the valley. (0.035 was ~30 m: with
+  --- the over-lit colour it read as a white wall; 0.022 is ~45 m to the
+  --- point things are lost, a real valley fog.)
   --@range 0 0.2
-  mistBank = 0.035,
+  mistBank = 0.022,
   --- Print what the air is doing, once a second. For tuning and for `run`.
   debug = false,
 }
@@ -485,6 +515,26 @@ local function lighting()
   return lit
 end
 
+-- ENGINE 0710's knobs on the haze's light (fogSun, fogLamps, fogAmbient,
+-- fogClamp): written where the engine has them, every frame the volumetric
+-- haze is written (one owner: this script; params are live, so a dev can
+-- tune them in the inspector). An engine without them raises on the first
+-- read; the answer is kept, so it is asked once.
+local knobs_ok = nil
+local function fog_knobs(l)
+  if knobs_ok == false then return false end
+  if knobs_ok == nil then
+    knobs_ok = pcall(function() local _ = l.fogClamp; l.fogClamp = l.fogClamp end) and l.fogClamp ~= nil
+    if not knobs_ok then return false end
+  end
+  local function put(k, v) if math.abs((l[k] or 0) - v) > 1e-4 then l[k] = v end end
+  put("fogSun", params.fogSun or 0.7)
+  put("fogLamps", params.fogLamps or 0.45)
+  put("fogAmbient", params.fogAmbient or 1.0)
+  put("fogClamp", params.fogClamp or 1.35)
+  return true
+end
+
 local function fog_off(l)
   l.fog = false
   l.fogVolumetric = false
@@ -676,7 +726,8 @@ function follow(dt)
     -- Mist is water, white in the day's light: the haze pales toward it.
     local lt = 0.05 + 0.95 * smooth(-0.3, 0.25, cur.sun)
     local m = 0.55 * cur.mist
-    local wr, wg2, wb = 0.86 * lt, 0.88 * lt, 0.92 * lt
+    local mw = params.mistWhite or 0.74
+    local wr, wg2, wb = mw * lt, (mw + 0.02) * lt, (mw + 0.06) * lt
     fr, fg, fb = fr + (wr - fr) * m, fg + (wg2 - fg) * m, fb + (wb - fb) * m
   end
   local tint = wsky and wsky.tint
@@ -789,7 +840,11 @@ function follow(dt)
     l.fogNoiseScale = 24 + 36 * lump
     l.fogAnisotropy = (params.anisotropy or 0.3) * (1 - 0.7 * ovc)
     -- Overcast: no direct beam to scatter, only the sky's diffuse light.
-    l.fogLight = (params.fogLight or 0.75) * (1 - 0.5 * ovc) * (1 - 0.6 * enc)
+    -- A fog bank likewise: lit by the whole sky, read at about its colour.
+    local knobs = fog_knobs(l)
+    local mk2 = smooth(0.0, 0.6, cur.mist)
+    local ml = knobs and (params.mistLightClamped or 0.45) or (params.mistLight or 0.15)
+    l.fogLight = (params.fogLight or 0.75) * (1 - 0.5 * ovc) * (1 - 0.6 * enc) * (1 - (1 - ml) * mk2)
     l.fogShafts = (params.shafts ~= false) and gx_shafts and ovc < 0.3
   else
     l.fogVolumetric = false

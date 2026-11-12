@@ -578,3 +578,23 @@ from the low ground, day and night. `GR` lines; pictures in
 `$WORK/shots/<TAG>` (`SHOTS=`). Results of the 2026-11-10 pass:
 /mnt/disks/3tb/.floptle-shared/solar/work/grit/NOTES.md.
 
+
+## renderfix.sh + renderfix.lua + rf_frames.py — fog, light flicker, headlights, floating rocks
+
+    WORK=$SCRATCH tools/perf/renderfix.sh <engine> <mode> [TAG]
+
+Ty's 2026-11-12 render issues on a NEW Career save. Modes: `fog` (the spawn
+clear, in forced mist, mist at dusk and at night, four headings each, the
+Light component's fog fields as `RF LIGHT` lines, a census of every lit lamp at
+night), `fogsweep` (strs `sweep` = "fogLight=0.75,0.4,0.2,0": one atmosphere
+param swept in day and dusk mist), `flick` (the rover driven in mist with its
+lights on, EVERY frame the Light component compared with the last: `RF LW` on a
+>15 % change, `HITCH` on a long frame, lightsDropped counted; `DUMP=1` dumps the
+window's frames between `DUMP ON/OFF` and rf_frames.py lists one-frame flashes;
+params `night` (star elevation to warp to, 1.0 = stay in the day), `shadowmap=0`,
+`secs`), `lights` (the rover parked at night, lamps off/on/in mist, four camera
+angles), `rocks` (floating scatter rocks and rock nodes round the spawn and three
+spots out on the land, with mineral_field's audit counters), `catch` (a slab held
+over a stone while it is re-rolled, then taken away). Pictures in
+`$WORK/rf/<TAG>/shots/`. PATCHES= applies diffs to the copied tree (a reverse
+diff gives a before run). Results 2026-11-12: renderfix report to main.

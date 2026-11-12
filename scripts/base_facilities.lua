@@ -2483,8 +2483,119 @@ function onDestroy()
   built = nil
 end
 
+-- ── THE BASE'S LAMPS, budgeted (Ty 2026-11-12: "lights make nearly
+-- everything flicker sometimes, worse while moving") ─────────────────────────
+-- The engine sends at most 16 lamps to the shader, the ones giving most at
+-- the camera, re-ranked every frame with no hysteresis: a lamp at the edge
+-- of the sixteen drops out and comes back as the camera moves, and the
+-- ground and fog it lights blink with it (engine card 0711). The base alone
+-- lit 26 (renderfix census at night: the VAB's five, the Medical Bay's
+-- three, four buildings' room lights, two apron and four pad floods, the
+-- Lab's eight), so 16 of 19 enabled ones reached the shader and 3 swapped
+-- every frame the ranking moved, before a rover's lamps or the suit's.
+-- Here each lamp of the base is on only while the camera is within
+-- LAMPS.near of its own reach (range x LAMPS.k + LAMPS.near), off past
+-- LAMPS.far (the gap is the hysteresis), eased over LAMPS.ease s, and at most
+-- LAMPS.cap are on at once (the nearest; one already on keeps its place
+-- unless a newcomer is LAMPS.swap m nearer), which leaves room in the 16
+-- for craft lamps, the suit and the torch. A lamp another script switched
+-- off (or a disabled interior) is left alone.
+LAMPS = { k = 1.6, near = 20.0, far = 40.0, cap = 10, swap = 15.0, ease = 0.6, every = 0.2 }
+lampStats = { governed = 0, on = 0 }
+local lamp_t, lamp_scan_t, lamp_list = -1, -100, {}
+local function lamp_scan()
+  local list, seen = {}, {}
+  for _, L in ipairs(lamp_list) do if L.node.valid then seen[L.node] = L end end
+  local function walk(n, depth)
+    for _, c in ipairs((n.children and n:children()) or {}) do
+      local pl = c.getcomponent and c:getcomponent("PointLight")
+      if pl then
+        local L = seen[c]
+        if not L and (pl.intensity or 0) > 0 then
+          L = { node = c, l = pl, i0 = pl.intensity, cur = pl.intensity, on = true, wrote = pl.intensity }
+        end
+        if L then list[#list + 1] = L end
+      end
+      if depth < 5 then walk(c, depth + 1) end
+    end
+  end
+  local roots = {}
+  for _, f in ipairs(FACILITIES) do
+    roots[#roots + 1] = find(f.prefab)
+    if f.interior then roots[#roots + 1] = find(f.interior) end
+  end
+  for _, n in ipairs(findAll and findAll("BaseFlood") or {}) do roots[#roots + 1] = n end
+  for _, r in ipairs(roots) do
+    if r and r.valid and r.getcomponent then
+      local pl = r:getcomponent("PointLight")
+      if pl and not seen[r] and (pl.intensity or 0) > 0 then
+        list[#list + 1] = { node = r, l = pl, i0 = pl.intensity, cur = pl.intensity, on = true, wrote = pl.intensity }
+      elseif pl and seen[r] then list[#list + 1] = seen[r] end
+      walk(r, 0)
+    end
+  end
+  lamp_list = list
+end
+local cam_ref = nil
+local function lamps_tick()
+  if time - lamp_t < LAMPS.every then return end
+  local step = time - lamp_t
+  lamp_t = time
+  if time - lamp_scan_t > 5.0 then lamp_scan_t = time; lamp_scan() end
+  if not (cam_ref and cam_ref.valid) then cam_ref = findScript("planet_camera") end
+  local cn = cam_ref and cam_ref.node
+  if not (cn and cn.valid) then return end
+  local cp = cn.worldPos
+  if not cp then return end
+  local cand = {}
+  for _, L in ipairs(lamp_list) do
+    local n = L.node
+    if n.valid and n.enabled ~= false then
+      local li = L.l.intensity or 0
+      -- another script retuned it: its value is the lamp's own from now on
+      if math.abs(li - (L.wrote or 0)) > 1e-3 then
+        if li > 0 then L.i0 = li end
+        L.cur, L.wrote = li, li
+        if li <= 0 then L.foreign = true else L.foreign = nil end
+      end
+      if not L.foreign and n.worldPos then
+        local p = n.worldPos
+        local d = len(V(p.x - cp.x, p.y - cp.y, p.z - cp.z))
+        local reach = (L.l.range or 10) * LAMPS.k
+        L.d = d
+        L.want = d < reach + LAMPS.near or (L.on and d < reach + LAMPS.far)
+        if L.want then cand[#cand + 1] = L end
+      end
+    end
+  end
+  -- the cap: the nearest, a lamp already on keeping its place against a
+  -- newcomer less than LAMPS.swap m nearer
+  table.sort(cand, function(a, b)
+    local da, db = a.d - (a.on and LAMPS.swap or 0), b.d - (b.on and LAMPS.swap or 0)
+    return da < db
+  end)
+  local keep = {}
+  for i, L in ipairs(cand) do if i <= LAMPS.cap then keep[L] = true end end
+  local g, on = 0, 0
+  for _, L in ipairs(lamp_list) do
+    if L.node.valid and L.node.enabled ~= false and not L.foreign then
+      g = g + 1
+      L.on = keep[L] == true
+      local target = L.on and L.i0 or 0
+      local rate = L.i0 * step / math.max(LAMPS.ease, 0.05)
+      local c = L.cur or 0
+      if c < target then c = math.min(target, c + rate) elseif c > target then c = math.max(target, c - rate) end
+      if math.abs(c - (L.l.intensity or 0)) > 1e-3 then L.l.intensity = c end
+      L.cur, L.wrote = c, c
+      if c > 0 then on = on + 1 end
+    end
+  end
+  lampStats.governed, lampStats.on = g, on
+end
+
 function update(node, dt)
   -- Keep the published base position live: the body is orbiting.
+  if LAMPS.cap > 0 then lamps_tick() end
   if baseBody then
     local b = space.body(baseBody)
     local hx, hy, hz = save.get("base.x"), save.get("base.y"), save.get("base.z")

@@ -1686,6 +1686,58 @@ outcrops_drop = function(p)
   end
 end
 
+-- OUTCROPS ON GROUND THAT WAS DUG (Ty 2026-11-12: "lots of floating rocks").
+-- An outcrop is a node stood once on the vein's ground (vein_ground); the
+-- engine re-drops scatter rocks under an edit, but nothing moved a node, so
+-- a crystal cluster whose ground the laser or a quarry cut away hung in the
+-- air where the ground had been. Every non-paint edit the terrain's feed
+-- reports (terrain.editsSince; the centres are body-relative, the frame the
+-- outcrops are kept in) has the outcrops it reached looked at: one standing
+-- more than OUTCROP_LIFT (plus a share of its size) over the ground, or
+-- buried well under it, is gone for good, as if broken out (its taken bit;
+-- the dig took its ore with the rock).
+OUTCROP_LIFT, OUTCROP_SINK = 0.3, 1.5
+outcropsDug = 0
+local oc_serial = nil
+local function outcrop_check_near(ex, ey, ez, r)
+  for _, p in pairs(patches) do
+    for _, v in ipairs(p.veins or {}) do
+      for j, rec in pairs(v.out or {}) do
+        if rec.n and not rec.gone and len(rec.x - ex, rec.y - ey, rec.z - ez) <= r + 2.0 + rec.s then
+          local body = cur_body and space.body(cur_body)
+          local d = body and terrain.query(body.x + rec.x, body.y + rec.y, body.z + rec.z)
+          if d and (d > OUTCROP_LIFT + 0.4 * rec.s or d < -OUTCROP_SINK * math.max(rec.s, 0.5)) then
+            local vr = vein_rec(p.key)
+            local mask = vr.t[v.key] or 0
+            if not bit_on(mask, j) then vr.t[v.key] = mask + 2 ^ (j - 1) end
+            vein_save(p.key)
+            outcrop_gone(rec)
+            outcropsDug = outcropsDug + 1
+          end
+        end
+      end
+    end
+  end
+end
+local function outcrop_ground_tick()
+  if not (terrain.editSerial and terrain.editsSince) then return end
+  local sv = terrain.editSerial()
+  if oc_serial == nil or sv == oc_serial then oc_serial = sv; return end
+  local recs = terrain.editsSince(oc_serial)
+  oc_serial = sv
+  if outcrop_n <= 0 then return end
+  if recs == nil then
+    -- further behind than the feed keeps: every outcrop is looked at
+    outcrop_check_near(0, 0, 0, math.huge)
+    return
+  end
+  for _, r in ipairs(recs) do
+    if r.kind ~= "paint" and r.x and (r.body == nil or r.body == cur_body) then
+      outcrop_check_near(r.x, r.y, r.z, r.r or 3.0)
+    end
+  end
+end
+
 -- Paint the veins coming into reach and grow or put away their outcrops: a
 -- little a tick (one vein's ground read, one paint, a few nodes).
 local function veins_tick(w, R, body, planet, rx, ry, rz)
@@ -2422,11 +2474,46 @@ end
 function groundBusy() return #gw_regions + #gw_queue end
 
 -- Rocks resting on something that is not the ground (a roof, the pad, a
--- craft) go, and rocks over open air or under it have their ground re-dropped
--- once: flora_field "props standing on something that is not the ground",
+-- craft) go, and rocks over open air or under it are dropped onto the ground
+-- again: flora_field "props standing on something that is not the ground",
 -- with its AUDIT numbers, a slice a frame round the observer.
-local au = { t = -1e9, job = nil, tried = {} }
+-- (Ty 2026-11-12, "lots of floating rocks", rock clusters hanging in the sky
+-- and over the ground.) The engine's settling ray stops at the first
+-- collider under a rock: a craft flying low or a rover driving over ground
+-- that is arriving catches the rocks under it, and they keep that height
+-- after it has gone (engine card 0712). The audit used to re-declare a
+-- whole stand once a session for such a rock and only within 60 m, so the
+-- second craft's catch, and every boulder past 60 m (they draw to ~140),
+-- stayed in the air. Now a floating rock is taken out and put back two
+-- frames later (scatter.remove, then scatter.restore: a prop put back is
+-- rolled again and settles like an arriving one, on what is under it NOW),
+-- at most REDROP_TRIES times a session each, over the boulders' whole reach.
+AUDIT_RADIUS = 145.0
+REDROP_TRIES, REDROP_MAX = 2, 48
+local au = { t = -1e9, job = nil, tried = {}, back = {} }
 auditRemoved, auditRedropped = 0, 0
+local function redrop(sid, iid)
+  local k = sid .. ":" .. tostring(iid)
+  local n = au.tried[k] or 0
+  if n >= REDROP_TRIES or #au.back >= REDROP_MAX then return false end
+  au.tried[k] = n + 1
+  scatter.remove(sid, iid)
+  au.back[#au.back + 1] = { sid = sid, id = iid, f = (FRAME_N or 0) + 2 }
+  auditRedropped = auditRedropped + 1
+  return true
+end
+local function redrop_tick()
+  local i = 1
+  while i <= #au.back do
+    local b = au.back[i]
+    if (FRAME_N or 0) >= b.f then
+      if srcs[b.sid] then scatter.restore(b.sid, b.id) end
+      table.remove(au.back, i)
+    else
+      i = i + 1
+    end
+  end
+end
 local function audit_tick(obs)
   local ff = ref("flora_field")
   local A = ff and ff.AUDIT
@@ -2440,7 +2527,7 @@ local function audit_tick(obs)
     local rx, ry, rz = obs.x - body.x, obs.y - body.y, obs.z - body.z
     for id, sr in pairs(srcs) do
       local p = patches[sr.patch]
-      if p and patch_dist(p, rx, ry, rz) <= A.radius then list[#list + 1] = id end
+      if p and patch_dist(p, rx, ry, rz) <= math.max(A.radius, AUDIT_RADIUS) then list[#list + 1] = id end
     end
     if #list == 0 then return end
     au.job = { list = list, si = 1, pg = nil, F = nil, i = 1 }
@@ -2457,7 +2544,7 @@ local function audit_tick(obs)
       -- a page at a time, round the observer as it stands when this source's
       -- turn comes, body-relative: the job runs over frames on a moving planet
       -- (flora_field pager)
-      if not j.pg then j.pg, j.F = ff.nearPager(sid, obs.x - body.x, obs.y - body.y, obs.z - body.z, A.radius), nil end
+      if not j.pg then j.pg, j.F = ff.nearPager(sid, obs.x - body.x, obs.y - body.y, obs.z - body.z, math.max(A.radius, AUDIT_RADIUS)), nil end
       if not j.F or j.i > j.F.count then j.F, j.i = ff.nearPagerNext(j.pg, body), 1 end
       local F = j.F
       while F and j.i <= F.count do
@@ -2477,20 +2564,22 @@ local function audit_tick(obs)
             up = up or vec3(0, 1, 0)
             local hit = d > 0 and raycast(vec3(px + up.x * 0.3, py + up.y * 0.3, pz + up.z * 0.3),
               vec3(-up.x, -up.y, -up.z), 0.6) or nil
-            -- (once a session per stand, not per rock: flora_field AUDIT)
-            local key = sr.patch .. "|" .. sr.kind.id
             -- (a ray that meets the terrain answers with the world's own node,
             -- named for the body: surveyor is_ground)
             local hn = hit and hit.node
             local solid = hn and hn.valid ~= false and hn.name and not space.body(hn.name)
             local hq = solid and terrain.query(hit.x, hit.y, hit.z)
             if hq and hq > 0.15 then
-              scatter.remove(sid, it.id)
-              auditRemoved = auditRemoved + 1
-            elseif not au.tried[key] and math.abs(d) > (A.redrop or 0.8) then
-              au.tried[key] = true
-              auditRedropped = auditRedropped + 1
-              groundChanged(px, py, pz, 3.0, true)
+              -- on a roof, the pad or a craft parked on it: first dropped
+              -- again (a craft that has driven off), then taken off
+              if not redrop(sid, it.id) then
+                scatter.remove(sid, it.id)
+                auditRemoved = auditRemoved + 1
+              end
+            elseif d > (A.redrop or 0.8) then
+              -- (only one standing OVER the ground: a rock under it is out
+              -- of sight, and one whose ground was dug the engine drops itself)
+              redrop(sid, it.id)
             end
           end
         end
@@ -2511,6 +2600,8 @@ function update(node, dt)
   drain_yields()
   paint_drain(PAINT_PER_FRAME or 12)
   if #events > 32 then for _ = 1, #events - 32 do table.remove(events, 1) end end
+  FRAME_N = (FRAME_N or 0) + 1
+  if #au.back > 0 then redrop_tick() end
   if cur_body then audit_tick(observer()) end
   loose_tick()
   if time < next_t then return end
@@ -2653,6 +2744,7 @@ function update(node, dt)
   regrow()
   ground_tick(w, R)
   veins_tick(w, R, body, planet, rx, ry, rz)
+  outcrop_ground_tick()
   dose_tick(R, rx, ry, rz)
 
   if not frame_checked then

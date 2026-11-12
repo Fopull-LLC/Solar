@@ -163,13 +163,20 @@
         name: "Lamp",
         transform: (
             translation: (1.0, 0.05, 0.0),
-            rotation: (0.0, 0.0, 0.0, 1.0),
+            // a headlight's aim: down the chassis' +X, dipped 2 degrees so
+            // the beam centre meets the road about 20 m out (yaw -90, pitch -2)
+            rotation: (-0.012341, -0.707000, -0.012341, 0.707000),
             scale: (1.0, 1.0, 1.0),
         ),
+        // Headlights (Ty 2026-11-12: "rover light blinding"): a 70-degree
+        // soft cone out to 80 m instead of an 18 m bulb all round, which at
+        // the lit intensity washed the ground and the chassis to pure white.
+        // Lit at LAMP_INTENSITY.roverBody (vessel_controller.lua).
         matter: PointLight(
             color: (1.0, 0.94, 0.82),
             intensity: 0.0,
-            range: 18.0,
+            range: 80.0,
+            spot: Some((angle: 70.0, softness: 0.6)),
         ),
         scripts: [],
         parent: Some(0),
