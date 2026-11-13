@@ -262,6 +262,32 @@ do
   check(logged, "the base log records the override")
 end
 
+-- ── (playtest 11-13, Dust Season) a stale hab still lets you in ─────────────
+-- The chamber full of a CO2 world's gas, the hab behind it at 3 % CO2 (its
+-- scrubbers behind): the purge used to refill from the hab, read the refill as
+-- foreign and purge again, forever (CYCLING 0.01 atm). One purge per cycle.
+do
+  local W = scene()
+  local A = W.A
+  W.at(2.6, 1.0, -0.3)
+  local st = A.state(1)
+  local C, H = st.air[W.ch.id], st.air[W.hab.id]
+  local Vc, Vh = W.ch.m3, W.hab.m3
+  C.N, C.x, C.c = 0, 0, 0.5 * Vc          -- 0.5 atm of pure CO2
+  local hp = p(W, W.hab)
+  H.N, H.x, H.c = hp * Vh * 0.76, hp * Vh * 0.21, hp * Vh * 0.03
+  A.cycleTo(1, INNER)
+  local seen = { uid = INNER }
+  local minp = 9
+  local t0 = run(W, 90, {}, function() minp = math.min(minp, p(W, W.ch)); return minp < 0.05 end)
+  local t = run(W, 90, {}, function() local o = A.airlockStatus(1, INNER); return o and o.label == "READY" end, seen)
+  C = A.state(1).air[W.ch.id]
+  local tot = C.N + C.x + C.c
+  check(t0 and t and math.abs(p(W, W.ch) - p(W, W.hab)) < 0.05 and tot > 0 and C.c / tot < 0.1,
+    string.format("CO2 in the chamber, a hab at 3 %% CO2: purged once, then READY (%.1f s, %.2f / %.2f atm, CO2 %.1f %%)",
+      t or -1, p(W, W.ch), p(W, W.hab), tot > 0 and 100 * C.c / tot or -1))
+end
+
 -- ── a bigger chamber takes longer, in proportion; a small one is quick ──────
 do
   local A0 = load_script("room_air.lua", env({}, S))

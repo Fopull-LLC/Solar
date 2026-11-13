@@ -1609,7 +1609,7 @@ local function chamber_tick(sid, s, C, dt)
     end
     return
   end
-  if not C.cyc then C.cyc = target; C.cyc_t = t; C.saved, C.vented, C.back, C.said = 0, 0, 0, nil end
+  if not C.cyc then C.cyc = target; C.cyc_t = t; C.saved, C.vented, C.back, C.said = 0, 0, 0, nil; C.purged = nil end
   local was = C.pumping
   C.purging = nil
   cycleStep(sid, s, C, target, pT, dt)
@@ -1796,7 +1796,12 @@ function cycleStep(sid, s, C, target, pT, dt)
     -- outside (powered; without power it pressurises as it is, and says so)
     local tot = A.N + A.x + A.c
     local foreign = tot > EPS and ((A.c / tot) > PURGE_CO2 or (A.x / tot) < PURGE_O2)
-    if foreign and tr and tr.sealed and pc > P_PURGE + 1e-6 and s.pow then
+    -- (playtest 11-13, Dust Season: the airlock hung at CYCLING 0.01 atm. The
+    -- hab it fills from held 3 % CO2 (scrubbers behind), so the refill itself
+    -- read as foreign and was purged again, forever. A cycle purges ONCE: down
+    -- to P_PURGE, then it pressurises with whatever the room ahead holds)
+    if foreign and not C.purged and pc <= P_PURGE + 1e-6 then C.purged = true end
+    if foreign and not C.purged and tr and tr.sealed and pc > P_PURGE + 1e-6 and s.pow then
       C.dir = "down"
       C.pumping = true
       C.purging = true
