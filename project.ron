@@ -7,7 +7,7 @@
     matter: true,
     title: Some("Floptle Solar"),
     entry_scene: Some("scenes/menu.ron"),
-    engine_version: Some("0.118.3-dev.1520.f304839"),
+    engine_version: Some("0.118.3-dev.1525.a6d954e"),
     data_id: Some("solar"),
     layers: [
         "entity",
