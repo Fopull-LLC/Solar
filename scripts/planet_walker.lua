@@ -988,7 +988,7 @@ local function footstep(node, from, to)
   -- ground (audio/water/wade_1..4, a real puddle walk, CC0), louder the
   -- deeper, with a ring of foam where the foot lands.
   if (wadeDepth or -1) > 0.08 then
-    local w = math.min(1, (wadeDepth - 0.08) / 0.5)
+    local w = math.min(1, (wadeDepth - 0.08) / 0.8)
     audio.play("audio/water/wade_" .. (1 + n % 4) .. ".ogg", node,
       { track = "SFX", volume = (0.35 + 0.4 * w) * q, mode = "spatial", falloff = "inverse",
         minDistance = 3.0, maxDistance = 45.0 })
@@ -1000,7 +1000,7 @@ local function footstep(node, from, to)
         local rx, ry, rz = node.x - bn.x, node.y - bn.y, node.z - bn.z
         local rl = math.sqrt(rx * rx + ry * ry + rz * rz)
         if rl > 1e-6 then
-          local k = wadeDepth / rl
+          local k = (wadeDepth - (wadeHalf or 0.94)) / rl
           vfx_ref.splash(node.x + rx * k, node.y + ry * k, node.z + rz * k, 0.25 + 0.5 * w)
         end
       end
@@ -2379,12 +2379,22 @@ function update(node, dt)
   local swimming = depth ~= nil and depth > 0.7
   -- (published: how deep the body stands in water, for the wading steps and
   -- the tool belt; -1 on dry ground)
-  wadeDepth = (depth ~= nil and depth > 0) and depth or -1
+  -- WADING is measured at the FEET (the water over the soles): `depth` is
+  -- at the capsule's centre, a metre up, so a knee-deep brook read as dry
+  -- ground and wading only began waist-deep.
+  local half_h = body_h(node) * 0.5
+  wade_px, wade_py, wade_pz = node.x - ux * (half_h - 0.06), node.y - uy * (half_h - 0.06), node.z - uz * (half_h - 0.06)
+  local fdepth = depth
+  if not swimming and cl then fdepth = cl.seaDepth(wade_px, wade_py, wade_pz) end
+  if swimming and depth then fdepth = depth + half_h end
+  wadeDepth = (fdepth ~= nil and fdepth > 0) and fdepth or -1
+  wadeHalf = half_h
   if swimming then
     speed = sprint and params.swim_fast or params.swim
-  elseif depth ~= nil and depth > 0.12 then
-    -- Wading: the water drags the legs, knee-deep halves the pace, no sprint.
-    speed = speed * (1 - 0.55 * math.min(1, (depth - 0.12) / 0.58))
+  elseif wadeDepth > 0.25 then
+    -- Wading: the water drags the legs; shin-deep costs a little, thigh-deep
+    -- halves the pace, and there is no sprinting through it.
+    speed = speed * (1 - 0.55 * math.min(1, (wadeDepth - 0.25) / 0.9))
     sprint = false
   end
 
@@ -2508,6 +2518,21 @@ function update(node, dt)
     local gd = gust_x * ux + gust_y * uy + gust_z * uz
     tx, ty, tz = tx + (gust_x - ux * gd) * f, ty + (gust_y - uy * gd) * f, tz + (gust_z - uz * gd) * f
     gust_left = math.max(0, gust_left - dt)
+  end
+  -- THE CURRENT (climate.flowAt: a river's velocity where you stand in it).
+  -- A swimmer is carried at the water's speed; a wader is leaned on by the
+  -- share of the body that is in the stream (knee-deep in a fast brook is a
+  -- shove you walk against, waist-deep takes your feet). `current` published.
+  current = 0
+  if cl and cl.flowAt and (wadeDepth or -1) > 0.1 then
+    local cvx, cvy, cvz = cl.flowAt(wade_px or node.x, wade_py or node.y, wade_pz or node.z)
+    local cs = math.sqrt(cvx * cvx + cvy * cvy + cvz * cvz)
+    if cs > 0.05 then
+      local share = swimming and 1.0 or math.min(1, (wadeDepth / 1.3) ^ 2)
+      local cd = cvx * ux + cvy * uy + cvz * uz
+      tx, ty, tz = tx + (cvx - ux * cd) * share, ty + (cvy - uy * cd) * share, tz + (cvz - uz * cd) * share
+      current = cs * share
+    end
   end
   local md = mvx * ux + mvy * uy + mvz * uz
   mvx, mvy, mvz = mvx - ux * md, mvy - uy * md, mvz - uz * md

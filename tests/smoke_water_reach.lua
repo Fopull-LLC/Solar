@@ -38,7 +38,9 @@ local function sdf_local(x, y, z)
   return d
 end
 local reads, misaimed = 0, 0
+local COLD = false   -- the field not answering (ground streaming in)
 local function sdf(x, y, z)
+  if COLD then return nil end
   reads = reads + 1
   local lx, ly, lz = x - BODY.x, y - BODY.y, z - BODY.z
   if len(lx, ly, lz) > 200 then misaimed = misaimed + 1 end
@@ -156,6 +158,27 @@ check(st.floods >= 3 and st.dry >= 1 and st.wet >= 2, string.format("reach flood
 local f0 = st.floods
 for _ = 1, 20 do depth_at(0, 0, 1, 93); depth_at(1, 0, 0, 93) end
 check(env.reachStats.floods == f0, "repeated reads hit the cell cache (no new floods)")
+
+-- 1b. the answers STICK (cpuperf, 11-13: a pit beside the sea flipped dry /
+-- wet between reads and the walker flipped between running and swimming):
+-- a cold field changes nothing, a fresh spot under a cold field is dry (no
+-- ring-test guess), and a dig near the sea's radius keeps every answer
+-- until its new flood lands.
+COLD = true
+local c_pit, c_tr, c_oc = depth_at(0, 0, 1, 93), depth_at(math.cos(a), 0, math.sin(a), 93), depth_at(1, 0, 0, 93)
+check(c_pit == -1 and c_tr and c_tr > 1.9 and c_oc and c_oc > 1.9,
+  string.format("under a cold field the pit stays dry and the trench and the ocean wet (%s, %s, %s)", tostring(c_pit), tostring(c_tr), tostring(c_oc)))
+local c_new = depth_at(0.3, 0, 1, 93)
+check(c_new == -1, string.format("a spot never asked before, under a cold field, is dry: no guess (%s)", tostring(c_new)))
+COLD = false
+dig(95.5, 0, 30, 1.2)   -- a small dig at the sea's radius: every cell goes stale
+local flips = 0
+for _ = 1, 30 do
+  frames(1)
+  local p1, p2 = depth_at(0, 0, 1, 93), depth_at(math.cos(a), 0, math.sin(a), 93)
+  if p1 ~= -1 or not (p2 and p2 > 1.9) then flips = flips + 1 end
+end
+check(flips == 0, string.format("after a dig near the sea the pit stays dry and the trench wet through the re-floods (%d flips in 30 frames)", flips))
 
 -- 2. a pit dug 22 m from the lake seeps full to the lake's level
 local lake_depth0 = depth_at(0, 1, 0, 96)

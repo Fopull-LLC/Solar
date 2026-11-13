@@ -313,7 +313,6 @@ local REACH_WIDE = 400
 -- down mid-ocean is wet the same frame; about 0.6 ms once per cached region)
 local REACH_INLINE = 440
 local REACH_SLICE = 600
-local REACH_KEEP = 180.0
 local REACH_JOBS = 3
 local reach = { body = nil, cells = {}, jobs = {}, njobs = 0, R = 0 }
 reachStats = { floods = 0, wet = 0, dry = 0, cold = 0, deferred = 0, cells = 0 }
@@ -343,6 +342,7 @@ end
 
 local function reach_reset(name, R)
   reach.body, reach.R, reach.cells, reach.jobs, reach.njobs = name, R, {}, {}, 0
+  reach.cold = {}
   reachStats.cells = 0
 end
 
@@ -387,13 +387,21 @@ end
 local function reach_finish(key, J)
   reach.jobs[key] = nil
   reach.njobs = reach.njobs - 1
-  if J.cold then reachStats.cold = reachStats.cold + 1 return end
+  if J.cold then
+    -- asked again in two seconds, not on every read
+    reach.cold = reach.cold or {}
+    reach.cold[key] = reach.clock or 0
+    reachStats.cold = reachStats.cold + 1
+    return
+  end
   reachStats.floods = reachStats.floods + 1
   if J.wet then reachStats.wet = reachStats.wet + 1 else reachStats.dry = reachStats.dry + 1 end
   local now = reach.clock or 0
   for _, k in ipairs(J.open) do
     if not reach.cells[k] then reachStats.cells = reachStats.cells + 1 end
-    reach.cells[k] = { wet = J.wet, t = now }
+    -- (a flood run while the ground was still streaming in is asked again
+    -- in a while; its answer stands until the new one lands)
+    reach.cells[k] = { wet = J.wet, t = now, soft = J.busy or nil }
   end
 end
 
@@ -404,27 +412,45 @@ end
 local function reach_query(name, b, R, ux, uy, uz)
   if reach.body ~= name or reach.R ~= R then reach_reset(name, R) end
   local key = rkey(ux, uy, uz, R)
+  -- ONE ANSWER PER CELL, AND IT STICKS (cpuperf, 11-13: a pit beside Kaia's
+  -- sea read dry, then wet, then dry as answers expired, floods ran against
+  -- half-streamed ground and "cold" fell back to the ring test: the walker
+  -- flipped between running and swimming). A cell's answer never expires by
+  -- the clock. A dig near the sea's radius, or an answer got while the ground
+  -- was streaming, marks it STALE: it is asked again in the background and
+  -- keeps answering as before until the new flood lands. A cell with no
+  -- answer yet is dry while its first flood runs, and where the field is
+  -- cold there is no flood and no guess: the last answer, else dry.
   local c = reach.cells[key]
   local now = reach.clock or 0
-  if c and now - c.t < REACH_KEEP then return c.wet end
-  if reach.jobs[key] then return false, "pending" end
-  if reach.njobs >= REACH_JOBS then reachStats.deferred = reachStats.deferred + 1 return false, "pending" end
+  if c and c.soft and now - c.t > 12 and not (terrain.busy and terrain.busy()) then c.stale, c.soft = true, nil end
+  if c and not c.stale then return c.wet end
+  local held = c and c.wet or false
+  local ct = reach.cold and reach.cold[key]
+  if ct and now - ct < 2.0 then return held, "cold" end
+  if reach.jobs[key] then return held, (not c) and "pending" or nil end
+  if reach.njobs >= REACH_JOBS then
+    reachStats.deferred = reachStats.deferred + 1
+    return held, (not c) and "pending" or nil
+  end
   local t1x, t1y, t1z, t2x, t2y, t2z = tangent_basis(ux, uy, uz)
   local J = { b = { x = b.x, y = b.y, z = b.z }, R = R, ux = ux, uy = uy, uz = uz,
     t1x = t1x, t1y = t1y, t1z = t1z, t2x = t2x, t2y = t2y, t2z = t2z,
-    queue = { { 0, 0 } }, head = 1, seen = { [0] = true }, open = {}, done = false }
+    queue = { { 0, 0 } }, head = 1, seen = { [0] = true }, open = {}, done = false,
+    busy = (terrain.busy and terrain.busy()) or false }
   reach_step(J, REACH_INLINE)
   if J.done then
     reach.njobs = reach.njobs + 1
     reach.jobs[key] = J
     reach_finish(key, J)
-    if J.cold then return nil, "cold" end
+    -- cold: no verdict and no guess; the last answer stands (dry if none)
+    if J.cold then return held, "cold" end
     return J.wet
   end
   reach.jobs[key] = J
   reach.njobs = reach.njobs + 1
   reachStats.deferred = reachStats.deferred + 1
-  return false, "pending"
+  return held, (not c) and "pending" or nil
 end
 
 -- The floods under way, REACH_SLICE reads a frame between them. The body
@@ -444,7 +470,9 @@ end
 -- A dig or a fill that landed near the sea's radius: the cells are forgotten
 -- (a channel may have opened or closed), the floods under way with them.
 local function reach_forget()
-  if reach.body then reach_reset(reach.body, reach.R) end
+  -- (stale, not gone: each cell keeps answering as it did until its new
+  -- flood lands, so a dig beside a swimmer does not blink the water off)
+  for _, c in pairs(reach.cells) do c.stale = true end
 end
 
 -- ── flooded caves ───────────────────────────────────────────────────────────
@@ -501,7 +529,6 @@ local function flood_step(budget)
         local so, state = reach_query(flood.body, b, sea, px / r, py / r, pz / r)
         budget = budget - 8
         if state == "pending" then J.head = J.head - 1 break end
-        if state == "cold" then so = surface_open(b.x, b.y, b.z, px / r, py / r, pz / r, sea) end
         if so ~= false then J.wet, J.done = true, true end
       end
       if not J.done then
@@ -595,8 +622,14 @@ function seaDepth(x, y, z)
       -- (reach_query). While its flood runs the point is dry; where the field
       -- is cold the old ring test stands in.
       local so, state = reach_query(d, b, sea, px / r, py / r, pz / r)
-      if state == "cold" then so = surface_open(b.x, b.y, b.z, px / r, py / r, pz / r, sea) end
       if so == false then depth = -1 end
+    else
+      -- The field is not answering here (ground streaming in): no roof
+      -- test, no flood. The surface cell's last answer stands, else dry —
+      -- never "under the sea's radius, so sea" (that flipped a pit wet
+      -- whenever its chunk was cold).
+      local so = reach_query(d, b, sea, px / r, py / r, pz / r)
+      if so ~= true then depth = -1 end
     end
     if depth > 0 then
       wet_note(d, px, py, pz)
@@ -609,6 +642,9 @@ function seaDepth(x, y, z)
   if not depth or depth <= 0 then
     local ld = lakeDepth(d, x, y, z)
     if ld then return ld end
+    -- …and a river: shallow running water you wade (riverAt, below)
+    local rd = riverAt(d, x, y, z)
+    if rd and rd > 0 then return rd end
   end
   return depth
 end
@@ -1444,6 +1480,53 @@ local function amb_stop_all()
 end
 ambientStats = { stream = nil, fall = nil, lap = nil, near = nil }
 
+-- ── running water you can stand in ──────────────────────────────────────────
+-- A river is WATER, not a picture of it: inside a drawn ribbon, under its
+-- surface, a point is that deep in the stream (seaDepth answers it, so the
+-- crew wades and splashes), and the stream is moving: `flowAt` is its
+-- velocity there (m/s, the planet's frame), downstream at the speed the
+-- ripples are drawn (the rows' travel time). planet_walker leans a wader
+-- and carries a swimmer on it; anything else that floats can ask the same.
+-- The rows near the eye are listed twice a second (ambient_tick).
+-- → depth (m, nil when the point is in no river), vx, vy, vz
+function riverAt(name, x, y, z)
+  local rows = water.near_rows
+  if not rows or name ~= water.body then return nil end
+  local b = space.body(name)
+  if not b then return nil end
+  local px, py, pz = x - b.x, y - b.y, z - b.z
+  local best, bi = 1e9, nil
+  for i, row in ipairs(rows) do
+    local d = len(px - row[1], py - row[2], pz - row[3])
+    if d < best then best, bi = d, i end
+  end
+  if not bi then return nil end
+  local row = rows[bi]
+  local r = len(px, py, pz)
+  local depth = row[4] - r
+  -- across the stream: the distance from the row's point less the height
+  local horiz = math.sqrt(math.max(0, best * best - depth * depth))
+  if depth <= 0 or depth > 3 or horiz > row[5] + 0.3 then return nil end
+  local nxt = row.nxt
+  if not nxt then return depth, 0, 0, 0 end
+  local fx, fy, fz = nxt[1] - row[1], nxt[2] - row[2], nxt[3] - row[3]
+  local ds, dt = len(fx, fy, fz), nxt[6] - row[6]
+  if ds < 1e-6 or dt <= 1e-4 then return depth, 0, 0, 0 end
+  local v = math.min(3.2, ds / dt)
+  -- slower at the banks than midstream
+  v = v * (1 - 0.6 * math.min(1, horiz / math.max(row[5], 0.1)) ^ 2)
+  return depth, fx / ds * v, fy / ds * v, fz / ds * v
+end
+-- The water's velocity at a WORLD point (m/s, planet frame): a river's
+-- current, zero in still water and in air.
+function flowAt(x, y, z)
+  local d = space.dominant(x, y, z)
+  if not d then return 0, 0, 0 end
+  local depth, vx, vy, vz = riverAt(d, x, y, z)
+  if not depth then return 0, 0, 0 end
+  return vx, vy, vz
+end
+
 -- How far the eye is from the nearest standing water it is not in (m): the
 -- nearest lake or pool shore, river stretch or sea shore found this tick;
 -- nil when none is near. soundscape.lua's rain on water.
@@ -1452,16 +1535,24 @@ function waterNearEye() return water.near_dist end
 local function ambient_tick(name, w, b, ex, ey, ez)
   local rx, ry, rz = ex - b.x, ey - b.y, ez - b.z
   local near = nil
-  -- the nearest river row
+  -- the nearest river row (and the rows within 60 m, for riverAt)
   local best, brow, bhalf = 45, nil, nil
+  local near_rows = {}
   for _, rv in pairs(water.rivers) do
-    if rv and rv.rowinfo and len(rx - rv.vx, ry - rv.vy, rz - rv.vz) < rv.vr + 50 then
-      for _, row in ipairs(rv.rowinfo) do
+    if rv and rv.rowinfo and len(rx - rv.vx, ry - rv.vy, rz - rv.vz) < rv.vr + 60 then
+      for i, row in ipairs(rv.rowinfo) do
         local d = len(rx - row[1], ry - row[2], rz - row[3]) - row[5]
         if d < best then best, brow, bhalf = d, row, row[5] end
+        if d < 60 then
+          -- (the next row downstream, when it is the same run: a few metres on)
+          local nx = rv.rowinfo[i + 1]
+          row.nxt = (nx and len(nx[1] - row[1], nx[2] - row[2], nx[3] - row[3]) < 12) and nx or nil
+          near_rows[#near_rows + 1] = row
+        end
       end
     end
   end
+  water.near_rows = near_rows
   if brow then
     local k = 1 - math.max(0, best) / 45
     amb_set("stream", (bhalf > 2.2) and "audio/water/stream_loop.ogg" or "audio/water/brook_loop.ogg",

@@ -732,6 +732,8 @@ local function run_sealook()
     local rg = w_ground(ru, WR + 80) or WR
     A3.x, A3.y, A3.z = bb.x + ru.x * (rg + 1.5), bb.y + ru.y * (rg + 1.5), bb.z + ru.z * (rg + 1.5)
     A3.vx, A3.vy, A3.vz = 0, 0, 0
+    -- (the free camera is the eye the water is built round: bring it along)
+    fc.rel = vec3(ru.x, ru.y, ru.z) * (rg + 6)
     wait_for(function() return cl.waterNear().rivers >= 1 end, 60, "the river built")
     -- let the pieces near the eye finish (one build at a time)
     local last, same = -1, 0
@@ -739,7 +741,7 @@ local function run_sealook()
       wait(1)
       local nr = cl.waterNear().rivers
       if nr == last then same = same + 1 else same, last = 0, nr end
-      if same >= 4 then break end
+      if same >= 4 and nr >= 1 then break end
     end
     local wn = cl.waterNear()
     -- the built row nearest the crew (the hydro point itself may lie in a lake's basin)
@@ -761,6 +763,23 @@ local function run_sealook()
       wait(3)
       A3 = astro()
       P("SEALOOK river: standing by the nearest built row (half-width %.1f m); stream loop at %s m", row.half or -1, tostring(cl.waterNear().ambient.stream))
+      -- the current: the crew stood IN the stream, hands off, for 5 s
+      local pwk = findScript("planet_walker")
+      local bb4 = home()
+      -- (feet on the bed: the capsule's centre ~0.6 m over the water)
+      local rl4 = len(row.x, row.y, row.z)
+      A3.x, A3.y, A3.z = bb4.x + row.x * (1 + 0.6 / rl4), bb4.y + row.y * (1 + 0.6 / rl4), bb4.z + row.z * (1 + 0.6 / rl4)
+      A3.vx, A3.vy, A3.vz = 0, 0, 0
+      wait(1.0)
+      bb4 = home()
+      local sx0, sy0, sz0 = A3.x - bb4.x, A3.y - bb4.y, A3.z - bb4.z
+      local fvx, fvy, fvz = cl.flowAt(A3.x, A3.y, A3.z)
+      P("SEALOOK current: seaDepth %s flowAt %.2f m/s wadeDepth %s walker.current %s", tostring(cl.seaDepth(A3.x, A3.y, A3.z)),
+        len(fvx, fvy, fvz), tostring(pwk and pwk.wadeDepth), tostring(pwk and pwk.current))
+      wait(5.0)
+      bb4 = home()
+      P("SEALOOK current: the crew drifted %.1f m in 5 s (wadeDepth %s, current %s)", len(A3.x - bb4.x - sx0, A3.y - bb4.y - sy0, A3.z - bb4.z - sz0),
+        tostring(pwk and pwk.wadeDepth), tostring(pwk and pwk.current))
     end
     local am = wn.ambient or {}
     P("SEALOOK river: %d pieces built, falls %d, stream loop at %s m, fall loops %s, near %s; river stats %s",
@@ -861,4 +880,44 @@ local function run_sealook()
   end
   w_cam_off()
   P("SEALOOK RESULT: shots a–u (+n) taken")
+end
+
+-- ── tysea (waterprobe.sh tysea, USERSAVE=1): one answer where the crew stands ──
+-- On a copy of the player's save (cpuperf, 11-13: the crew in a pit 27 m
+-- under Kaia's sea, beside the sea, read dry then wet between runs and
+-- within one): climate.seaDepth at the crew four times a second for 45 s,
+-- standing and then walked back and forth 6 m, with the terrain streaming
+-- in round them. RESULT: how many times the wet/dry answer changed.
+local function run_tysea()
+  wait_ready(120)
+  local cl = findScript("climate")
+  local pw = findScript("planet_walker")
+  local A = astro()
+  local b = home()
+  local name = space.dominant(A.x, A.y, A.z)
+  local bb = space.body(name)
+  local R = cl.seaRadius(name) or 0
+  P("TYSEA body %s sea %.1f crew |r| %.1f (%.1f under the sea's radius)", tostring(name), R, len(A.x - bb.x, A.y - bb.y, A.z - bb.z), R - len(A.x - bb.x, A.y - bb.y, A.z - bb.z))
+  local last, flips, wet_n, n = nil, 0, 0, 0
+  local t0 = W()
+  local walking = false
+  while W() - t0 < 45 do
+    wait(0.25)
+    if not walking and W() - t0 > 15 then walking = true; key_down("w") end
+    if walking and W() - t0 > 22 then key_up("w"); key_down("s") end
+    if walking and W() - t0 > 29 then key_up("s") end
+    local d = cl.seaDepth(A.x, A.y, A.z)
+    local wet = d ~= nil and d > 0
+    n = n + 1
+    if wet then wet_n = wet_n + 1 end
+    if last ~= nil and wet ~= last then
+      flips = flips + 1
+      P("TYSEA flip %d at %.1f s: seaDepth %s swimming %s busy %s", flips, W() - t0, tostring(d), tostring(pw and pw.swimming), tostring(terrain.busy and terrain.busy()))
+    end
+    last = wet
+  end
+  release_all()
+  local rs = cl.reachStats or {}
+  P("TYSEA RESULT: %d reads, %d wet, %d flips; reach floods %s wet %s dry %s cold %s; final seaDepth %s", n, wet_n, flips,
+    tostring(rs.floods), tostring(rs.wet), tostring(rs.dry), tostring(rs.cold), tostring(cl.seaDepth(A.x, A.y, A.z)))
 end
