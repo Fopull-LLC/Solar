@@ -483,6 +483,10 @@
                         enabled: false,
                     ),
                     (
+                        shader: "shaders/waterfx.flsl",
+                        enabled: false,
+                    ),
+                    (
                         shader: "shaders/sunFlare.flsl",
                         enabled: true,
                     ),

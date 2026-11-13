@@ -179,6 +179,16 @@ if pool then
   check(saved["pools.W"] ~= nil and #saved["pools.W"] >= 1, "the pool is in the save (pools.W)")
 end
 
+-- 2b. a pit 30 m from the lake's shore (45 m from its centre) stays dry:
+-- water seeps only beside water you can see (Ty, 11-12b)
+local qa = 0.45
+dig(math.sin(qa) * 101, math.cos(qa) * 101, 0, 6)
+frames(120)
+local n_near = 0
+for _, p in pairs(env.waterNear().poolSpecs or {}) do if p.kind == "pit" then n_near = n_near + 1 end end
+check(n_near == 1, string.format("a pit 30 m from the lake's shore stays dry (%d pit pools)", n_near))
+check(saved["pools.W"] ~= nil and saved["pools.W"][1].v == 2, "pool records carry their rule's version")
+
 -- 3. a dry pit far from any water stays dry
 local dx, dy, dz = 0, math.cos(math.rad(60)), -math.sin(math.rad(60))
 dig(dx * 101, dy * 101, dz * 101, 6)

@@ -1351,7 +1351,18 @@ function build_fall_sheets(b, w, river)
     local tl = len(f.tx, f.ty, f.tz)
     local bl = len(f.bx, f.by, f.bz)
     local lx, ly, lz = f.tx / tl, f.ty / tl, f.tz / tl
+    -- the foot: carried on past the lower row by a third of the drop (the
+    -- water leaves the lip with its speed and lands in the plunge pool, not
+    -- at the foot of the step), so the sheet leans into the pool
     local fx, fy, fz = f.bx / bl, f.by / bl, f.bz / bl
+    local hx, hy, hz = fx - lx, fy - ly, fz - lz
+    local hl = len(hx, hy, hz)
+    if hl > 1e-9 then
+      local push = (f.drop * 0.33) / bl
+      fx, fy, fz = fx + hx / hl * push, fy + hy / hl * push, fz + hz / hl * push
+      local fl2 = len(fx, fy, fz)
+      fx, fy, fz = fx / fl2, fy / fl2, fz / fl2
+    end
     local pos, uvs, idx = {}, {}, {}
     local N = 10
     local half = f.half * 0.9
@@ -1941,8 +1952,20 @@ local LEVEL_DRAIN = 0.06
 local LEVEL_FILL = 0.015
 local LEVEL_REBUILD = 0.2
 local POOL_MAX = 64
-local PIT_SOURCE = 60
-local PIT_SOURCE_RIVER = 40
+-- A pit seeps only BESIDE water the player can see (Ty, 11-12b: "digging a
+-- hole still leads to water" — a 6 m pit by the base fence got a puddle from
+-- a source 60 m off: the generator's lake record, whose `reach` is its
+-- farthest shore, or a sea 60 m away over a rise). Now: open, reachable sea
+-- within PIT_SOURCE m; the SHORE of a lake that is built and drawn within
+-- PIT_SOURCE m (never the hydro record's reach); a drawn river's water within
+-- PIT_SOURCE_RIVER m; a settled pool within PIT_SOURCE_POOL m of its edge.
+-- Anywhere else a pit is a dry pit, however deep.
+local PIT_SOURCE = 18
+local PIT_SOURCE_RIVER = 10
+local PIT_SOURCE_POOL = 5
+-- Pool records carry POOL_V; a save's pit pools from before the rule above
+-- are dropped on load (cave sumps are kept: their rule has not changed).
+local POOL_V = 2
 local PIT_MIN_R = 0.8
 local SUMP_EVERY = 6.0
 local SUMP_MOVE = 8.0
@@ -1982,7 +2005,10 @@ local function pools_load(name)
   local l = save.get("pools." .. name)
   if type(l) == "table" then
     for _, p in ipairs(l) do
-      if p.id and p.x and p.level then
+      if p.kind == "pit" and p.v ~= POOL_V then
+        poolStats.stale = (poolStats.stale or 0) + 1
+        water.pools_dirty = true
+      elseif p.id and p.x and p.level then
         water.pools[p.id] = p
         water.pool_next = math.max(water.pool_next, p.id + 1)
       end
@@ -2029,33 +2055,12 @@ local function pool_add(w, p)
     water.plakes[oldest], water.pools[oldest] = nil, nil
   end
   p.id = water.pool_next
+  p.v = POOL_V
   p.t = water.t_total or 0
   water.pool_next = water.pool_next + 1
   water.pools[p.id] = p
   water.pools_dirty = true
   return p
-end
-
--- The ground under a river's nearest bed point to direction u: distance along
--- the ground (m), the river's width there, and the bed's radius; nil without.
-local function river_near(b, w, h, ux, uy, uz)
-  local R = w.radius
-  local best, bw, bp = nil, nil, nil
-  for _, rv in ipairs(h and h.rivers or {}) do
-    if rv.river then
-      local p = rv.points
-      for i = 1, #p / 3 do
-        local x, y, z = p[i * 3 - 2], p[i * 3 - 1], p[i * 3]
-        local d = arc_between(ux, uy, uz, x, y, z, R)
-        if not best or d < best then best, bw, bp = d, rv.widths[i] or 6, i * 3 - 2; bp = { x, y, z } end
-      end
-    end
-  end
-  if not best then return nil end
-  local l = len(bp[1], bp[2], bp[3])
-  slice(b)
-  local g = ground_r(b, bp[1] / l, bp[2] / l, bp[3] / l, R + (w.relief or 30) + 20, R - (w.shape and w.shape.low or 40) - 20)
-  return best, bw, g
 end
 
 -- A dig landed at body-relative (e.x,e.y,e.z), radius e.r: is there a pit
@@ -2117,17 +2122,30 @@ local function pit_check(b, w, h, e)
       end
     end
   end
-  for i, L in ipairs(h and h.lakes or {}) do
-    local Rl = R + lake_level(i, L)
-    local d = arc_between(ux, uy, uz, L.x, L.y, L.z, R) - L.reach
-    if d <= PIT_SOURCE then offer(Rl, d) end
+  -- a BUILT lake's shore (its lattice's shore ring, kept at build time)
+  for i, l in pairs(water.lakes) do
+    if l and l.shore and l.Rl then
+      local best = nil
+      for _, sd in ipairs(l.shore) do
+        local d = arc_between(ux, uy, uz, sd[1], sd[2], sd[3], R)
+        if not best or d < best then best = d end
+      end
+      if best and best <= PIT_SOURCE then offer(l.Rl, best) end
+    end
   end
+  -- a settled pool right beside the pit (not a pool still filling: pits
+  -- would feed pits across a whole yard)
   for _, p in pairs(water.pools) do
     local d = arc_between(ux, uy, uz, p.x, p.y, p.z, R) - p.reach
-    if d <= PIT_SOURCE then offer(R + (p.target or p.level), d) end
+    if d <= PIT_SOURCE_POOL and math.abs((p.target or p.level) - p.level) < 0.02 then offer(R + p.level, d) end
   end
-  local rd, rw, rg = river_near(b, w, h, ux, uy, uz)
-  if rd and rg and rd - (rw or 4) * 0.5 <= PIT_SOURCE_RIVER then offer(rg + 0.4, rd - (rw or 4) * 0.5) end
+  -- a drawn river's water (the built ribbon's rows)
+  for _, rv in pairs(water.rivers) do
+    for _, row in ipairs(rv and rv.rowinfo or {}) do
+      local d = arc_between(ux, uy, uz, row[1], row[2], row[3], R) - row[5]
+      if d <= PIT_SOURCE_RIVER then offer(row[4], d) end
+    end
+  end
   if not src_level then poolStats.dry = poolStats.dry + 1 return end
   -- The pit's rim: the lowest pass out of it (twelve rays, the highest ground
   -- along each); the pool can stand no higher.
@@ -2354,6 +2372,108 @@ end
 local function start_build(what, fn, put)
   water.job = { what = what, co = coroutine.create(fn), put = put }
   run_build()
+end
+
+-- ── the water's screen pass (shaders/waterfx.flsl) ──────────────────────────
+-- Under water: fog in the water's colour; near it: caustics on the lit bed
+-- and the wet band over the waterline. Driven here every frame in
+-- lateUpdate, the pose the frame is drawn with: the water sphere's centre is
+-- sent RELATIVE TO THE CAMERA (a 32-bit uniform cannot hold a point 60 km
+-- from the origin, and the planet moves metres a tick), with the radius of
+-- the water the eye is in or nearest to (the sea, or a lake / pool the eye
+-- stands by), how deep the camera is under it, the chemistry and the sun.
+-- Off when nothing is near (more than WATERFX_FAR over the water, no lake).
+local WATERFX_FAR = 60.0
+local wfx = { node = nil, on = false, t = -10 }
+waterFx = { on = false, depth = 0, R = 0 }   -- published, for the probes
+
+local star_name, star_t = nil, -10
+local function star_body()
+  if time - star_t > 1.0 or not star_name then
+    star_t = time
+    local best, bmu = nil, -1
+    for _, b in ipairs(space.bodies and space.bodies() or {}) do
+      local key = ((b.soi or 0) < 0 and 1e30 or 0) + (b.mu or 0)
+      if key > bmu then best, bmu = b.name, key end
+    end
+    star_name = best
+  end
+  return star_name and space.body(star_name)
+end
+
+function lateUpdate(node, dt)
+  if not (wfx.node and wfx.node.valid) then
+    if time - wfx.t < 1.0 then return end
+    wfx.t = time
+    wfx.node = find and find("Post Processing") or nil
+    if not wfx.node then return end
+  end
+  local post = wfx.node
+  local pc = findScript and findScript("planet_camera")
+  local cx, cy, cz
+  if pc and (pc.cam_x ~= 0 or pc.cam_y ~= 0 or pc.cam_z ~= 0) then cx, cy, cz = pc.cam_x, pc.cam_y, pc.cam_z end
+  local name = cx and space.dominant(cx, cy, cz)
+  local w = name and worldOf(name)
+  local bn = name and find and find(name)
+  local R, Rsea = 0, (w and w.sea) or 0
+  local depth = -1e9
+  if bn and w then
+    local dx, dy, dz = cx - bn.x, cy - bn.y, cz - bn.z
+    local dc = len(dx, dy, dz)
+    -- the water the eye is in or beside: the sea where it reaches (seaDepth's
+    -- rule), else the nearest built lake or pool whose sphere the eye is near
+    if Rsea > 0 then
+      local sd = seaDepth(cx, cy, cz)
+      if sd and sd > 0 then R, depth = Rsea, sd
+      elseif sd and sd == -1 then R = 0           -- a dry hollow under the sea's radius: no sea here
+      else R, depth = Rsea, Rsea - dc end
+    end
+    local ld = lakeDepth(name, cx, cy, cz)
+    if ld and ld > 0 then
+      -- inside a lake or pool: its sphere
+      for _, l in pairs(water.lakes) do if l and l.Rl and math.abs(l.Rl - dc - ld) < 0.5 then R = l.Rl end end
+      for _, l in pairs(water.plakes) do if l and l.Rl and math.abs(l.Rl - dc - ld) < 0.5 then R = l.Rl end end
+      depth = ld
+    elseif R == 0 or dc - R > WATERFX_FAR then
+      -- above the sea's reach: a lake or pool near the eye lends its sphere
+      local best = WATERFX_FAR
+      local function near_sheet(list)
+        for _, l in pairs(list) do
+          if l and l.Rl then
+            local d = len(dx - l.vx, dy - l.vy, dz - l.vz) - (l.vr or 0)
+            if d < best then best, R, depth = d, l.Rl, l.Rl - dc end
+          end
+        end
+      end
+      near_sheet(water.lakes)
+      near_sheet(water.plakes)
+    end
+    local want = R > 0 and depth > -WATERFX_FAR
+    if want ~= wfx.on then
+      wfx.on = want
+      pcall(post.setScreenShader, post, "waterfx", want)
+    end
+    waterFx.on, waterFx.depth, waterFx.R = want, depth, R
+    if want then
+      post:setShaderParam("waterfx.w0", bn.x - cx, bn.y - cy, bn.z - cz, R)
+      post:setShaderParam("waterfx.eyeDepth", depth)
+      local wt = water_look(w)
+      local ar, ag, ab = waterAbsorb(wt)
+      post:setShaderParam("waterfx.absorb", ar, ag, ab)
+      post:setShaderParam("waterfx.deepColor", wt.deep[1], wt.deep[2], wt.deep[3])
+      post:setShaderParam("waterfx.shallowColor", wt.shallow[1], wt.shallow[2], wt.shallow[3])
+      local st = star_body()
+      if st then
+        local sx, sy, sz = st.x - cx, st.y - cy, st.z - cz
+        local sl = len(sx, sy, sz)
+        if sl > 1e-6 then post:setShaderParam("waterfx.sunDir", sx / sl, sy / sl, sz / sl) end
+      end
+    end
+  elseif wfx.on then
+    wfx.on = false
+    waterFx.on = false
+    pcall(post.setScreenShader, post, "waterfx", false)
+  end
 end
 
 -- The scene goes (a menu round trip, a load): the lake and river meshes with

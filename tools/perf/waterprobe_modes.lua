@@ -176,6 +176,33 @@ local function run_water()
     A.vx, A.vy, A.vz = 0, 0, 0
   end
 
+  -- THE BASE PIT (Ty, 11-12b: "digging a hole still leads to water", a 6 m
+  -- pit by the base fence with a puddle in it): 6 m down, 14 m from where the
+  -- crew starts. No water is beside it: it must stay DRY, with no pool.
+  do
+    local bb = home()
+    local bu = unit({ x = A.x - bb.x, y = A.y - bb.y, z = A.z - bb.z })
+    local bt = w_tangent(bu)
+    local pu0 = w_along(bu, bt, 14, WR)
+    local pg0 = w_ground(pu0, len(A.x - bb.x, A.y - bb.y, A.z - bb.z) + 30)
+    if pg0 then
+      local n0 = w_shaft(pu0, pg0 + 0.5, pg0 - 6.0, 2.4)
+      wait(4)
+      local fl0 = ground_r(home(), pu0.x, pu0.y, pu0.z, pg0 + 3) or (pg0 - 6)
+      local sd0 = w_depth_at(cl, pu0, fl0 + 0.5)
+      local np0 = 0
+      for _, p in pairs(cl.waterNear().poolSpecs or {}) do np0 = np0 + 1 end
+      local ps0 = cl.poolStats or {}
+      P("BASEPIT %d bites, ground %.1f over the sea's radius, floor %.1f; seaDepth %s, pools %d (pits %s dry %s)", n0, pg0 - R, fl0 - R,
+        tostring(sd0), np0, tostring(ps0.pits), tostring(ps0.dry))
+      P("WATER RESULT base pit: %s", ((sd0 == nil or sd0 <= 0) and np0 == 0) and "DRY" or "WET")
+      local be = w_along(pu0, bt, -6, WR)
+      if w_cam(home(), { x = be.x * (pg0 + 4), y = be.y * (pg0 + 4), z = be.z * (pg0 + 4) }, bt, -0.7) then
+        w_shot("0_base_pit")
+        w_cam_off()
+      end
+    end
+  end
   if R > 0 then
     -- Where is a coast? The ground only exists near the player, so go to
     -- where a river ends (it runs to the sea), else try the base's own
@@ -240,10 +267,10 @@ local function run_water()
       for _, ang in ipairs({ 0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5 }) do
         if pu then break end
         local tx = unit({ x = -t.x * math.cos(ang) + bt1.x * math.sin(ang), y = -t.y * math.cos(ang) + bt1.y * math.sin(ang), z = -t.z * math.cos(ang) + bt1.z * math.sin(ang) })
-        for d = 30, 72, 7 do
+        for d = 6, 16, 2 do
           local cand = w_along(u, tx, d, R)
           local gg = w_ground(cand, R + 80)
-          if gg and gg > R + 3 and gg < R + 14 then pu, pg = cand, gg break end
+          if gg and gg > R + 1.2 and gg < R + 14 then pu, pg = cand, gg break end
         end
       end
       if not pu then
@@ -275,7 +302,9 @@ local function run_water()
         -- This pit is within PIT_SOURCE (60 m) of the sea: the sea is not IN it
         -- (seaDepth -1, no murk) but it SEEPS in, to the sea's level.
         local seeps = pool ~= nil and math.abs((pool.target or -99) - (R - WR)) < 0.3
-        P("WATER RESULT near pit: %s (seaDepth %s = not sea; %s)", ((sd == nil or sd <= 0) and seeps) and "SEEPS TO SEA LEVEL" or "UNEXPECTED",
+        -- (a pit a few metres behind a low beach usually opens into the sea
+        -- itself: then it IS sea, which is as honest as a seep)
+        P("WATER RESULT near pit: %s (seaDepth %s; %s)", (sd and sd > 0) and "JOINED THE SEA" or (seeps and "SEEPS TO SEA LEVEL" or "DRY"),
           tostring(sd), pool and "a seep pool with the sea's level" or "no seep pool")
         local t1 = w_tangent(pu)
         if w_cam(home(), { x = pu.x * (floor + 1.5), y = pu.y * (floor + 1.5), z = pu.z * (floor + 1.5) }, t1, -0.35) then
@@ -308,9 +337,11 @@ local function run_water()
             local c1, c2 = w_tangent(cand)
             for k = 0, 7 do
               local a = k * math.pi / 4
-              local q = w_along(cand, unit({ x = c1.x * math.cos(a) + c2.x * math.sin(a), y = c1.y * math.cos(a) + c2.y * math.sin(a), z = c1.z * math.cos(a) + c2.z * math.sin(a) }), 70, R)
-              local gq = w_ground(q, R + 80)
-              if gq and gq < R then near_sea = true end
+              for _, rr in ipairs({ 6, 12, 20, 30, 45, 70 }) do
+                local q = w_along(cand, unit({ x = c1.x * math.cos(a) + c2.x * math.sin(a), y = c1.y * math.cos(a) + c2.y * math.sin(a), z = c1.z * math.cos(a) + c2.z * math.sin(a) }), rr, R)
+                local gq = w_ground(q, R + 80)
+                if gq and gq < R + 0.8 then near_sea = true end
+              end
             end
             if not near_sea then fu, fg = cand, gg break end
           end
@@ -330,6 +361,26 @@ local function run_water()
         P("FARPIT %d bites, ground %.1f over the sea, floor %.1f %s the sea's radius: seaDepth %s, pit pools %d -> %d", n, fg - R,
           math.abs(R - floor), floor < R and "under" or "over", tostring(sd), before, after)
         P("WATER RESULT far pit: %s", ((sd == nil or sd <= 0) and after == before) and "DRY" or "WET")
+        do
+          -- why: the field at the sea's radius round the pit, and the reach stats
+          local c1, c2 = w_tangent(fu)
+          local out = {}
+          for _, rr in ipairs({ 0, 2, 4, 6, 9, 14 }) do
+            local row = {}
+            for k = 0, 7 do
+              local a = k * math.pi / 4
+              local q = w_along(fu, unit({ x = c1.x * math.cos(a) + c2.x * math.sin(a), y = c1.y * math.cos(a) + c2.y * math.sin(a), z = c1.z * math.cos(a) + c2.z * math.sin(a) }), rr, R)
+              local bb = home()
+              local v = terrain.query(bb.x + q.x * R, bb.y + q.y * R, bb.z + q.z * R)
+              row[#row + 1] = v and string.format("%.1f", v) or "nil"
+            end
+            out[#out + 1] = rr .. "m[" .. table.concat(row, " ") .. "]"
+          end
+          local rs = cl.waterNear().reach or {}
+          P("FARPIT field at the sea's radius: %s", table.concat(out, " "))
+          P("FARPIT reach: floods %s wet %s dry %s cold %s deferred %s cells %s; lakeDepth %s", tostring(rs.floods), tostring(rs.wet), tostring(rs.dry),
+            tostring(rs.cold), tostring(rs.deferred), tostring(rs.cells), tostring(cl.lakeDepth(home().name, home().x + fu.x * (floor + 0.6), home().y + fu.y * (floor + 0.6), home().z + fu.z * (floor + 0.6))))
+        end
         local ps = cl.poolStats or {}
         P("POOLS after the far pit: pits %s dry %s", tostring(ps.pits), tostring(ps.dry))
       end
@@ -537,6 +588,8 @@ local function run_sealook()
   end
   wait(2.5)
   stats("shore")
+  local wf0 = cl.waterFx or {}
+  P("SEALOOK waterfx shore: on %s depth %.2f R %.1f", tostring(wf0.on), wf0.depth or -99, wf0.R or 0)
   w_shot("a_shore_eye")
   local pc = findScript("planet_camera")
   local fc = pc.freecamState()
@@ -617,11 +670,31 @@ local function run_sealook()
   fc.ref = vec3(t.x, t.y, t.z)
   fc.pitch = 0.5
   wait(2.0)
+  local wf = cl.waterFx or {}
+  P("SEALOOK waterfx under: on %s depth %.2f R %.1f", tostring(wf.on), wf.depth or -99, wf.R or 0)
   w_shot("g_under")
+  -- the eye 2 m under, looking level along the water (the fog and the bed)
+  fc.rel = vec3(sw.x, sw.y, sw.z) * (R - 2.0)
+  fc.pitch = -0.1
+  wait(1.5)
+  wf = cl.waterFx or {}
+  P("SEALOOK waterfx 2 m under: on %s depth %.2f R %.1f", tostring(wf.on), wf.depth or -99, wf.R or 0)
+  w_shot("g_under_level")
   -- h: a lake's shore (the same shader on a sheet climate built; its
   -- parameters land the tick after the node, dress_params)
   local h0 = cl.hydroOf and cl.hydroOf(b.name)
-  local L = h0 and h0.lakes and h0.lakes[1]
+  -- a REAL lake: the one with the smallest reach over 15 m nearest the base
+  -- (lake 1 on Naolol is a 467 m basin whose level sits within a metre of
+  -- the ground: no sheet to see)
+  local L, Lscore = nil, 1e18
+  local a1 = astro()
+  for _, Lk in ipairs(h0 and h0.lakes or {}) do
+    if (Lk.reach or 0) > 15 and (Lk.reach or 0) < 150 and (Lk.depth or 0) > 1.5 then
+      local d = len(Lk.x - (a1.x - b.x), Lk.y - (a1.y - b.y), Lk.z - (a1.z - b.z))
+      if d < Lscore then L, Lscore = Lk, d end
+    end
+  end
+  if L then P("SEALOOK lake pick: reach %.0f depth %.1f level %.1f, %.0f m from the crew", L.reach, L.depth or -1, L.level, Lscore) end
   if L then
     local lu = unit({ x = L.x, y = L.y, z = L.z })
     local Rl = WR + L.level
@@ -735,6 +808,57 @@ local function run_sealook()
       P("SEALOOK fall: none within the built pieces of the longest river")
     end
   end
+  -- n: NOON over the first beach: warp the clock until the star stands at
+  -- least 45° up, then the shore and skim shots again (the sky reflection
+  -- and the glint in real light)
+  if u and space.warp then
+    local function sun_up()
+      local bb = home()
+      local best, bmu = nil, -1
+      for _, sb in ipairs(space.bodies() or {}) do
+        local key = ((sb.soi or 0) < 0 and 1e30 or 0) + (sb.mu or 0)
+        if key > bmu then best, bmu = sb, key end
+      end
+      if not best then return 0 end
+      local sx, sy, sz = best.x - (bb.x + u.x * R), best.y - (bb.y + u.y * R), best.z - (bb.z + u.z * R)
+      local sl = len(sx, sy, sz)
+      return (sx * u.x + sy * u.y + sz * u.z) / math.max(sl, 1e-6)
+    end
+    local A4 = astro()
+    local bb = home()
+    A4.x, A4.y, A4.z = bb.x + u.x * (g + 1.5), bb.y + u.y * (g + 1.5), bb.z + u.z * (g + 1.5)
+    A4.vx, A4.vy, A4.vz = 0, 0, 0
+    wait(2)
+    local s0 = sun_up()
+    local tries = 0
+    while sun_up() < 0.7 and tries < 40 do
+      space.warp(1000)
+      wait(1.0)
+      space.warp(1)
+      wait(0.5)
+      tries = tries + 1
+    end
+    P("SEALOOK noon: sun elevation sin %.2f -> %.2f after %d warps", s0, sun_up(), tries)
+    wait(3)
+    local ne = w_along(u, t, 10, R)
+    fc.rel = vec3(ne.x, ne.y, ne.z) * (R + 1.7)
+    fc.ref = vec3(t.x, t.y, t.z)
+    fc.pitch = -0.08
+    wait(2.0)
+    w_shot("n_noon_shore")
+    fc.rel = vec3(out.x, out.y, out.z) * (R + 0.6)
+    fc.pitch = -0.05
+    wait(1.5)
+    w_shot("n_noon_skim")
+    fc.rel = vec3(out.x, out.y, out.z) * (R + 12)
+    fc.pitch = -0.8
+    wait(1.5)
+    w_shot("n_noon_12m")
+    fc.rel = vec3(sw.x, sw.y, sw.z) * (R - 1.5)
+    fc.pitch = 0.45
+    wait(1.5)
+    w_shot("n_noon_under")
+  end
   w_cam_off()
-  P("SEALOOK RESULT: shots a–u taken")
+  P("SEALOOK RESULT: shots a–u (+n) taken")
 end

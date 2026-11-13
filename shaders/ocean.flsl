@@ -233,7 +233,18 @@ shader ocean {
   // From under the surface the water is between the eye and the surface
   // (the air beyond absorbs nothing): the light crosses `dist` of it.
   let thick = mix(dist, max(sceneDepth(suv) - dist, 0), step(0, side))
-  let behind = sceneColor(suv).rgb
+  // The scene behind the surface. The capture holds no sky (it is drawn
+  // after), so where the ray goes on into the sky the sky is read directly:
+  // from under water through Snell's window (the refracted ray, 1.33), and
+  // the water's own dark beyond it where the surface mirrors (total internal
+  // reflection: refract gives no ray). Looking up from a swim the sky was a
+  // black hole (r4a g_under).
+  let isSky = step(50000, sceneDepth(suv))
+  let rrU = refract(-viewDir, n, 1.33)
+  let tir = 1 - step(0.0001, dot(rrU, rrU))
+  let skyU = skyRadiance(normalize(rrU + vec3(0.0001, 0.0002, 0.0001)), 0.04)
+  let skySeen = mix(skyU, deepColor.rgb * 0.5, tir)
+  let behind = mix(sceneColor(suv).rgb, skySeen, isSky * step(0, -side))
   let trans = exp(-absorb * min(thick, 400))
   let deep = 1 - (trans.x + trans.y + trans.z) / 3
   // The column's own light where the bed is lost: navy in deep water, a

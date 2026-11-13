@@ -1,0 +1,94 @@
+// WATERFX — the water's screen pass (scripts/climate.lua drives it, on only
+// near water): what a surface shader cannot do because it happens to the
+// SCENE, not to the water's own pixels.
+//
+//   under water   Beer–Lambert fog in the water's own colour over the length
+//                 of water each ray crosses (to the bed, or out through the
+//                 surface), the column lit toward the sun; the suit's murk.
+//   caustics      light focused through the swell dancing on the lit bed in
+//                 the shallows (a two-layer cell pattern in the planet's
+//                 frame, fading with depth), seen through the surface or
+//                 from under it.
+//   the wet band  sand and rock within `wet` metres above the waterline are
+//                 darker and shinier, with the swash breathing over it.
+//
+// The water is a SPHERE about the planet's centre (the sea at its radius, a
+// lake at its own): `w0` carries the centre RELATIVE TO THE CAMERA (metres,
+// the only way a 32-bit uniform holds a point 60 km from the origin) and the
+// radius. Every point here is camera-relative (sceneRay × sceneDepth), so
+// the planet's own motion never enters: the script re-sends w0 every frame
+// from the drawn poses.
+shader waterfx {
+  stage post
+  // xyz: the water sphere's centre relative to the camera (m); w: its radius (0: nothing)
+  uniform w0: vec4 = vec4(0, 0, 0, 0)
+  // metres the camera is under that water's surface (≤ 0: above it)
+  uniform eyeDepth: float = 0 range(-1000, 1000)
+  // the water's chemistry (climate.waterAbsorb, water_look)
+  uniform absorb: vec3 = vec3(0.45, 0.09, 0.06)
+  uniform deepColor: vec3 = vec3(0.03, 0.14, 0.22)
+  uniform shallowColor: vec3 = vec3(0.12, 0.46, 0.5)
+  // the sun: direction (toward it, world) and its colour in real light
+  uniform sunDir: vec3 = vec3(0, 1, 0)
+  uniform sunColor: vec3 = vec3(1, 0.95, 0.9)
+  // how high the wet band reaches over the waterline (m), and how strong the caustics are
+  uniform wet: float = 0.7 range(0, 5)
+  uniform caustic: float = 1 range(0, 3)
+  uniform debugView: float = 0 range(0, 1)
+
+  let c0 = sceneColor().rgb
+  let d = sceneDepth()
+  let ray = sceneRay()
+  let solid = 1 - step(50000, d)
+  let C = w0.xyz
+  let R = w0.w
+  let active = step(0.5, R)
+  // the ray and the water sphere (the camera is the origin)
+  let bq = dot(ray, C)
+  let cq = dot(C, C) - R * R
+  let disc = bq * bq - cq
+  let sq = sqrt(max(disc, 0))
+  let tFar = bq + sq
+
+  // ── under water ──
+  let under = step(0.001, eyeDepth) * active
+  // the water the ray crosses: to the bed, or out through the surface
+  let thickU = max(min(d, max(tFar, 0)), 0)
+  let transU = exp(-absorb * min(thickU, 400))
+  let toSun = saturate(dot(ray, sunDir) * 0.5 + 0.6)
+  let upward = saturate(-dot(ray, normalize(C)) * 0.5 + 0.5)
+  let columnU = mix(shallowColor * 0.7, deepColor, saturate(eyeDepth / 14)) * (0.3 + 0.7 * toSun) * (0.6 + 0.6 * upward)
+  let colU = c0 * transU + columnU * sunColor * (1 - transU)
+
+  // ── the bed under the water: caustics ──
+  // (the sky's depth is 1e6: a point that far made exp() overflow and the
+  // noise NaN, and NaN × 0 is NaN — the sky went black over water, r4a)
+  let P = ray * min(d, 3000)
+  let rp = P - C
+  let rl = length(rp)
+  let bedDepth = R - rl
+  let inWater = step(0, bedDepth) * solid * active
+  let upP = rp / max(rl, 0.001)
+  let q = rp * 0.75
+  let n1 = noise(q + vec3(time * 0.55, 0, time * 0.35))
+  let n2 = noise(q * 1.6 - vec3(time * 0.45, time * 0.3, 0))
+  // (softer cells: the crisp web read as cracks on the bed, r4a c_12m)
+  let caus = pow(saturate(1 - abs(n1 - n2) * 2.0), 3) * 0.8
+  let sunLit = saturate(dot(upP, sunDir))
+  // From above, only where the look goes steeply down into the shallows:
+  // at a grazing look the pass (drawn after the water) laid the bed's web
+  // over the surface as scribbles (r4b n_noon_shore). Fades with distance.
+  let steep = mix(smoothstep(0.35, 0.8, saturate(-dot(ray, upP))), 1, under)
+  let cStr = caustic * caus * sunLit * exp(-clamp(bedDepth, 0, 60) * 0.3) * smoothstep(0, 0.25, bedDepth) * inWater * steep * exp(-min(d, 3000) / 35)
+
+  // ── the wet band over the waterline ──
+  let above = rl - R
+  let swash = 0.8 + 0.2 * sin(time * 1.3 + rp.x * 0.05 + rp.z * 0.07)
+  let band = (1 - smoothstep(0, wet * swash, min(above, 1000))) * step(0, above) * solid * active * (1 - under)
+  let gl = pow(saturate(dot(reflect(ray, upP), sunDir)), 80)
+  let colA = c0 * (1 - 0.35 * band) + sunColor * (cStr * 0.22 + band * gl * 0.6)
+
+  let col = mix(colA, colU, under)
+  let dbg = vec3(under, saturate(cStr), band)
+  output color = mix(vec4(col, 1), vec4(dbg, 1), debugView)
+}
