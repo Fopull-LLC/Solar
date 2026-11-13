@@ -501,7 +501,7 @@ do
     and (rs.blockedBy("powerCable95") or ""):find("through a night", 1, true) ~= nil, rs.blockedBy("powerCable95"))
   F.mark("grid_served")
   check("a grid served opens the Base Station Tower", rs.isUnlocked("tower"))
-  F.mark("cable_laid"); F.mark("night_held")
+  F.mark("cable_laid"); F.mark("source_wired"); F.mark("night_held")
   check("a night held opens heavy power (the 35/95 mm² and HV drums by ALIAS)", rs.isUnlocked("power2")
     and rs.isUnlocked("powerCable35") and rs.isUnlocked("hvCable"))
   step()
@@ -524,7 +524,7 @@ do
   F.mark("ruin_stripped", { n = 3 }); F.mark("lock_opened"); F.mark("core_read")
   step()
   check("a core read grants the Probe Core", rs.isUnlocked("probe") and not done("salvage"))
-  F.mark("ruin_claimed")
+  F.mark("ruin_claimed"); F.mark("ruin_repaired")
   step()
   check("…a claimed ruin finishes Salvage", done("salvage"))
 
@@ -539,7 +539,7 @@ do
   check("refining shows its kilograms", ln:find("(120 of 200 kg)", 1, true) ~= nil, ln)
   F.addAmount("machine_worked", 80.0)
   check("the Quarry: past the feat, a price", rs.blockedBy("quarry") == nil or not (rs.blockedBy("quarry") or ""):find("refinery run", 1, true), rs.blockedBy("quarry"))
-  F.mark("part_fabricated")
+  F.mark("part_fabricated"); F.mark("part_crafted")
   step()
   check("Ironworks done", done("ironworks"))
 

@@ -103,7 +103,7 @@ local function norm(x, y, z)
   return x / l, y / l, z / l, l
 end
 
-local KEEP = { "id", "b", "x", "y", "z", "ux", "uy", "uz", "fx", "fy", "fz", "n", "by", "t", "d", "bp", "st", "paid", "ru" }
+local KEEP = { "id", "b", "x", "y", "z", "ux", "uy", "uz", "fx", "fy", "fz", "n", "by", "t", "d", "bp", "st", "paid", "ru", "aw" }
 local function plain(r)
   local o = {}
   for _, k in ipairs(KEEP) do o[k] = r[k] end

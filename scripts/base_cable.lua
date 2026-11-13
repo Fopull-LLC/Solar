@@ -86,7 +86,7 @@ end
 local function defs(id) local pb = ref("parts_base"); return pb and pb.partInfo(id) or nil end
 -- A cable type's figures: base_power.CABLES (the copper, the rating) over
 -- the drum's own card (max, kgm, perm, lift, r). `ty` nil = the 16 mm² drum.
-local DRUM = { lv16 = "powerCable", lv35 = "powerCable35", lv95 = "powerCable95", hv35 = "hvCable" }
+local DRUM = { lv16 = "powerCable", lv35 = "powerCable35", lv95 = "powerCable95", hv35 = "hvCable", lv2 = "flexLead" }
 local function cdef(ty)
   -- (scn_dust) a type no drum lays (a 2.5 mm² flex run): base_power's own card
   if ty and not DRUM[ty] then
@@ -650,13 +650,79 @@ local function perm_for(by, ty)
   return (C.perm or 3) * k, k
 end
 
-function quote(L, by, ty)
+-- (playtest 11-12b) OFF THE HOME WORLD A CABLE IS CUT FROM YOUR OWN STOCK:
+-- its copper and its armour by the metre (recipes.recipeFor's cable recipe:
+-- half Wiring, half Steel), out of the stores in the Build Kit's reach. A
+-- ruin on another world could not be wired at all before: nothing ships
+-- there. → { { mat, kg, label } … } for a run of L metres
+function stockNeed(L, ty)
+  local Rc, M = ref("recipes"), ref("materials")
+  local d = defs(DRUM[ty or "lv16"] or "powerCable")
+  local r = Rc and Rc.recipeFor and d and Rc.recipeFor(d, "BASE", DRUM[ty or "lv16"] or "powerCable") or nil
+  local out = {}
+  for _, m in ipairs(r and r.mats or { { mat = "wiring", kg = 0.7 }, { mat = "steel", kg = 0.7 } }) do
+    out[#out + 1] = { mat = m.mat, kg = math.max(1, math.ceil(m.kg * (L or 0) - 1e-9)), label = M and M.label and M.label(m.mat) or m.mat }
+  end
+  return out
+end
+local function away(body)
+  local home = save and save.get and save.get("base.body")
+  local co = ref("company")
+  if co and co.isSandbox and co.isSandbox() == true then return false end
+  return home ~= nil and body ~= nil and body ~= home
+end
+-- the stock in reach (field_builder's scan): → have(mat), order = { cid … }
+local function stock_reach()
+  local fb = ref("field_builder")
+  local st = fb and fb.reachScan and fb.reachScan(true) or { order = {}, mats = {} }
+  return function(mat) return (st.mats and st.mats[mat]) or 0 end, st.order or {}
+end
+local function stock_take(need)
+  local inv = ref("inventory")
+  local have, order = stock_reach()
+  if not inv then return false end
+  for _, e in ipairs(need) do if have(e.mat) + 1e-9 < e.kg then return false end end
+  for _, e in ipairs(need) do
+    local left = e.kg
+    for _, cid in ipairs(order) do
+      if left <= 0 then break end
+      local h = inv.count(cid, e.mat) or 0
+      if h > 0 then left = left - (inv.remove(cid, e.mat, math.min(h, left)) or 0) end
+    end
+  end
+  return true
+end
+local function stock_give(need)
+  local inv = ref("inventory")
+  local _, order = stock_reach()
+  if not inv then return end
+  for _, e in ipairs(need or {}) do
+    local left = e.kg
+    for _, cid in ipairs(order) do
+      if left <= 0 then break end
+      left = left - (inv.add(cid, e.mat, left) or 0)
+    end
+  end
+end
+function stockLine(need)
+  local t = {}
+  for _, e in ipairs(need or {}) do t[#t + 1] = string.format("%d kg of %s", e.kg, e.label or e.mat) end
+  return table.concat(t, " and ")
+end
+function quote(L, by, ty, body)
   local E = ref("base_economy")
+  -- (off the home world: no bill, its metres out of the stock in reach)
+  if away(body) then
+    local C0 = cdef(ty)
+    return { mode = "stock", cost = 0, ship = 0, foot = 0, total = 0, mats = stockNeed(L, ty), mass = (L or 0) * (C0.kgm or 1.4) / 1000 }
+  end
   local perm, k = perm_for(by, ty)
   local cost = math.ceil((L or 0) * perm)
   local q = E and E.quote({ cost = cost, label = "Power Cable" }, "BASE", nil, nil, 0)
                  or { mode = "money", cost = cost, ship = 0, foot = 0, total = cost }
   local C = cdef(ty)
+  -- (W2) a flex lead is a coil carried out by hand: nothing to ship
+  if C.flex and q.mode == "money" and (q.ship or 0) > 0 then q.total = q.total - q.ship; q.ship = 0 end
   q.mass = (L or 0) * (C.kgm or 1.4) / 1000
   q.perk = k < 1 and k or nil
   return q
@@ -672,7 +738,6 @@ function validity(e1, hit, body, ty)
   local r = {}
   r.bad = layerWhyNot()
   if r.bad then return r end
-  if home and body and body ~= home then r.bad = "off the home world a cable is made, not shipped: step 13" return r end
   if not (hit and hit.rec and hit.part) then
     r.bad = e1 and "aim at a part on another structure to make the far end off" or "aim at a placed part to make the cable off there"
     return r
@@ -700,7 +765,17 @@ function validity(e1, hit, body, ty)
     r.bad = endWhy(d, hit.rec.id, hit.part.uid)
     return r
   end
-  if hit.rec.id == e1.sid then r.bad = "the same structure: its parts already share a grid" return r end
+  -- (W2) a cable joins two TERMINALS: a piece of equipment's own, or a
+  -- structure's circuit (base_grid.nodeKeyOf). Two pieces of one building's
+  -- circuit are joined already; a machine, a source or a battery beside them
+  -- is not, and may be cabled to it.
+  local na = BG and BG.nodeKeyOf and BG.nodeKeyOf(e1.sid, e1.uid) or ("s" .. tostring(e1.sid))
+  local nz = BG and BG.nodeKeyOf and BG.nodeKeyOf(hit.rec.id, hit.part.uid) or ("s" .. tostring(hit.rec.id))
+  if na == nz then
+    r.bad = (hit.rec.id == e1.sid and hit.part.uid == e1.uid) and "the same part: aim at what this cable should feed"
+      or "the same circuit: this structure's pieces already share its wiring (cable a source, a battery or a machine to it)"
+    return r
+  end
   local dz = defs(hit.part.id)
   r.bad = endWhy(dz, hit.rec.id, hit.part.uid)
   if r.bad then return r end
@@ -709,8 +784,8 @@ function validity(e1, hit, body, ty)
   local pa = ST and ST.getPart(e1.sid, e1.uid)
   local da = pa and defs(pa.id)
   local gear = (da and da.netgear) or (dz and dz.netgear)
-  local ga = BG and BG.gridOfStruct and BG.gridOfStruct(e1.sid)
-  local gz = BG and BG.gridOfStruct and BG.gridOfStruct(hit.rec.id)
+  local ga = BG and BG.gridOfStruct and BG.gridOfStruct(e1.sid, e1.uid)
+  local gz = BG and BG.gridOfStruct and BG.gridOfStruct(hit.rec.id, hit.part.uid)
   if ga and gz and ga == gz and not gear then r.bad = "those two are already on one grid (a breaker, pole or junction may close a loop)" return r end
   local rec = { a = { sid = e1.sid, uid = e1.uid }, z = { sid = hit.rec.id, uid = hit.part.uid }, ty = ty }
   local E, why = ends(rec)
@@ -720,7 +795,17 @@ function validity(e1, hit, body, ty)
   local _, _, d = span({ x = E.tax, y = E.tay, z = E.taz }, { x = E.tzx, y = E.tzy, z = E.tzz }, R, 1)
   local L = d + 2 * HANG + 1.2
   r.len, r.E, r.ty = L, E, ty
-  r.quote = quote(L, nil, ty)
+  r.quote = quote(L, nil, ty, hit.rec.b)
+  if r.quote.mode == "stock" and not FREE then
+    local have = stock_reach()
+    for _, e in ipairs(r.quote.mats) do
+      if have(e.mat) + 1e-9 < e.kg then
+        r.bad = string.format("off the home world a cable is cut from your own stock: this run wants %s within the kit's reach (%d kg of %s there)",
+          stockLine(r.quote.mats), math.floor(have(e.mat)), e.label or e.mat)
+        return r
+      end
+    end
+  end
   local C = cdef(ty)
   if L > (C.max or 1500) then
     r.bad = string.format("%.2f km: a run is at most %.1f km (a Power Pole or a Junction Box between, and run two)", L / 1000, (C.max or 1500) / 1000)
@@ -728,6 +813,16 @@ function validity(e1, hit, body, ty)
   end
   local co = ref("company")
   if not FREE and co and co.afford and not co.afford(r.quote.total) then r.bad = "can't afford it: " .. money(r.quote.total) return r end
+  -- (W2) what the run would join, in words: the hint's last clause
+  if BG and BG.wiring then
+    local wa, wz = BG.wiring(e1.sid, e1.uid), BG.wiring(hit.rec.id, hit.part.uid)
+    local la, lz = (da and da.label) or "part", (dz and dz.label) or "part"
+    if not (da and BG.isEquipment(da)) and not (pa and ST.get(e1.sid).aw) then la = la .. "'s building" end
+    if not (dz and BG.isEquipment(dz)) and not hit.rec.aw then lz = lz .. "'s building" end
+    local live = (wa.live and 1 or 0) + (wz.live and 1 or 0)
+    r.joins = string.format("joins the %s to the %s%s", la, lz,
+      live == 0 and " (neither reaches a source yet)" or (live == 1 and " (it goes live)" or ""))
+  end
   return r
 end
 
@@ -752,18 +847,30 @@ function lay(a, z, opts)
   local rk = rocksAlong(b, v.E, b.radius)
   local rec0 = { b = ra.b, a = a, z = z, ty = ty }
   local pts, L = polyline(v.E, h, b.radius, { boxes = obstaclesFor(rec0, v.E), rocks = rk, a = tensionA(b, cdef(ty), v.E), ty = ty })
-  local q = quote(L, c0 and c0.activeId and c0.activeId() or nil, ty)
-  if not FREE and not co.spend(q.total, EC.ledgerWhy("Power Cable", q) .. string.format(" · %.0f m", L)) then return nil, "can't afford it: " .. money(q.total) end
+  local q = quote(L, c0 and c0.activeId and c0.activeId() or nil, ty, ra.b)
+  if q.mode == "stock" then
+    q.mats = stockNeed(L, ty)
+    if not FREE and not stock_take(q.mats) then return nil, "the stock in reach is short: " .. stockLine(q.mats) end
+  elseif not FREE and not co.spend(q.total, EC.ledgerWhy("Power Cable", q) .. string.format(" · %.0f m", L)) then return nil, "can't afford it: " .. money(q.total) end
   local t = agency_now()
   local c = ref("crew")
   local by = c and c.activeId and c.activeId() or nil
   local dp = ref("deployables")
   local rec = { id = opts.id, b = ra.b, a = { sid = a.sid, uid = a.uid }, z = { sid = z.sid, uid = z.uid }, len = L, h = h, ty = ty,
                 v = 2, rk = (#rk > 0) and rk or nil, t = t, d = dp and dp.dateOf and dp.dateOf(t) or nil, by = by,
-                paid = { cost = q.cost, ship = q.ship, foot = 0, total = q.total, t = t, supplier = q.supplier, by = by } }
+                paid = { cost = q.cost, ship = q.ship, foot = 0, total = q.total, t = t, supplier = q.supplier, by = by,
+                         mats = (q.mode == "stock" and not FREE) and q.mats or nil } }
   local id = add(rec)
   if spawn_mesh then spawn_mesh(rec) end
   if (L or 0) >= 40 then local FT = ref("feats"); if FT and FT.once then pcall(FT.once, "cable_laid", { b = ra.b }) end end   -- (progression P2)
+  -- (W2) a source's first cable to a store or a load
+  do
+    local FT = ref("feats")
+    local pa2 = ST.getPart(a.sid, a.uid)
+    local da2, dz2 = pa2 and defs(pa2.id), pz and defs(pz.id)
+    local function src(d) local k = d and d.power and d.power.kind; return k == "solar" or k == "rtg" or k == "plant" end
+    if FT and FT.once and not FREE and ((src(da2) and not src(dz2)) or (src(dz2) and not src(da2))) then pcall(FT.once, "source_wired", { b = ra.b }) end
+  end
   if c and c.credit and by then pcall(c.credit, by, "built", 1, { body = ra.b }) end
   lastLay = { id = id, len = L, total = q.total, t = t, n = #pts, mass = q.mass }
   -- the ring: undo = a full refund within the minute; redo = lay it again
@@ -775,7 +882,8 @@ function lay(a, z, opts)
       if not r2 then e.res, e.why = nil, "it's gone" return end
       remove(e.cable)
       local amt = math.floor((r2.paid and r2.paid.total) or 0)
-      if co.refund then co.refund(amt, "returned: Power Cable (undone within a minute)") else co.earn(amt, "returned: Power Cable") end
+      if r2.paid and r2.paid.mats then stock_give(r2.paid.mats)   -- (cut from stock: coiled back into it)
+      elseif co.refund then co.refund(amt, "returned: Power Cable (undone within a minute)") else co.earn(amt, "returned: Power Cable") end
       if c and c.credit and by then pcall(c.credit, by, "built", -1) end
       e.res = amt
     end
@@ -809,6 +917,8 @@ function takeUp(id, why)
   if not r then return nil, "it's gone" end
   local EC, co = ref("base_economy"), ref("company")
   local amt = (EC and EC.deconstructRefund) and EC.deconstructRefund(r.paid, agency_now()) or 0
+  -- (a cable cut from your own stock is coiled back into the stores in reach)
+  if r.paid and r.paid.mats then stock_give(r.paid.mats) end
   remove(id)
   if co and amt > 0 then
     if co.refund then co.refund(amt, why or "taken up: Power Cable") else co.earn(amt, why or "taken up: Power Cable") end

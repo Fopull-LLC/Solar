@@ -913,6 +913,9 @@ tower's base grid (`base_grid.towerPower`), and `sourcesOf` is gone.
 Q19 is settled: **every structure within 150 m of a base's tower shares one
 grid automatically; a Power Cable joins grids beyond that.**
 
+(Since playtest 11-12b this holds only for structures "as wired before":
+§39's wiring rule replaces it for everything built from then on.)
+
 ### The parts (`parts_base`, `tools/gen_base_parts.py`)
 
 | Part | Prefab | Real size | Mass | Price | What it does |
@@ -4617,3 +4620,137 @@ Tests: `smoke_airlock` (the cycle from each side, the panel, the override),
 `smoke_plant_av` (the cues, the pool, the alarms and silence),
 `smoke_reactor_warp` (a setpoint change under warp). Probe: `kitprobe.sh
 <engine> airlock`.
+
+## 39. The hands-on base loop (playtest 11-12b)
+
+Ty: "Make everything feel more involved … too much is just automatically
+done." One rule runs through this section: **the game checks the result,
+never the method.** A room is repaired when it holds air, a machine runs when
+a cable reaches it from something that makes power, a part exists when someone
+made it from stock. The design is `work/baseloop/DESIGN.md`.
+
+### Wired grids (`base_grid.lua`, `base_cable.lua`, `base_power.lua`)
+
+§12's rule ("every structure within 150 m of a tower shares one grid") is
+gone for anything built from now on. **A part has power only if a cable path
+joins it to something that makes or stores power.**
+
+- **Equipment** has its own terminal and wants its own cable
+  (`base_grid.isEquipment`): every source (Solar Array, Isotope Skid, a
+  plant's generator), every Battery Bank, every tower and mast, every
+  Transformer, and every machine drawing 0.5 kW or more.
+- **A building's circuit** is the rest of its structure: the walls, floors
+  and roofs and the small fixtures in them (lights, screens, doors, sensors;
+  a structural piece's own pump, the Airlock Wall's). It is dead until a
+  cable lands on any of its pieces. Its lights are dark until then
+  (`circuitDead`; `kit_live`): fittings have no cells of their own any more.
+- **Nodes.** The union-find runs over nodes, not structures: `"s<sid>"` a
+  structure's circuit, `"s<sid>:<uid>"` a piece of equipment
+  (`nodeKey`). A cable joins the nodes of its two end parts, so two parts of
+  ONE structure can be cabled (an array to the bank beside it); two pieces of
+  one building's circuit cannot. A node is a bus of §16's network; the load
+  flow is unchanged.
+- **The Flex Lead 2.5 mm²** (`parts_base` `flexLead`: 24 A, 9.6 kW, 200 m,
+  $1 a metre, no shipping) is the drum for the short runs.
+- **Off the home world a cable is cut from your own stock** (§12 refused it
+  there): its metres as Wiring and Steel (half and half of its mass, the
+  cable's own recipe) out of the stores in the kit's reach, no bill
+  (`base_cable.stockNeed`, a `stock` quote). Taken up, it is coiled back
+  into the stock. Without this a claimed ruin on another world could not be
+  powered at all.
+- **Readouts.** With a drum in hand every terminal within 60 m is tagged
+  (`base_power.terminals`, `drawOverlay(true)`): red `NO CABLE`, amber
+  `NO SOURCE ON ITS CABLES`, green `LIVE`. The F2 overlay tags what is not
+  live and gives no card to an island of one. Every electrical part's menu
+  has a **Wiring** row (what it is cabled to, and how far), its plate and
+  `powerWhy` / `wireWhy` say `NOT WIRED` and what to do; the terminal's
+  POWER page lists what is not wired within 150 m. The drum's hint says
+  what the run would join.
+- **Old saves.** A save with no `grid.wv` has every structure standing in it
+  marked `aw` ("as wired before") on its first load: such a structure keeps
+  the old rule (one bus; the tower's 150 m). Nothing the player built goes
+  dark; what is built afterwards wants cables. A structure's **Wiring** menu
+  offers **Rewire this structure by hand** (drops the mark). Scenario
+  stations and authored ruins are staged `aw` unless they ask for
+  `wired = true`.
+- **Teaching.** Lights On gains "Cable a source to a Battery Bank or a load"
+  (feat `source_wired`); the 40 m cable goal now has a use (arrays stand in
+  the open, away from the buildings).
+- Tests: `smoke_wired_grid` (44). Probe: `tools/perf/baseloopkit.sh <engine>
+  wired`.
+
+### Ruins repaired by hand (`ruins.lua`)
+
+- The **Restore** rows are gone from a claimed ruin's tower. `ruins.restore`
+  stays as a function for scenario staging and scripted solves.
+- A claimed site's tower and its core terminal are its Base Core: **Rooms**
+  (how many hold air of how many the design had, and what leaks), **Take a
+  Build Kit** (an Engineer with none: the site's own kit, which also opens
+  the kit's research), and **Build the base** (the full builder on the
+  site, §19).
+- **Repaired = its rooms hold air.** `ruins.enclosure(id)` reads
+  `room_air.roomsOf` (rooms.lua's geometry: any piece that seals, any
+  material, any layout) against `designRooms(id)` (the full design, solved
+  once). The first time a claimed site holds air: feat `ruin_repaired` and a
+  caption. An authored ruin's job counts as done when its pieces are back OR
+  the room it was about holds air (`lotEnclosed`; the scenario goal `ruin`
+  `restored`, and the new `enclosed`).
+- A ruin stamped in a new game is under the wiring rule: its arrays, its
+  bank and its tower each want a cable.
+- Hollis's room step now asks for the bunk room to hold air; its hints name
+  the kit, not a button.
+
+### Prebuilt bases on the player's grid (`kit_snap.lua`)
+
+- **The audit** (`smoke_kit_slots`): every upright wall of every ruin
+  grammar (12 seeds a kind), the Hollis camp and the Graveyard and Dust
+  Season stations is a pose `kit_snap.face` itself produces. It found one
+  piece typed off the grid (the hab block's stair rail), now on its floor's
+  edge line.
+- **Vacant slots** (`kit_snap.slots`, `slotOnRay`): where a wall or a roof
+  panel is missing there is nothing under the cursor to snap to, only the
+  ground beyond the gap or the sky. A slot is the place the missing piece
+  belongs, worked out from what still stands: a floor's edge an existing
+  wall ends at; the cell beside a wall's top or a roof panel, over a floor.
+  `field_builder` takes the slot this frame's aim ray passes within 0.9 m
+  of, before the ray's hit; with only sky under the cursor a roof panel
+  still finds its slot. Shift frees it, as it frees every snap.
+- A leaning piece keeps its grid pose (decay turns pitch and roll only), so
+  a neighbour snaps to where it belongs.
+
+### Workbench crafting (`workbench.lua`, `fab_panel.lua`)
+
+- The **Workbench** (the prop that was only drawers) makes the kit's pieces
+  up to 150 kg and tools (Repair Kit, Relay Beacon, Flashlight, Gas Can,
+  Company Flag) **by hand** from the stock round it: every container within
+  60 m (its drawers, lockers, crates, silos, hoppers, machine outlets, a
+  Fabricator's store), the warehouse at the spaceport, and the worker's pack.
+- Its menu opens the Fabricator's RECIPE panel with the bench as host. A job
+  takes 3 × the Fabricator's seconds, and the clock runs only while a crew
+  member stands at the bench (2.6 m). An Engineer works at twice the pace and
+  wastes nothing; anyone else loses 10 % of the materials; practice adds up
+  to half again at 100 parts.
+- What it makes lands in its drawers as a crated part, where the Build Kit's
+  reach finds it (`reachScan` now reads kit containers). **At home too a
+  crate in reach is placed before one is bought** (`base_economy.quote`).
+- Feat `part_crafted`; Ironworks gains "Make a part by hand at a Workbench".
+- Tests: `smoke_workbench` (37).
+
+### Shipping between bases (`courier.lua`)
+
+- On any base's tower: **Request a shipment** → a source (the spaceport's
+  warehouse, or another base: the containers within 150 m of its tower) →
+  lines on a manifest → **Send the pod**. $60 + $40 a tonne-kilometre and
+  5 min + the distance at 25 m/s on one world; $2,500 + $400 a tonne and two
+  days between worlds.
+- 2 t a pod, one in flight to a base, and a sending base's tower must be
+  powered. The goods leave at once; on time the pod is set down 8 m from the
+  tower as a crate (salvage.lua's: E takes what fits; the kit's reach reads
+  its crated parts).
+- **Runs carry crated parts** (§21): a crate's move joins inventory's move
+  ring as `"@part:<id>"`, so a flight flown with crates in the hold repeats
+  with them once automated (`route_ops`: the world adapter counts, moves and
+  labels a crated part as it does a material; at the Intake a crate goes
+  into the warehouse as it is). Tools and gear changing hands are not cargo.
+- Feat `shipment_received`. Tests: `smoke_courier` (28).
+- Left for later: standing orders; the pod as a craft that lands.

@@ -526,7 +526,7 @@ local function late_draw(node, dt)
       tag(vx + vw * 0.5, vy + vh * 0.70, string.format("%s  ·  %.0f kg in the crate", FULL_LINE, near.kg or 0),
           16 * k, 1.0, 0.52, 0.36, 1.0)
     else
-      tag(vx + vw * 0.5, vy + vh * 0.70, string.format("E   Recover the suit pack  ·  %.0f kg", near.kg or 0),
+      tag(vx + vw * 0.5, vy + vh * 0.70, string.format((type(near.n) == "string" and near.n:find("^Courier pod")) and "E   Unload the courier pod  ·  %.0f kg" or "E   Recover the suit pack  ·  %.0f kg", near.kg or 0),
           16 * k, 1.0, 0.86, 0.62, 1.0)
     end
   end

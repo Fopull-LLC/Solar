@@ -201,6 +201,12 @@ local function real_grid(sid)
   local real = #(g.bases or {}) > 0 or (M and ((M.sources or 0) > 0 or (M.C or 0) > 0))
   return real and g or nil, BG.status and BG.status(g.id), M
 end
+-- (W2) under the wiring rule a building no cable feeds is DEAD: its fittings
+-- have no cells of their own any more (base_grid.circuitDead)
+local function dead(sid)
+  local BG = ref("base_grid")
+  return (BG and BG.circuitDead and BG.circuitDead(sid)) == true
+end
 local function browned(sid)
   local g, s = real_grid(sid)
   return g ~= nil and s ~= nil and (s.short or 0) > 0 and (s.stored or 0) <= 0
@@ -212,7 +218,7 @@ local function pool(a)
   local cand = {}
   for k, e in pairs(A) do
     if e.def.light and valid(e.light) then
-      local on = light_on(e)
+      local on = light_on(e) and not dead(e.sid)
       local d = 1e9
       if a and on then
         local w = e.light.worldPos
@@ -583,7 +589,12 @@ function screenLines(sid)
   if base then out.title = string.upper(tostring(base.n or "BASE")) end
   local g, s, M = nil, nil, nil
   if BG then g, s, M = real_grid(sid) end
-  if not g then
+  if not g and dead(sid) then
+    L("NO POWER", true)
+    L("no cable reaches this building")
+    L("run a Power Cable from a source or")
+    L("a battery to any piece of it")
+  elseif not g then
     L("NO BASE GRID", true)
     L("fittings on their own cells")
     L("a Base Station Tower within 150 m, or")
@@ -906,7 +917,7 @@ local function provider(t, ctx)
       end,
       enabled = function() local e = E[key(sid, uid)]; return lightWhyNot(sid, uid, not (e and light_on(e))) == nil end,
       why = function() local e = E[key(sid, uid)]; return lightWhyNot(sid, uid, not (e and light_on(e))) end,
-      hint = browned(sid) and "grid short" or nil }
+      hint = (dead(sid) and "no cable to the building") or (browned(sid) and "grid short") or nil }
   end
   -- (scn_dust) a heater's switch: `st.off`, the switch every load has
   if def.heat then

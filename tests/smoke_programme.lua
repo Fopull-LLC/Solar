@@ -271,6 +271,7 @@ local rl = nil
 for _, e in ipairs(mi.programme()) do if e.m.id == "relay_net" then rl = e end end
 check("…and says so", rl and rl.needs == "Lights On", rl and rl.needs)
 store.feats.grid_served, store.feats.cable_laid, store.feats.night_held = { n = 1 }, { n = 1 }, { n = 1 }
+store.feats.source_wired = { n = 1 }
 second()
 check("Lights On's feats finish it", state_of("lights_on") == "done", state_of("lights_on"))
 check("…granting the tower and heavy power", rs.isUnlocked("tower") and rs.isUnlocked("power2"))

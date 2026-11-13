@@ -886,6 +886,11 @@ function moveItem(from, to, id, n, opts)
   if fit <= 0 then return 0, why end
   local took, levels = removeItem(from, id, fit)
   local moved = addItem(to, id, took, { force = true, fills = levels })
+  -- (playtest 11-12b: runs carry crated parts) a crated part's move joins the
+  -- move ring as "@<item id>", so a flight log sees a hold loaded with parts
+  -- as it sees one loaded with ore (route_ops); tools and gear do not: a
+  -- crew's kit changing hands is not cargo
+  if moved > 0 and type(id) == "string" and id:sub(1, 5) == "part:" then note_move(from, to, "@" .. id, moved) end
   if moved < n and not why then why = string.format("only %d to move", have) end
   return moved, why
 end

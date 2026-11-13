@@ -397,6 +397,70 @@ do
   check("a restore quote: the missing pieces and their price", q.n > 0 and q.cost > 0, string.format("%d · $%d", q.n, q.cost))
   local nr = S2.restore(s.id)
   check("restore puts back every missing piece and charges once", nr == q.n and co.spent == q.cost and S2.restoreQuote(s.id).n == 0)
+  -- (playtest 11-12b) REPAIRED = ITS ROOMS HOLD AIR. The enclosure is the
+  -- air's own geometry (rooms.lua), so anything that seals closes a room;
+  -- here the design's own pieces stand in for a player's build.
+  do
+    local RM = loadlib("rooms.lua", {})
+    SCRIPTS.rooms = RM
+    SCRIPTS.room_air = { roomsOf = function(sid) return RM.solve(ST.get(sid), PB.partInfo) end }
+    local need = S2.designRooms(s.id)
+    local en = S2.enclosure(s.id)
+    check("the enclosure reads the site's rooms", en ~= nil and en.need == need, en and string.format("need %d, %d rooms, %d sealed", en.need, en.rooms, en.sealed))
+    -- every leaning piece righted: with the missing ones back, the design stands
+    local rr = ST.get(S2.state(s.id).sid)
+    -- (the sealing pieces; a leaning array or prop is left for the repair check below)
+    local ids = {}
+    for _, p in ipairs(rr.bp) do
+      local d = PB.partInfo(p.id)
+      if p.wr and d and d.kit and (d.snap == "wall" or d.snap == "floor" or d.door) then ids[#ids + 1] = p.uid end
+    end
+    for _, u in ipairs(ids) do S2.repairPiece(rr.id, u) end
+    en = S2.enclosure(s.id)
+    check("the design standing again: as many sealed rooms as it had", en.sealed >= need and (need == 0 or en.ok), string.format("need %d, sealed %d, open %d", need, en.sealed, #en.open))
+    -- a roof panel taken away: a room opens, and says where
+    -- (the one whose loss opens a room: not every panel roofs one)
+    local roof = nil
+    for _, p in ipairs(ST.get(rr.id).bp) do
+      local d = PB.partInfo(p.id)
+      if not roof and d and d.snap == "floor" and (p.y or 0) > 1.5 then
+        local keepP = {}
+        for k, v in pairs(p) do keepP[k] = v end
+        ST.removeParts(rr.id, { p.uid })
+        local e2 = S2.enclosure(s.id)
+        ST.addPart(rr.id, keepP)
+        if e2 and not e2.ok then roof = ST.getPart(rr.id, keepP.uid) end
+      end
+    end
+    if roof and need > 0 then
+      local saved = { id = roof.id, x = roof.x, y = roof.y, z = roof.z, yaw = roof.yaw, pitch = roof.pitch, roll = roof.roll, ri = roof.ri, uid = roof.uid }
+      ST.removeParts(rr.id, { roof.uid })
+      en = S2.enclosure(s.id)
+      check("a roof panel gone: the site no longer holds air, and a room names its leak", not en.ok and (#en.open == 0 or #en.open[1].leaks > 0),
+        string.format("sealed %d of %d, open %d (%s)", en.sealed, need, #en.open, en.open[1] and table.concat(en.open[1].leaks, "; ") or "no leaky room: open to the sky"))
+      -- closed again with ANOTHER material's panel: the check takes it
+      saved.id = saved.id:gsub("%.steel$", ".concrete"); saved.ri = nil; saved.uid = nil
+      if not PB.partInfo(saved.id) then saved.id = roof.id end
+      ST.addPart(rr.id, saved)
+      en = S2.enclosure(s.id)
+      check("...closed with a panel of another material: it holds air again", en.ok, string.format("%s: sealed %d of %d", saved.id, en.sealed, need))
+    end
+    -- the menu: no Restore rows, the builder and the rooms instead
+    local tower = nil
+    for _, p in ipairs(ST.get(rr.id).bp) do if p.id == "tower" then tower = p end end
+    if tower and S2.providerFn then
+      local fakeST = SCRIPTS.structures
+      local orig = fakeST.partOfNode
+      fakeST.partOfNode = function() return ST.get(rr.id), tower end
+      local rows = S2.providerFn({ node = { id = 1 } }, { actor = { pack = "astro" } })
+      fakeST.partOfNode = orig
+      local has = {}
+      for _, e in ipairs(rows or {}) do has[e.id] = true end
+      local anyRestore = false
+      for k in pairs(has) do if tostring(k):find("ru_restore", 1, true) then anyRestore = true end end
+      check("the claimed tower's menu: Rooms and Build the base, no Restore", has.ru_rooms and has.ru_build and not anyRestore)
+    end
+  end
   local worn = nil
   for _, p in ipairs(r.bp) do if p.wr and (p.o_p or p.o_r) then worn = p; break end end
   if worn then

@@ -70,7 +70,7 @@ check(slurp("solar/prefabs/BaseBattery.prefab.ron") and slurp("solar/prefabs/Bas
   "...their prefabs on disk")
 check((slurp("solar/prefabs/BaseShieldWall.prefab.ron") or ""):find('name: "Wall 1"', 1, true) ~= nil, "the wall's collider box")
 local cat = PB.catalogue()[1].ids
-check(#cat == 14 and cat[5] == "baseHub" and cat[9] == "batteryBank" and cat[10] == "shieldWall" and cat[11] == "powerCable" and cat[14] == "hvCable",
+check(#cat == 15 and cat[5] == "baseHub" and cat[9] == "batteryBank" and cat[10] == "shieldWall" and cat[11] == "powerCable" and cat[14] == "hvCable",
   "the BASE column: ten parts, S5's three more cable drums and the Base Hub (playtest 11-09)")
 
 -- ── a small solar system on a real conic ────────────────────────────────────
@@ -88,6 +88,7 @@ local SPACE = {
 }
 local E = load_script("electronics.lua", env({}, {}))
 local BG0 = load_script("base_grid.lua", env({}, {}))
+BG0.WIRED = false   -- (this test is of the grid as wired before W2: the tower's 150 m, a structure one bus; smoke_wired_grid.lua has the wiring rule)
 local Y = BG0.yearOf(bodies[2], bodies[1])
 check(Y and near(Y, 2 * math.pi * math.sqrt(RS ^ 3 / MU), 1e-6), string.format("the world's year from its conic: %.1f s", Y or -1))
 
@@ -118,6 +119,7 @@ scripts.structures = ST
 local CB = load_script("base_cable.lua", env(s, scripts, X))
 scripts.base_cable = CB
 local BG = load_script("base_grid.lua", env(s, scripts, X))
+BG.WIRED = false   -- (this test is of the grid as wired before W2: the tower's 150 m, a structure one bus; smoke_wired_grid.lua has the wiring rule)
 scripts.base_grid = BG
 scripts.base_facilities = { setGuards = function() end }
 local BT = load_script("base_tower.lua", env(s, scripts, X))
@@ -295,6 +297,7 @@ check(tp3.structures == 4 and tp3.cables == 1 and tp3.supply > tp2.supply + 1.9,
 local stored0 = BT.power(bid).stored
 s["grid.a"] = clock.a - 5000
 local BGr = load_script("base_grid.lua", env(s, scripts, X))
+BGr.WIRED = false   -- (this test is of the grid as wired before W2: the tower's 150 m, a structure one bus; smoke_wired_grid.lua has the wiring rule)
 local sc2 = setmetatable({ base_grid = BGr }, { __index = scripts })
 local BTr = load_script("base_tower.lua", env(s, sc2, X))
 BGr.start({ id = 9 }); BTr.start({ id = 10 })
@@ -348,7 +351,7 @@ check(q.cost == math.ceil(len * 3) and q.ship == scripts.base_economy.shipping(q
 check(near(q.mass, len * 1.4 / 1000, 1e-9), string.format("...%.2f t of cable", q.mass))
 -- the rules
 local vr = CB.validity({ sid = s_bat, uid = 1 }, { rec = ST.get(s_bat), part = ST.get(s_bat).bp[1] }, "Vever")
-check(vr.bad and vr.bad:find("same structure", 1, true), "not to the same structure: " .. tostring(vr.bad))
+check(vr.bad and (vr.bad:find("same circuit", 1, true) or vr.bad:find("same part", 1, true)), "not to the same structure: " .. tostring(vr.bad))
 local vr2 = CB.validity({ sid = s_bat, uid = 1 }, { rec = ST.get(s_arr), part = ST.get(s_arr).bp[1] }, "Vever")
 check(vr2.bad and vr2.bad:find("one grid", 1, true), "not between two already on one grid: " .. tostring(vr2.bad))
 local fx, fy, fz = at(2000)
@@ -359,7 +362,7 @@ check(vr3.bad == nil and vr3.len and vr3.len < 1500, string.format("850 m on fro
 local vr4 = CB.validity({ sid = s_bat, uid = 1 }, { rec = ST.get(s_long), part = ST.get(s_long).bp[1] }, "Vever")
 check(vr4.bad and vr4.bad:find("at most 1.5 km", 1, true), "past 1.5 km refused: " .. tostring(vr4.bad))
 local vr5 = CB.validity(nil, { rec = ST.get(s_long), part = ST.get(s_long).bp[1] }, "Elsewhere")
-check(vr5.bad and vr5.bad:find("home world", 1, true), "off the home world refused")
+check(vr5.bad == nil, "off the home world an end is made off as anywhere (the run is cut from stock there: smoke_wired_grid): " .. tostring(vr5.bad))
 -- laying it: the bill, the record, the ring's step
 local bal0, nc0 = money.bal, CB.count()
 local id, why, q2, L2 = CB.lay({ sid = t2, uid = 1 }, { sid = s_long, uid = 1 })

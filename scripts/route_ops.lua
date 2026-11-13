@@ -58,7 +58,20 @@ local function dec(s)
   return ok and type(t) == "table" and t or nil
 end
 local function R() return ref("routes") end
-local function mat_label(m) local M = ref("materials"); return (M and M.label and M.label(m)) or tostring(m) end
+-- (playtest 11-12b) a run's cargo is a material, or a crated part: "@part:<id>"
+-- (inventory's move ring names an item move so). → the item id | nil
+local function item_of(m) return type(m) == "string" and m:sub(1, 1) == "@" and m:sub(2) or nil end
+itemOf = item_of
+local function mat_label(m)
+  local it = item_of(m)
+  if it then
+    local Rc, pb = ref("recipes"), ref("parts_base")
+    local pid = Rc and Rc.partIdOf and Rc.partIdOf(it) or it:gsub("^part:", "")
+    local d = pb and pb.partInfo and pb.partInfo(pid)
+    return "crated " .. tostring(d and d.label or pid)
+  end
+  local M = ref("materials"); return (M and M.label and M.label(m)) or tostring(m)
+end
 local function store_name(cid)
   if cid == "base" then return "the warehouse" end
   local sc = ref("supply_crates")
@@ -140,8 +153,18 @@ local function home_body() return save.get("base.body") end
 local W = {}
 W.label = mat_label
 W.storeName = store_name
-W.count = function(cid, mat) local inv = ref("inventory"); return inv and inv.count(cid, mat) or 0 end
-W.room = function(cid, mat) local inv = ref("inventory"); return inv and inv.roomFor(cid, mat, 1e9) or 0 end
+W.count = function(cid, mat)
+  local inv = ref("inventory")
+  local it = item_of(mat)
+  if it then return inv and inv.itemCount(cid, it) or 0 end
+  return inv and inv.count(cid, mat) or 0
+end
+W.room = function(cid, mat)
+  local inv = ref("inventory")
+  local it = item_of(mat)
+  if it then return inv and inv.roomForItem and (inv.roomForItem(cid, it, 1e6)) or 0 end
+  return inv and inv.roomFor(cid, mat, 1e9) or 0
+end
 W.exists = function(cid)
   if cid == "base" or cid == "intake" or cid == "hand" then return true end
   if type(cid) ~= "string" then return false end
@@ -157,14 +180,27 @@ W.exists = function(cid)
   local inv = ref("inventory")
   return inv ~= nil and (inv.cap(cid) or 0) > 0
 end
-W.move = function(a, b, mat, n) local inv = ref("inventory"); return inv and inv.transfer(a, b, mat, n) or 0 end
-W.add = function(cid, mat, n, origin) local inv = ref("inventory"); return inv and inv.add(cid, mat, n, origin) or 0 end
+W.move = function(a, b, mat, n)
+  local inv = ref("inventory")
+  local it = item_of(mat)
+  if it then return inv and (inv.moveItem(a, b, it, n)) or 0 end
+  return inv and inv.transfer(a, b, mat, n) or 0
+end
+W.add = function(cid, mat, n, origin)
+  local inv = ref("inventory")
+  local it = item_of(mat)
+  if it then return inv and inv.addItem(cid, it, n) or 0 end
+  return inv and inv.add(cid, mat, n, origin) or 0
+end
 -- THE INTAKE'S PATH (material_intake take(), a "mat" body): into the
 -- warehouse with its origin, counted as freight, studied by the lab (RP, a
 -- first-kind bonus), the capsule up the lab's tube when the lab is there.
 W.intake = function(hold, mat, n)
   local inv = ref("inventory")
   if not inv then return 0 end
+  -- (a crated part is no sample: it goes into the warehouse as it is)
+  local it = item_of(mat)
+  if it then inv.moveItem(hold, "base", it, n, { force = true }); return 0 end
   local origin = nil
   local o = inv.origins and inv.origins(hold, mat) or {}
   for b in pairs(o or {}) do origin = origin or b end
@@ -232,6 +268,10 @@ local function bag(cid)
   local out = {}
   if not inv then return out end
   for _, it in ipairs(inv.items(cid) or {}) do out[it.mat] = (out[it.mat] or 0) + (it.n or 0) end
+  -- (crated parts aboard: cargo too)
+  for _, g in ipairs(inv.itemList and inv.itemList(cid) or {}) do
+    if type(g.id) == "string" and g.id:sub(1, 5) == "part:" then out["@" .. g.id] = (out["@" .. g.id] or 0) + (g.n or 0) end
+  end
   return out
 end
 local function controller(name)

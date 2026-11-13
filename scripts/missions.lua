@@ -305,9 +305,11 @@ PROGRAMME = {
   {
     id = "lights_on", title = "Lights On", requires = "homestead",
     brief = "Panels by day, a bank for the night. A base is a grid: sources, loads,\n" ..
-            "cables and breakers. Keep the lights on from dusk to dawn.",
+            "cables and breakers, and nothing is on it until a cable says so.\n" ..
+            "Keep the lights on from dusk to dawn.",
     reward = 1500, rep = 1,
     goals = {
+      { kind = "feat", id = "source_wired", pay = 150, label = "Cable a source to a Battery Bank or a load" },
       { kind = "feat", id = "grid_served", pay = 300, label = "A grid that carries its load for a minute" },
       { kind = "feat", id = "cable_laid", pay = 200, label = "Lay a power cable run of 40 m or more" },
       { kind = "feat", id = "night_held", pay = 500, label = "Hold a grid through a night without a brownout" },
@@ -334,6 +336,7 @@ PROGRAMME = {
       { kind = "feat", id = "lock_opened", pay = 200, label = "Open a lock: its code, or forced" },
       { kind = "feat", id = "core_read", pay = 300, grant = "probe", label = "Read a ruin's Data Core (unlocks the Probe Core)" },
       { kind = "feat", id = "ruin_claimed", pay = 300, label = "Claim a ruin" },
+      { kind = "feat", id = "ruin_repaired", pay = 500, label = "Close a claimed ruin's rooms so they hold air (any pieces, your way)" },
     },
   },
   {
@@ -345,6 +348,7 @@ PROGRAMME = {
       { kind = "feat", id = "ore_studied", pay = 300, label = "Study an ore at the Research Lab" },
       { kind = "tech", id = "refinery", pay = 600, label = "Research the Refinery (Crusher, Furnace)" },
       { kind = "feat", id = "machine_worked", n = 200, pay = 800, label = "Refine 200 kg of ore" },
+      { kind = "feat", id = "part_crafted", pay = 400, label = "Make a part by hand at a Workbench, from your own stock" },
       { kind = "feat", id = "part_fabricated", pay = 1000, label = "Fabricate a part" },
     },
   },

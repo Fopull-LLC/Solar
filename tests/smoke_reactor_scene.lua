@@ -78,6 +78,7 @@ local ST = load_script("structures.lua", env(s, scripts, X)); scripts.structures
 local CB = load_script("base_cable.lua", env(s, scripts, X)); scripts.base_cable = CB
 local BPw = load_script("base_power.lua", env(s, scripts, X)); scripts.base_power = BPw
 local BG = load_script("base_grid.lua", env(s, scripts, X)); scripts.base_grid = BG
+BG.WIRED = false   -- (this test is of the grid as wired before W2: the tower's 150 m, a structure one bus; smoke_wired_grid.lua has the wiring rule)
 scripts.base_facilities = { setGuards = function() end }
 local BT = load_script("base_tower.lua", env(s, scripts, X)); scripts.base_tower = BT
 local BS = load_script("base_shield.lua", env(s, scripts, X)); scripts.base_shield = BS

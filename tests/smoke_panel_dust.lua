@@ -53,7 +53,7 @@ check(slurp("solar/prefabs/BaseBattery.prefab.ron") and slurp("solar/prefabs/Bas
   "...their prefabs on disk")
 check((slurp("solar/prefabs/BaseShieldWall.prefab.ron") or ""):find('name: "Wall 1"', 1, true) ~= nil, "the wall's collider box")
 local cat = PB.catalogue()[1].ids
-check(#cat == 14 and cat[5] == "baseHub" and cat[9] == "batteryBank" and cat[10] == "shieldWall" and cat[11] == "powerCable" and cat[14] == "hvCable",
+check(#cat == 15 and cat[5] == "baseHub" and cat[9] == "batteryBank" and cat[10] == "shieldWall" and cat[11] == "powerCable" and cat[14] == "hvCable",
   "the BASE column: ten parts, S5's three more cable drums and the Base Hub (playtest 11-09)")
 
 -- ── a small solar system on a real conic ────────────────────────────────────
@@ -71,6 +71,7 @@ local SPACE = {
 }
 local E = load_script("electronics.lua", env({}, {}))
 local BG0 = load_script("base_grid.lua", env({}, {}))
+BG0.WIRED = false   -- (this test is of the grid as wired before W2: the tower's 150 m, a structure one bus; smoke_wired_grid.lua has the wiring rule)
 local Y = BG0.yearOf(bodies[2], bodies[1])
 check(Y and near(Y, 2 * math.pi * math.sqrt(RS ^ 3 / MU), 1e-6), string.format("the world's year from its conic: %.1f s", Y or -1))
 
@@ -101,6 +102,7 @@ scripts.structures = ST
 local CB = load_script("base_cable.lua", env(s, scripts, X))
 scripts.base_cable = CB
 local BG = load_script("base_grid.lua", env(s, scripts, X))
+BG.WIRED = false   -- (this test is of the grid as wired before W2: the tower's 150 m, a structure one bus; smoke_wired_grid.lua has the wiring rule)
 scripts.base_grid = BG
 scripts.base_facilities = { setGuards = function() end }
 local BT = load_script("base_tower.lua", env(s, scripts, X))

@@ -1153,9 +1153,15 @@ kind("ruin", { req = { "struct" }, eval = function(g, W)
   local ok, parts = true, {}
   if g.claimed ~= nil then ok = ok and ((r.claimed == true) == (g.claimed == true)); parts[#parts + 1] = r.claimed and "claimed" or "not claimed" end
   if g.restored ~= nil then
-    local done = (r.missing or 0) == 0
+    -- (playtest 11-12b) restored = its pieces back, OR its room closed some
+    -- other way (any pieces, any material: the air's geometry decides)
+    local done = (r.missing or 0) == 0 or r.enclosed == true
     ok = ok and (done == (g.restored == true))
-    parts[#parts + 1] = done and "restored" or string.format("%d piece%s missing", r.missing, r.missing == 1 and "" or "s")
+    parts[#parts + 1] = done and ((r.missing or 0) == 0 and "restored" or "closed: it holds air") or "still open to the sky"
+  end
+  if g.enclosed ~= nil then
+    ok = ok and ((r.enclosed == true) == (g.enclosed == true))
+    parts[#parts + 1] = r.enclosed and "holds air" or "does not hold air yet"
   end
   if g.afford ~= nil then
     local can = (r.funds or 0) >= (r.cost or 0)

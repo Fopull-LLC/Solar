@@ -59,6 +59,7 @@ LABEL = {
   ruin_stripped  = "pieces stripped from a ruin",
   core_read      = "a ruin's Data Core read",
   ruin_claimed   = "a ruin claimed",
+  ruin_repaired  = "a claimed ruin whose rooms hold air again",
   lock_opened    = "a lock opened (its code, or forced)",
   ore_studied    = "an ore studied at the lab",
   machine_worked = "a refinery run",
@@ -69,6 +70,9 @@ LABEL = {
   reactor_critical = "a reactor brought critical",
   -- (P2)
   cable_laid     = "a power cable run of 40 m or more",
+  source_wired   = "a source cabled to a battery or a load",
+  part_crafted   = "a part made by hand at a Workbench",
+  shipment_received = "a courier pod set down at one of your bases",
   slept_in       = "a night spent in a sealed room",
   rtg_night      = "an Isotope Skid that carried a grid through a night",
   scram_seen     = "a reactor tripped (a SCRAM, or a meltdown lived through)",

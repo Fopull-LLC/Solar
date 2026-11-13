@@ -1782,7 +1782,13 @@ W.ruin = function(sid, lot)
   local rec = ST and ST.get(sid)
   if not (rec and rec.ru and RU and RU.restoreQuote) then return nil end
   local q = RU.restoreQuote(rec.ru, lot)
-  return { claimed = RU.claimed and RU.claimed(rec.ru) or false, missing = q.n, cost = q.cost, funds = co and co.balance and co.balance() or 0 }
+  -- (playtest 11-12b) `enclosed`: the room the job was about holds air,
+  -- whatever closed it (ruins.lotEnclosed; the whole site with no lot)
+  local enc = false
+  if lot and lot ~= "rest" and RU.lotEnclosed then enc = RU.lotEnclosed(rec.ru, lot) == true
+  elseif not lot and RU.enclosure then local en = RU.enclosure(rec.ru); enc = en ~= nil and en.ok == true end
+  return { claimed = RU.claimed and RU.claimed(rec.ru) or false, missing = q.n, cost = q.cost, funds = co and co.balance and co.balance() or 0,
+           enclosed = enc }
 end
 
 local hooks_api
@@ -2554,6 +2560,9 @@ local function stage_structures(list, out)
       local g = bp and resolve_stage(s.at or "base", s.offset, s.yaw)
       if bp and g then
         local rec = ST.recordFromPieces(bp.pieces, g.body, g, s.name or bp.name, "scenario", { t = agency_now() })
+        -- (W2) a staged station is wired as before the wiring rule (one bus,
+        -- the tower's 150 m) unless its stage asks for `wired = true`
+        if rec and not s.wired then rec.aw = 1 end
         local sid = ST.add(rec)
         if s.name then map[s.name] = sid end
         out[#out + 1] = string.format("structure %s: %d pieces as #%s", tostring(s.name), #rec.bp, tostring(sid))

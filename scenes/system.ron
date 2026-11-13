@@ -3739,6 +3739,10 @@
                 ( kind: "refinery", enabled: true, params: [] ),
                 // planks: the Sawbench, the Depot's timber yard, the jobs on the game clock (timber; progression W1)
                 ( kind: "timber", enabled: true, params: [] ),
+                // parts by hand at a Workbench, from the stock round it (workbench; playtest 11-12b)
+                ( kind: "workbench", enabled: true, params: [] ),
+                // parts and materials shipped between bases: pods on the agency clock (courier; playtest 11-12b)
+                ( kind: "courier", enabled: true, params: [] ),
                 // lasers from components: the physics, the damage rules and the scene (beam, damage, lasers; X9)
                 ( kind: "beam", enabled: true, params: [] ),
                 ( kind: "damage", enabled: true, params: [] ),

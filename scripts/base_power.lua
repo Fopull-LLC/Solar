@@ -524,8 +524,47 @@ fmtKW = kw
 drawn = { lines = 0, labels = 0, arrows = 0 }  -- probes: what the last overlay frame drew
 OVERLAY_R = 700.0
 LABEL_R = 160.0
-function drawOverlay()
-  drawn = { lines = 0, labels = 0, arrows = 0 }
+-- (W2) THE TERMINALS: every piece of equipment under the wiring rule, and
+-- every building's circuit, with what its wiring comes to: "no" (no cable),
+-- "dead" (cabled, but to no source and no charged store) or "live". Worked
+-- out when the grids or the cables change (and at most once a second), never
+-- per frame. → { { sid, uid, state, label, lift } … }
+local term_cache, term_key, term_t = nil, nil, -10
+function terminals()
+  local BG, CB, ST = ref("base_grid"), ref("base_cable"), ref("structures")
+  if not (BG and ST and BG.wiring) then return {} end
+  local key = tostring(BG.version) .. ":" .. tostring(CB and CB.version or 0) .. ":" .. tostring(ST.version)
+  local t = time or 0
+  if term_cache and (key == term_key or t - term_t < 1.0) then return term_cache end
+  term_key, term_t = key, t
+  local out = {}
+  for _, rec in ipairs(ST.list()) do
+    if not rec.aw and BG.WIRED ~= false then
+      local circuit = nil      -- the building's own tag: at its first fixture (or first piece)
+      for _, p in ipairs(rec.bp or {}) do
+        local d = partsDef(p.id)
+        if d and BG.isEquipment(d) then
+          local W = BG.wiring(rec.id, p.uid)
+          out[#out + 1] = { sid = rec.id, uid = p.uid, state = (W.cables == 0 and "no") or (W.live and "live") or "dead",
+                            label = string.upper(tostring(d.label or "part")), lift = (d.h or 1) + 0.35, cables = W.cables }
+        elseif d and d.power and (d.power.kind == "load" or d.power.kind == "aux") and not circuit then
+          circuit = p
+        end
+      end
+      if circuit then
+        local d = partsDef(circuit.id)
+        local W = BG.wiring(rec.id, circuit.uid)
+        out[#out + 1] = { sid = rec.id, uid = circuit.uid, state = (W.cables == 0 and "no") or (W.live and "live") or "dead",
+                          label = "BUILDING CIRCUIT", lift = (d and d.h or 1) + 0.6, cables = W.cables, circuit = true }
+      end
+    end
+  end
+  term_cache = out
+  return out
+end
+TERM_R = 60.0          -- the tags show this near the camera
+function drawOverlay(terminalsOnly)
+  drawn = { lines = 0, labels = 0, arrows = 0, tags = 0 }
   if not (draw and draw.line) then return drawn end
   local BG, CB, ST = ref("base_grid"), ref("base_cable"), ref("structures")
   if not (BG and CB and ST and BG.cableFlow) then return drawn end
@@ -564,6 +603,25 @@ function drawOverlay()
       drawn.labels = drawn.labels + 1
     end
   end
+  -- (W2) the terminals: what has no cable, what is cabled to nothing live
+  for _, T in ipairs(terminals()) do
+    local rec = ST.get(T.sid)
+    local p = rec and ST.getPart(T.sid, T.uid)
+    local b = p and body(rec.b)
+    if b and (terminalsOnly or T.state ~= "live") then
+      local x, y, z = ST.partPose(rec, p, T.lift)
+      local wx, wy, wz = b.x + x, b.y + y, b.z + z
+      if (wx - ax) ^ 2 + (wy - ay) ^ 2 + (wz - az) ^ 2 < TERM_R * TERM_R then
+        local col = (T.state == "no" and COL.hot) or (T.state == "dead" and COL.warm) or COL.ok
+        local s = T.label .. ((T.state == "no" and " · NO CABLE") or (T.state == "dead" and " · NO SOURCE ON ITS CABLES")
+          or string.format(" · LIVE · %d cable%s", T.cables or 0, (T.cables or 0) == 1 and "" or "s"))
+        text(wx, wy, wz, s, col, 0, 14, true)
+        drawn.tags = drawn.tags + 1
+      end
+    end
+  end
+  if terminalsOnly then return drawn end
+  local seenSid = {}
   for _, c in ipairs(CB.list()) do
     local b = body(c.b)
     local pts = b and CB.pathOf and CB.pathOf(c.id)
@@ -626,7 +684,9 @@ function drawOverlay()
     local M = BG.model(g.id)
     local net = M and M.net
     for _, sid in ipairs(g.sids) do
-      local rec = ST.get(sid)
+      -- (W2: a structure's pieces may sit on several grids; its gear is labelled once)
+      local rec = (not seenSid[sid]) and ST.get(sid) or nil
+      seenSid[sid] = true
       local b = rec and body(rec.b)
       if b and (rec.x - (ax - b.x)) ^ 2 + (rec.y - (ay - b.y)) ^ 2 + (rec.z - (az - b.z)) ^ 2 < OVERLAY_R * OVERLAY_R then
         for _, p in ipairs(rec.bp) do
@@ -650,9 +710,12 @@ function drawOverlay()
       end
     end
     -- the network's card over its first base (or structure): IN, OUT, LOSS
+    -- (W2: an island of one terminal, a part nobody has cabled yet, has no
+    -- card: its NO CABLE tag says it)
     local s = BG.status(g.id)
-    if s and M then
-      local rec = ST.get(g.sids[1])
+    local rec0 = ST.get(g.sids[1])
+    if s and M and (#(g.nodes or {}) > 1 or #g.bases > 0 or g.cables > 0 or BG.WIRED == false or not g.nodes or (rec0 and rec0.aw)) then
+      local rec = rec0
       local b = rec and body(rec.b)
       if b and (rec.x - (ax - b.x)) ^ 2 + (rec.y - (ay - b.y)) ^ 2 + (rec.z - (az - b.z)) ^ 2 < OVERLAY_R * OVERLAY_R then
         local U = { rec.ux or 0, rec.uy or 1, rec.uz or 0 }
@@ -785,7 +848,16 @@ local function after_camera(node, dt, fn)
   if not (pc_late and pc_late.valid) then pc_late = findScript("planet_camera", { quiet = true }) end
   if pc_late and pc_late.valid and pc_late.deferLate then pc_late.deferLate(node, dt, fn) else fn(node, dt) end
 end
-local function late_overlay() if overlay_on() then drawOverlay() end end
+-- (W2) with a cable drum in hand the terminals show by themselves: where a
+-- cable is wanted, and what is already live
+local function drum_held()
+  local fb, CB = ref("field_builder"), ref("base_cable")
+  return fb and fb.isOpen and fb.isOpen() and CB and CB.heldType and CB.heldType() ~= nil or false
+end
+local function late_overlay()
+  if overlay_on() then drawOverlay()
+  elseif drum_held() then drawOverlay(true) end
+end
 function lateUpdate(node, dt)
   after_camera(node, dt, late_overlay)
 end

@@ -407,8 +407,10 @@ FEAT_STEP = {
     local how = kit_has("campMast") and "raise a Camp Mast with the Build Kit" or "place a Base Station Tower with the Build Kit"
     return "Found a base of your own.", "The Engineer claims a ruin (\"Claim the site\"), or " .. how .. "."
   end,
-  grid_served = { "Power a load from a source.", "A Solar Array and a Battery Bank on one grid with a light or a tower: 150 m round a tower is one grid, and a cable joins two." },
-  cable_laid = { "Lay a 40 m power cable.", "Take a Power Cable drum from the Build Kit and click one part, then another 40 m or more away." },
+  part_crafted = { "Make a part at a Workbench.", "A Workbench makes the kit's lighter pieces and tools by hand from the refined materials within 60 m of it: in its drawers, a crate, a silo. Someone has to stand at it while the work goes on; an Engineer is twice as quick and wastes nothing." },
+  source_wired = { "Get a source's power to a Battery Bank.", "Nothing shares power by standing close. A source's power goes only where a cable carries it: a drum from the Build Kit, one click on the source, one on the bank." },
+  grid_served = { "Power a load from a source.", "A load runs when a cable path joins it to a source or a charged battery: the tower wants its own cable, and a building is fed through any one of its pieces." },
+  cable_laid = { "Lay a 40 m power cable.", "Arrays want open sky, clear of the buildings' shadows. Set one 40 m or more out and cable it back." },
   night_held = { "Keep the grid up through a night.", "The bank must carry every load from dusk to dawn; a Desk Monitor's POWER page says how long it lasts, and time warp shortens the wait." },
   room_sealed = { "Close a sealed room.", "Steel walls, floor and roof round 8 m³ or more with the door shut: timber leaks, and the ROOMS overlay shows a sealed room." },
   room_breathable = { "Make the room's air your own.", "A CO2 Scrubber inside it, on the grid and running, for an hour of breathable air. The outside's gas in it? Purge it at an Air Tank Rack." },
@@ -416,6 +418,7 @@ FEAT_STEP = {
   ruin_stripped = { "Strip pieces from a ruin.", "An Engineer with a Repair Kit strips what is sound: look at a piece and choose \"Strip for parts\"." },
   lock_opened = { "Open a lock.", "The code is written down somewhere on the site; or force it." },
   core_read = { "Read a ruin's Data Core.", "Pull the core from the ruin's terminal and carry it into the Research Lab." },
+  ruin_repaired = { "Make a claimed ruin hold air.", "A room with no roof is no room. The site's tower hands an Engineer a Build Kit and opens the builder: close each room with any pieces, any material. Its Rooms line says what still leaks." },
   ruin_claimed = { "Claim a ruin.", "At the site the Engineer chooses \"Claim the site\", and its tower founds a base." },
   ore_studied = { "Study an ore.", "Put ore in at the Materials Intake and send a sample up to the Research Lab." },
   machine_worked = { "Refine 200 kg of ore.", "A Crusher and a Furnace on the grid, fed through a hopper: ore in, metal out." },

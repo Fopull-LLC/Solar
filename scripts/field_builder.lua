@@ -435,6 +435,16 @@ function reachScan(force)
   for _, c in ipairs((sc and sc.list) and sc.list() or {}) do
     if c.node and c.node.valid ~= false and a.distanceTo then add(c.cid, a:distanceTo(c.node), c.name or "supply crate") end
   end
+  -- (playtest 11-12b) the kit's own containers: a Workbench's drawers, a
+  -- locker, a Parts Rack (loot.lua's `piece:<sid>:<uid>`)
+  local STc = ref("structures")
+  local bb = st.body and space and space.body and space.body(st.body)
+  if STc and STc.partsNear and bb then
+    for _, e in ipairs(STc.partsNear(st.body, a.x - bb.x, a.y - bb.y, a.z - bb.z, REACH)) do
+      local d = partInfo(e.part.id)
+      if d and d.container then add("piece:" .. tostring(e.rec.id) .. ":" .. tostring(e.part.uid), e.d, d.label) end
+    end
+  end
   -- (X6) a Fabricator's store: the crates it made
   local LX = ref("logistics")
   if LX and LX.storesNear and st.body then
@@ -482,9 +492,12 @@ end
 -- warehouse's planks when it holds enough (base_economy.quote)
 local function home_opts(id)
   local d = partInfo(id)
-  if not (d and d.planks) then return nil end
+  -- (playtest 11-12b) a crate of it in reach is placed before one is bought
+  local n, from = cratedInReach(id)
   local V = ref("inventory")
-  return { planks = (V and V.count and V.count("base", "plank")) or 0 }
+  local planks = (d and d.planks) and ((V and V.count and V.count("base", "plank")) or 0) or nil
+  if (n or 0) <= 0 and not planks then return nil end
+  return { planks = planks, crated = (n or 0) > 0 and n or nil, from = from }
 end
 local function quote_opts(id, body) if body ~= home_body() then return away_opts(id) end return home_opts(id) end
 -- planks out of / back into the warehouse for a paid record → kg moved
@@ -785,6 +798,57 @@ local function near_parts(ST, bname, x, y, z, rad)
   return near_memo.list
 end
 
+-- ── VACANT SLOTS (playtest 11-12b; kit_snap.slots) ─────────────────────────
+-- The place a missing wall or roof panel belongs, taken when this frame's
+-- aim ray passes within kit_snap.SLOT_RAY_R of its middle before it hits
+-- anything: looking through the gap a wall left, or up at the sky through a
+-- roof. The slots of the structures round the crew are worked out when the
+-- records or the held piece's class change, never per frame.
+aimRay = nil
+local slot_cache = { key = nil, list = {} }
+local function slot_lists(def, bname)
+  local ST, KS = ref("structures"), ref("kit_snap")
+  local a = astro()
+  local b = bname and space.body(bname)
+  if not (ST and KS and KS.slots and a and b and def and def.kit and (def.snap == "wall" or def.snap == "floor")) then return {} end
+  local ax, ay, az = a.x - b.x, a.y - b.y, a.z - b.z
+  local key = string.format("%s|%s|%s|%.0f|%.0f|%.0f", tostring(ST.version), tostring(def.snap), tostring(def.piece), ax / 4, ay / 4, az / 4)
+  if slot_cache.key == key then return slot_cache.list end
+  local out, seen = {}, {}
+  for _, e in ipairs(ST.partsNear and ST.partsNear(bname, ax, ay, az, 30) or {}) do
+    local r = e.rec
+    if r and not seen[r.id] and #out < 3 then
+      seen[r.id] = true
+      local l = KS.slots(r, partInfo, def)
+      if #l > 0 then out[#out + 1] = { rec = r, list = l } end
+    end
+  end
+  slot_cache.key, slot_cache.list = key, out
+  return out
+end
+-- → slot, rec | nil: the slot this frame's ray passes nearest, no further
+-- along it than `tmax`
+local function slot_pick(def, bname, tmax)
+  local KS = ref("kit_snap")
+  local R = aimRay
+  local b = bname and space.body(bname)
+  if not (KS and R and b and R.t == time) then return nil end
+  local best, brec, bd = nil, nil, 1e9
+  for _, L in ipairs(slot_lists(def, bname)) do
+    local O, D = KS.rayLocal(L.rec, R.ox - b.x, R.oy - b.y, R.oz - b.z, R.dx, R.dy, R.dz)
+    local s, _, d = KS.slotOnRay(L.list, O, D, tmax, KS.SLOT_RAY_R)
+    if s and d < bd then best, brec, bd = s, L.rec, d end
+  end
+  return best, brec
+end
+function slot_ahead()
+  local def = heldPart and partInfo(heldPart)
+  local R = aimRay
+  if not (def and def.kit and R and not shift_held()) then return false end
+  local bname = space.dominant(R.ox, R.oy, R.oz)
+  return slot_pick(def, bname, R.range or 24) ~= nil
+end
+
 -- A hit → the pose the held part takes there (K5 snapping, K6 turns).
 -- → pose { body, x, y, z (its ground point, body frame), up, fwd, mode,
 --          sid (the structure it joins) | nil, lx, ly, lz, yaw (in it),
@@ -810,6 +874,29 @@ function pose(hit, id)
     kf = KS.face({ def = def, id = id, P = { x = x, y = y, z = z }, N = { x = hit.nx or ux, y = hit.ny or uy, z = hit.nz or uz },
       toward = { x = tx, y = ty, z = tz }, hit = { rec = hrec, part = hpart }, defs = partInfo, yawOff = yawOffset })
   end
+  -- (playtest 11-12b) a vacant slot on the way to the hit: where a wall or a
+  -- roof panel is missing, the aim through the gap takes its place. Not when
+  -- the cursor is on the slot's own floor away from the edge (the free
+  -- 0.5 m placement there stays the player's).
+  if def and def.kit and KS and KS.slots and aimRay and aimRay.t == time and not shift_held() and (def.snap == "wall" or def.snap == "floor") then
+    local thit = hit.sky and (aimRay.range or 24) or (len(hit.x - aimRay.ox, hit.y - aimRay.oy, hit.z - aimRay.oz) + 0.75)
+    local sl, srec = slot_pick(def, bname, thit)
+    if sl and kf and hpart and sl.anchor == hpart and def.snap == "wall" then
+      -- (on the slot's own floor: face() has it when the cursor is near the
+      -- edge; a metre in from it the cell is what was meant)
+      if math.abs(kf.lx - sl.lx) + math.abs(kf.lz - sl.lz) > 0.01 then
+        local fr0 = KS.frameOf(srec)
+        local hxl = (x - fr0.O.x) * fr0.R.x + (y - fr0.O.y) * fr0.R.y + (z - fr0.O.z) * fr0.R.z
+        local hzl = (x - fr0.O.x) * fr0.F.x + (y - fr0.O.y) * fr0.F.y + (z - fr0.O.z) * fr0.F.z
+        if (hxl - sl.lx) ^ 2 + (hzl - sl.lz) ^ 2 > 1.0 then sl = nil end
+      end
+    end
+    if sl then
+      kf = { lx = sl.lx, ly = sl.ly, lz = sl.lz, yaw = KS.wrap(sl.yaw + KS.quantize(yawOffset or 0, math.pi)), pitch = 0, anchor = sl.anchor, face = "slot" }
+      hrec, hpart = srec, sl.anchor
+    end
+  end
+  if hit.sky and not kf then return nil, "aim at a placed piece or the ground" end
   if kf then
     -- (S1: a face snap, then the storeys and the pitch / roll dialled)
     local yaw, pitch, roll = kf.yaw, kf.pitch + pitchOff, rollOff
@@ -1134,8 +1221,18 @@ local function aim()
   local a = astro()
   local reach = params.reach or 24
   local range = reach + (a and len(a.x - ox, a.y - oy, a.z - oz) or 0)
+  -- (this frame's ray, for the vacant slots: slot_pose below)
+  aimRay = { ox = ox, oy = oy, oz = oz, dx = dx, dy = dy, dz = dz, t = time, range = range }
   local okr, h = pcall(raycast, ox, oy, oz, dx, dy, dz, range, { ignore = { a } })
-  if not okr or not h then return nil, string.format("no ground within %.0f m of the cursor", reach) end
+  if not okr or not h then
+    -- (playtest 11-12b) nothing under the cursor but sky: a roof panel still
+    -- has its slot over the walls (a stand-in hit on the ray, 6 m out; the
+    -- pose is the slot's or none)
+    if heldPart and slot_ahead and slot_ahead() then
+      return { x = ox + dx * 6, y = oy + dy * 6, z = oz + dz * 6, nx = -dx, ny = -dy, nz = -dz, sky = true }
+    end
+    return nil, string.format("no ground within %.0f m of the cursor", reach)
+  end
   if a and len(h.x - a.x, h.y - a.y, h.z - a.z) > reach then return nil, string.format("out of reach (%.0f m)", reach) end
   return h
 end
@@ -1484,9 +1581,11 @@ function place(sid, partId, p, payer, opts)
   -- (X4: off the home world a crated part in reach is the payment; the
   -- sandbox builds anywhere for money, as at home)
   local qbody = creative() and home_body() or p.body
-  local q = E.quote(def, section_of(partId), qbody, home_body(), plan and plan.vol or 0,
-    quote_opts(partId, qbody))
   local pre = opts and opts.prepaid
+  local qo = quote_opts(partId, qbody)
+  -- (a paste or a blueprint is one delivery, billed whole: never a crate)
+  if pre and qo and qbody == home_body() then qo.crated = nil end
+  local q = E.quote(def, section_of(partId), qbody, home_body(), plan and plan.vol or 0, qo)
   if pre and q.mode ~= "money" then return nil, "a paste or a blueprint ships as one delivery: on the home world only" end
   if (q.mode ~= "money" and q.mode ~= "item") or payer ~= "money" then return nil, q.why or "nothing to pay with" end
   if sid ~= nil and not ST.get(sid) then return nil, "that structure is gone" end
@@ -1836,7 +1935,7 @@ local function cable_click()
     CB.makeOff(req.hitRec, req.hitPart)
     play("pick", 0.5)
     local cd = (req.def and req.def.cable) or ((partInfo("powerCable") or {}).cable) or {}
-    say(string.format("%s made off at the %s · walk it out to a part on another structure and click it (up to %.1f km)",
+    say(string.format("%s made off at the %s · walk it out to the part it should feed (or be fed by) and click it (up to %.1f km)",
       tostring(req.def and req.def.label or "Power Cable"), tostring(req.label or "part"), (cd.max or 1500) / 1000))
     return
   end
@@ -2571,7 +2670,16 @@ function hintLine()
     local nm = hdef.label or "Power Cable"
     if not req then return string.format("%s  ·  %s", nm, aim_why or "aim at a placed part") end
     if req.bad then return string.format("%s  ·  %s  ·  RMB tap drops it", nm, req.bad) end
-    if not pend then return string.format("%s  ·  LMB makes it off at the %s  ·  then walk it out to another structure", nm, tostring(req.label or "part")) end
+    if not pend then
+      -- (W2) what this end is now: no cable, cabled to nothing live, or live
+      local BG = ref("base_grid")
+      local st = ""
+      if BG and BG.wiring and req.hitRec and req.hitPart then
+        local W = BG.wiring(req.hitRec.id, req.hitPart.uid)
+        if not W.legacy then st = (W.cables == 0 and " (no cable yet)") or (W.live and " (live)") or " (cabled, no source)" end
+      end
+      return string.format("%s  ·  LMB makes it off at the %s%s  ·  then walk it out to what it should feed, or be fed by", nm, tostring(req.label or "part"), st)
+    end
     local q = req.quote or {}
     -- (S5) what the run would lose at the grid's load now: the loss of a
     -- 10 kW draw over its length at its voltage, so the gauge is chosen
@@ -2580,8 +2688,14 @@ function hintLine()
     if BP and BP.lossShare and req.len then
       lossTxt = string.format("  ·  loses %.1f %% at 10 kW", 100 * BP.lossShare(10, hdef.cable.type or "lv16", req.len))
     end
-    return string.format("%s from the %s  ·  %.0f m, %.1f t%s  ·  LMB lays it for %s (%s + %s shipping)",
-      nm, tostring(pend.label), req.len or 0, q.mass or 0, lossTxt, money(q.total or 0), money(q.cost or 0), money(q.ship or 0))
+    if q.mode == "stock" then
+      local CB2 = ref("base_cable")
+      return string.format("%s from the %s  ·  %.0f m%s  ·  LMB cuts it from your stock: %s%s", nm, tostring(pend.label), req.len or 0, lossTxt,
+        CB2 and CB2.stockLine and CB2.stockLine(q.mats) or "its metres", req.joins and ("  ·  " .. req.joins) or "")
+    end
+    return string.format("%s from the %s  ·  %.0f m, %.1f t%s  ·  LMB lays it for %s (%s + %s shipping)%s",
+      nm, tostring(pend.label), req.len or 0, q.mass or 0, lossTxt, money(q.total or 0), money(q.cost or 0), money(q.ship or 0),
+      req.joins and ("  ·  " .. req.joins) or "")
   end
   local turn = "scroll turns  ·  R quarter  ·  PgUp/PgDn raise  ·  Shift frees"
   local hk = partInfo(heldPart)

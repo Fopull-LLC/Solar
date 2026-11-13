@@ -196,7 +196,9 @@ local function page_power(scope)
   local g = BG.gridOfStruct and BG.gridOfStruct(scope.sid)
   rows[#rows + 1] = { type = "header", label = "GRID", col = 1 }
   if not g then
-    rows[#rows + 1] = { type = "line", text = "NO BASE GRID: this structure is on no grid", level = 1, col = 1 }
+    local deadc = BG.circuitDead and BG.circuitDead(scope.sid)
+    rows[#rows + 1] = { type = "line", text = deadc and "NO POWER: no cable reaches this building" or "NO BASE GRID: this structure is on no grid", level = 1, col = 1 }
+    if deadc then rows[#rows + 1] = { type = "line", text = "a Power Cable from a source or a battery to any piece of it", level = 2, col = 1 } end
   else
     local gid = g.id
     rows[#rows + 1] = { type = "info", col = 1, label = "Made / drawn", value = function()
@@ -324,6 +326,25 @@ local function page_power(scope)
         local f = BG.partFlow and BG.partFlow(x.sid, x.uid) or {}
         return string.format("%s · loss %s", kw(f.kW), kw(f.loss)) end }
     end
+  end
+  -- (W2) NOT WIRED: the equipment within 150 m that no cable reaches, or
+  -- whose cables reach no source (base_power.terminals)
+  if BP.terminals and BG.WIRED ~= false then
+    local ST = ref("structures")
+    local me = ST and ST.get and ST.get(scope.sid)
+    local n = 0
+    for _, T in ipairs(BP.terminals()) do
+      local r = (T.state ~= "live") and ST and ST.get(T.sid) or nil
+      if r and me and r.b == me.b and (r.x - me.x) ^ 2 + (r.y - me.y) ^ 2 + (r.z - me.z) ^ 2 <= 150 * 150 then
+        if n == 0 then rows[#rows + 1] = { type = "header", label = "NOT WIRED", col = 2 } end
+        n = n + 1
+        if n <= 8 then
+          rows[#rows + 1] = { type = "line", col = 2, level = T.state == "no" and 1 or 2,
+            text = string.format("%s: %s", T.label, T.state == "no" and "no cable" or "no source on its cables") }
+        end
+      end
+    end
+    if n > 8 then rows[#rows + 1] = { type = "line", col = 2, text = string.format("...and %d more", n - 8), level = 2 } end
   end
   return rows
 end

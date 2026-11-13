@@ -149,6 +149,7 @@ end
 
 -- ── the closed form, with losses and a noon trip ────────────────────────────
 local BG0 = load_script("base_grid.lua", env({}, {}))
+BG0.WIRED = false   -- (this test is of the grid as wired before W2: the tower's 150 m, a structure one bus; smoke_wired_grid.lua has the wiring rule)
 do
   local N, L = 96, 100.0
   local prof = {}
@@ -254,6 +255,7 @@ scripts.base_cable = CB
 local BPs = load_script("base_power.lua", env(s, scripts, X))
 scripts.base_power = BPs
 local BG = load_script("base_grid.lua", env(s, scripts, X))
+BG.WIRED = false   -- (this test is of the grid as wired before W2: the tower's 150 m, a structure one bus; smoke_wired_grid.lua has the wiring rule)
 scripts.base_grid = BG
 scripts.base_facilities = { setGuards = function() end }
 local BT = load_script("base_tower.lua", env(s, scripts, X))

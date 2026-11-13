@@ -79,6 +79,12 @@ function quote(def, section, body, home, footVol, opts)
              why = string.format("no crated %s within %.0f m: order one crated at home (K with it in hand) and bring it in a hold",
                def.label or "part", REACH) }
   end
+  -- (playtest 11-12b: "I don't want to … buy everything with money") AT HOME
+  -- TOO a crate in reach is what gets placed: a part made at a Workbench or
+  -- a Fabricator, or shipped in, costs nothing more than its footing
+  if opts and (opts.crated or 0) > 0 then
+    return { mode = "item", n = opts.crated, from = opts.from, cost = 0, ship = 0, foot = foot, total = foot, recipe = opts.recipe, own = true }
+  end
   -- (progression W1) a timber piece at home: the warehouse's planks pay for
   -- its wood when it holds enough (`opts.planks` kg), and only its fittings
   -- and hardware are bought (parts_kit `fit`: nails, bolts, brackets, a

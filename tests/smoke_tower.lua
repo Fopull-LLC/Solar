@@ -163,6 +163,7 @@ scripts.base_tower = BT
 BT.start({ id = 1 })
 -- (step 8: the tower's power is its base grid's)
 local BG = load_script("base_grid.lua", env(s, scripts, { space = SPACE }))
+BG.WIRED = false   -- (this test is of the grid as wired before W2: the tower's 150 m, a structure one bus; smoke_wired_grid.lua has the wiring rule)
 scripts.base_grid = BG
 BG.start({ id = 2 })
 local BS = scripts.bases

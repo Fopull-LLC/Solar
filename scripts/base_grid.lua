@@ -103,46 +103,117 @@ end
 -- world: the chord is within 1 % of the arc).
 local function dist(ax, ay, az, bx, by, bz) return math.sqrt((ax - bx) ^ 2 + (ay - by) ^ 2 + (az - bz) ^ 2) end
 
+-- ── pure: the wiring rule (W2, playtest 11-12b; work/baseloop/DESIGN.md) ────
+-- "Everything on a grid must be connected to a power source with power
+-- cables. Nothing should be part of the grid automatically." A part has power
+-- only where a cable path joins it to something that makes or stores it.
+--
+--   EQUIPMENT has its own terminal and wants its own cable: every source
+--   (solar, rtg, a plant's generator), every Battery Bank, every tower and
+--   mast, every Transformer, and every machine drawing FIXTURE_KW or more.
+--   A BUILDING's own circuit is the rest of its structure: the walls, floors
+--   and roofs, and the small fixtures in them (lights, screens, doors,
+--   sensors; a structural piece's own pump, the Airlock Wall's). It is dead
+--   until a cable lands on any of its pieces.
+--
+-- A NODE is what a cable's end joins: "s<sid>" a structure's circuit,
+-- "s<sid>:<uid>" a piece of equipment. A record marked `aw` ("as wired
+-- before": every structure of a save from before the rule, a scenario's
+-- station) keeps the old rule: all its parts are one node, and within 150 m
+-- of a tower it joins the base.
+FIXTURE_KW = 0.5
+WIRE_VERSION = 2
+WIRED = true      -- false: every record as wired before (the old rule; tests of it)
+local STRUCTURAL = { wall = true, floor = true, slab = true, post = true, hab = true, block = true }
+function isEquipment(d)
+  if not d then return false end
+  if d.tower then return true end
+  local pw = d.power
+  if not pw then return false end
+  local k = pw.kind
+  if k == "rtg" or k == "solar" or k == "store" or k == "plant" or k == "xfmr" then return true end
+  if (k == "load" or k == "aux") and not STRUCTURAL[d.snap or ""] then
+    return (pw.use or FIXTURE_KW) >= FIXTURE_KW
+  end
+  return false
+end
+function nodeKey(r, p, d)
+  if r.aw or not WIRED or not isEquipment(d) then return "s" .. tostring(r.id) end
+  return "s" .. tostring(r.id) .. ":" .. tostring(p.uid)
+end
+local function pkey(sid, uid) return tostring(sid) .. ":" .. tostring(uid) end
+
 -- THE GRIDS. `structs` = structures.list(); `bases` = bases.list() (standing);
 -- `cables` = { { a = { sid, uid }, z = { sid, uid } } }; `defs(id)` the parts;
--- `pose(rec, p, seat)` structures.partPose. → grids (list), bySid (sid → grid)
--- grid = { id, sids = { sid … }, bases = { bid … }, parts = { { rec, p, def } … } }
+-- `pose(rec, p, seat)` structures.partPose. → grids (list), bySid (sid → the
+-- grid of that structure's own circuit), byNode (node → grid), nodeOf
+-- ("sid:uid" → node)
+-- grid = { id, sids = { sid … }, nodes = { node … }, bases = { bid … },
+--          parts = { { rec, p, def, node } … }, busOf = { [node] = bus },
+--          baseNode = { [bid] = node } }
 function buildGrids(structs, bases, cables, defs, pose, radius)
   radius = radius or RADIUS
   local U = uf_new()
-  -- (S5) the BUSES: the same union without the cables, so each structure
-  -- knows the lossless bus it sits on (a tower's 150 m share one)
+  -- (S5) the BUSES: the same union without the cables, so each node knows
+  -- the lossless bus it sits on (an as-wired-before tower's 150 m share one)
   local Bu = uf_new()
-  local byId = {}
-  for _, r in ipairs(structs or {}) do byId[r.id] = r; uf_find(U, "s" .. tostring(r.id)); uf_find(Bu, "s" .. tostring(r.id)) end
-  -- the radius: a structure with any part within it of a tower joins the base
+  local byId, nodeOf, nodes = {}, {}, {}
+  local function note(k) if U.p[k] == nil then nodes[#nodes + 1] = k end uf_find(U, k); uf_find(Bu, k) end
+  for _, r in ipairs(structs or {}) do
+    byId[r.id] = r
+    note("s" .. tostring(r.id))
+    for _, p in ipairs(r.bp or {}) do
+      local k = nodeKey(r, p, defs(p.id))
+      nodeOf[pkey(r.id, p.uid)] = k
+      note(k)
+    end
+  end
+  local function node_at(e) return e and (nodeOf[pkey(e.sid, e.uid)] or (byId[e.sid] and ("s" .. tostring(e.sid)))) or nil end
+  local baseNode = {}
   for _, b in ipairs(bases or {}) do
     local bk = "b" .. string.format("%06d", b.id)
     uf_find(U, bk)
-    if b.sid and byId[b.sid] then uf_join(U, bk, "s" .. tostring(b.sid)); uf_join(Bu, bk, "s" .. tostring(b.sid)) end
+    local tr = b.sid and byId[b.sid]
+    if tr then
+      -- the tower's own terminal (its structure's circuit when as wired before)
+      local tn = (b.uid ~= nil and nodeOf[pkey(b.sid, b.uid)]) or nil
+      if not tn then
+        tn = "s" .. tostring(b.sid)
+        if not (tr.aw or not WIRED) then
+          for _, p in ipairs(tr.bp or {}) do local d = defs(p.id); if d and d.tower then tn = nodeOf[pkey(tr.id, p.uid)] or tn break end end
+        end
+      end
+      baseNode[b.id] = tn
+      uf_join(U, bk, tn); uf_join(Bu, bk, tn)
+    end
+    -- the radius, for structures as wired before only: one with any part
+    -- within it of a tower joins the base
     for _, r in ipairs(structs or {}) do
-      -- (S5) a structure of network gear alone (a pole, a junction) is on
-      -- the line its cables make, never on the tower's low-voltage ring
-      local gearOnly = #(r.bp or {}) > 0
-      for _, p in ipairs(r.bp or {}) do local d = defs(p.id); if not (d and d.netgear and not d.power) then gearOnly = false break end end
-      if r.b == b.b and not gearOnly then
-        for _, p in ipairs(r.bp or {}) do
-          local x, y, z = pose(r, p, 0)
-          if dist(x, y, z, b.x, b.y, b.z) <= radius then uf_join(U, bk, "s" .. tostring(r.id)); uf_join(Bu, bk, "s" .. tostring(r.id)) break end
+      if (r.aw or not WIRED) and r.b == b.b then
+        -- (S5) a structure of network gear alone (a pole, a junction) is on
+        -- the line its cables make, never on the tower's low-voltage ring
+        local gearOnly = #(r.bp or {}) > 0
+        for _, p in ipairs(r.bp or {}) do local d = defs(p.id); if not (d and d.netgear and not d.power) then gearOnly = false break end end
+        if not gearOnly then
+          for _, p in ipairs(r.bp or {}) do
+            local x, y, z = pose(r, p, 0)
+            if dist(x, y, z, b.x, b.y, b.z) <= radius then uf_join(U, bk, "s" .. tostring(r.id)); uf_join(Bu, bk, "s" .. tostring(r.id)) break end
+          end
         end
       end
     end
   end
   -- the cables
   for _, c in ipairs(cables or {}) do
-    local a, z = c.a and byId[c.a.sid], c.z and byId[c.z.sid]
-    if a and z then uf_join(U, "s" .. tostring(a.id), "s" .. tostring(z.id)) end
+    local a, z = node_at(c.a), node_at(c.z)
+    if a and z then uf_join(U, a, z) end
   end
-  local roots, out, bySid = {}, {}, {}
+  local roots, out, bySid, byNode = {}, {}, {}, {}
   local function grid_of(root)
     local g = roots[root]
     if not g then
-      g = { id = root, sids = {}, bases = {}, parts = {}, cables = 0, bus = {}, cableList = {} }
+      g = { id = root, sids = {}, nodes = {}, bases = {}, parts = {}, cables = 0, bus = {}, busOf = {}, cableList = {},
+            baseNode = baseNode, nodeOf = nodeOf, hasSid = {} }
       roots[root] = g
       out[#out + 1] = g
     end
@@ -152,37 +223,59 @@ function buildGrids(structs, bases, cables, defs, pose, radius)
     local g = grid_of(uf_find(U, "b" .. string.format("%06d", b.id)))
     g.bases[#g.bases + 1] = b.id
   end
+  for _, k in ipairs(nodes) do
+    local g = grid_of(uf_find(U, k))
+    g.nodes[#g.nodes + 1] = k
+    g.busOf[k] = uf_find(Bu, k)
+    byNode[k] = g
+  end
   for _, r in ipairs(structs or {}) do
-    local g = grid_of(uf_find(U, "s" .. tostring(r.id)))
-    g.sids[#g.sids + 1] = r.id
-    g.bus[r.id] = uf_find(Bu, "s" .. tostring(r.id))
-    bySid[r.id] = g
+    local own = "s" .. tostring(r.id)
+    local g0 = byNode[own]
+    g0.bus[r.id] = g0.busOf[own]
+    bySid[r.id] = g0
+    if not g0.hasSid[r.id] then g0.hasSid[r.id] = true; g0.sids[#g0.sids + 1] = r.id end
     for _, p in ipairs(r.bp or {}) do
       local d = defs(p.id)
-      if d then g.parts[#g.parts + 1] = { rec = r, p = p, def = d } end
+      if d then
+        local k = nodeOf[pkey(r.id, p.uid)]
+        local g = byNode[k]
+        g.parts[#g.parts + 1] = { rec = r, p = p, def = d, node = k }
+        if not g.hasSid[r.id] then g.hasSid[r.id] = true; g.sids[#g.sids + 1] = r.id end
+      end
     end
   end
   for _, c in ipairs(cables or {}) do
-    local g = c.a and bySid[c.a.sid]
-    if g and c.z and bySid[c.z.sid] == g then g.cables = g.cables + 1; g.cableList[#g.cableList + 1] = c end
+    local a, z = node_at(c.a), node_at(c.z)
+    local g = a and byNode[a]
+    if g and z and byNode[z] == g then g.cables = g.cables + 1; g.cableList[#g.cableList + 1] = c end
   end
   -- (a grid with nothing on it that makes, stores or draws power is dropped)
-  local keep = {}
+  local keep, used = {}, {}
   for _, g in ipairs(out) do
     local live = #g.bases > 0
-    for _, e in ipairs(g.parts) do if e.def.power then live = true end end
+    for _, e in ipairs(g.parts) do if e.def.power or e.def.tower then live = true end end
     if live then
       table.sort(g.bases)
-      -- the id: its first base's, or its first structure's
-      local m = nil
-      for _, sid in ipairs(g.sids) do if not m or sid < m then m = sid end end
-      g.id = (#g.bases > 0) and ("b" .. tostring(g.bases[1])) or ("s" .. tostring(m))
+      -- the id: its first base's, else its first structure's own circuit,
+      -- else its first piece of equipment
+      local m, mk = nil, nil
+      for _, k in ipairs(g.nodes) do
+        local sid = k:match("^s([^:]+)$")
+        if sid then
+          local n = tonumber(sid) or sid
+          if m == nil or (type(n) == type(m) and n < m) or (type(n) ~= type(m) and tostring(n) < tostring(m)) then m = n end
+        elseif not mk or k < mk then mk = k end
+      end
+      g.id = (#g.bases > 0) and ("b" .. tostring(g.bases[1])) or (m ~= nil and ("s" .. tostring(m))) or mk
+      used[g.id] = true
       keep[#keep + 1] = g
     else
-      for _, sid in ipairs(g.sids) do bySid[sid] = nil end
+      for _, k in ipairs(g.nodes) do byNode[k] = nil end
+      for _, sid in ipairs(g.sids) do if bySid[sid] == g then bySid[sid] = nil end end
     end
   end
-  return keep, bySid
+  return keep, bySid, byNode, nodeOf
 end
 
 -- ── pure: what a grid is made of ────────────────────────────────────────────
@@ -208,18 +301,22 @@ function gridModel(g, pose, towerNeed, opts)
       local stt = e.rec.st and e.rec.st[tostring(e.p.uid)]
       local ir = type(stt) == "table" and tonumber(stt.ir) or nil
       ir = ir and math.max(IR_MIN, math.min(1, ir)) or 1
-      M.breakers[#M.breakers + 1] = { key = key, sid = e.rec.id, uid = e.p.uid, pw = pw, main = main, state = st, kW = breakerKW_(pw) * ir, ir = ir }
+      M.breakers[#M.breakers + 1] = { key = key, sid = e.rec.id, uid = e.p.uid, node = e.node, pw = pw, main = main, state = st, kW = breakerKW_(pw) * ir, ir = ir }
       if main and st ~= "closed" then M.mainsOff[e.rec.id] = true end
     elseif pw and pw.kind == "xfmr" then
       M.xfmrs[#M.xfmrs + 1] = { key = tostring(e.rec.id) .. ":" .. tostring(e.p.uid), sid = e.rec.id, uid = e.p.uid, pw = pw }
     end
   end
+  -- (W2) a main cuts its structure's own circuit: a piece of equipment has
+  -- its own terminal and is past it
+  local function mainOff(sid, node) return M.mainsOff[sid] and (node == nil or node == "s" .. tostring(sid)) end
   for _, bid in ipairs(g.bases) do
     local bsid = opts.baseSid and opts.baseSid(bid) or nil
-    if not (bsid and M.mainsOff[bsid]) then
+    local bnode = g.baseNode and g.baseNode[bid] or nil
+    if not (bsid and mainOff(bsid, bnode)) then
       -- (W1) each base's own tower draw: a Camp Mast's is 0.5 (opts.towerNeedOf), the Tower's towerNeed
       local tn = (opts.towerNeedOf and opts.towerNeedOf(bid)) or towerNeed or 2.0
-      M.loads[#M.loads + 1] = { kind = "tower", bid = bid, need = tn, label = "tower", sid = bsid }
+      M.loads[#M.loads + 1] = { kind = "tower", bid = bid, need = tn, label = "tower", sid = bsid, node = bnode }
       M.need = M.need + tn
     end
   end
@@ -231,13 +328,13 @@ function gridModel(g, pose, towerNeed, opts)
       M.base = M.base + (pw.gen or 0)
       M.rtg = M.rtg + (pw.gen or 0)
       M.sources = M.sources + 1
-      M.rtgs[#M.rtgs + 1] = { sid = r.id, gen = pw.gen or 0 }
+      M.rtgs[#M.rtgs + 1] = { sid = r.id, gen = pw.gen or 0, node = e.node }
     elseif pw and pw.kind == "solar" then
       local gx, gy, gz, U, F = pose(r, p, pw.lift or 1.0)
       -- the cells track about the part's +X (= up × front)
       local ax, ay, az = U.y * F.z - U.z * F.y, U.z * F.x - U.x * F.z, U.x * F.y - U.y * F.x
       M.arrays[#M.arrays + 1] = { key = string.format("%s|%.2f|%.2f|%.2f|%.3f|%.3f|%.3f", key, gx, gy, gz, ax, ay, az),
-                                  gen = pw.gen or 0, x = gx, y = gy, z = gz, ax = ax, ay = ay, az = az, b = r.b, sid = r.id,
+                                  gen = pw.gen or 0, x = gx, y = gy, z = gz, ax = ax, ay = ay, az = az, b = r.b, sid = r.id, node = e.node,
                                   pk = key, uid = p.uid }   -- (G4: pk = "sid:uid", its dust and sky)
       M.sources = M.sources + 1
     elseif pw and pw.kind == "store" then
@@ -247,32 +344,32 @@ function gridModel(g, pose, towerNeed, opts)
       -- (X8) a bank may arrive with its own charge (`fill` on the part: an
       -- abandoned base's battery is flat)
       local fill = tonumber(p.fill) or pw.fill or 0
-      M.stores[#M.stores + 1] = { key = key, cap = pw.cap or 0, eff = eff, fill = fill, sid = r.id }
+      M.stores[#M.stores + 1] = { key = key, cap = pw.cap or 0, eff = eff, fill = fill, sid = r.id, node = e.node }
       M.C = M.C + (pw.cap or 0)
       effw, capw = effw + eff * (pw.cap or 0), capw + (pw.cap or 0)
-    elseif pw and pw.kind == "load" and not M.mainsOff[r.id]
+    elseif pw and pw.kind == "load" and not mainOff(r.id, e.node)
            and not (r.st and type(r.st[tostring(p.uid)]) == "table" and r.st[tostring(p.uid)].off) then
       -- (S8: a life-support machine switched off by its run terminal draws
       -- nothing; and so does a light switched off, or any load whose switch
       -- is off: `st.off` is every piece's switch)
-      M.loads[#M.loads + 1] = { kind = "load", need = pw.use or 0, label = e.def.label, sid = r.id, uid = p.uid }
+      M.loads[#M.loads + 1] = { kind = "load", need = pw.use or 0, label = e.def.label, sid = r.id, uid = p.uid, node = e.node }
       M.need = M.need + (pw.use or 0)
     elseif pw and pw.kind == "plant" then
       -- (S6) a turbine-generator: what its plant makes now (reactor_plant
       -- publishes it; held over each step, the grid rebuilt when it moves)
       local kw = opts.plantKW and opts.plantKW(r.id, p.uid) or 0
-      M.plants[#M.plants + 1] = { sid = r.id, uid = p.uid, kw = kw }
+      M.plants[#M.plants + 1] = { sid = r.id, uid = p.uid, kw = kw, node = e.node }
       if kw > 0 then
         M.base = M.base + kw
         M.plant = M.plant + kw
         M.sources = M.sources + 1
-        M.rtgs[#M.rtgs + 1] = { sid = r.id, gen = kw }
+        M.rtgs[#M.rtgs + 1] = { sid = r.id, gen = kw, node = e.node }
       end
-    elseif pw and pw.kind == "aux" and not M.mainsOff[r.id] then
+    elseif pw and pw.kind == "aux" and not mainOff(r.id, e.node) then
       -- (S6) a plant's pump, heater or fan, while it runs
       local kw = opts.auxKW and opts.auxKW(r.id, p.uid) or 0
       if kw > 0 then
-        M.loads[#M.loads + 1] = { kind = "aux", need = kw, label = e.def.label, sid = r.id, uid = p.uid }
+        M.loads[#M.loads + 1] = { kind = "aux", need = kw, label = e.def.label, sid = r.id, uid = p.uid, node = e.node }
         M.need = M.need + kw
       end
     end
@@ -290,33 +387,43 @@ IR_MIN = 0.3            -- (scn_dust) the lowest a breaker's trip dial goes
 -- prof(arr) = an array's year of slots (or nil). → spec
 function netSpec(g, M, prof, defsAt)
   local idx, buses = {}, {}
-  local function busOf(sid)
-    local k = g.bus[sid] or ("s" .. tostring(sid))
+  -- (W2) a bus is a node's (a structure's circuit, a piece of equipment);
+  -- `at(x)` = the bus of a model entry (its node, else its structure's circuit)
+  local function busOf(node)
+    local k = (g.busOf and g.busOf[node]) or node
     local i = idx[k]
     if not i then buses[#buses + 1] = k; i = #buses; idx[k] = i end
     return i
   end
-  for _, sid in ipairs(g.sids) do busOf(sid) end
+  local function own(sid) return "s" .. tostring(sid) end
+  local function at(x) return busOf(x.node or (g.bus and g.bus[x.sid]) or own(x.sid)) end
+  if g.nodes then for _, k in ipairs(g.nodes) do busOf(k) end
+  else for _, sid in ipairs(g.sids) do busOf(g.bus[sid] or own(sid)) end end
   local spec = { buses = buses, gen = {}, arrays = {}, loads = {}, stores = {}, edges = {}, mains = {}, xfmrs = {} }
   for i = 1, #buses do spec.gen[i] = 0 end
-  for _, r in ipairs(M.rtgs or {}) do local b = busOf(r.sid); spec.gen[b] = spec.gen[b] + r.gen end
-  for _, a in ipairs(M.arrays) do spec.arrays[#spec.arrays + 1] = { bus = busOf(a.sid), prof = prof and prof(a) or nil, kW = 0 } end
+  for _, r in ipairs(M.rtgs or {}) do local b = at(r); spec.gen[b] = spec.gen[b] + r.gen end
+  for _, a in ipairs(M.arrays) do spec.arrays[#spec.arrays + 1] = { bus = at(a), prof = prof and prof(a) or nil, kW = 0 } end
   local bySid = {}
   for _, l in ipairs(M.loads) do
-    local b = l.sid and busOf(l.sid) or 1
+    local b = l.sid and at(l) or 1
     spec.loads[#spec.loads + 1] = { bus = b, kW = l.need, sid = l.sid }
-    if l.sid then bySid[l.sid] = (bySid[l.sid] or 0) + l.need end
+    -- (a main guards its structure's own circuit)
+    if l.sid and (l.node == nil or l.node == own(l.sid)) then bySid[l.sid] = (bySid[l.sid] or 0) + l.need end
   end
-  for _, st in ipairs(M.stores) do spec.stores[#spec.stores + 1] = { bus = busOf(st.sid), cap = st.cap } end
+  for _, st in ipairs(M.stores) do spec.stores[#spec.stores + 1] = { bus = at(st), cap = st.cap } end
   local brk, xf = {}, {}
   for _, b in ipairs(M.breakers) do
     brk[b.key] = b
     if b.main and b.state == "closed" then spec.mains[#spec.mains + 1] = { key = b.key, kW = b.kW, sid = b.sid, load = bySid[b.sid] or 0 } end
   end
   for _, x in ipairs(M.xfmrs) do xf[x.key] = x; spec.xfmrs[#spec.xfmrs + 1] = { key = x.key, pw = x.pw } end
+  local function endBus(e)
+    local k = g.nodeOf and g.nodeOf[tostring(e.sid) .. ":" .. tostring(e.uid)]
+    return busOf(k or (g.bus and g.bus[e.sid]) or own(e.sid))
+  end
   for _, c in ipairs(g.cableList or {}) do
     local ka, kz = tostring(c.a.sid) .. ":" .. tostring(c.a.uid), tostring(c.z.sid) .. ":" .. tostring(c.z.uid)
-    local e = { id = c.id, a = busOf(c.a.sid), z = busOf(c.z.sid), ty = c.ty or "lv16", len = c.len or 1, guard = {}, xf = {} }
+    local e = { id = c.id, a = endBus(c.a), z = endBus(c.z), ty = c.ty or "lv16", len = c.len or 1, guard = {}, xf = {} }
     for _, k in ipairs({ ka, kz }) do
       if brk[k] then e.guard[#e.guard + 1] = { key = k, kW = brk[k].kW } end
       if xf[k] then e.xf[#e.xf + 1] = { key = k, pw = xf[k].pw } end
@@ -515,7 +622,7 @@ local function agency_now()
 end
 local function wall() return (app and app.wallClock) and app.wallClock() or nil end
 
-local G = { list = {}, byId = {}, bySid = {}, byBase = {}, models = {}, st = {}, status = {}, flow = {}, short = {}, edgeOf = {}, dead = {} }
+local G = { list = {}, byId = {}, bySid = {}, byNode = {}, nodeOf = {}, byBase = {}, models = {}, st = {}, status = {}, flow = {}, short = {}, edgeOf = {}, dead = {} }
 trips = 0                 -- probes: breakers tripped and cables burnt since the start
 local vers = { st = nil, bs = nil, cb = nil }
 local dirty, last_rebuild, last_adv = true, -10, -10
@@ -863,11 +970,11 @@ local function advance_all(a)
     for _, g in ipairs(G.list) do
       local M, st = G.models[g.id], G.st[g.id]
       if M and st then
-        local t0 = clk[g.sids[1] or -1] or a0
+        local t0 = clk[g.nodes[1] or -1] or a0
         local rep = { short = 0, slots = 0, years = 0 }
         advance(st, M, t0, a, rep)
         local t1 = rep.stopAt or a
-        for _, sid in ipairs(g.sids) do clk[sid] = t1 end
+        for _, k in ipairs(g.nodes) do clk[k] = t1 end
         nslots = nslots + rep.slots
         spread(g, M, st.e)
         if rep.trip then events[#events + 1] = { ev = rep.trip, t = t1, gid = g.id } end
@@ -920,7 +1027,7 @@ topology = function(a, clk)
   local all = cables_list()
   local live, dead, at = split_cables(all)
   local blist = B.list()
-  local grids, bySid = buildGrids(ST.list(), blist, live, defs, ST.partPose, RADIUS)
+  local grids, bySid, byNode, nodeOf = buildGrids(ST.list(), blist, live, defs, ST.partPose, RADIUS)
   -- the slots: once per session, on the home world (off-world building is
   -- step 13's: a moon's light needs its own slots)
   if not slot then
@@ -985,11 +1092,12 @@ topology = function(a, clk)
     for _, bid in ipairs(g.bases) do byBase[bid] = g end
     if clk then
       local c = nil
-      for _, sid in ipairs(g.sids) do if clk[sid] then c = c and math.min(c, clk[sid]) or clk[sid] end end
-      for _, sid in ipairs(g.sids) do clk[sid] = c or a end
+      for _, k in ipairs(g.nodes) do if clk[k] then c = c and math.min(c, clk[k]) or clk[k] end end
+      for _, k in ipairs(g.nodes) do clk[k] = c or a end
     end
   end
   G.list, G.bySid, G.models, G.st, G.byId, G.byBase = grids, bySid, models, sts, byId, byBase
+  G.byNode, G.nodeOf = byNode, nodeOf
   G.edgeOf, G.dead = edgeOf, dead
   G.status, G.flow = {}, {}
   local CB = ref("base_cable")
@@ -1040,6 +1148,7 @@ local function fresh()
   if dirty then rebuild() end
 end
 FRESH_MIN = 0.5
+local grid_at
 function gridOf(bid) fresh() return G.byBase[bid] end
 -- (S5) A cable's flow now: → { P (kW, + from its a end to its z end), share
 -- (of its rating), loss (kW), cap (kW), dead, why, burnt, grid } | nil
@@ -1061,7 +1170,7 @@ end
 -- { kW, share, loss, cables } | {}
 function partFlow(sid, uid)
   fresh()
-  local g = G.bySid[sid]
+  local g = grid_at(sid, uid)
   local key = tostring(sid) .. ":" .. tostring(uid)
   local M = g and G.models[g.id]
   local f = g and G.flow[g.id]
@@ -1095,7 +1204,105 @@ function partFlow(sid, uid)
   return out
 end
 
-function gridOfStruct(sid) fresh() return G.bySid[sid] end
+-- (W2) the grid a PART is on: its own terminal's when it is a piece of
+-- equipment, else its structure's circuit's. nil: on no grid.
+grid_at = function(sid, uid)
+  if uid ~= nil then
+    local k = G.nodeOf and G.nodeOf[tostring(sid) .. ":" .. tostring(uid)]
+    if k then return G.byNode[k], k end
+  end
+  return G.bySid[sid], "s" .. tostring(sid)
+end
+-- The grid of a structure's own circuit (its lights, its rooms' machines'
+-- sockets); with `uid`, the grid of that part.
+function gridOfStruct(sid, uid) fresh() return (grid_at(sid, uid)) end
+function gridOfPart(sid, uid) fresh() return (grid_at(sid, uid)) end
+function nodeOf(sid, uid) fresh() local _, k = grid_at(sid, uid) return k end
+-- (straight from the records: right after a placement, before any rebuild)
+function nodeKeyOf(sid, uid)
+  local ST = ref("structures")
+  local r = ST and ST.get and ST.get(sid)
+  local p = r and ST.getPart(sid, uid)
+  if not p then return "s" .. tostring(sid) end
+  return nodeKey(r, p, defs(p.id))
+end
+-- Is a part a piece of equipment that wants its own cable (and is its
+-- structure under the wiring rule)? → true | false
+function wantsCable(sid, uid)
+  local ST = ref("structures")
+  local r = ST and ST.get and ST.get(sid)
+  local p = r and ST.getPart(sid, uid)
+  if not p or r.aw or not WIRED then return false end
+  return isEquipment(defs(p.id))
+end
+-- Is a structure's own circuit DEAD under the wiring rule: no cable path from
+-- it to a source or a store? (Its fittings are dark: kit_live. A structure
+-- as wired before is never dead this way: off any grid its fittings ran on
+-- their own cells, and still do.) Cheap: table reads only, asked per light.
+function circuitDead(sid)
+  if not WIRED then return false end
+  local ST = ref("structures")
+  local r = ST and ST.get and ST.get(sid)
+  if not r or r.aw then return false end
+  local g = G.bySid[sid]
+  if not g then return true end
+  local M = G.models[g.id]
+  return not (M and ((M.sources or 0) > 0 or (M.C or 0) > 0))
+end
+-- NOT WIRED: the one line a part's plate and menu show when it is equipment
+-- under the rule with no cable, or a cable to nothing live. nil: fine (or
+-- not electrical, or as wired before).
+function wireWhy(sid, uid)
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  local d = p and defs(p.id)
+  if not (d and (d.power or d.tower)) then return nil end
+  local W = wiring(sid, uid)
+  if W.legacy then return nil end
+  local pw = d.power
+  if pw and (pw.kind == "breaker") then return nil end
+  if W.cables == 0 then
+    if W.equipment then
+      local makes = pw and (pw.kind == "solar" or pw.kind == "rtg" or pw.kind == "plant")
+      return makes and "NOT WIRED: its power goes nowhere (run a Power Cable from it to a battery or to what it should feed)"
+        or (pw and pw.kind == "store") and "NOT WIRED: nothing charges it and it feeds nothing (run a Power Cable to a source, and one to what it should feed)"
+        or "NOT WIRED: run a Power Cable from it to a powered part"
+    end
+    return "no cable reaches this building: run a Power Cable from a source or a battery to any piece of it"
+  end
+  if not W.live then return "its cables reach no source and no charged battery" end
+  return nil
+end
+-- WIRED TO: what a part's terminal (or its structure's circuit) is cabled to.
+-- → { cables = n, live (its grid has a source or a charged store), sources,
+--     grid, equipment (it wants its own cable), legacy (as wired before) }
+function wiring(sid, uid)
+  fresh()
+  local k = nodeKeyOf(sid, uid)
+  local g = G.byNode[k]
+  local ST, CB = ref("structures"), ref("base_cable")
+  local r = ST and ST.get and ST.get(sid)
+  local out = { cables = 0, live = false, sources = 0, grid = g and g.id or nil, node = k,
+                equipment = wantsCable(sid, uid), legacy = (r and r.aw) and true or (not WIRED) }
+  -- the cables on this node: its own part's, or (a circuit) any of its structure's pieces'
+  for _, c in ipairs((CB and CB.list) and CB.list() or {}) do
+    for _, e in ipairs({ c.a, c.z }) do
+      if nodeKeyOf(e.sid, e.uid) == k then
+        out.cables = out.cables + 1
+        local o = (e == c.a) and c.z or c.a
+        out.to = out.to or {}
+        out.to[#out.to + 1] = { sid = o.sid, uid = o.uid, cable = c.id, len = c.len }
+      end
+    end
+  end
+  local M, s = g and G.models[g.id], g and G.status[g.id]
+  if M then
+    out.sources = M.sources or 0
+    out.live = (M.sources or 0) > 0 or ((s and s.stored or 0) > 1e-6)
+    out.powered = s and s.powered or false
+  end
+  return out
+end
 -- (scenarios) a start state already lived in: sid's grid with its stores full.
 -- → true | nil (no grid with a store)
 -- (scn_dust) `frac`: charged to that share of the store instead (0..1)
@@ -1111,7 +1318,7 @@ end
 -- (S6) Is a part's load served now? (a plant's pump on a grid short and
 -- flat drops out.) → true | false | nil (not on a grid, or no load)
 function partServed(sid, uid)
-  local g = G.bySid[sid]
+  local g = grid_at(sid, uid)
   local M, s = g and G.models[g.id], g and G.status[g.id]
   if not (M and s and s.served) then return nil end
   for i, l in ipairs(M.loads) do if l.sid == sid and l.uid == uid then return s.served[i] == true end end
@@ -1162,10 +1369,20 @@ function powerWhy(sid, uid)
   local d = p and defs(p.id)
   local pw = d and d.power
   if not (pw and (pw.kind == "load" or pw.kind == "aux")) then return nil end
-  local g = G.bySid[sid]
-  if not g then return "no power: not on a base grid (a tower within 150 m, or a Power Cable)" end
+  local g, k = grid_at(sid, uid)
+  local own = (k == "s" .. tostring(sid))
+  -- (W2) no cable, or a cable to nothing that makes power: say what to do
+  local W = wiring(sid, uid)
+  if not W.legacy then
+    if W.cables == 0 then
+      return own and "no power: no cable reaches this building (run a Power Cable from a source or a battery to any piece of it)"
+                 or "no power: NOT WIRED (run a Power Cable from it to a powered part)"
+    end
+    if not W.live then return "no power: its cables reach no source and no charged battery" end
+  end
+  if not g then return "no power: not on a base grid (a Power Cable from a source or a battery)" end
   local M, s = G.models[g.id], G.status[g.id]
-  if M and M.mainsOff and M.mainsOff[sid] then return "no power: its structure's main breaker is open" end
+  if M and M.mainsOff and M.mainsOff[sid] and own then return "no power: its structure's main breaker is open" end
   local served = partServed(sid, uid)
   if served == false then return "no power: the grid is short and its store is flat" end
   return nil
@@ -1221,16 +1438,107 @@ function start(node)
     local all = findScripts("base_grid")
     if #all > 1 and all[1].node and all[1].node.id ~= node.id then node:destroy() return end
   end
-  G = { list = {}, byId = {}, bySid = {}, byBase = {}, models = {}, st = {}, status = {}, flow = {}, short = {}, edgeOf = {}, dead = {} }
+  G = { list = {}, byId = {}, bySid = {}, byNode = {}, nodeOf = {}, byBase = {}, models = {}, st = {}, status = {}, flow = {}, short = {}, edgeOf = {}, dead = {} }
   vers = { st = nil, bs = nil, cb = nil }
   trips = 0
   dirty, last_rebuild, last_adv, slot, light_cache, e_saved, caught = true, -10, -10, nil, {}, nil, nil
   SOIL, soil_d, soil_w, soiled_cache, soil_reg = { k = {}, sky = {}, t = nil, n_steps = 0 }, nil, nil, {}, false
+  -- (W2) is this a save from before the wiring rule? Decided HERE, as the
+  -- scene loads, from the save itself: a new game has no structures yet and
+  -- is stamped at once, so what it builds (or a scenario stages) a moment
+  -- later is never taken for old.
+  migrated = true
+  if save and save.get and tonumber(save.get("grid.wv")) ~= WIRE_VERSION then
+    local l = save.get("struct.list")
+    if type(l) == "table" and #l > 0 then migrated = false
+    elseif save.set then save.set("grid.wv", WIRE_VERSION) end
+  end
 end
+
+-- (W2) OLD SAVES. A save from before the wiring rule has no `grid.wv`: every
+-- structure standing in it is marked `aw` ("as wired before") and keeps the
+-- rule it was built under (one bus a structure; the tower's 150 m), so
+-- nothing the player built goes dark. What is built from now on wants its
+-- cables. Once per save. → the number marked
+function migrate()
+  migrated = true
+  if not (save and save.get and save.set) then return 0 end
+  if tonumber(save.get("grid.wv")) == WIRE_VERSION then return 0 end
+  local ST = ref("structures")
+  if not (ST and ST.list and ST.put) then migrated = false return 0 end
+  local n = 0
+  for _, r in ipairs(ST.list()) do
+    if not r.aw then r.aw = 1; ST.put(r); n = n + 1 end
+  end
+  save.set("grid.wv", WIRE_VERSION)
+  if n > 0 and log then log(string.format("base_grid: %d structure(s) from before the wiring rule keep their grid as it was", n)) end
+  return n
+end
+-- (a structure's menu: "Rewire by hand") drop the mark: its equipment wants
+-- cables from now on. → true | nil
+function rewire(sid)
+  local ST = ref("structures")
+  local r = ST and ST.get and ST.get(sid)
+  if not (r and r.aw) then return nil end
+  r.aw = nil
+  ST.put(r)
+  dirty = true
+  return true
+end
+
+-- (W2) THE MENU on anything electrical: what its terminal is wired to, or
+-- that it is not; on a structure as wired before, the way to the new rule.
+local function wire_provider(t, ctx)
+  if not (t and t.node) then return {} end
+  local ST = ref("structures")
+  if not (ST and ST.partOfNode) then return {} end
+  local rec, part = ST.partOfNode(t.node)
+  if not part then return {} end
+  local def = defs(part.id)
+  if not (def and (def.power or def.tower)) then return {} end
+  local sid, uid = rec.id, part.uid
+  local out = {}
+  out[#out + 1] = { id = "wg_wired", type = "info", label = "Wiring", group = "Power", value = function()
+      local W = wiring(sid, uid)
+      if W.legacy then return "as wired before: shares its base's grid" end
+      if W.cables == 0 then return W.equipment and "NOT WIRED · no cable on its terminal" or "the building's circuit · NO CABLE reaches it" end
+      local names = {}
+      for i, e in ipairs(W.to or {}) do
+        if i > 3 then names[#names + 1] = string.format("+%d more", #W.to - 3) break end
+        local op = ST.getPart(e.sid, e.uid)
+        local od = op and defs(op.id)
+        names[#names + 1] = string.format("%s (%.0f m)", od and od.label or "part", e.len or 0)
+      end
+      return string.format("%s%s · %s", W.equipment and "" or "the building's circuit: ", table.concat(names, ", "),
+        W.live and "LIVE" or "no source on these cables")
+    end }
+  if rec.aw and WIRED then
+    out[#out + 1] = { id = "wg_rewire", type = "action", label = "Rewire this structure by hand", group = "Power",
+      hint = "its sources, batteries and machines will each want a cable",
+      enabled = function() return engineer_why() == nil end,
+      why = function() return engineer_why() end,
+      job = { secs = 3.0, label = "Pulling the old bus links",
+        check = function() if not ST.get(sid) then return false, "it's gone" end return true end,
+        tick = function() end,
+        done = function()
+          rewire(sid)
+          if ctx and ctx.toast then ctx.toast("rewired: cable each source, battery and machine") end
+          return true
+        end } }
+  end
+  return out, def.label
+end
+wireProviderFn = wire_provider
+local wire_reg = false
 
 function update(node, dt)
   local ST, B, CB = ref("structures"), ref("bases"), ref("base_cable")
   if not (ST and B) then return end
+  if not migrated then migrate() end
+  if not wire_reg then
+    local reg = ref("context_registry")
+    if reg and reg.register then reg.register("prop", wire_provider, { id = "base_grid_wire", order = 5 }); wire_reg = true end
+  end
   local sv, bv, cv = ST.version, B.version, CB and CB.version or 0
   if sv ~= vers.st or bv ~= vers.bs or cv ~= vers.cb then
     vers.st, vers.bs, vers.cb = sv, bv, cv

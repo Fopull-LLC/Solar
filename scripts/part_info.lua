@@ -185,8 +185,11 @@ local function grid_row(sid, uid, d)
   if not pw then return nil end
   local BG = ref("base_grid")
   if not BG then return nil end
-  local g = BG.gridOfStruct and BG.gridOfStruct(sid)
+  local g = BG.gridOfStruct and BG.gridOfStruct(sid, uid)
   if pw.kind == "breaker" or pw.kind == "xfmr" then return nil end   -- (base_power's own rows)
+  -- (W2) not wired, or wired to nothing live: the wiring's own line
+  local ww = BG.wireWhy and BG.wireWhy(sid, uid)
+  if ww then return ww end
   if not g then return "not on a base grid" end
   local s = BG.status and BG.status(g.id)
   local head = s and string.format("grid %s · %s of %s kW", s.short and "SHORT" or "ok", string.format("%.1f", s.need or 0), string.format("%.1f", s.supply or 0)) or "on a grid"
@@ -293,6 +296,10 @@ function whyOf(sid, uid)
   if d.light and st and st.off then list[#list + 1] = "switched off" end
   local BG = ref("base_grid")
   if BG and BG.powerWhy and not (st and st.off) then list[#list + 1] = BG.powerWhy(sid, uid) end
+  -- (W2) a source, a store or a tower with no cable
+  if BG and BG.wireWhy and #list == 0 and d and (d.tower or (d.power and d.power.kind ~= "load" and d.power.kind ~= "aux")) then
+    list[#list + 1] = BG.wireWhy(sid, uid)
+  end
   return composeWhy(list)
 end
 

@@ -272,6 +272,7 @@ do
   local trip = { [4] = "tripped" }
   SCR.base_power = { breakerState = function(sid, uid) return trip[uid] or "closed" end }
   local BG = load_script("base_grid.lua", env(STORE, SCR, {}))
+  BG.WIRED = false   -- (this test is of the grid as wired before W2: the tower's 150 m, a structure one bus; smoke_wired_grid.lua has the wiring rule)
   SCR.base_grid = BG
   local why = BG.whyNot(7, 4, true)
   check(why and why:find("tripped: Reset it first", 1, true), "a tripped breaker won't close by hand: " .. tostring(why))

@@ -171,10 +171,18 @@ PARTS = {
                kind = "structural", fieldOnly = true, seat = 0.7250,
                cable = { type = "hv35", max = 6000, kgm = 2.3, perm = 9.0, lift = 0.6, r = 0.022, label = "HV Cable 11 kV" },
                desc = "3-core 35 mm² 11 kV cable · 140 A (1.5 MW) · 2.3 kg/m · $9 a metre · Transformer to Transformer, up to 6 km" },
+  -- W2 (the wiring rule, playtest 11-12b): every source, battery and machine
+  -- wants its own cable, so the short runs get a light lead: 2.5 mm² flex,
+  -- carried as a coil (no shipping on it), a dollar a metre, 200 m at most.
+  -- It burns through over 12 kW: the feed to a building wants 16 mm².
+  flexLead   = { prefab = "BaseCableDrum", label = "Flex Lead 2.5 mm²", h = 1.45, rx = 0.65, rz = 0.65, mass = 0.00035, cost = 1,
+               kind = "structural", fieldOnly = true, seat = 0.7250,
+               cable = { type = "lv2", max = 200, kgm = 0.35, perm = 1.0, lift = 0.4, r = 0.009, label = "Flex Lead 2.5 mm²", flex = true },
+               desc = "3-core 2.5 mm² rubber flex, 400 V · 24 A (9.6 kW) · 0.35 kg/m · $1 a metre, no shipping · up to 200 m: a machine's lead, a light's feed" },
 }
 
 ORDER = { "padPlate", "shed", "hab", "stand", "baseHub", "tower", "solarArray", "isotopeSkid", "batteryBank", "shieldWall", "powerCable",
-          "powerCable35", "powerCable95", "hvCable" }
+          "powerCable35", "powerCable95", "hvCable", "flexLead" }
 
 -- The panel's sections: { { title, ids } } (catalog_panel's host shape).
 function catalogue()

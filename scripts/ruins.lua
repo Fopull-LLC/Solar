@@ -301,7 +301,7 @@ GRAMMAR.hab = function(site)
   f[1] = add("floor.steel", 0, 2.4, 0, 0, 0, 0, "gunmetal", "floor")
   f[2] = add("floor21.steel", 2, 2.4, 0.5, 0, 0, 0, "gunmetal", "floor")
   add("floor.steel", 0, 2.4, -2, 0, 0, 0, "gunmetal", "floor")
-  add("rail.steel", 0.96, 2.6, -1.85, Q, 0, 0, nil, "fix")   -- (the well's west edge, its feet on the floor, clear of the back wall)
+  add("rail.steel", 1, 2.6, -2, Q, 0, 0, nil, "fix")   -- (the well's west edge: on the floor's edge line, where a player's rail snaps; playtest 11-12b)
   add("lightFitting.steel", 2, 2.4, 0.5, 0, math.pi, 0, nil, "light", f[2])
   add("lightFitting.steel", 0, 2.4, 0, 0, math.pi, 0, nil, "light", f[1])
   add("wall.steel", 0, 2.6, -3, math.pi, 0, 0, "bone", "wall")
@@ -1176,6 +1176,9 @@ function stampAuthored(def, pieces, g, now_)
   end
   local kept, ds = decayAuthored(s.full, s)
   local rec = ST.recordFromPieces(kept, g.body, g, s.name, "ruin", { t = (now_ or 0) - (s.age or 0) * 86400 })
+  -- (W2) an authored ruin is wired as before the wiring rule unless its
+  -- scenario asks for `wired = true`
+  if rec and not def.wired then rec.aw = 1 end
   rec.ru = s.id
   -- (a piece's uid is its line in the author's blueprint, as for any staged
   -- structure: the scenario names pieces by it, gaps where the decay took one;
@@ -1243,6 +1246,8 @@ local function tick()
         -- not for ever: near, or after 20 s, the stand-in will do)
         local sid = stampNow(s.id, d < 300 or now() - t0 > 20)
         if sid then stamp_wait[s.id] = nil end
+      elseif d < STAMP_R and e and e.cl and not e.enc and enclosureTick then
+        enclosureTick(s.id)   -- (playtest 11-12b: repaired = its rooms hold air)
       elseif d > UNSTAMP_R and e and e.sid then
         unstampNow(s.id)
       end
@@ -1456,7 +1461,22 @@ function claim(id, ctx, force)
   local r = ST.get(e.sid)
   ST.put(r)
   bump()
-  say("CLAIMED", string.format("%s is yours: a base. Repair what leans, restore what's gone, and power it", s.name), 5.0, "result")
+  say("CLAIMED", string.format("%s is yours: a base. Right what leans, close its rooms with the Build Kit, and cable its power", s.name), 5.0, "result")
+  return true
+end
+-- A claimed site's own Build Kit, for an Engineer who has none (playtest
+-- 11-12b: the repair "gets stuck … because no kit is deployed with the
+-- engineer": kits were only issued at the home base). The site's stores
+-- hold one; taking it also opens the kit's research, as the Relay
+-- Network's goal would have. → ok, why
+function takeKit(pack)
+  local inv, rs = ref("inventory"), ref("research")
+  if not (inv and inv.addItem) then return false, "no pack" end
+  pack = pack or "astro"
+  if (inv.itemCount(pack, "buildkit") or 0) > 0 then return false, "you carry one already" end
+  if rs and rs.isUnlocked and rs.grant and not rs.isUnlocked("buildkit") then pcall(rs.grant, "buildkit", "a claimed site's own kit") end
+  local ok, n = pcall(inv.addItem, pack, "buildkit", 1, { force = true })
+  if not ok or (tonumber(n) or 1) < 1 then return false, "no room in the pack" end
   return true
 end
 function baseOf(id)
@@ -1530,6 +1550,91 @@ function repairPiece(sid, uid)
 end
 
 -- ── the right-click rows on a ruin's piece ─────────────────────────────────
+-- ── THE ENCLOSURE (playtest 11-12b; work/baseloop/DESIGN.md phase 3) ────────
+-- "No more Restore roof buttons … repair the roof however you want, with any
+-- material. The game only checks that the room is actually enclosed." A
+-- claimed site is repaired through the Build Kit and the builder; what is
+-- judged is the air's own geometry (rooms.lua through room_air: any piece
+-- that seals, any layout), never which pieces stand where.
+--
+-- How many sealed rooms the site's design had: its full blueprint, solved
+-- once (pure). 0: a site with no room to close (a relay post).
+local need_cache = {}
+function designRooms(id)
+  if need_cache[id] ~= nil then return need_cache[id] end
+  local s = site(id)
+  local RM, pb = ref("rooms"), ref("parts_base")
+  if not (s and RM and RM.solve and pb and pb.partInfo) then return 0 end
+  local bp = {}
+  for i, p in ipairs(blueprintOf(s)) do
+    bp[#bp + 1] = { uid = i, id = p.id, x = p.x, y = p.y, z = p.z, yaw = p.yaw or 0, pitch = 0, roll = 0 }
+  end
+  local ok, R = pcall(RM.solve, { id = 0, bp = bp, st = {} }, pb.partInfo)
+  local n = 0
+  if ok and R then for _, r in ipairs(R.rooms) do if r.sealed then n = n + 1 end end end
+  need_cache[id] = n
+  return n
+end
+-- The site's rooms now. → { need, rooms, sealed, ok (sealed ≥ need > 0),
+--   open = { { m3, leaks = { label … } } … } (the rooms that leak) } | nil
+function enclosure(id)
+  local e = peek(id)
+  local RA = ref("room_air")
+  if not (e and e.sid and RA and RA.roomsOf) then return nil end
+  local R = RA.roomsOf(e.sid)
+  if not R and RA.solveNow then pcall(RA.solveNow, e.sid); R = RA.roomsOf(e.sid) end
+  local out = { need = designRooms(id), rooms = 0, sealed = 0, open = {} }
+  for _, r in ipairs(R and R.rooms or {}) do
+    out.rooms = out.rooms + 1
+    if r.sealed then out.sealed = out.sealed + 1
+    else
+      local o = { m3 = r.m3, leaks = {} }
+      for _, l in ipairs(r.leaks or {}) do o.leaks[#o.leaks + 1] = (l.n or 1) > 1 and string.format("%s (%d cells)", l.label, l.n) or l.label end
+      out.open[#out.open + 1] = o
+    end
+  end
+  out.ok = out.need > 0 and out.sealed >= out.need
+  return out
+end
+-- Is the room an authored job (`lot`) was about closed? True when the space
+-- under each of the lot's design pieces is inside a sealed room now: the
+-- author's pieces put back, or anything else that seals built over it.
+function lotEnclosed(id, lot)
+  local s, e = site(id), peek(id)
+  local RA, RM = ref("room_air"), ref("rooms")
+  if not (s and e and e.sid and RA and RA.roomsOf and RM and RM.roomAt) then return false end
+  local L = nil
+  for _, l in ipairs(s.lots or {}) do if l.id == lot then L = l end end
+  if not L then return false end
+  local R = RA.roomsOf(e.sid)
+  if not R then return false end
+  local full = blueprintOf(s)
+  local n = 0
+  for _, u in ipairs(L.uids or {}) do
+    local p = full[u]
+    if p then
+      n = n + 1
+      local room = RM.roomAt(R, p.x, p.y - 0.6, p.z)
+      if not (room and room.sealed) then return false end
+    end
+  end
+  return n > 0
+end
+-- (1 Hz, in tick: the first time a claimed site holds air as its design did)
+local function enclosure_tick(id)
+  local e = peek(id)
+  if not (e and e.cl and e.sid) or e.enc then return end
+  local en = enclosure(id)
+  if en and en.ok then
+    e.enc = agency_now()
+    write()
+    local s = site(id)
+    feat("ruin_repaired", { key = id, b = s and s.body })
+    say("IT HOLDS AIR", string.format("%s: every room closed. Power and air are yours to bring", s and s.name or "The site"), 5.0, "result")
+  end
+end
+enclosureTick = enclosure_tick
+
 local function pack_of(ctx) return (ctx and ctx.actor and ctx.actor.pack) or "astro" end
 local function near(ctx, t, extra)
   local CP = ref("context_providers")
@@ -1594,38 +1699,59 @@ local function provider(t, ctx)
           if ctx and ctx.toast then ctx.toast(ok and (s.name .. " is your base now") or tostring(why), not ok) end
           return ok
         end }
-    elseif s.lots then
-      -- (F8) an authored ruin's bill in its author's jobs, each at its price
-      local lots = {}
-      for _, l in ipairs(s.lots) do lots[#lots + 1] = l.id end
-      lots[#lots + 1] = "rest"
-      for _, lid in ipairs(lots) do
-        local function q() return restoreQuote(id, lid) end
-        if q().n > 0 then
-          out[#out + 1] = { id = "ru_restore_" .. tostring(lid), type = "action", group = G,
-            label = function() local qq = q(); return qq.n > 0 and ("Restore: " .. (qq.name or string.format("%d other piece%s", qq.n, qq.n == 1 and "" or "s"))) or "Restored" end,
-            hint = function() local qq = q(); return qq.n > 0 and string.format("$%d", qq.cost) or "" end,
-            enabled = function() return q().n > 0 end, why = "it stands as it was built",
-            act = function()
-              local n, why = restore(id, false, lid)
-              if ctx and ctx.toast then ctx.toast(n > 0 and string.format("%d pieces shipped and set back", n) or tostring(why), n == 0) end
-              return n > 0
-            end }
-        end
-      end
-    else
-      out[#out + 1] = { id = "ru_restore", type = "action", group = G,
-        label = function() local q = restoreQuote(id); return q.n > 0 and string.format("Restore %d missing piece%s", q.n, q.n == 1 and "" or "s") or "Nothing is missing" end,
-        hint = function() local q = restoreQuote(id); return q.n > 0 and string.format("$%d", q.cost) or "" end,
-        enabled = function() return restoreQuote(id).n > 0 end, why = "it stands as it was built",
-        act = function()
-          local n, why = restore(id)
-          if ctx and ctx.toast then ctx.toast(n > 0 and string.format("%d pieces shipped and set back", n) or tostring(why), n == 0) end
-          return n > 0
-        end }
     end
   end
-  if part.wr and e.cl then
+  -- (playtest 11-12b) A CLAIMED SITE IS REPAIRED BY HAND: no Restore rows.
+  -- Its tower and its core terminal are its Base Core: the rooms as the air
+  -- sees them, a Build Kit for an Engineer without one, and the builder.
+  if e.cl and (part.id == "tower" or part.rl == "core") then
+    out[#out + 1] = { id = "ru_rooms", type = "info", group = G, label = "Rooms", value = function()
+      local en = enclosure(id)
+      if not en then return "no rooms to read" end
+      if en.need == 0 then return en.rooms > 0 and string.format("%d room%s, %d hold air", en.rooms, en.rooms == 1 and "" or "s", en.sealed) or "no room to close here" end
+      if en.ok then return string.format("%d of %d hold air · the site is whole", en.sealed, en.need) end
+      local first = en.open[1] and en.open[1].leaks[1]
+      return string.format("%d of %d hold air%s", en.sealed, en.need, first and (" · " .. first) or " · a room with no roof is no room: close it")
+    end }
+    do
+      -- (the rooms that leak, as the menu opens: what and where)
+      local en0 = enclosure(id)
+      for i = 1, math.min(3, en0 and #en0.open or 0) do
+        local o = en0.open[i]
+        out[#out + 1] = { id = "ru_leak" .. i, type = "info", group = G, label = "Open room " .. i,
+          value = string.format("%.0f m³ · %s", o.m3 or 0, #o.leaks > 0 and table.concat(o.leaks, "; ", 1, math.min(3, #o.leaks)) or "open") }
+      end
+    end
+    local inv0 = ref("inventory")
+    if inv0 and (inv0.itemCount(pack_of(ctx), "buildkit") or 0) == 0 then
+      out[#out + 1] = { id = "ru_kit", type = "action", group = G, label = "Take a Build Kit", hint = "Engineer",
+        enabled = function() return role_of(ctx) == "engineer" and near(ctx, t, 6.0) end,
+        why = function() return role_of(ctx) ~= "engineer" and "the Build Kit is an Engineer's" or "come closer" end,
+        act = function()
+          local ok, why = takeKit(pack_of(ctx))
+          if ctx and ctx.toast then ctx.toast(ok and "Build Kit in the pack: B opens it. Walls, roof panels and cable drums are in its columns" or tostring(why), not ok) end
+          return ok
+        end }
+    end
+    out[#out + 1] = { id = "ru_build", type = "action", group = G, label = "Build the base", hint = "▸",
+      value = function() return "the full builder on this site: close its rooms your way" end,
+      enabled = function()
+        local bh = ref("build_host")
+        return role_of(ctx) == "engineer" and near(ctx, t, 9.0) and bh ~= nil and bh.enter ~= nil
+      end,
+      why = function() return role_of(ctx) ~= "engineer" and "Engineers only" or "come closer" end,
+      act = function()
+        local fb = ref("field_builder")
+        if fb and fb.isOpen and fb.isOpen() and fb.close then fb.close() end
+        local bh = ref("build_host")
+        local ok, w = bh.enter({ hub = { sid = rec.id, uid = part.uid } })
+        if not ok and ctx and ctx.toast then ctx.toast(tostring(w or "the builder wouldn't open here"), true) end
+        return ok ~= false, w
+      end }
+  end
+  -- (a window broken to an open frame carries `o_id`, not `wr`: it is repaired
+  -- the same way, or replaced through the kit)
+  if (part.wr or part.o_id) and e.cl then
     local label = part.id
     local pb = ref("parts_base")
     local d = pb and pb.partInfo(part.id)
@@ -1643,8 +1769,8 @@ local function provider(t, ctx)
           if inv and inv.removeItem then inv.removeItem(pack_of(ctx), "repairkit", 1) end
           return repairPiece(rec.id, part.uid), nil
         end } }
-  elseif part.wr then
-    out[#out + 1] = { id = "ru_fix0", type = "info", group = G, label = "Damage", value = "knocked askew · claim the site to repair it" }
+  elseif part.wr or part.o_id then
+    out[#out + 1] = { id = "ru_fix0", type = "info", group = G, label = "Damage", value = (part.o_id and not part.wr) and "broken open · claim the site to repair it" or "knocked askew · claim the site to repair it" }
   end
   local sub = string.format("Abandoned · %s · %s days", LABEL[s.kind], tostring(s.age))
   if e.cl then sub = "Claimed · " .. LABEL[s.kind] end

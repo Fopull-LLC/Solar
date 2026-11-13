@@ -356,6 +356,149 @@ function face(q)
            x = x, y = y, z = z, up = bodyv(lu), fwd = bodyv(lf), anchor = part, face = ax .. (an > 0 and "+" or "-") }
 end
 
+-- ── VACANT SLOTS (playtest 11-12b: "replacing one wall comes out misaligned
+-- … you have to tear down and rebuild several walls") ────────────────────────
+-- face() snaps to the piece under the cursor. Where a wall or a roof panel is
+-- MISSING there is nothing under the cursor but the ground beyond the gap, or
+-- the sky. A slot is the place a missing piece belongs, worked out from what
+-- still stands, on the same edge lines and wall tops face() uses:
+--   wall   a floor's or slab's edge with no wall on it, that an existing wall
+--          ends at (a line to continue, a corner to close)
+--   floor  the cell beside a wall's top, or beside a roof panel, with a floor
+--          below it and no panel in it (a roof to close)
+-- field_builder takes the slot the aim ray passes nearest. A leaning piece
+-- (a ruin's) counts where it stands: its x, z and yaw are its grid pose.
+-- → { { kind, lx, ly, lz, yaw, cx, cy, cz (its middle: what the ray is
+--       measured to), anchor (the part it hangs on) } … }
+SLOT_RAY_R = 0.9
+local function near2(ax, az, bx, bz, r) return (ax - bx) ^ 2 + (az - bz) ^ 2 <= r * r end
+function slots(rec, defs, def)
+  local out = {}
+  if not (rec and def and def.kit) then return out end
+  local S = classOf(def)
+  if S ~= "wall" and S ~= "floor" then return out end
+  local nb = boxOf(def)
+  local walls, floors = {}, {}
+  for _, p in ipairs(rec.bp or {}) do
+    local d = defs(p.id)
+    if d then
+      local c = classOf(d)
+      local b = boxOf(d)
+      local yaw = p.yaw or 0
+      if c == "wall" and d.kit then
+        walls[#walls + 1] = { p = p, x = p.x or 0, y = p.y or 0, z = p.z or 0, yaw = yaw, hx = (b[2] - b[1]) / 2, top = (p.y or 0) + b[4],
+                              c = math.cos(yaw), s = math.sin(yaw) }
+      elseif (c == "floor" or c == "slab") and math.abs(p.pitch or 0) < 1e-3 and math.abs(p.roll or 0) < 1e-3 and not d.slopeZ then
+        floors[#floors + 1] = { p = p, d = d, b = b, x = p.x or 0, y = p.y or 0, z = p.z or 0, yaw = yaw, top = (p.y or 0) + (d.deckTop or b[4]),
+                                c = math.cos(yaw), s = math.sin(yaw) }
+      end
+    end
+  end
+  local seen = {}
+  local function add(e)
+    local k = string.format("%s|%.1f|%.1f|%.1f", e.kind, e.lx, e.ly, e.lz)
+    if not seen[k] then seen[k] = true; out[#out + 1] = e end
+  end
+  -- is (x, z) inside floor f's footprint (its own frame)?
+  local function over(f, x, z, pad)
+    local dx, dz = x - f.x, z - f.z
+    local px, pz = dx * f.c - dz * f.s, dx * f.s + dz * f.c
+    pad = pad or 0
+    return px >= f.b[1] - pad and px <= f.b[2] + pad and pz >= f.b[5] - pad and pz <= f.b[6] + pad
+  end
+  if S == "wall" then
+    local whx, wh = (nb[2] - nb[1]) / 2, nb[4] - nb[3]
+    -- a wall's two ends (structure frame)
+    local function ends(x, z, c, s, hx) return x + hx * c, z - hx * s, x - hx * c, z + hx * s end
+    for _, f in ipairs(floors) do
+      local b = f.b
+      local E = { { "z", 1, b[6], b[1], b[2], 0 }, { "z", -1, b[5], b[1], b[2], math.pi }, { "x", 1, b[2], b[5], b[6], QUARTER }, { "x", -1, b[1], b[5], b[6], -QUARTER } }
+      for _, e in ipairs(E) do
+        local L = e[5] - e[4]
+        local n = math.floor(L / (2 * whx) + 1e-6)
+        for k = 1, n do
+          local t = e[4] + whx + (k - 1) * 2 * whx + (L - n * 2 * whx) / 2
+          local ex, ez
+          if e[1] == "z" then ex, ez = t, e[3] else ex, ez = e[3], t end
+          local lx = f.x + ex * f.c + ez * f.s
+          local lz = f.z - ex * f.s + ez * f.c
+          local yaw = wrap(f.yaw + e[6])
+          local yc, ys = math.cos(yaw), math.sin(yaw)
+          local vacant, wanted = true, false
+          local ax, az, bx, bz = ends(lx, lz, yc, ys, whx)
+          for _, w in ipairs(walls) do
+            if math.abs(w.y - f.top) < 0.3 then
+              -- on this slot already: its centre here, or a wider wall's line over it
+              local dx, dz = lx - w.x, lz - w.z
+              local along, across = dx * w.c - dz * w.s, dx * w.s + dz * w.c
+              if math.abs(across) < 0.3 and math.abs(along) <= math.max(0.3, w.hx - 0.1) then vacant = false break end
+              local wax, waz, wbx, wbz = ends(w.x, w.z, w.c, w.s, w.hx)
+              if near2(ax, az, wax, waz, 0.35) or near2(ax, az, wbx, wbz, 0.35) or near2(bx, bz, wax, waz, 0.35) or near2(bx, bz, wbx, wbz, 0.35) then wanted = true end
+            end
+          end
+          if vacant and wanted then
+            add({ kind = "wall", lx = lx, ly = f.top, lz = lz, yaw = yaw, cx = lx, cy = f.top + wh / 2, cz = lz, anchor = f.p })
+          end
+        end
+      end
+    end
+  else
+    local fhx, fhz = (nb[2] - nb[1]) / 2, (nb[6] - nb[5]) / 2
+    local function free(lx, ly, lz)
+      for _, f in ipairs(floors) do
+        if math.abs(f.y - ly) < 0.3 and math.abs(f.x - lx) < 0.3 and math.abs(f.z - lz) < 0.3 then return false end
+      end
+      return true
+    end
+    -- a floor at least a metre below the cell's middle: it roofs something
+    local function roofs(lx, ly, lz)
+      for _, f in ipairs(floors) do if f.top < ly - 1.0 and over(f, lx, lz, 0.05) then return true end end
+      return false
+    end
+    for _, w in ipairs(walls) do
+      for _, side in ipairs({ 1, -1 }) do
+        local cz = side * fhz
+        local lx, lz = w.x + cz * w.s, w.z + cz * w.c
+        if free(lx, w.top, lz) and roofs(lx, w.top, lz) then
+          add({ kind = "floor", lx = lx, ly = w.top, lz = lz, yaw = w.yaw, cx = lx, cy = w.top, cz = lz, anchor = w.p })
+        end
+      end
+    end
+    for _, f in ipairs(floors) do
+      if roofs(f.x, f.y, f.z) then
+        for _, o in ipairs({ { 2 * fhx, 0 }, { -2 * fhx, 0 }, { 0, 2 * fhz }, { 0, -2 * fhz } }) do
+          local lx, lz = f.x + o[1] * f.c + o[2] * f.s, f.z - o[1] * f.s + o[2] * f.c
+          if free(lx, f.y, lz) and roofs(lx, f.y, lz) then
+            add({ kind = "floor", lx = lx, ly = f.y, lz = lz, yaw = f.yaw, cx = lx, cy = f.y, cz = lz, anchor = f.p })
+          end
+        end
+      end
+    end
+  end
+  return out
+end
+-- The slot the ray (O + t·D, structure frame, D a unit vector) passes nearest,
+-- within `R` m of its middle and no further along than `tmax`. → slot, t, dist
+function slotOnRay(list, O, D, tmax, R)
+  local best, bt, bd = nil, nil, R or SLOT_RAY_R
+  for _, e in ipairs(list or {}) do
+    local vx, vy, vz = e.cx - O.x, e.cy - O.y, e.cz - O.z
+    local t = vx * D.x + vy * D.y + vz * D.z
+    if t > 0.4 and t <= (tmax or 1e9) then
+      local px, py, pz = vx - D.x * t, vy - D.y * t, vz - D.z * t
+      local d = math.sqrt(px * px + py * py + pz * pz)
+      if d < bd then best, bt, bd = e, t, d end
+    end
+  end
+  return best, bt, bd
+end
+-- A ray into a structure's frame (body-relative origin and direction).
+function rayLocal(rec, ox, oy, oz, dx, dy, dz)
+  local fr = frameOf(rec)
+  local lx, ly, lz = toLocal(fr, ox, oy, oz)
+  return { x = lx, y = ly, z = lz }, { x = dx * fr.R.x + dy * fr.R.y + dz * fr.R.z, y = dx * fr.U.x + dy * fr.U.y + dz * fr.U.z, z = dx * fr.F.x + dy * fr.F.y + dz * fr.F.z }
+end
+
 -- ── the records rules ───────────────────────────────────────────────────────
 
 -- A part's solid in its structure's frame { x, z, hx, hz, yaw, y0, y1 }.
