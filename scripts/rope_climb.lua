@@ -62,8 +62,8 @@ defaults = {
 
 -- ── the numbers (tools/gen_rope.py prints the davit's) ─────────────────────
 ROPE = {
-  length = 30.0,       -- m of 11 mm static line in the kit
-  radius = 0.0055,
+  length = 30.0,       -- m of 9.5 mm static line in the kit
+  radius = 0.00475,
   origin = 0.75,       -- the davit's root over its ground point (deployables)
   drop_y = 1.42,       -- the line leaves the sheave this high over the ground point
   drop_out = 0.885,    -- … and this far out over the drop (along -Z)
@@ -851,7 +851,7 @@ function climbing() return C ~= nil end
 function state()
   if not C then return nil end
   local L = layoutOf(C.id)
-  return { id = C.id, mode = C.mode, s = C.s, v = C.v, s_top = L and L.s_top, s_max = L and L.s_max,
+  return { id = C.id, mode = C.mode, s = C.s, v = C.v, s_top = L and L.s_top, s_max = L and L.s_max, push = C.push or 0,
            kind = L and unclipKind(L, C.s), drop = C.drop or (L and dropAt(L, C.s)), total = L and L.total }
 end
 
@@ -942,6 +942,54 @@ local function step_spot(e, b)
   return { sx + ux * (ROPE.foot + 0.03), sy + uy * (ROPE.foot + 0.03), sz + uz * (ROPE.foot + 0.03) }
 end
 
+-- KEEP THE SUIT OFF THE ROCK (playtest 2026-11-12b: "in first person you can
+-- still get stuck and clip through terrain while rappelling"). bodyAt hangs
+-- the suit ROPE.hang under the upper hand and ROPE.away out along the line's
+-- `away`: on a slab leaning out under a lip, or where the line runs over a
+-- bulge, that put the suit's middle, its head (the first-person eye) or its
+-- knees inside the rock, and a let-go there left the walker stuck in it.
+-- Rays come in from SUIT_CLEAR.from out over the drop, along −away, at the
+-- head and the middle; the suit is moved out along `away` until each of
+-- those points is SUIT_CLEAR.r off what they meet, never more than
+-- SUIT_CLEAR.max. (Not at the knees: the legs are the IK's, on the wall or
+-- folded, and a push for a floor rising under them near the foot of the line
+-- took the fists 0.4 m off the rope: ropeshots `grips`.)
+-- Pure (the cast is given: body-relative x,y,z, dir, max → { d } or nil).
+SUIT_CLEAR = { r = 0.38, from = 1.4, max = 0.35, ease = 1.5, every = 0.1, ahead = 0.35, pts = { 0.72, 0.0 } }
+function clearTarget(L, s, cast)
+  local _, _, _, ax, ay, az = at(L, s)
+  local u = L.u
+  local bx, by, bz = bodyAt(L, s)
+  local need = 0
+  for _, h in ipairs(SUIT_CLEAR.pts) do
+    local px, py, pz = bx + u[1] * h, by + u[2] * h, bz + u[3] * h
+    local hit = cast(px + ax * SUIT_CLEAR.from, py + ay * SUIT_CLEAR.from, pz + az * SUIT_CLEAR.from, -ax, -ay, -az, SUIT_CLEAR.from + SUIT_CLEAR.r + 0.6)
+    if hit and hit.d then need = max(need, SUIT_CLEAR.r - (hit.d - SUIT_CLEAR.from)) end
+  end
+  return max(0, min(SUIT_CLEAR.max, need))
+end
+-- The push this tick (m along this tick's `away`): measured every SUIT_CLEAR.every
+-- s at s and SUIT_CLEAR.ahead s further along the way it is going; it comes on at
+-- once (never in the rock) and eases off at SUIT_CLEAR.ease m/s (no pop). A scalar
+-- in the line's own frame: nothing world-frame is kept.
+local function clear_push(L, b, dt)
+  C.clr_t = (C.clr_t or 0) - dt
+  if C.clr_t <= 0 then
+    C.clr_t = SUIT_CLEAR.every
+    local cast = cast_for(C.id, b)
+    if cast then
+      local t = clearTarget(L, C.s, cast)
+      local s2 = max(L.s_top, min(L.s_max, C.s + (C.v or 0) * SUIT_CLEAR.ahead))
+      if abs(s2 - C.s) > 0.05 then t = max(t, clearTarget(L, s2, cast)) end
+      C.clr_want = t
+    end
+  end
+  local want, p = C.clr_want or 0, C.push or 0
+  if want > p then p = want else p = max(want, p - SUIT_CLEAR.ease * dt) end
+  C.push = p
+  return p
+end
+
 local function gravity(b, x, y, z)
   local r2 = x * x + y * y + z * z
   if not (b and b.mu and r2 > 1) then return 9.8 end
@@ -978,6 +1026,9 @@ function fixedUpdate(node, dt)
     C.t = C.t + dt
     local k = smooth(C.t / ROPE.slide)
     local tx, ty, tz = bodyAt(L, C.s)
+    local pu = clear_push(L, b, dt)
+    local _, _, _, ax, ay, az = at(L, C.s)
+    tx, ty, tz = tx + ax * pu, ty + ay * pu, tz + az * pu
     px, py, pz = C.p0[1] + (tx - C.p0[1]) * k, C.p0[2] + (ty - C.p0[2]) * k, C.p0[3] + (tz - C.p0[3]) * k
     if C.t >= ROPE.slide then C.mode = "on" end
   elseif C.mode == "step" then
@@ -997,6 +1048,9 @@ function fixedUpdate(node, dt)
       sound(string.format("audio/foley/ratchet_%d.ogg", (strokes % 5) + 1), 0.22)
     end
     px, py, pz = bodyAt(L, C.s)
+    local pu = clear_push(L, b, dt)
+    local _, _, _, ax, ay, az = at(L, C.s)
+    px, py, pz = px + ax * pu, py + ay * pu, pz + az * pu
   end
   set_kinematic(a, true)
   a.x, a.y, a.z = b.x + px, b.y + py, b.z + pz
@@ -1368,7 +1422,6 @@ function update(node, dt)
     local H = ref("item_hand")
     if H and H.held and H.held() and H.stow then pcall(H.stow) end
     if L then
-      local kind = unclipKind(L, C.s)
       -- the drop under the soles, from the ground there (the line's own end
       -- can lie lower than the ground under a suit hanging out from it)
       if now() - (C.drop_t or -10) > 0.25 then
@@ -1381,15 +1434,11 @@ function update(node, dt)
         C.drop = h and h.d or nil
       end
       local drop = C.drop or dropAt(L, C.s)
+      -- NO KEY STRIP ON THE LINE (playtest 2026-11-12b: "the controls are
+      -- intuitive"): W/S climb and lower, E steps off or lets go; what is
+      -- under the feet stays on the readout below.
       if C.mode ~= "on" then
         promptText = C.mode == "step" and "stepping off…" or "clipping on…"
-      elseif kind == "top" then
-        promptText = "E   step off onto the ledge  ·  S   lower away"
-      elseif kind == "bottom" then
-        promptText = "E   unclip  ·  W   climb"
-      else
-        local fall = drop and string.format("a %s fall", fmt_m(drop)) or "a long fall: the line ends in the air"
-        promptText = string.format("W   climb  ·  S   lower away (SHIFT fast)  ·  E   let go — %s", fall)
       end
       local down = C.s - L.s_top
       readout = string.format("ROPE  %s down  ·  %s", fmt_m(max(0, down)),
@@ -1566,13 +1615,15 @@ local function pose(dt)
   -- the side (right as the crew faces the wall): up × away
   local sx, sy, sz = norm3(u[2] * az - u[3] * ay, u[3] * ax - u[1] * az, u[1] * ay - u[2] * ax)
   local bx, by, bz = bodyAt(L, s)
+  local pu = C.push or 0
+  bx, by, bz = bx + ax * pu, by + ay * pu, bz + az * pu
   -- the feet: on the wall where there is one in reach, else hanging
   -- (the legs near straight: the ankles a leg's length from the hips, which
   -- are GRIP.hip under the suit's centre, as low on the wall as that puts them)
   local fs = s + ROPE.hang + 0.55
   local wd = wallSmooth(L, fs)
   if wd and wd < ROPE.feet_max then
-    local h = ROPE.away + wd - GRIP.sole
+    local h = ROPE.away + pu + wd - GRIP.sole
     fs = s + ROPE.hang + GRIP.hip + sqrt(max(0.25 * 0.25, GRIP.leg * GRIP.leg - h * h))
     wd = wallSmooth(L, fs) or wd
   end
@@ -1581,9 +1632,11 @@ local function pose(dt)
   -- the body: leant back off the line, legs out to the wall (an L: the
   -- harness takes the weight, the soles flat on the rock); hanging free,
   -- nearly plumb. (Back is the rig's root: the bone writes come first.)
-  local lean = on_wall and GRIP.lean_wall or (free and GRIP.lean_free or 0)
+  -- (pushed off the rock by SUIT_CLEAR, the climber leans in toward the
+  -- line, past upright if need be, so the fists still reach it)
+  local lean = math.max(-0.45, (on_wall and GRIP.lean_wall or (free and GRIP.lean_free or 0)) - 1.4 * pu)
   C.lean = (C.lean or lean) + (lean - (C.lean or lean)) * (1 - math.exp(-6 * (dt or 0.016)))
-  if C.lean > 0.005 then pcall(an.addBoneRot, an, "Back", 0, -C.lean * w, 0, w) end
+  if math.abs(C.lean) > 0.005 then pcall(an.addBoneRot, an, "Back", 0, -C.lean * w, 0, w) end
   -- the hands: the right above, the left below, fists on the line
   local hx, hy, hz = at(L, s - GRIP.upper - sw)
   local lx, ly, lz = at(L, s + GRIP.lower + sw)
@@ -1608,10 +1661,17 @@ local function pose(dt)
     local fx, fy, fz, fax, fay, faz = at(L, fs)
     -- the ankles a sole's depth off the rock, shoulder-width apart
     local px, py, pz = fx - fax * (wd - GRIP.sole), fy - fay * (wd - GRIP.sole), fz - faz * (wd - GRIP.sole)
+    -- (the knees' pole: over the middle of hip to ankle, up and a little
+    -- out to the side, so they bend up as in a harness sit. It was out from
+    -- the ankle along `away`, close to the hip–ankle line itself: the bend's
+    -- plane was ill-defined and a knee could fold sideways or backwards,
+    -- playtest 2026-11-12b "limbs bent wrong")
+    local hpx, hpy, hpz = bx - u[1] * GRIP.hip, by - u[2] * GRIP.hip, bz - u[3] * GRIP.hip
     for _, sg in ipairs({ -1, 1 }) do
-      local t = W(px + sx * 0.17 * sg, py + sy * 0.17 * sg, pz + sz * 0.17 * sg)
-      local pole = W(px + sx * 0.22 * sg + fax * 0.7 + u[1] * 0.35, py + sy * 0.22 * sg + fay * 0.7 + u[2] * 0.35,
-                     pz + sz * 0.22 * sg + faz * 0.7 + u[3] * 0.35)
+      local ex, ey, ez = px + sx * 0.17 * sg, py + sy * 0.17 * sg, pz + sz * 0.17 * sg
+      local t = W(ex, ey, ez)
+      local mx, my, mz = (hpx + sx * 0.12 * sg + ex) * 0.5, (hpy + sy * 0.12 * sg + ey) * 0.5, (hpz + sz * 0.12 * sg + ez) * 0.5
+      local pole = W(mx + u[1] * 0.7 + sx * 0.12 * sg, my + u[2] * 0.7 + sy * 0.12 * sg, mz + u[3] * 0.7 + sz * 0.12 * sg)
       pcall(an.reach, an, sg < 0 and "Foot.Left" or "Foot.Right", t, { pole = pole, weight = w })
     end
   elseif free then

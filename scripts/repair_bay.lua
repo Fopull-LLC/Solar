@@ -118,6 +118,8 @@ function quote(work, p)
   local q = { parts = 0, mend = 0, fuel = 0, fuelCost = 0, charge = 0, chargeCost = 0, gas = 0, gasCost = 0, lost = work.lost or 0,
               refit = 0, refitCost = 0, refits = {}, refitUids = {} }
   local add_fuel, add_ec = 0, 0
+  -- THE WRECK'S crewed part, rebuilt: its whole price (it is a new part)
+  if work.wreck then q.wreck = { label = work.wreck.label or "crewed part", cost = work.wreck.cost or 20 } end
   for _, e in ipairs(work.refit or {}) do
     local c = (e.cost or 20) * (p.refit_rate or 0.5)
     q.refit = q.refit + 1
@@ -143,8 +145,8 @@ function quote(work, p)
   -- gas to the tenth of a litre (a bike's tank is 4 L)
   q.gas = math.max(0, math.floor((work.gas or 0) * 10 + 0.5) / 10)
   q.gasCost = q.gas * (p.gas_price or 0.6)
-  local sum = q.mend + q.refitCost + q.fuelCost + q.chargeCost + q.gasCost
-  q.nothing = q.parts == 0 and q.refit == 0 and q.fuel < 1 and q.charge < 1 and q.gas < 0.1
+  local sum = q.mend + q.refitCost + q.fuelCost + q.chargeCost + q.gasCost + (q.wreck and q.wreck.cost or 0)
+  q.nothing = q.parts == 0 and q.refit == 0 and q.fuel < 1 and q.charge < 1 and q.gas < 0.1 and not q.wreck
   q.total = q.nothing and 0 or math.max(p.min_fee or 10, math.floor(sum + 0.5))
   return q
 end
@@ -154,6 +156,7 @@ function orderLines(q, money, most)
   money = money or function(v) return "$" .. tostring(math.floor(v + 0.5)) end
   most = most or defaults.refit_lines or 6
   local out = {}
+  if q.wreck then out[#out + 1] = { "Rebuild  " .. q.wreck.label, money(q.wreck.cost) } end
   -- every refit part on its own line, the most costly first; past `most`, the
   -- rest summed on one
   local rs = {}
@@ -297,7 +300,9 @@ local function craft_in_bay(node)
   local best, bd = nil, math.huge
   for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
     local vn = v.node
-    if valid(vn) and not (v.isLost and v.isLost()) then
+    -- (a wreck counts when its crewed part is all it lost: vessel_controller
+    -- wreckMendable; playtest 2026-11-12b, a crashed bike the bay ignored)
+    if valid(vn) and (not (v.isLost and v.isLost()) or (v.wreckMendable and v.wreckMendable())) then
       local p = tick_pos(vn)
       local lx, ly, lz
       if p then lx, ly, lz = bay_local(node, p) end
@@ -321,6 +326,9 @@ end
 -- What the craft needs, read off its controller.
 local function work_of(v)
   local w = { parts = {}, fuel = 0, charge = 0, lost = 0, refit = {} }
+  -- a wreck: its broken crewed part rebuilt (unwreck), at its whole price
+  local wm = v.isLost and v.isLost() and v.wreckMendable and v.wreckMendable()
+  if wm then w.wreck = { uid = wm.uid, label = wm.label, cost = wm.cost } end
   for _, e in ipairs(v.damagedParts and v.damagedParts() or {}) do
     local rec = v.partRec and v.partRec(e.uid) or {}
     local id = tostring(rec.id or "")
@@ -376,6 +384,15 @@ function service(v)
   if co and co.afford and not co.afford(q.total) then return false, "not enough funds: " .. money(q.total) end
   if co and co.spend and not co.spend(q.total, "repair bay: " .. (v.craftName or "craft")) then
     return false, "not enough funds"
+  end
+  -- a wreck first: its crewed part rebuilt, and it is a craft again (the
+  -- mend, refit and fills below refuse a lost craft)
+  if q.wreck then
+    local ok, why = v.unwreck and v.unwreck()
+    if not ok then
+      if co and co.earn then co.earn(q.total, "repair bay: wreck rebuild called off") end
+      return false, "rebuild: " .. tostring(why or "this wreck can't be mended")
+    end
   end
   local mended = 0
   for _, e in ipairs(v.damagedParts and v.damagedParts() or {}) do
@@ -464,6 +481,10 @@ local function provider(t, ctx)
   out[#out + 1] = { type = "meter", id = "cond", label = "WORST PART", frac = worst,
     value = q.parts > 0 and string.format("%d%%  ·  %d worn", math.floor(worst * 100 + 0.5), q.parts) or "all whole",
     warn = worst < 0.5 }
+  if q.wreck then
+    out[#out + 1] = { type = "info", id = "wreck", label = "WRECKED", warn = true,
+      value = q.wreck.label .. " broken: the bay rebuilds it" }
+  end
   if q.refit + (q.lost or 0) > 0 then
     out[#out + 1] = { type = "info", id = "missing", label = "MISSING", warn = true,
       value = string.format("%d part%s broken off", q.refit + q.lost, q.refit + q.lost == 1 and "" or "s") }
@@ -476,7 +497,7 @@ local function provider(t, ctx)
     out[#out + 1] = { type = "info", id = "line" .. i, group = "WORK ORDER", label = l[1], value = l[2] }
   end
   out[#out + 1] = { type = "info", id = "total", group = "WORK ORDER", label = "TOTAL", value = money(q.total) }
-  local secs = math.min(params.secs_max, params.secs + params.secs_part * q.parts + params.secs_refit * q.refit)
+  local secs = math.min(params.secs_max, params.secs + params.secs_part * q.parts + params.secs_refit * (q.refit + (q.wreck and 2 or 0)))
   local spark_t = 0
   out[#out + 1] = { type = "action", id = "service", group = "WORK ORDER",
     label = string.format("Service  ·  %s", money(q.total)), hint = string.format("%.0f s", secs),

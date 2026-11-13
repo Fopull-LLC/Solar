@@ -1725,15 +1725,16 @@ local function outcrop_ground_tick()
   if oc_serial == nil or sv == oc_serial then oc_serial = sv; return end
   local recs = terrain.editsSince(oc_serial)
   oc_serial = sv
-  if outcrop_n <= 0 then return end
+  -- (loose rock on the ground the edits reached is woken: looseWakeNear)
   if recs == nil then
-    -- further behind than the feed keeps: every outcrop is looked at
-    outcrop_check_near(0, 0, 0, math.huge)
+    looseWakeNear(0, 0, 0, math.huge)
+    if outcrop_n > 0 then outcrop_check_near(0, 0, 0, math.huge) end
     return
   end
   for _, r in ipairs(recs) do
     if r.kind ~= "paint" and r.x and (r.body == nil or r.body == cur_body) then
-      outcrop_check_near(r.x, r.y, r.z, r.r or 3.0)
+      looseWakeNear(r.x, r.y, r.z, r.r or 3.0)
+      if outcrop_n > 0 then outcrop_check_near(r.x, r.y, r.z, r.r or 3.0) end
     end
   end
 end
@@ -2252,6 +2253,53 @@ local loose_wait = 0
 
 local function loose_live(e) return e.n and e.n.valid and e.n.name == e.name end
 
+-- LOOSE ROCK FOLLOWS ITS GROUND (playtest 2026-11-12b: "rocks from cave-ins
+-- still float in the air"). A cave-in's slabs (cave_hazards) and boulders
+-- plucked from the scatter are bodies here, asleep once they settle. Two
+-- ways they ended up in the air:
+--   * the save kept where each lay but not how it lay: brought back on a
+--     load (loose_tick) a slab that had settled on its long edge stood again
+--     on its default rotation, its box's flat face up to a quarter of a
+--     metre a unit of scale over the ground, and was built asleep where it
+--     was put. Now the save keeps its yaw, pitch and roll (ya, pi, ro), and a
+--     body brought back is woken with a small push down, so it settles on
+--     the ground there is now (a rubble heap dug since included);
+--   * the ground under a sleeping one dug away: every non-paint edit the
+--     terrain's feed reports (outcrop_ground_tick, body-relative centres)
+--     wakes the loose bodies it reached (LOOSE_WAKE m past its reach), so
+--     they fall onto what is left.
+LOOSE_WAKE = 1.5
+looseWoken = 0
+local function loose_drop(n)
+  if not (n and n.valid ~= false) then return end
+  local b = cur_body and space.body(cur_body)
+  local ux, uy, uz = 0, -1, 0
+  if b then
+    local dx, dy, dz = n.x - b.x, n.y - b.y, n.z - b.z
+    local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if l > 1e-6 then ux, uy, uz = -dx / l, -dy / l, -dz / l end
+  end
+  -- (planet-relative, as node.vel is: a gentle start downward)
+  pcall(function() n.asleep = false; n.vel = vec3(ux * 0.4, uy * 0.4, uz * 0.4) end)
+end
+function looseWakeNear(ex, ey, ez, r)
+  local b = cur_body and space.body(cur_body)
+  if not b then return 0 end
+  local k = 0
+  for _, e in ipairs(loose) do
+    if loose_live(e) then
+      local n = e.n
+      local d = len(n.x - b.x - ex, n.y - b.y - ey, n.z - b.z - ez)
+      if d <= (r or 3) + LOOSE_WAKE + (e.s or 1) * 0.7 then
+        pcall(function() n.asleep = false end)
+        k = k + 1
+      end
+    end
+  end
+  looseWoken = looseWoken + k
+  return k
+end
+
 function adoptBody(n, pf, mat, qty, scale)
   if not (n and n.valid ~= false and pf and mat) then return end
   local mats = ref("materials")
@@ -2275,7 +2323,7 @@ local loose_pending = {}   -- body → saved entries not spawned yet
 local loose_since = {}
 
 local function copy_entry(e)
-  return { b = e.b, pf = e.pf, x = e.x, y = e.y, z = e.z, m = e.m, q = e.q, s = e.s }
+  return { b = e.b, pf = e.pf, x = e.x, y = e.y, z = e.z, m = e.m, q = e.q, s = e.s, ya = e.ya, pi = e.pi, ro = e.ro }
 end
 
 local function loose_tick()
@@ -2309,8 +2357,12 @@ local function loose_tick()
         loose_wait = math.max(0, loose_wait - 1)
         n.name = nm
         if e.s and e.s ~= 1 then n.scale = e.s end
+        -- (the way it lay, and then let settle: LOOSE ROCK FOLLOWS ITS GROUND)
+        if e.ya and n.setAngles then pcall(n.setAngles, n, e.ya, e.pi or 0, e.ro or 0) end
         adoptBody(n, e.pf, e.m, e.q, e.s)
-        if assembly and assembly.rebuild then assembly.rebuild(n) end
+        if assembly and assembly.rebuild then
+          if not pcall(assembly.rebuild, n, function() loose_drop(n) end) then loose_drop(n) end
+        else loose_drop(n) end
       end)
     else
       keep[#keep + 1] = e
@@ -2335,7 +2387,8 @@ local function loose_tick()
       local bn = space.dominant(n.x, n.y, n.z)
       local bb = bn and space.body(bn)
       if bb then
-        out[#out + 1] = { b = bn, pf = e.pf, x = n.x - bb.x, y = n.y - bb.y, z = n.z - bb.z, m = e.mat, q = e.qty, s = e.s }
+        out[#out + 1] = { b = bn, pf = e.pf, x = n.x - bb.x, y = n.y - bb.y, z = n.z - bb.z, m = e.mat, q = e.qty, s = e.s,
+                          ya = n.yaw or 0, pi = n.pitch or 0, ro = n.roll or 0 }
       end
     end
   end

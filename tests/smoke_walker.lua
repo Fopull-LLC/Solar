@@ -1276,6 +1276,28 @@ check("a 25 m/s frame at the end of a 1.25 m drop is judged as the drop (impactC
   string.format("%d impacts, %.2f m/s (raw %.2f)", n4, sp4, walker.impactRaw or -1))
 check("impactCap: a 1.9 m jump on g 7 lands under 6.9 m/s, a 30 m fall at 20+",
   walker.impactCap(7, 1.9, 0) < 6.9 and walker.impactCap(7, 30, 0) > 20)
+-- (playtest 2026-11-12b: "fall damage running and jumping on flat ground")
+-- a sprint-jump's run is the walker's own: it is never a fall
+do
+  local own = walker.ownSpeed()
+  check("ownSpeed covers a bunny hop's 10.5 m/s carry", own >= 10.5, string.format("%.2f", own))
+  local c45 = math.sqrt(0.5)
+  -- landing at 10.5 m/s along the ground and 5.4 down onto a face tipped 45° toward the runner
+  local raw, jh = walker.landingImpact(10.5, -5.4, 0, 0, 1, 0, -c45, c45, 0, own)
+  local was = walker.impactOf(10.5, -5.4, 0, -c45, c45, 0)
+  check("a run-jump onto a tipped face judges the drop, not the run", jh == 0 and raw < 4 and was > 11,
+    string.format("judged %.2f (was %.2f)", raw, was))
+  check("…and its cap is the drop's", walker.impactCap(7, 1.9, jh) < 6.9)
+  -- a sprint-jump DOWN a 13° hill: the slope falling away still eases it
+  local s13, c13 = math.sin(math.rad(13)), math.cos(math.rad(13))
+  local dn = walker.landingImpact(9.4, -9.5, 0, 0, 1, 0, s13, c13, 0, own)
+  check("a sprint-jump down a 13° hill lands under 9 (the slope falls away)", dn < 8 and dn > 6, string.format("%.2f", dn))
+  -- thrown off a craft at 25 m/s into a wall: the speed past a sprint still counts
+  local th, kh = walker.landingImpact(25, -2, 0, 0, 1, 0, -1, 0, 0, own)
+  check("thrown off a craft at 25 m/s, the excess still counts", kh > 12 and th > 12, string.format("%.2f", th))
+  -- a fall is whole: 14 m/s straight down onto the flat
+  check("a fall's own speed is whole", math.abs(walker.landingImpact(0.5, -14, 0, 0, 1, 0, 0, 1, 0, own) - 14) < 1e-9)
+end
 ASTRO.vy = 0
 tick(10)
 

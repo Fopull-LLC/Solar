@@ -377,6 +377,27 @@ do
   check(next(R.guardGroups({})) == nil, "guard: no davits, no owners")
 end
 
+-- THE SUIT KEPT OFF THE ROCK (playtest 2026-11-12b): a plumb line, `away` +X;
+-- the face is the plane x = f(y), cast along −X
+do
+  local L = R.finish({ p = { 0, 10, 0, 0, 0, 0 }, a = { 1, 0, 0, 1, 0, 0 }, u = { 0, 1, 0 }, g = true })
+  local function caster(f)
+    return function(ox, oy, oz, dx, dy, dz, mx)
+      if dx >= 0 then return nil end
+      local d = ox - f(oy)
+      if d >= 0 and d <= mx then return { d = d } end
+      return nil
+    end
+  end
+  local plumb = R.clearTarget(L, 2, caster(function() return -0.05 end))
+  check(near(plumb, 0), string.format("clear: a plumb wall behind the line needs no push (%.3f)", plumb))
+  local slab = R.clearTarget(L, 2, caster(function(y) return (10 - y) * 0.1 end))
+  check(near(slab, R.SUIT_CLEAR.r - (0.38 - (10 - (8 - 0.65)) * 0.1), 1e-6), string.format("clear: a slab leaning out pushes the middle clear (%.3f)", slab))
+  local over = R.clearTarget(L, 2, caster(function(y) return (10 - y) * 0.4 end))
+  check(near(over, R.SUIT_CLEAR.max), string.format("clear: never more than SUIT_CLEAR.max (%.3f)", over))
+  check(R.clearTarget(L, 2, function() return nil end) == 0, "clear: open air, no push")
+end
+
 for _, f in ipairs(failures) do print("FAIL " .. f) end
 print(string.format("smoke_rope: %d passed, %d failed", passed, #failures))
 if #failures > 0 then os.exit(1) end

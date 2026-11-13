@@ -203,6 +203,110 @@ local function ignore_list(node)
   return out
 end
 
+-- ── CRAFT CONTACT (playtest 2026-11-12b: "crew walking into a rover push it
+-- around wildly while you pilot") ────────────────────────────────────────────
+-- The body is KINEMATIC: whatever it is placed into is pushed out of it with
+-- no limit on the force. A walk that ran into a rover (its route planned
+-- before the rover moved; a follow or a board walk aimed at the craft's
+-- middle) shoved the rover about, and a rover driven into someone standing
+-- met a post. Now, before each step, the capsule's knee and chest spheres at
+-- the new point are asked for a CRAFT (an assembly that is not anchored: a
+-- base's kit structure is): one there and the step is not taken. Within
+-- YIELD.reach of the walk's target the walk has ARRIVED (a walk to a craft
+-- ends at its hull, and SC5R.board's walk then seats them); otherwise it
+-- stands and plans its route again (the planner's cells see the craft now),
+-- at most every YIELD.replan s. A craft that comes INTO the body moves the
+-- body out of its way (YIELD.out m a tick, away from the craft's centre of
+-- mass along the ground), never the craft. The tests run only with a craft
+-- within YIELD.near m (asked twice a second).
+-- (a craft on the move is met YIELD.ahead m early: the body steps aside
+-- before the hull reaches it; on = false turns it all off, for A/B probes)
+YIELD = { on = true, r = 0.33, ahead = 0.3, lo = 0.55, hi = 1.25, reach = 8.0, replan = 0.6, out = 0.06, scan = 0.5, near = 40 }
+yieldStats = { blocked = 0, arrived = 0, pushed = 0 }
+local craft_t, craft_near, yield_t = -10, false, -10
+local function craft_root(n)
+  local k = 0
+  while n and n.valid ~= false and k < 6 do
+    local inf = assembly and assembly.info and assembly.info(n)
+    if inf and inf.mass then
+      if inf.anchored then return nil end
+      return n, inf
+    end
+    n = n.parent
+    k = k + 1
+  end
+  return nil
+end
+local function crafts_about(wx, wy, wz)
+  if not YIELD.on then return false end
+  local t = time or 0
+  if t - craft_t < YIELD.scan then return craft_near end
+  craft_t = t
+  craft_near = false
+  for _, v in ipairs(findScripts and findScripts("vessel_controller") or {}) do
+    local n = v.node
+    if n and n.valid ~= false and not v.structureMode
+      and (n.x - wx) ^ 2 + (n.y - wy) ^ 2 + (n.z - wz) ^ 2 < YIELD.near * YIELD.near then
+      craft_near = true
+      break
+    end
+  end
+  return craft_near
+end
+-- The craft a standing capsule centred at body-relative p (up ux,uy,uz) would
+-- overlap → its root node and assembly.info, or nil.
+local function craft_in(b, p, ux, uy, uz, ign, moving_r)
+  if not (overlapSphere and vec3) then return nil end
+  local hh = P("half_h")
+  for _, h in ipairs({ YIELD.lo, YIELD.hi }) do
+    local o = h - hh
+    local ok, hits = pcall(overlapSphere, vec3(b.x + p.x + ux * o, b.y + p.y + uy * o, b.z + p.z + uz * o), moving_r or YIELD.r, { ignore = ign })
+    if ok and type(hits) == "table" then
+      for _, hit in ipairs(hits) do
+        if hit.node and not passable(hit.node) then
+          local root, inf = craft_root(hit.node)
+          -- (the wider sphere counts only a craft on the move)
+          if root and (not moving_r or (inf.vel and (inf.vel.x ^ 2 + inf.vel.y ^ 2 + inf.vel.z ^ 2) > 0.09)) then return root, inf end
+        end
+      end
+    end
+  end
+  return nil
+end
+-- A craft in the body now: out of its way along the ground. → the new
+-- body-relative centre, or nil
+local function yield_out(node, b, p, dt)
+  if not crafts_about(b.x + p.x, b.y + p.y, b.z + p.z) then return nil end
+  local ux, uy, uz = norm3(p.x, p.y, p.z)
+  local ign = ignore_list(node)
+  local root, inf = craft_in(b, p, ux, uy, uz, ign)
+  if not root then root, inf = craft_in(b, p, ux, uy, uz, ign, YIELD.r + YIELD.ahead) end
+  if not root then return nil end
+  local cm = inf.com or inf.origin
+  if not cm then return nil end
+  local dx, dy, dz = p.x - (cm.x - b.x), p.y - (cm.y - b.y), p.z - (cm.z - b.z)
+  local du = dx * ux + dy * uy + dz * uz
+  dx, dy, dz = dx - ux * du, dy - uy * du, dz - uz * du
+  -- (a craft on the move: out to its side, and carried with it meanwhile
+  -- (its velocity is planet-relative, as the body's frame is), never
+  -- bulldozed ahead of it)
+  local v = inf.vel or { x = 0, y = 0, z = 0 }
+  local vu = v.x * ux + v.y * uy + v.z * uz
+  local vx, vy, vz = v.x - ux * vu, v.y - uy * vu, v.z - uz * vu
+  local vx1, vy1, vz1, vl = norm3(vx, vy, vz)
+  if vl > 0.3 then
+    local a = dx * vx1 + dy * vy1 + dz * vz1
+    local sx, sy, sz, sl = norm3(dx - vx1 * a, dy - vy1 * a, dz - vz1 * a)
+    if sl < 1e-3 then sx, sy, sz = norm3(vy1 * uz - vz1 * uy, vz1 * ux - vx1 * uz, vx1 * uy - vy1 * ux) end
+    dx, dy, dz = sx, sy, sz
+  end
+  local hx, hy, hz, hl = norm3(dx, dy, dz)
+  if hl < 1e-3 then hx, hy, hz = norm3(uy, -ux, 0) end
+  local k = (vl > 0.3) and (dt or 0) or 0
+  yieldStats.pushed = yieldStats.pushed + 1
+  return { x = p.x + hx * YIELD.out + vx * k, y = p.y + hy * YIELD.out + vy * k, z = p.z + hz * YIELD.out + vz * k }
+end
+
 -- ── PATHS (pure but for `free`, tests/smoke_crew_walk.lua) ──────────────────
 -- plan = newPlan(gi, gj, arrive_cells, maxEval): an A* from cell (0, 0)
 -- toward (gi, gj) over 8-connected cells; planStep(plan, free, budget) asks
@@ -648,6 +752,21 @@ local function steer_tick(node, c, r, dt)
     -- or a tank's flank, walked at the same height, not climbed)
     if up <= step * 0.8 + 0.02 then nx, ny, nz = nx + vx * up, ny + vy * up, nz + vz * up end
   end
+  -- a craft where the step goes: not into it (CRAFT CONTACT, above)
+  if crafts_about(b.x + nx, b.y + ny, b.z + nz) and craft_in(b, { x = nx, y = ny, z = nz }, vx, vy, vz, ignore_list(node)) then
+    yieldStats.blocked = yieldStats.blocked + 1
+    if td < YIELD.reach then
+      -- at the hull of what it walks to: arrived (the stop next tick)
+      steer.arrive = td + 0.3
+      yieldStats.arrived = yieldStats.arrived + 1
+    elseif now_ - yield_t > YIELD.replan then
+      yield_t = now_
+      plan = nil
+    end
+    place_stand(node, b, p, wface and wface.x or fx, wface and wface.y or fy, wface and wface.z or fz)
+    gait(false)
+    return true
+  end
   wpos = { x = nx, y = ny, z = nz }
   -- the suit looks the way it goes, turned smoothly (presentation: the walk
   -- itself goes straight at the corner) — frames doc rule 7
@@ -910,6 +1029,16 @@ function fixedUpdate(node, dt)
   settle(node, c, r, b)
   r = c.get(memberId)
   seen = seen or { x = r.x or 0, y = r.y or 0, z = r.z or 0 }
+  -- a craft driven into them: they move, not it (CRAFT CONTACT)
+  if not r.downed then
+    local q = yield_out(node, b, wpos or { x = r.x or 0, y = r.y or 0, z = r.z or 0 }, dt)
+    if q then
+      if wpos then wpos = q end
+      c.patch(memberId, { x = q.x, y = q.y, z = q.z })
+      seen = { x = q.x, y = q.y, z = q.z }
+      r = c.get(memberId)
+    end
+  end
   -- walking (a scenario's `walk`, a step aside): the walk places the node this tick
   if steer and not r.downed then
     if type(r.pose) == "table" then c.patch(memberId, { pose = false }); r = c.get(memberId) end

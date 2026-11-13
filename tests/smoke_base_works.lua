@@ -129,6 +129,12 @@ for i = 1, 9 do many[i] = { uid = i, cost = 10 * i, label = "P" .. i } end
 lines = RB.orderLines(RB.quote({ refit = many }, P), nil, 6)
 ok(#lines == 6 and lines[6][1] == "Refit  4 more parts" and lines[6][2] == "$" .. math.floor((10 + 20 + 30 + 40) * P.refit_rate + 0.5),
   "past six, the cheapest are summed on one line")
+-- A WRECK (playtest 2026-11-12b): its broken crewed part rebuilt at its whole
+-- price, first on the order, with the rest of the work
+q = RB.quote({ parts = { { uid = 3, hp = 0.5, cost = 40 } }, wreck = { uid = 1, label = "Moto Saddle", cost = 15 } }, P)
+ok(not q.nothing and q.wreck and q.total == math.max(P.min_fee, math.floor(15 + 40 * P.rate * 0.5 + 0.5)), "a wreck is work, its crewed part at its price")
+lines = RB.orderLines(q)
+ok(lines[1][1] == "Rebuild  Moto Saddle" and lines[2][1]:match("^Mend 1"), "the rebuild leads the order")
 ok(RB.inBay(0, 0.5, 0) and RB.inBay(5.0, 0.3, -7.0) and not RB.inBay(6.0, 0.3, 0) and not RB.inBay(0, 6, 0), "the bay floor box")
 
 -- ── progression: the Battery Pack comes with 2 km on wheels ────────────────

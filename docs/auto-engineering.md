@@ -514,6 +514,37 @@ Files: `scripts/parts_auto.lua` (parts), `scripts/auto_drive.lua` §5 (maths),
 (meshes, prefabs), `tools/base_buildings.py` (the pump), `tests/smoke_gas.lua`,
 `tools/perf/gasbike.py`, `gasprobe.lua` / `gasshots.sh`, jumpprobe `JP GAS`.
 
+### Letting go of the throttle (playtest 2026-11-12b)
+
+"When you're not holding forward, bikes slide and spin out of control." The
+probe is `tools/perf/vehfixprobe.sh vcoast` (the player's 500 gas bike).
+Three paths braked the rear tyre past its grip. The friction budget is
+shared, so the rear lost its side grip and the tail came round. Each now has
+a limit (`vessel_controller.lua`, ahead of `drive_tick`):
+
+- **The throttle closing.** The stick eases to 0 over a third of a second
+  after W is let go. Its target (want × the top speed) fell under the road
+  speed, and the motor pulled the rim down with the traction control's full
+  push. Now, easing off (stick let go, still rolling the stick's way, under
+  the road speed), the motor runs free. A gas engine engine-brakes. The
+  motor's hold on the top speed down a hill still works while the stick is
+  held.
+- **Engine braking.** It was the engine's pumping losses × the parts rating,
+  in the gear that pulls hardest, which is first as the bike slows. Now it
+  is never more than `GAS_EB_GRIP` (0.3) of what the tyre's load carries
+  (`gasEngineBrake`). Under 1.4× the idle's road speed in the gear
+  (`GAS_CLUTCH_K`), the clutch is in and the wheel rolls free. Before, a
+  bike let go of at a walk held 1.7 m/s for ever.
+- **The brakes (B) left on.** Both brakes caught at 0.8 g. Now each wheel of
+  a two-wheeler brakes at no more than `R2_BIKE_ABS` (0.75) of what its
+  tyre's load carries.
+
+**Rolling resistance.** The engine's tyres roll for nothing. Off the stick,
+with tyres down and not braking, the craft gets `R2_ROLL_CRR` (0.04) × m × g
+against its roll along the ground. It is an impulse each tick through the
+centre of mass, faded in over the last 0.6 m/s. A bike let go of at 5 m/s
+on the flat now stops in about 10 s.
+
 ## 3e. Wheels on servos, hinges and pistons (playtest 2026-11-04)
 
 "I tried adding a servo joint and then attaching my back wheel to it … when

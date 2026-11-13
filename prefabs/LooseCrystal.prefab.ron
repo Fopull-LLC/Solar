@@ -57,7 +57,7 @@
             mode: Kinematic,
             radius: 0.3,
             height: 0.6,
-            half_extents: (0.33, 0.55, 0.39),
+            half_extents: (0.7857, 1.3095, 0.9286),
             restitution: 0.15,
             friction: 0.8,
             gravity: true,

@@ -211,8 +211,24 @@ function lateUpdate(node, dt)
   local L = rc.layoutOf(F.id)
   local p = astro_rel()
   local bx, by, bz = rc.bodyAt(L, st.s)
+  -- (out from the rock by the clearance push, SUIT_CLEAR: along `away`)
+  local _, _, _, ax, ay, az = rc.at(L, st.s)
+  local pu = st.push or 0
+  bx, by, bz = bx + ax * pu, by + ay * pu, bz + az * pu
   local e = len(p.x - bx, p.y - by, p.z - bz)
   FR.n, FR.sum, FR.max = FR.n + 1, FR.sum + e, math.max(FR.max, e)
+  -- the head (the first-person eye) and the middle against the rock: the
+  -- field's distance, nearest so far (playtest 2026-11-12b: FP clipping)
+  local a = find("Astronaut")
+  local b = home()
+  local u = unit({ x = a.x - b.x, y = a.y - b.y, z = a.z - b.z })
+  local qh = terrain.query and terrain.query(a.x + u.x * 0.72, a.y + u.y * 0.72, a.z + u.z * 0.72)
+  local qm = terrain.query and terrain.query(a.x, a.y, a.z)
+  local qk = terrain.query and terrain.query(a.x - u.x * 0.55, a.y - u.y * 0.55, a.z - u.z * 0.55)
+  if qh then FR.head = math.min(FR.head or 99, qh) end
+  if qm then FR.mid = math.min(FR.mid or 99, qm) end
+  if qk then FR.knee = math.min(FR.knee or 99, qk) end
+  FR.pmax = math.max(FR.pmax or 0, pu)
   local pi = rc.poseInfo
   if pi and pi.gripR and pi.gripL and (pi.w or 0) > 0.99 then
     GR.n, GR.R, GR.L = GR.n + 1, GR.R + pi.gripR, GR.L + pi.gripL
@@ -518,6 +534,9 @@ local function main()
   FR.on = false
   R("frames", FR.n > 100 and FR.max < 0.25, "the suit's drawn place vs the line's, %d frames: mean %.3f m, max %.3f m",
     FR.n, FR.sum / math.max(1, FR.n), FR.max)
+  R("clear_rock", (FR.head or 99) > 0.2 and (FR.mid or 99) > 0.25,
+    "nearest rock over the climb: head (the eye) %.2f m, middle %.2f m, knees %.2f m; push up to %.2f m",
+    FR.head or -1, FR.mid or -1, FR.knee or -1, FR.pmax or 0)
   R("grips", GR.n > 100 and GR.Rmax < 0.04 and GR.Lmax < 0.04 and GR.cR > 0.2 and GR.cL > 0.2,
     "both fists on the line, %d frames: right mean %.3f max %.3f m (first reach max %.3f), left mean %.3f max %.3f m (first %.3f); fingers closed R %.2f L %.2f; worst at s %.2f / %.2f",
     GR.n, GR.R / math.max(1, GR.n), GR.Rmax, GR.R0max, GR.L / math.max(1, GR.n), GR.Lmax, GR.L0max, GR.cR, GR.cL, GR.Rs or -1, GR.Ls or -1)

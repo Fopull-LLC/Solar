@@ -520,6 +520,137 @@ function HZ.slabdiag(cv)
   for _, e in pairs(nodes) do if e.n.valid then e.n:destroy() end end
 end
 
+-- ROCKS (playtest 2026-11-12b: "rocks from cave-ins still float in the
+-- air"): a fall 4 m ahead; once it is down, each loose slab's gap — its
+-- box's lowest corner over what is under its centre (a ray down past itself)
+-- — then the ground under each dug (a 1.3 m ball under its centre) and the
+-- gap again 3 s later; then the world saved and loaded again and the gap of
+-- every slab brought back. `HZ ROCK` lines.
+function HZ.rock_gap(n)
+  local b = home()
+  local u = unit({ x = n.x - b.x, y = n.y - b.y, z = n.z - b.z })
+  local h = raycast(n.x, n.y, n.z, -u.x, -u.y, -u.z, 8, { ignore = { n } })
+  if not h then return nil end
+  local s = n.scale
+  if type(s) == "table" then s = s.x end
+  s = tonumber(s) or 1
+  local R, U, F = n:worldRight(), n:worldUp(), n:worldForward()
+  local e = (math.abs(dot(R, u)) * 0.637 + math.abs(dot(U, u)) * 0.377 + math.abs(dot(F, u)) * 0.559) * s
+  -- (on a slope, a rubble edge or a pit's rim the box rests on a corner the
+  -- ray down from its centre misses: the ground's own distance (the field)
+  -- at its 8 corners, the nearest, is the gap; the ray's is kept for the log)
+  local cg = nil
+  if terrain.query and n.toWorld then
+    for _, sx in ipairs({ -1, 1 }) do for _, sy in ipairs({ -1, 1 }) do for _, sz in ipairs({ -1, 1 }) do
+      local okw, w = pcall(n.toWorld, n, vec3(sx * 0.637, sy * 0.377, sz * 0.559))
+      local q = okw and w and terrain.query(w.x, w.y, w.z)
+      if q then cg = math.min(cg or 99, q) end
+    end end end
+  end
+  return cg or (h.distance - e), h.distance, e, h.distance - e
+end
+function HZ.slabs_near(p, r)
+  local mf = findScript("mineral_field")
+  local out = {}
+  local b = home()
+  for _, e in ipairs(mf.looseBodies() or {}) do
+    if e.pf == "LooseBoulder" and e.n and e.n.valid then
+      if not p or len(e.n.x - b.x - p.x, e.n.y - b.y - p.y, e.n.z - b.z - p.z) < r then out[#out + 1] = e end
+    end
+  end
+  return out
+end
+function HZ.rock_report(tag, list)
+  local worst, n = -9, 0
+  for _, e in ipairs(list) do
+    local g, d, ex, rg = HZ.rock_gap(e.n)
+    if g then
+      n = n + 1
+      worst = math.max(worst, g)
+      local inf = assembly.info(e.n)
+      -- what it touches (a prop, a slab, the crew: not terrain), within its half-height and a hand
+      local touch = {}
+      local okh, hits = pcall(overlapSphere, vec3(e.n.x, e.n.y, e.n.z), ex + 0.15, { ignore = { e.n }, ignoreChildren = true })
+      for _, hh in ipairs(okh and hits or {}) do touch[#touch + 1] = tostring(hh.node and hh.node.name or "terrain") end
+      P("HZ ROCK %s %s: nearest corner %.2f m off the ground (under the centre %.2f: centre %.2f over it, half-height %.2f), asleep %s, wake %s, touching [%s]", tag, e.name, g, rg or -1, d, ex,
+        tostring(inf and inf.asleep), tostring(inf and inf.wake), table.concat(touch, ","))
+    end
+  end
+  return worst, n
+end
+function HZ.rocks(cv)
+  local ch = findScript("cave_hazards")
+  local b = home()
+  local a = astro()
+  local up = unit(sub(a, b))
+  local t = cv.t
+  local tgt
+  for _, d in ipairs({ 4, 3, 5, 2 }) do
+    local p = { x = a.x - b.x + t.x * d + up.x * 1.4, y = a.y - b.y + t.y * d + up.y * 1.4, z = a.z - b.z + t.z * d + up.z * 1.4 }
+    local q = terrain.query(b.x + p.x, b.y + p.y, b.z + p.z)
+    if q and q > 0.8 then tgt = p; break end
+  end
+  tgt = tgt or { x = a.x - b.x + t.x * 3 + up.x * 1.4, y = a.y - b.y + t.y * 3 + up.y * 1.4, z = a.z - b.z + t.z * 3 + up.z * 1.4 }
+  local pc = findScript("planet_camera")
+  pc.face(t.x, t.y, t.z, -0.1)
+  for k = 1, tonumber(params.falls) or 2 do
+    ch.fallCooldown = 0
+    ch.startRockfall(b.name, tgt.x, tgt.y, tgt.z, "probe")
+    wait_for(function() return ch.fallState() == nil end, 20, "the fall")
+    wait(2.5)
+  end
+  wait(3)
+  CV.shot("rocks_1_down", false)
+  local list = HZ.slabs_near(tgt, 25)
+  local w1, n1 = HZ.rock_report("settled", list)
+  HZ.check("cave-in slabs rest on the ground", n1 == 0 or w1 < 0.25, "%d slabs, worst gap %.2f m", n1, w1)
+  -- the ground under each dug
+  local y0 = {}
+  for _, e in ipairs(list) do
+    local n = e.n
+    local bb = home()
+    local u = unit({ x = n.x - bb.x, y = n.y - bb.y, z = n.z - bb.z })
+    local g, d = HZ.rock_gap(n)
+    if d then
+      y0[e.name] = len(n.x - bb.x, n.y - bb.y, n.z - bb.z)
+      terrain.dig(n.x - u.x * (d + 0.4), n.y - u.y * (d + 0.4), n.z - u.z * (d + 0.4), 1.3, 1.0, { hardness = 0.8 })
+    end
+  end
+  wait_for(function() return (terrain.pending and terrain.pending() or 0) == 0 end, 20, "the digs")
+  wait(3)
+  local dropped, nd = 0, 0
+  for _, e in ipairs(list) do
+    if e.n.valid and y0[e.name] then
+      nd = nd + 1
+      local bb = home()
+      local dr = y0[e.name] - len(e.n.x - bb.x, e.n.y - bb.y, e.n.z - bb.z)
+      P("HZ ROCK dug %s: dropped %.2f m", e.name, dr)
+      if dr > 0.3 then dropped = dropped + 1 end
+    end
+  end
+  local w2, n2 = HZ.rock_report("dug", list)
+  CV.shot("rocks_2_dug", false)
+  local mf = findScript("mineral_field")
+  HZ.check("…and fall when their ground is dug", nd == 0 or (dropped == nd and w2 < 0.25), "%d of %d dropped, worst gap %.2f m, woken %d", dropped, nd, w2, mf.looseWoken or -1)
+  -- saved and loaded again
+  findScript("flight_ops").fleetSync(true)
+  wait(2.5)   -- (mineral_field writes loose.bodies every 2 s)
+  save.flush()
+  local rel = { x = a.x - b.x, y = a.y - b.y, z = a.z - b.z }
+  scene.load("system")
+  yield()
+  wait_for(function()
+    local gm = findScript("game_manager")
+    return gm and not gm.loading and not gm.curtain
+  end, 240, "the reload")
+  CV.stand(cv)
+  wait(8)
+  local back = HZ.slabs_near(tgt, 25)
+  local w3, n3 = HZ.rock_report("reloaded", back)
+  CV.shot("rocks_3_reloaded", false)
+  HZ.check("…and after a reload", n3 >= 1 and w3 < 0.25, "%d slabs back, worst gap %.2f m", n3, w3)
+end
+
 function HZ.dose(cv)
   local ch, mf = findScript("cave_hazards"), findScript("mineral_field")
   local a = astro()
@@ -709,6 +840,7 @@ function HZ.run()
   cf.params.forceKind = ""
   CV.stand(cv); wait(1)
   if params.only == "slabdiag" then HZ.slabdiag(cv) end
+  if params.only == "rocks" then HZ.rocks(cv) end
   if (params.only or "") == "" or params.only == "fall" then HZ.rockfall(cv) end
   CV.stand(cv); wait(1)
   if (params.only or "") == "" or params.only == "fall" or params.only == "rubble" then HZ.rubble(cv) end

@@ -311,6 +311,39 @@ end
 function impactCap(g, dh, vh, slack)
   return math.sqrt(2 * math.max(0, g or 9.8) * math.max(0, dh or 0) + (vh or 0) ^ 2) + (slack or 1.5)
 end
+-- THE WALKER'S OWN SPEED IS NO FALL (playtest 2026-11-12b: "fall damage
+-- when running and jumping on flat ground over and over"). The landing's
+-- speed along the ground came into both rules whole: a sprint is 9.4 m/s and
+-- a bunny hop carries 10.5, so impactCap allowed ~11 m/s for a run-jump on
+-- the flat (over impact_injure, 9), and the speed INTO the ground met
+-- (impactOf) took that run against the contact's normal: a landing on a
+-- bump's face, a step's edge or a stone tipped toward the runner (a 40°
+-- normal: 0.64 of 10 m/s) read as a 9+ m/s fall. Legs take what they run at.
+-- Only the run past `own` (what the walker makes itself, ownSpeed) pushes
+-- INTO the ground met; the fall's own speed (along the up) is whole, and a
+-- run carrying the body AWAY from the face (down a slope) still eases the
+-- landing as it did. (Taking the run out whole judged a sprint-jump down a
+-- 13° hill as its plain vertical drop, 9.96 m/s, where the slope falling
+-- away under it makes 7: vehfixprobe runjumphill.)
+-- → the impact (m/s into the surface, normal nx,ny,nz) and the speed along
+-- the ground that counts (for impactCap).
+function landingImpact(vx, vy, vz, ux, uy, uz, nx, ny, nz, own)
+  local vu = vx * ux + vy * uy + vz * uz
+  local hx, hy, hz = vx - ux * vu, vy - uy * vu, vz - uz * vu
+  local hs = math.sqrt(hx * hx + hy * hy + hz * hz)
+  local over = math.max(0, hs - (own or 0))
+  local iv = -(ux * vu * nx + uy * vu * ny + uz * vu * nz)
+  local ih = -(hx * nx + hy * ny + hz * nz)
+  if ih > 0 then ih = (hs > 1e-6) and ih * over / hs or 0 end
+  return math.max(0, iv + ih), over
+end
+-- What the walker makes itself along the ground (m/s): its sprint and the
+-- hop's carry on it (OWN_K), never less than OWN_MIN.
+OWN_K, OWN_MIN = 1.35, 6.0
+function ownSpeed(p)
+  p = p or defaults
+  return math.max(OWN_MIN, (p.run or 8.0) * OWN_K)
+end
 
 -- Published: the load (`packKg`, `encumbrance` 0..1), the crouch (`crouching`,
 -- `crouchAmount` 0..1 eased, `eyeDrop` m below the standing eye), the slide
@@ -325,6 +358,8 @@ crouchAmount = 0.0
 eyeDrop = 0.0
 sliding = false
 moveSpeed = 0.0         -- ground speed (m/s) this frame
+wadeEased = 0.0         -- the wading depth (m) the walk's speed rule reads, eased ~0.2 s
+climbGrade = 0.0        -- the grade along the walk (rise/run) the climb limit reads, eased ~0.12 s
 fallSpeed = 0.0         -- m/s down, in the air
 landSeq, landSpeed = 0, 0.0
 impactSeq, impactSpeed = 0, 0.0
@@ -2391,13 +2426,22 @@ function update(node, dt)
   if swimming and depth then fdepth = depth + half_h end
   wadeDepth = (fdepth ~= nil and fdepth > 0) and fdepth or -1
   wadeHalf = half_h
+  -- (the speed rule reads the wading depth EASED, ~0.2 s: a depth that
+  -- flickers at a shore or a puddle's rim frame to frame cut the sprint on
+  -- and off, and the speed, the run cycle and the sprint field of view
+  -- pumped — playtest 2026-11-12b, "running, the animation and FOV jitter")
+  local wd_raw = (not swimming and wadeDepth > 0) and wadeDepth or 0.0
+  wadeEased = wadeEased + (wd_raw - wadeEased) * (1 - math.exp(-5.0 * math.min(dt or 0.016, 0.1)))
   if swimming then
     speed = sprint and params.swim_fast or params.swim
-  elseif wadeDepth > 0.25 then
+  elseif wadeEased > 0.25 then
     -- Wading: the water drags the legs; shin-deep costs a little, thigh-deep
-    -- halves the pace, and there is no sprinting through it.
-    speed = speed * (1 - 0.55 * math.min(1, (wadeDepth - 0.25) / 0.9))
-    sprint = false
+    -- halves the pace, and the sprint fades to a walk over the first 0.2 m
+    -- past shin-deep (not cut at a line).
+    local wk = math.min(1, (wadeEased - 0.25) / 0.2)
+    if sprint then speed = speed + (params.walk * m_walk - speed) * wk end
+    speed = speed * (1 - 0.55 * math.min(1, (wadeEased - 0.25) / 0.9))
+    if wk >= 1 then sprint = false end
   end
 
   -- THE IMPACT (playtest 2026-11-05: "fall damage extremely annoying and
@@ -2429,7 +2473,8 @@ function update(node, dt)
         local n = node.groundNormal
         local nx, ny, nz = ux, uy, uz
         if n and n.x then nx, ny, nz = n.x, n.y, n.z end
-        local raw = impactOf(imp.v[1], imp.v[2], imp.v[3], nx, ny, nz)
+        -- (only the run past the walker's own counts: landingImpact)
+        local raw, jh = landingImpact(imp.v[1], imp.v[2], imp.v[3], ux, uy, uz, nx, ny, nz, ownSpeed(params))
         -- NO HARDER THAN THE FALL (playtest 2026-11-12: "died jumping on
         -- flat ground with a heavy-ish pack"). The landing cannot meet the
         -- ground faster than the drop from the arc's top and the speed it
@@ -2437,7 +2482,7 @@ function update(node, dt)
         -- past that is not the fall's — a stalled frame's catch-up ticks, a
         -- seam's push, the snap-down's pull — and is not judged.
         impactRaw = raw
-        impactSpeed = math.min(raw, impactCap(local_g(node), (imp.top or r_now) - r_now, imp.vh or 0))
+        impactSpeed = math.min(raw, impactCap(local_g(node), (imp.top or r_now) - r_now, jh))
         impactSeq = impactSeq + 1
       end
       imp.air, imp.v, imp.top = 0.0, nil, nil
@@ -2635,7 +2680,7 @@ function update(node, dt)
     local slope = 0.0
     local n = nil
     local vs = vertState
-    vs.contact, vs.ray, vs.snap = contact, false, 0.0
+    vs.contact, vs.ray, vs.snap, vs.climbk = contact, false, 0.0, 1.0
     if contact then
       n = node.groundNormal
       if (params.slope_ray or 1) > 0 then
@@ -2665,11 +2710,24 @@ function update(node, dt)
       -- at most (less under a load): up a steep hill the walk slows until
       -- the climb is what they can make, rather than the sprint carrying on
       -- up a 45° bank at 9 m/s (and off its top).
+      -- (Read off the grade EASED over ~0.12 s, not this frame's ray. On
+      -- a surface-nets facet field, a base's graded edges and its slabs, the
+      -- ray's normal flickers a few degrees frame to frame; at a sprint
+      -- (9.4 m/s, the limit is a 17.7 deg grade) every frame it read high
+      -- cut the walk back and the accel brought it up again: the speed, the
+      -- run cycle and the sprint field of view pumped — playtest
+      -- 2026-11-12b, "running at the base the animation and the FOV jitter".
+      -- A real hill still slows the walk, a tenth of a second later.)
       local cmax = CLIMB_MAX * (1 - 0.4 * encumbrance)
-      if slope > cmax then
-        local k = cmax / slope
+      local hs = math.sqrt(mvx * mvx + mvy * mvy + mvz * mvz)
+      local grade = hs > 0.1 and slope / hs or 0.0
+      climbGrade = climbGrade + (grade - climbGrade) * (1 - math.exp(-8.0 * math.min(dt or 0.016, 0.1)))
+      local want = climbGrade * hs
+      if want > cmax and slope > 0 then
+        local k = cmax / want
         mvx, mvy, mvz = mvx * k, mvy * k, mvz * k
-        slope = cmax
+        slope = slope * k
+        vs.climbk = k
       end
     end
     vs.slope = slope

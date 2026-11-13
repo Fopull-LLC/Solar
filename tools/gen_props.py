@@ -70,6 +70,13 @@ def mats_block(names, indent="        "):
 
 def prop_prefab(name, tags, about, model, mats, half, mass, scale=1.0):
     hx, hy, hz = half
+    # (`half` is the body's size in the world. The engine sizes a part's box
+    # by its node's scale (half_extents x the world scale), and Body carries
+    # `scale`: its box is written at scale 1, half / scale. Written as the
+    # world size, a LooseBoulder's box was 2.3x its rock and the rock rested
+    # on it 0.5-0.8 m over the ground: playtest 2026-11-12b, "rocks from
+    # cave-ins still float in the air"; a crate's or a crystal's sank in.)
+    bx, by, bz = (round(v / scale, 4) for v in half)
     tag_s = ", ".join(f'"{t}"' for t in tags)
     return f'''// {about}
 // Written by tools/gen_props.py — edit the generator, not this file.
@@ -113,7 +120,7 @@ def prop_prefab(name, tags, about, model, mats, half, mass, scale=1.0):
             mode: Kinematic,
             radius: 0.3,
             height: 0.6,
-            half_extents: ({hx}, {hy}, {hz}),
+            half_extents: ({bx}, {by}, {bz}),
             restitution: 0.15,
             friction: 0.8,
             gravity: true,

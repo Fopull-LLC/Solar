@@ -5159,6 +5159,41 @@ end
 -- read it: flight_ops' fleet sync asks this instead.
 function isLost() return destroyed == true end
 
+-- A WRECK THE REPAIR BAY CAN MEND (playtest 2026-11-12b: "a craft an old
+-- astronaut crashed, brought to the repair bay, can't be repaired"). When
+-- the crewed part breaks (break_part: the pod, a bike's saddle) the craft is
+-- lost, `destroyed`, but it does not come apart: every other part is still
+-- on it and the broken pod is still in its place. The bay skipped it as
+-- debris ("drive a craft in"). WRECK says how it was lost: "pod" (whole but
+-- for the crewed part: mendable) or "shatter" (came apart: recover it).
+WRECK = nil
+-- → the broken crewed part { uid, label, cost } when the bay can mend it, or
+-- nil and why not
+function wreckMendable()
+  if not destroyed then return nil, "not a wreck" end
+  local node = dock.node
+  if not (node and node.valid) then return nil, "the craft is gone" end
+  if not (WRECK and WRECK.kind == "pod") then return nil, "it came apart: recover what is left" end
+  local d = bp_by_uid[WRECK.uid]
+  if not d or integ.gone[WRECK.uid] or not child_of_uid(node, WRECK.uid) then return nil, "the crewed part is gone" end
+  return { uid = WRECK.uid, label = d.label or d.id or "crewed part", cost = d.cost or 20 }
+end
+-- The bay's mend: the crewed part whole again and the craft a craft again
+-- (its controls, power and fleet record pick up from the next tick; the
+-- fleet gives it a record afresh). The hull insurance it paid out stays
+-- paid: it is not insured again (integ.insured stays set). → ok, why
+function unwreck()
+  local m, why = wreckMendable()
+  if not m then return false, why end
+  local node = dock.node
+  part_hp[m.uid] = 1.0
+  set_part_damage(child_of_uid(node, m.uid), 1.0)
+  destroyed = false
+  WRECK = nil
+  log(string.format("repaired the wreck of %s: %s back on", craftName or node.name or "craft", m.label))
+  return true
+end
+
 -- WHERE THE CREW STEPS OUT: beside the crew position (px, py, pz, world), past
 -- the hull's widest reach, 0.4 m up — on the craft's right first, then its
 -- left, front, back and the diagonals, a metre further out on a second pass.
@@ -6932,6 +6967,7 @@ break_part = function(node, uid, d, c, hx, hy, hz, depth)
     -- (A PROBE core is the ship too; its crew, if any, were never in it — they
     -- stay where they are and the controls go back to them.)
     destroyed = true
+    WRECK = { kind = "pod", uid = uid }
     insureHull()
     silence_loops()
     local was_piloting = piloting
@@ -7022,6 +7058,7 @@ end
 local function shatter(node, hx, hy, hz, spd, info)
   if destroyed then return end
   destroyed = true
+  WRECK = { kind = "shatter" }
   insureHull()
   log("CATASTROPHIC BREAKUP")
   add_shake(1.4) -- the whole airframe failing is a hard jolt
@@ -12903,6 +12940,73 @@ function r2DriveShares(wheels, vf, gl, n_drive)
   return out
 end
 
+-- LETTING GO OF THE THROTTLE (playtest 2026-11-12b: "when you're not holding
+-- forward, bikes slide and spin out of control and kill the astronaut").
+-- Measured (tools/perf/vehfixprobe.sh vcoast, the player's 500 gas bike):
+-- the rear motor's force on the rim came to 0.62–0.75 kN·m after W was let
+-- go (the closing stick's target under the road speed, see `easing` in
+-- drive_tick; then the engine braking in first, gasBrake × the parts rating,
+-- the gearbox going down as it slowed), more than the rear tyre's ~1.4 kN of
+-- grip carries at 0.33 m: the rim fell 4.7–7 m/s behind the ground, the one
+-- friction budget the rear tyre has (floptle-physics drive_on_ground) went on
+-- braking, its side grip with it, and the tail came round: let go at 10 m/s
+-- it fell within 0.5 s (1.9 rad/s of yaw); let go at 14.7 m/s with A held it
+-- spun at 7 m/s (1.1 rad/s, 66° of slip). And under the idle's road speed in
+-- first (1.7 m/s) the engine held the rim at the ground's speed for ever: a
+-- bike let go of at a walk never stopped. After: 5, 16 and 26.5 m/s let go,
+-- 15 in a turn and 15 with B on, all upright, slip under 3°, yaw under
+-- 0.21 rad/s; 5 m/s stops in 9.4 s.
+--   GAS_EB_GRIP   engine braking is never more than this share of what the
+--                 tyre's load carries (μ × load × r): a rider's clutch hand
+--                 and any modern slipper clutch keep the rear turning, and the
+--                 rest of the budget is the tyre's side grip.
+--   GAS_CLUTCH_K  under the idle's road speed in the gear × this, the clutch
+--                 is in: the wheel rolls free (and R2_ROLL_CRR slows it).
+--   R2_ROLL_CRR   ROLLING RESISTANCE while coasting (off the stick, tyres
+--                 down): Crr × m × g against the way it rolls, an impulse a
+--                 tick through the centre of mass, faded in over the last R2_ROLL_V0 m/s so a
+--                 stopped craft is not pushed about. The engine's tyres roll
+--                 for nothing (joints.rs rolling_grip), so a rover or an
+--                 electric bike let go of on the flat coasted on for ever at
+--                 the speed it was let go at. Knobbly tyres on dirt: 0.03–0.05.
+GAS_EB_GRIP = 0.3
+GAS_CLUTCH_K = 1.4
+R2_BIKE_ABS = 0.75
+R2_ROLL_CRR = 0.04
+R2_ROLL_V0 = 0.6
+-- The road speed (m/s) a gas wheel turns at with its engine idling in the
+-- gear it is in.
+function gasIdleV(w)
+  local e = w.gas and w.gas.e
+  if not e then return 0 end
+  return (e.m.idle or 1500) / 9.5493 / math.max(1, e.ratio or 1) * (w.r or 0.33)
+end
+-- ENGINE BRAKING at a gas wheel `w` (joint j, its cfg c) rolling at `cur`
+-- m/s: the rim held toward the idle's road speed in its gear with the
+-- engine's pumping losses (auto_drive gasBrake × the parts rating), never
+-- more than GAS_EB_GRIP of what the tyre's load carries (its contact load,
+-- at most the craft's weight `wmax` kN). In the air the rim keeps the
+-- ground speed it will land on.
+function gasEngineBrake(w, j, c, cur, wmax)
+  local AL = autoLib()
+  local e = w.gas.e
+  local vi = gasIdleV(w)
+  local tgt = cur
+  if w.down and math.abs(cur) > vi then tgt = (cur > 0) and vi or -vi end
+  j.motor = 1
+  j.motorSpeed = w.rs * tgt / (w.r or 0.33) * 57.29578
+  local gb = (AL and AL.gasBrake) and AL.gasBrake(e.m, e.rpm, e.ratio) * (R2.rk or 1) or 0
+  local load = math.min(w.load or 0, math.max(0, wmax or 0))
+  j.maxForce = math.min(gb, GAS_EB_GRIP * R2_TYRE_MU * ((c and c.friction) or 1) * load * (w.r or 0.33))
+  R2.ebMax = math.max(R2.ebMax or 0, j.maxForce)
+end
+-- The rolling resistance's push (kN, along -v) on a craft of `m` t at `spd`
+-- m/s under gravity `g` (pure).
+function r2RollDrag(m, spd, g)
+  if not (spd and spd > 0.02) then return 0 end
+  return R2_ROLL_CRR * (m or 0) * (g or 9.8) * math.min(1, spd / R2_ROLL_V0)
+end
+
 -- Drive, steer, brake and park, every tick the tyres are out
 -- (wheel_spec.md). W/S drive every driven wheel along the craft's front,
 -- each by the spin sign its mount gives it; A/D STEER the steerable wheels
@@ -13376,6 +13480,15 @@ local function drive_tick(node, info, dt)
           local tgt = cur > 0 and math.max(0, cur - dv) or math.min(0, cur + dv)
           j.motorSpeed = w.rs * tgt / w.r * 57.29578
           braking_at = bg * gl
+          -- A TWO-WHEELER'S BRAKES DON'T LOCK (R2_BIKE_ABS; playtest
+          -- 2026-11-12b: B left on, W let go at speed, both brakes caught at
+          -- 0.8 g and the rear, unloaded by the stop, slid and came round):
+          -- each wheel's brake no more than R2_BIKE_ABS of what its tyre's
+          -- load carries, as any bike's ABS keeps it rolling and steering.
+          if R2.bike then
+            local load = math.min(w.load or 0, (info.mass or 0) * gl)
+            bf = math.min(bf, R2_BIKE_ABS * R2_TYRE_MU * (c.friction or 1) * load * (w.r or 0.33))
+          end
         else
           j.motorSpeed = 0
         end
@@ -13385,7 +13498,7 @@ local function drive_tick(node, info, dt)
         j.motorSpeed = 0
         j.maxForce = math.min(full * 2.0 * (c.brake or 1), hill_a * (info.mass or 1) * w.r / grounded)
       elseif w.gas and w.gas.e.run and (w.rs or 0) ~= 0 and not w.coast and math.abs(want) < 0.02 and math.abs(vf) > 1.0
-        and (w.gas.k or 1) >= 0.001 then
+        and (w.gas.k or 1) >= 0.001 and math.abs(cur) > gasIdleV(w) * GAS_CLUTCH_K then
         -- ENGINE BRAKING: a gas engine's throttle shut, in gear, drags its
         -- wheel down (auto_drive gasBrake: the pumping losses through the gear)
         -- (down to the road speed of its idle in that gear, never to a
@@ -13394,14 +13507,7 @@ local function drive_tick(node, info, dt)
         -- bike came down on a skidding tyre and yawed at 2.4 rad/s, vjump
         -- .1429. In the air it keeps to the ground speed it will land on,
         -- as a driven rim does: R2_AIR_LEAD.)
-        local AL = autoLib()
-        local e = w.gas.e
-        local vi = (e.m.idle or 1500) / 9.5493 / math.max(1, e.ratio or 1) * (w.r or 0.33)
-        local tgt = cur
-        if w.down and math.abs(cur) > vi then tgt = (cur > 0) and vi or -vi end
-        j.motor = 1
-        j.motorSpeed = w.rs * tgt / (w.r or 0.33) * 57.29578
-        j.maxForce = (AL and AL.gasBrake) and AL.gasBrake(e.m, e.rpm, e.ratio) * (R2.rk or 1) or 0
+        gasEngineBrake(w, j, c, cur, (info.mass or 0) * gl)
       elseif (w.rs or 0) == 0 or w.coast or st.motor == false or served < 0.3 or math.abs(want) < 0.02
         or (w.gas and (w.gas.k or 1) < 0.001) then
         -- off the stick (or an undriven wheel): it rolls free
@@ -13424,14 +13530,32 @@ local function drive_tick(node, info, dt)
         -- runs it faster than the motor would, and a front motor braking at
         -- 18 m/s under a 28 m/s engine threw the bike down)
         local free = GAS.chained and not w.gas and want * cur > 0 and math.abs(cur) >= math.abs(tgt)
+        -- THE THROTTLE CLOSING IS NOT A BRAKE (playtest 2026-11-12b, see
+        -- GAS_EB_GRIP): W let go, the stick eases to 0 over a third of a
+        -- second, and its target (want × the top speed) fell under the road
+        -- speed: the motor pulled the rim down to it with all the traction
+        -- control's push — on a bike 0.6 kN·m at the rear rim, the rear
+        -- skidding 7 m/s behind the ground within 0.3 s and the bike thrown
+        -- round (vehfixprobe vcoast, 10 m/s). Easing off (the stick let go,
+        -- still the way it rolls, under the road speed) the motor runs free,
+        -- and a gas engine brakes as it does shut (gasEngineBrake). (The
+        -- stick HELD keeps the motor's hold on the top speed down a hill.)
+        local easing = dcmd == 0 and want * cur > 0 and math.abs(tgt) < math.abs(cur)
+        if easing and not free then
+          if w.gas and w.gas.e.run and math.abs(cur) > gasIdleV(w) * GAS_CLUTCH_K then
+            gasEngineBrake(w, j, c, cur, (info.mass or 0) * gl)
+          else
+            j.motor, j.motorSpeed, j.maxForce = 0, 0, 0
+          end
+          free = "eased"
+        end
         if free then tgt = cur end
-        if math.abs(tgt - cur) > lead then
+        if math.abs(tgt - cur) > lead and free ~= "eased" then
           limited = (tgt > cur) and 1 or -1
           lmot = math.min(lmot, (c.motor or 1) * served)
         end
         R2.srcF = R2.srcF + full * (c.motor or 1) * served / math.max(0.05, w.r or 0.33)
         tgt = math.max(cur - lead, math.min(cur + lead, tgt))
-        j.motorSpeed = w.rs * tgt / w.r * 57.29578
         -- THE MOTOR'S PUSH IS THE TRACTION CONTROL'S (engine .1376, floptle
         -- 0586: a motor and the tyre's grip now solve together, so a rim a
         -- quarter of a metre a second ahead pushes with 95–98% of its force,
@@ -13440,8 +13564,11 @@ local function drive_tick(node, info, dt)
         -- front wheel down and a tall rover off its back: the torque the
         -- traction control allows (`torque`: R2_TC g, the slope, the wheelie
         -- limit, up to full when stalled in a rut), not the motor's full.
-        j.maxForce = torque * served
-        if free then j.motor = 0; j.maxForce = 0 end
+        if free ~= "eased" then
+          j.motorSpeed = w.rs * tgt / w.r * 57.29578
+          j.maxForce = torque * served
+          if free then j.motor = 0; j.maxForce = 0 end
+        end
         if w.gas then
           -- the engine works as hard as the push it is let give
           local e = w.gas.e
@@ -13456,6 +13583,26 @@ local function drive_tick(node, info, dt)
   R2.power = power
   R2.vf = vf
   R2.served = smin
+  -- ROLLING RESISTANCE while coasting (R2_ROLL_CRR, above): off the stick,
+  -- tyres down, not braking or parked (the brakes hold it then), not a
+  -- plane's gear. The tick's own velocity, planet-relative, along the ground.
+  R2.rollF = 0
+  if dcmd == 0 and grounded > 0 and not R2.gear and not braking_at and R2.hold_t <= 0.15 and spd > 0.02 then
+    local gu = gl > 1e-6 and { x = -gdir.x / gl, y = -gdir.y / gl, z = -gdir.z / gl } or upv
+    local vu = v.x * gu.x + v.y * gu.y + v.z * gu.z
+    local hx, hy, hz = v.x - gu.x * vu, v.y - gu.y * vu, v.z - gu.z * vu
+    local hs = math.sqrt(hx * hx + hy * hy + hz * hz)
+    local F = r2RollDrag(info.mass or 0, hs, gl) * math.min(1, grounded / math.max(1, #R2.wheels))
+    -- (an impulse this tick through the centre of mass, never more than
+    -- stops it: assembly.force is a HELD force, which the thrust, the aero
+    -- and the anti-roll already write)
+    local J = math.min(F * dt, (info.mass or 0) * hs)
+    if hs > 0.02 and J > 0 then
+      local cm = info.com or info.origin
+      assembly.impulseAt(node, vec3(-hx / hs * J, -hy / hs * J, -hz / hs * J), cm)
+      R2.rollF = F
+    end
+  end
   gasTick(dt, ctl)
   -- ANTI-ROLL (r2Steady applies it): how far the body leans over its tyres —
   -- the left tyres hanging lower on their springs than the right ones means

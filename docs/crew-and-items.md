@@ -581,6 +581,21 @@ No member aboard has a rigid body. Each one is a **CrewDoll**: the suit model
   space makes me jitter around like crazy"; `tools/perf/boardevaprobe.sh
   jitter`).
 
+- **Crew on foot against a craft** (playtest 2026-11-12b: "party members
+  walking into a rover push it around wildly while you pilot"). A crew body
+  on foot is kinematic, so anything it is placed into gets pushed out with no
+  limit on the force. `crew_body.lua` CRAFT CONTACT (`YIELD`) keeps the
+  craft from being pushed:
+  - Before each step, the capsule's knee and chest spheres at the new point
+    test for a craft (an assembly that is not anchored). If one is there,
+    the body does not take the step.
+  - Within 8 m of its target the walk has arrived. A walk to a craft ends at
+    its hull, and `SC5R.board`'s walk seats the member from there.
+  - Farther away, the body plans its route again.
+  - A craft driven into a member moves the member, never the craft: 0.06 m
+    a tick out to the craft's side, carried along with it meanwhile.
+  - Probe: `tools/perf/vehfixprobe.sh crewshove`.
+
 ## 4. Control switching (C)
 
 ### 4.1 One avatar, many crew: how the `Astronaut` node is reused
@@ -1197,6 +1212,19 @@ pack over when it is filled. The other fills (air, cells) are weightless.
 | On cancel or stop | Progress is kept on the part for 120 s (`st.rprog`), so a re-click resumes. The kit is not used. |
 | Switching away | The job **keeps running**. It belongs to the crew member, not the menu (§6.3), so you can start one member repairing, switch to another, and come back. If the member's body leaves physics range, the job pauses and resumes when they're respawned. |
 | Results | `repairPart` restores `hp`, repaints, and the joint strength (`joint_strength(d, hp)`) comes back, so the structure is stronger again. |
+
+**A wreck in the Repair Bay** (playtest 2026-11-12b). When a crash breaks the
+crewed part (a pod, a bike's saddle), the craft is lost (`isLost`) but does
+not come apart. The bay used to treat it as debris.
+- `vessel_controller.wreckMendable()` reports such a wreck (`WRECK.kind ==
+  "pod"`). A craft that shattered can't be mended.
+- The bay sees the wreck and quotes **Rebuild ⟨part⟩** at the
+  part's full price, ahead of the rest of the order.
+- Service runs `unwreck()` first: the part is whole again and the craft is a
+  craft again. Then the mend, refit and fills run as usual.
+- The hull insurance already paid out stays paid, and the craft is not
+  insured again.
+- Probe: `tools/perf/vehfixprobe.sh bayfix`.
 
 ### 6.3 Tasks belong to crew members, and the lock
 

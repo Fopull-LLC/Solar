@@ -502,6 +502,14 @@ local function decide_light()
   L.contact = opt("contact_shadows")
   L.refl = opt("reflections")
   L.map = tonumber(opt("shadow_map"))
+  -- The map covers the whole reach, so its texel is 2 x reach / size: the
+  -- reach stretched on a big world (shadowScale) made a 2048 map's texels
+  -- 17-36 cm, a third of the suit's width, and a low sun drew speckled
+  -- acne on the ground, walls and the crew (Ty 2026-11-12b, "odd shadow
+  -- patterns on astronauts at certain sun angles"; cpuprobe shadow shots at
+  -- 8 deg: clean at 4096). Past 150 m of reach the map doubles, to 4096 at
+  -- most (the size costs ~0.6 ms GPU at 1440p, settings.lua's note).
+  if L.map and L.dist > 150 and L.map < 4096 then L.map = math.min(4096, L.map * 2) end
 end
 local function assert_light(force)
   local l = light()
@@ -513,8 +521,12 @@ local function assert_light(force)
   if L.steps and l.fogSteps ~= L.steps then l.fogSteps = L.steps end
   if L.contact ~= nil and (force or l.contactShadows ~= L.contact) then l.contactShadows = L.contact end
   if L.refl ~= nil and (force or l.reflections ~= L.refl) then l.reflections = L.refl end
-  -- the sun shadow map's size (engine 0.117.1-dev.1386; made again next frame)
-  if L.map and env and env.shadowMapSize ~= nil and (force or env.shadowMapSize ~= L.map) then env.shadowMapSize = L.map end
+  -- the sun shadow map's size (engine 0.117.1-dev.1386; made again next
+  -- frame). A field of the Light component, as every "env.*" in the API
+  -- docs is: this wrote a global `env` that does not exist, so the Shadow
+  -- sharpness option never reached the engine and every level drew at the
+  -- default 2048 (cpuperf 2026-11-13).
+  if L.map and l.shadowMapSize ~= nil and (force or l.shadowMapSize ~= L.map) then l.shadowMapSize = L.map end
 end
 
 -- ── the game's own dials: other scripts' published values ────────────────────
