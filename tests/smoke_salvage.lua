@@ -283,6 +283,29 @@ check(sv.fromBase(near) == nil, "with no base on that world the caption names no
 store["base.body"], store["base.x"], store["base.y"], store["base.z"] = "Ground", 500, 0, 0
 check(sv.fromBase(near) and sv.fromBase(near):find("from the base", 1, true), "with one it does: " .. tostring(sv.fromBase(near)))
 
+-- (playtest 11-12b) the dead recover nothing: while the member in control is
+-- dead (crew.dying), the crate keeps its load for someone alive
+do
+  local id3 = sv.drop("Ground", PLANET.x + 600, PLANET.y, PLANET.z, nil, { from = "astro" })
+  if not id3 then
+    envs.inventory.add("astro", "iron", 3)
+    id3 = sv.drop("Ground", PLANET.x + 600, PLANET.y, PLANET.z, nil, { from = "astro" })
+  end
+  if id3 then
+    local kg0 = envs.inventory.mass(sv.containerOf(id3))
+    local dead = true
+    envs.crew = { dying = function() return dead end }
+    local moved = sv.recover(id3)
+    check(moved == 0 and math.abs(envs.inventory.mass(sv.containerOf(id3)) - kg0) < 1e-9 and #sv.list() >= 1,
+      "the dead take nothing from their own pack crate")
+    dead = false
+    moved = sv.recover(id3)
+    check(kg0 <= 0 or moved > 0, "the next crew member takes it")
+  else
+    check(false, "a third drop for the dying check")
+  end
+end
+
 if #failures > 0 then
   print("SALVAGE SMOKE FAILURES:")
   for _, f in ipairs(failures) do print("  ✗ " .. f) end

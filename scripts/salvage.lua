@@ -61,6 +61,15 @@ local function ref(kind)
   return r
 end
 
+-- (playtest 11-12b) the dead recover nothing: for the 2.5 s the camera holds
+-- on the fallen they are still the member in control, standing on their own
+-- pack crate
+local function dead_hands()
+  local cr = ref("crew")
+  if cr and cr.dying then local ok, d = pcall(cr.dying); return ok and d == true end
+  return false
+end
+
 -- ── the records ─────────────────────────────────────────────────────────────
 local crates = nil     -- id → { id, body, x,y,z (bed, body-relative), sx,sy,sz, kg, n, node, born }
 local order = {}
@@ -210,6 +219,7 @@ function recover(id)
   local c = cs[id]
   local inv = ref("inventory")
   if not (c and inv) then return 0, 0 end
+  if dead_hands() then return 0, c.kg or 0 end
   local cid = containerOf(id)
   local moved = 0
   for _, it in ipairs(inv.items(cid)) do
@@ -295,6 +305,7 @@ local function sink(c, dt)
 end
 
 local function crew()
+  if dead_hands() then return nil end
   local pw = ref("planet_walker")
   if not (pw and pw.onFoot == true) then return nil end
   return pw.node or (find and find("Astronaut")) or nil

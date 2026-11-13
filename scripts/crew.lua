@@ -3475,6 +3475,17 @@ end
 -- ── the monitor: impact, crush, heat (the avatar on foot; heat aboard) ─────
 -- (the death curtain's numbers, s; frames under calm_ms in a row, calm_n,
 -- say the world has caught up)
+-- Is the controlled member dead and still on screen (the hold on the fallen,
+-- before control passes on)? (playtest 11-12b: "on the death screen you can
+-- recover your own pack": the pack crate dropped at their feet offered E to
+-- the dead, and taking it put the pack in the dead member's container, lost.
+-- salvage asks this; the crate waits for someone alive.)
+function dying()
+  if MON and MON.dying then return true end
+  local id = activeId and activeId()
+  local r = id and get(id) or nil
+  return r ~= nil and r.status == "dead"
+end
 DEATH_FADE = { out = 0.5, hold_min = 0.5, hold_max = 3.5, inn = 0.5, calm_ms = 45, calm_n = 4 }
 deathCurtain = nil   -- { phase = "black" | "in", t0, calm, text } while it is up
 -- (the game clock: a paused or loading game holds the curtain where it is)

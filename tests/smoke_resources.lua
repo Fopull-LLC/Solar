@@ -985,6 +985,23 @@ check("reputation pays better", (co.balance() - bal2) > list,
 check("an empty warehouse says so rather than paying zero",
   fm.depotSell():find("empty") ~= nil)
 
+-- (playtest 11-12b) anything SOLD counts as researched: the depot studies
+-- what it buys, as the Intake would have; the Intake's own sale (already
+-- studied) does not study twice.
+do
+  local st0 = rs.studied()
+  check("everything sold above is on the lab's studied list",
+    st0.iron ~= nil and (st0.iron.n or 0) >= 14, st0.iron and st0.iron.n or "nil")
+  local pts0, n0 = rs.points(), st0.iron.n
+  inv.add("base", "iron", 6)
+  local m2 = fm.depotSell("iron")
+  check("a sale studies what it sells", rs.studied().iron.n == n0 + 6, rs.studied().iron.n)
+  check("...and never loses research points", rs.points() >= pts0, rs.points() .. " from " .. pts0)
+  inv.add("base", "iron", 5)
+  fm.depotSell("iron", true)
+  check("the Intake's sale (studied already) is not studied twice", rs.studied().iron.n == n0 + 6, rs.studied().iron.n)
+end
+
 -- ── 4b. the depot SCREEN ────────────────────────────────────────────────────
 -- The verbs above worked all along. What didn't was the panel in front of them:
 -- the action button was only ever relabelled when there WAS an action, so every

@@ -590,6 +590,12 @@ end
 -- THE COUNTERS, at the depot. Two keys pick the counter; the one in force is
 -- latched. BUY lists what the depot stocks; SELL lists everything one press
 -- could sell (the depot's own stock list: pack, warehouse, landed holds).
+-- The counters' list height: what the screen leaves under the pack's own rows.
+function COUNTER_LIST_H()
+  local st = ref("settings")
+  local h = (st and st.designHeight and st.designHeight()) or 720
+  return math.max(170, math.min(430, h - 400))
+end
 local function counter_rows(inv, co, mats)
   local out = {}
   local function money(v) return (co and co.money) and co.money(v) or ("$" .. v) end
@@ -602,6 +608,7 @@ local function counter_rows(inv, co, mats)
     { "button", key = "sell", style = "panel/choice", w = 120, h = 28, selected = counter == "sell",
       textAlign = "center", textValign = "center", text = "Sell counter",
       onClicked = function() counter = "sell" end } }
+  local list = {}
   if counter == "buy" then
     local bal = (co and co.balance) and co.balance() or nil
     for _, g in ipairs(inv and inv.shopList and inv.shopList() or {}) do
@@ -613,7 +620,7 @@ local function counter_rows(inv, co, mats)
       local why = (not cash and "not enough money") or (not room and (room_why or "no room in the pack")) or nil
       local picked = (detailId == g.id)
       -- the row reads the card (click, or hover); the small button buys
-      out[#out + 1] = { "row", key = "buy_" .. g.id, w = "100%", h = 34, gap = 4, pad = 0, align = "center",
+      list[#list + 1] = { "row", key = "buy_" .. g.id, w = "100%", h = 34, gap = 4, pad = 0, align = "center",
         { "button", key = "pick", style = picked and "panel/rowActive" or "panel/row", selected = picked or nil,
           w = "grow", h = 34, dir = "row", gap = 10, align = "center", opacity = why and 0.7 or nil,
           onClicked = function() detailId = (detailId == g.id) and nil or g.id end,
@@ -630,18 +637,18 @@ local function counter_rows(inv, co, mats)
           disabled = why and true or nil, opacity = why and 0.45 or nil, text = "buy", tooltip = why,
           onClicked = function() if not why then buyGear(g.id) end end } }
     end
-    out[#out + 1] = { "text", key = "buyhint", style = "panel/hint", w = "100%", h = "fit", wrap = true,
+    list[#list + 1] = { "text", key = "buyhint", style = "panel/hint", w = "100%", h = "fit", wrap = true,
       text = "Point at or click an item to read its card before you buy." }
   else
     local fm = ref("facility_menu")
     local stock = (fm and fm.depotStock) and fm.depotStock() or {}
     if #stock == 0 then
-      out[#out + 1] = { "text", key = "nosell", style = "panel/cellMuted", w = "100%", h = 34,
+      list[#list + 1] = { "text", key = "nosell", style = "panel/cellMuted", w = "100%", h = 34,
         textAlign = "center", text = "— no materials to sell: not in the pack, the warehouse or a landed hold —" }
     end
     for _, e in ipairs(stock) do
       local tail = e.kept and "for the contract" or (e.first and string.format("NEW · +%s", money(e.bonus)) or "")
-      out[#out + 1] = { "button", key = "sell_" .. e.mat, style = "panel/row", w = "100%", h = 30,
+      list[#list + 1] = { "button", key = "sell_" .. e.mat, style = "panel/row", w = "100%", h = 30,
         dir = "row", gap = 10, align = "center", disabled = e.kept or nil, opacity = e.kept and 0.55 or nil,
         { "text", key = "n", style = "panel/cell", w = 34, h = "fit", textAlign = "end", text = string.format("%d ×", e.n) },
         { "text", key = "name", style = "panel/cell", w = "grow", h = "fit",
@@ -653,7 +660,7 @@ local function counter_rows(inv, co, mats)
         onClicked = function() if not e.kept then sellOne(e.mat) end end }
     end
     if #stock > 0 and fm and fm.depotAction then
-      out[#out + 1] = { "button", key = "sellall", style = "panel/action", w = "100%", h = 34,
+      list[#list + 1] = { "button", key = "sellall", style = "panel/action", w = "100%", h = 34,
         text = fm.depotAction() or "Sell everything", onClicked = function() sellAll() end }
     end
     -- GEAR, sold back one piece a click at the used-goods price (items
@@ -677,10 +684,19 @@ local function counter_rows(inv, co, mats)
       end
     end
     if #gear_rows > 0 then
-      out[#out + 1] = { "text", key = "sgH", style = "panel/label", w = "100%", h = "fit",
+      list[#list + 1] = { "text", key = "sgH", style = "panel/label", w = "100%", h = "fit",
         text = string.format("GEAR  ·  BOUGHT BACK AT %d%% OF LIST", math.floor(((I and I.SELL_BACK) or 0.6) * 100 + 0.5)) }
-      for _, r in ipairs(gear_rows) do out[#out + 1] = r end
+      for _, r in ipairs(gear_rows) do list[#list + 1] = r end
     end
+  end
+  -- (playtest 11-12b: "the buy and sell lists can't scroll") the goods in a
+  -- scroll view under the screen's height: the wheel moves it, the counters'
+  -- keys above and the way out below stay put
+  out[#out + 1] = { "scroll", key = "clist_" .. counter, name = "CounterList", w = "100%", h = "fit", maxH = COUNTER_LIST_H(), dir = "col",
+    gap = 4, pad = 0, align = "stretch", scrollFade = 14, scrollSpeed = 48, items = list, function(x) return x end }
+  if #list > 8 then
+    out[#out + 1] = { "text", key = "cmore", style = "panel/hint", w = "100%", h = "fit", textAlign = "end",
+      text = string.format("%d rows  ·  scroll for the rest", #list) }
   end
   return out
 end

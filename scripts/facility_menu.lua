@@ -430,14 +430,14 @@ end
 -- material (the depot's per-material rows); nil sells everything. A first sale
 -- of a material is a DISCOVERY — the moment the science half of the game starts
 -- paying, and the one time a single crate is worth real money.
-function depotSell(only)
+function depotSell(only, studied)
   local inv, co, mats = ref("inventory"), ref("company"), ref("materials")
   local rs = ref("research")
   if not (inv and co and mats) then return "no depot systems" end
   local items = inv.items("base")
   if #items == 0 then return "the warehouse is empty" end
   local mult = price_mult(co)
-  local total, bonus, firsts, kept, rare = 0, 0, {}, 0, 0
+  local total, bonus, firsts, kept, rare, rp = 0, 0, {}, 0, 0, 0
   local sold = save.get("depot.sold") or {}
   local fr = save.get("depot.freight") or {}
   local freight = 0
@@ -460,6 +460,26 @@ function depotSell(only)
         bonus = bonus + bonus_of(mats, it.mat)
         if mats.tier(it.mat) >= 2 then rare = rare + 1 end
       end
+      -- (playtest 11-12b: "anything sold should count as researched too")
+      -- the depot's assayer studies what it buys, exactly as the Intake
+      -- would have: the RP, the lab's list, the first-ore feat. `studied`
+      -- (the Intake's own bulk sale) has done it already.
+      if rs and rs.study and not studied and it.n > 0 then
+        -- (each off-world lot at its own world's worth, the rest as home's)
+        local left = it.n
+        for _, o in ipairs(it.origins or {}) do
+          local n = math.min(left, o.n or 0)
+          if n > 0 then
+            local ok, got = pcall(rs.study, it.mat, n, o.body)
+            if ok and tonumber(got) then rp = rp + got end
+            left = left - n
+          end
+        end
+        if left > 0 then
+          local ok, got = pcall(rs.study, it.mat, left, nil)
+          if ok and tonumber(got) then rp = rp + got end
+        end
+      end
       inv.remove("base", it.mat, it.n)
     end
   end
@@ -477,7 +497,8 @@ function depotSell(only)
     if rare > 0 then co.addRep(rare, "first sale of " .. table.concat(firsts, ", ")) end
     if rs and rs.noteDiscovery then rs.noteDiscovery() end
   end
-  return string.format("sold for %s%s%s%s", co.money(total),
+  return string.format("sold for %s%s%s%s%s", co.money(total),
+    rp >= 0.05 and string.format("  ·  studied +%.1f RP", rp) or "",
     freight > 0 and string.format("  (freight rate +%s)", co.money(freight)) or "",
     bonus > 0 and string.format("  ·  NEW DISCOVERY: %s (+%s)",
       table.concat(firsts, ", "), co.money(bonus)) or "",
@@ -577,6 +598,11 @@ end
 -- other building. A row is a button: what it is, how many, what it fetches,
 -- and NEW with the premium when its first sale is still to come.
 local rows_shown = nil
+function DEPOT_LIST_H()
+  local st = ref("settings")
+  local h = (st and st.designHeight and st.designHeight()) or 720
+  return math.max(150, math.min(420, h - 430))
+end
 local function depot_rows(show)
   local panel = find("Facility Panel")
   if not (panel and ui and ui.make) then return end
@@ -607,7 +633,10 @@ local function depot_rows(show)
       { "button", key = "sellCounter", style = "panel/secondary", w = "grow", h = 30,
         textAlign = "center", textValign = "center", text = "Sell counter  ·  materials",
         onClicked = function() counters("sell") end } },
-    { "col", key = "depotRows", w = "100%", h = "fit", gap = 3, pad = 0, order = 2,
+    -- (playtest 11-12b) a scroll view under the screen's height: a full
+    -- warehouse ran the list off the bottom with no way to reach it
+    { "scroll", key = "depotRows", name = "DepotList", w = "100%", h = "fit", maxH = DEPOT_LIST_H(), dir = "col", gap = 3, pad = 0, order = 2,
+      align = "stretch", scrollFade = 14, scrollSpeed = 48,
       items = items, function(e)
         local label = string.format("%d × %s", e.n, (mats and mats.label(e.mat)) or e.mat)
         -- an off-world lot names its world: "Ilmenite · Ryethos", or with

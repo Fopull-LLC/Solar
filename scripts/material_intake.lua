@@ -349,7 +349,7 @@ local function take(n, e, mass, wx, wy, wz)
     if (e.sell or took < e.qty) and co then
       local before = co.balance and co.balance() or 0
       if e.sell and fm and fm.depotSell and took > 0 then
-        pcall(fm.depotSell, e.mat)
+        pcall(fm.depotSell, e.mat, true)   -- (true: studied below, not twice)
       end
       -- what didn't fit in a full warehouse goes at the list price
       local over = e.qty - took
