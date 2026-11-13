@@ -1372,7 +1372,8 @@ end
 -- water leaves the lip level and drops as t²), a mist fired at the foot
 -- every few seconds while the eye is near (vfx/FallMist, through vfx.emit so
 -- it rides the planet), and a waterfall loop there (ambient_tick).
-FALL_DROP = 1.5
+FALL_DROP = 2.0
+FALL_APART = 30.0
 local function fall_params(n, w, f)
   local bn = space and space.body and space.body(water.body)
   local g = (bn and bn.mu and w.radius) and (bn.mu / (w.radius * w.radius)) or 9.81
@@ -1567,7 +1568,7 @@ local function ambient_tick(name, w, b, ex, ey, ez)
     if rv and rv.falls then
       for i, f in ipairs(rv.falls) do
         local d = len(rx - f.bx, ry - f.by, rz - f.bz)
-        if d < 150 then
+        if d < 150 and nf < 3 then
           nf = nf + 1
           amb_set("fall" .. key .. "_" .. i, (f.drop > 4) and "audio/water/waterfall_loop.ogg" or "audio/water/waterfall_soft_loop.ogg",
             math.min(0.9, 0.35 + f.drop * 0.06 + f.half * 0.04), f.bx, f.by, f.bz, 10, 160)
@@ -1827,9 +1828,18 @@ local function build_river(b, w, rv, i0, i1)
       -- kept for the sheet, the mist and the sound (build_fall_sheets).
       if last_row and last_row.r - r > FALL_DROP
           and len(dx * r - last_row.x, dy * r - last_row.y, dz * r - last_row.z) < 14 then
-        falls[#falls + 1] = { tx = last_row.x, ty = last_row.y, tz = last_row.z, tr = last_row.r,
+        -- (one fall per FALL_APART m of river: a steep stretch stepping down
+        -- every row is rapids, not fifty waterfalls — 51 falls and 9 loops
+        -- at once on Naolol's longest river; the biggest drop is the fall)
+        local nf = { tx = last_row.x, ty = last_row.y, tz = last_row.z, tr = last_row.r,
           bx = dx * r, by = dy * r, bz = dz * r, br = r, half = math.max(half, last_row.half),
           nx = nx, ny = ny, nz = nz, drop = last_row.r - r }
+        local pf = falls[#falls]
+        if pf and len(pf.bx - nf.bx, pf.by - nf.by, pf.bz - nf.bz) < FALL_APART then
+          if nf.drop > pf.drop then falls[#falls] = nf end
+        else
+          falls[#falls + 1] = nf
+        end
       end
       last_row = { x = dx * r, y = dy * r, z = dz * r, r = r, half = half }
       rows = rows + 1

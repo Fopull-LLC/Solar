@@ -921,3 +921,86 @@ local function run_tysea()
   P("TYSEA RESULT: %d reads, %d wet, %d flips; reach floods %s wet %s dry %s cold %s; final seaDepth %s", n, wet_n, flips,
     tostring(rs.floods), tostring(rs.wet), tostring(rs.dry), tostring(rs.cold), tostring(cl.seaDepth(A.x, A.y, A.z)))
 end
+
+-- ── wrover (waterprobe.sh wrover): a rover driven through the shallows ──────
+-- The smoke's rover is rolled out, set down on a beach facing along the
+-- waterline at the water's edge and driven for 8 s; shots from a camera
+-- beside its path while it moves, its speed, how wet it got (waterState)
+-- and the frame's cost while the sea fills the view.
+local function run_wrover()
+  wait_ready(90)
+  local b = home()
+  local cl = findScript("climate")
+  local R = cl and cl.seaRadius(b.name) or 0
+  if R <= 0 then P("WROVER RESULT: no sea"); return end
+  perf.enable(true)
+  local a0 = astro()
+  local u, g, t = w_find_beach(home(), R, unit({ x = a0.x - b.x, y = a0.y - b.y, z = a0.z - b.z }), 420)
+  -- (the sea's reach is asked as the search goes: its first floods are
+  -- pending, so the search is run again once they have landed)
+  for _ = 1, 4 do
+    if u then break end
+    wait(1.5)
+    u, g, t = w_find_beach(home(), R, unit({ x = a0.x - b.x, y = a0.y - b.y, z = a0.z - b.z }), 420)
+  end
+  if not u then P("WROVER RESULT: no beach"); return end
+  local vc = launch_via_builder(ROVER, "runway", 6)
+  if not vc then P("WROVER RESULT: no craft"); return end
+  local vn = vc.node
+  vc.releaseClamps()
+  wait(1)
+  -- the waterline along t: where the ground meets the sea's radius
+  local wl = 0
+  for d = 0, 40, 1 do
+    local gg = w_ground(w_along(u, t, d, R), R + 60)
+    if gg and gg < R + 0.15 then wl = d break end
+  end
+  local at = w_along(u, t, wl - 1.5, R)
+  local ag = w_ground(at, R + 60) or R
+  b = home()
+  assembly.teleport(vn, vec3(b.x + at.x * (ag + 1.2), b.y + at.y * (ag + 1.2), b.z + at.z * (ag + 1.2)))
+  a0.x, a0.y, a0.z = b.x + u.x * (g + 1.5), b.y + u.y * (g + 1.5), b.z + u.z * (g + 1.5)
+  wait(3)
+  local pc = findScript("planet_camera")
+  pc.setFreecam(true); wait(0.3)
+  local fc = pc.freecamState()
+  fc.body = b.name
+  local function cam_on_rover(back, up, side)
+    local bb = home()
+    local inf = assembly.info(vn)
+    local c = inf.com
+    local ru = unit({ x = c.x - bb.x, y = c.y - bb.y, z = c.z - bb.z })
+    local rr = len(c.x - bb.x, c.y - bb.y, c.z - bb.z)
+    local s1 = unit(cross(ru, t))
+    local p = { x = ru.x * (rr + up) + t.x * back + s1.x * side, y = ru.y * (rr + up) + t.y * back + s1.y * side, z = ru.z * (rr + up) + t.z * back + s1.z * side }
+    fc.rel = vec3(p.x, p.y, p.z)
+    local look = unit({ x = ru.x * rr - p.x, y = ru.y * rr - p.y, z = ru.z * rr - p.z })
+    local lu = dot(look, ru)
+    fc.ref = vec3(look.x - ru.x * lu, look.y - ru.y * lu, look.z - ru.z * lu)
+    fc.pitch = math.asin(clamp(lu, -1, 1))
+  end
+  cam_on_rover(7, 2.2, 5)
+  wait(1.5)
+  w_shot("v_rover_parked")
+  sc_begin("c_rover_shore")
+  key_down("w")
+  for i = 1, 8 do
+    wait(1.0)
+    cam_on_rover(7, 2.2, 5)
+    yield(); yield()
+    local inf = assembly.info(vn)
+    local ws = vc.waterState and vc.waterState() or {}
+    local bb = home()
+    P("WROVER t=%d: speed %.1f m/s, com %.2f m over the sea, wet %.2f splashed %s", i,
+      len(inf.vel.x, inf.vel.y, inf.vel.z), len(inf.com.x - bb.x, inf.com.y - bb.y, inf.com.z - bb.z) - R, ws.wet or 0, tostring(ws.splashed))
+    if i == 3 or i == 6 then w_shot("v_rover_moving_" .. i) end
+  end
+  key_up("w")
+  sc_end("c_rover_shore")
+  wait(1)
+  cam_on_rover(-8, 1.2, 3)
+  wait(1.0)
+  w_shot("v_rover_after")
+  pc.setFreecam(false)
+  P("WROVER RESULT: shots v_* taken")
+end

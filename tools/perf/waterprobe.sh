@@ -24,7 +24,7 @@ s = open(p).read()
 i = s.index('-- ── main ──')
 s = s[:i] + m + s[i:]
 s = s.replace('    elseif MODE == "plane" then run_plane()',
-              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "water" then run_water()\n    elseif MODE == "sealook" then run_sealook()\n    elseif MODE == "tysea" then run_tysea()')
+              '    elseif MODE == "plane" then run_plane()\n    elseif MODE == "water" then run_water()\n    elseif MODE == "sealook" then run_sealook()\n    elseif MODE == "tysea" then run_tysea()\n    elseif MODE == "wrover" then run_wrover()')
 open(p, 'w').write(s)
 PY
 SOLAR=${SOLAR:-$(cd "$HERE/../.." && pwd)} WORK=$S TMO=${TMO:-600} bash $S/tools/bench.sh $eng ${*:-water}
