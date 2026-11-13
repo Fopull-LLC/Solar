@@ -105,13 +105,18 @@ function G.turbine_on(g, api)
   if not R then return false, "no plant" end
   return R.turbine and (R.genKW or 0) > 3, string.format("%s · %.1f kW(e)", R.turbine and "on line" or "off line", R.genKW or 0)
 end
+-- (scnfix2, Ty 11-12b: "FW-2 off (running)" after the switch) the switch's
+-- goals read the pump NOW, not the 4 Hz snapshot: the card answers the
+-- press the moment the menu does
 function G.fw2_off(g, api)
   ready(api)
+  PC.fw2 = api.piece(S, FW2) or PC.fw2
   local p = PC.fw2
   return p.pumpOn == false, p.pumpOn == false and "isolated" or "running"
 end
 function G.fw2_on(g, api)
   ready(api)
+  PC.fw2 = api.piece(S, FW2) or PC.fw2
   local p = PC.fw2
   return p.pumpOn ~= false and not p.knocked, p.knocked and "out of its housing" or (p.pumpOn == false and "off" or "running")
 end

@@ -2026,6 +2026,11 @@ flight, and the base the walkable interiors will stand on (PLAN §5).
 - **Heard**: `audio/foley/leak_hiss.ogg` (a recorded CC0 gas leak, audio/
   SOURCES.md), a 3D loop on the part, louder with the flow, while air goes
   out of it; the three worst holes per network; within 60 m or aboard.
+- **Seen** (scnfix2, Ty 2026-11-12b: the hole is found by its cues): while
+  a hole is heard it also vents a plume of freezing air, a SteamJet every
+  0.3 s (cabin_air `JET`), off the part's +X face 0.95 m out (the same
+  place every time), sized by the flow, from the part's drawn frame the
+  frame it is emitted. Its menu's LEAK row reads the hole's size and flow.
 - **Patched**: "Patch the leak" on the part's menu with a Repair Kit in hand
   (item_hand's timed job, 40 % of a repair's time; on foot or EVA), the part
   to PATCH_HP 0.55. A full repair mends it too.
@@ -2113,3 +2118,42 @@ flight, and the base the walkable interiors will stand on (PLAN §5).
   puncture (the alarm, the hiss, the falling gauge), the menu, the patch and
   the repressurisation, the hatch venting, the docking hatch equalising and
   opening, an EVA venting the cabin.
+
+## 14. Play as, Follow me, Sit and Lie down (scnfix2, Ty 2026-11-12b)
+
+- **Play as <name>** (context_providers `member_playas`): right-click another
+  crew member on foot to take them, through `crew.switchToMember` (the
+  picker's rules). Dimmed with the reason: a survivor, a scenario member the
+  story keeps (`playable = false`), someone down, or someone **asleep**: a
+  record lying down that a story or a bunk put there (`crew.restingWhy`; you
+  lying down yourself, `pose.self`, are not). The pause menu's Switch crew
+  member and the crew strip offer the same people.
+- **Follow me / Wait here** (crew.lua FOLLOWERS, 2 Hz in `carry_tick`): any
+  crew member on foot, and survivors as before. Each follower has their own
+  slot behind you (one behind, two to the sides, then a row further back),
+  walks at your pace close by and jogs (3 m/s) past 7 m behind, round what is
+  in the way (crew_body's planner). A slot never sits within 3.5 m of a
+  craft's centre, so a follower never leans on a rover (the push itself is
+  the vehicles work). Board a craft and they board within 25 m (`follow =
+  "aboard"`); get out and they get out with you. More than 45 m behind and
+  out of your view (60 deg off the camera, or 150 m), they are set down out
+  of sight 22 m back on your trail (`followCatches` counts it): nobody is
+  teleported where you can see it and nobody is left behind. A scenario's
+  `follow` beat sets it; a story `walk` ends it.
+- **Sit / Lie down** (crew.lua REST, context_providers `prop_rest`): on a
+  Chair ("Sit") or a Bunk ("Lie down") of a structure, within 3 m. You are
+  held there (`crew.held`: the walker, the RCS Pack and the impact monitor
+  stand down), the body kinematic and placed every physics tick on the
+  piece's tick pose (`structures.partPose`, body-relative, against this
+  tick's `space.body`), the Pose layer playing `sit_idle` or `lie_rest` (the
+  clips the story's crew pose with), faced the chair's front (`restFace`,
+  read by planet_walker) or laid on your back with the head to the bunk's
+  end, and the eyes lowered when lying (`planet_walker.eyeDrop`). A movement
+  key, Space or E gets you up, set down where you sat down from (in front of
+  the chair, beside the bunk). Switching crew or a knocked piece ends it.
+  The story's crew sit and lie with the `pose` beat (docs/scenarios.md §5.1).
+- **On the floor** (crew_body `settle`, Ty: "NPCs stand or sink into base
+  floors"): a body's feet are settled again 0.5, 1.5, 3 and 6 s after each
+  placement (a base's colliders land frames after the body), and the ray
+  down starts 1.4 m over the capsule's centre, or under the ceiling when a
+  ray up meets one (a centre inside a slab never sees the slab).

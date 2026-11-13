@@ -461,6 +461,14 @@ PROF = { ms = 0, n = 0, crafts = 0, mods = 0 }
 lastAlarm = nil
 lastHatch = nil
 lastLeakSound = nil
+-- (scnfix2, Ty 2026-11-12b: Hard Vacuum's hole should be FOUND, by the hiss,
+-- the frost and the gauge) THE PLUME: while a hole has air to lose, a jet of
+-- freezing air comes off the hull at it, every JET.every s, sized by the
+-- flow. The hole sits on the part's +X face (its right axis, JET.r out from
+-- its axis, JET.up up it): one place, the same every time, the side the hiss
+-- is loudest on. Drawn from the part's DRAWN frame the frame it is emitted
+-- (docs/positions-and-frames.md rule 2); nothing kept but the uid.
+JET = { every = 0.3, r = 0.95, up = 0.1, t = 0, on = {}, emitted = 0, last = nil }
 gauge = nil          -- (probes) what the IVA gauge shows: { label, p, o2, co2, … }
 
 local refs = {}
@@ -1017,7 +1025,11 @@ local function hiss_tick(v, c, near)
       sounds[key] = nil
     end
   end
+  for key in pairs(JET.on) do
+    if key:sub(1, #tostring(c.id) + 1) == tostring(c.id) .. ":" and not want[key] then JET.on[key] = nil end
+  end
   for key, w in pairs(want) do
+    JET.on[key] = { v = v, uid = w.uid, vol = w.vol }
     local s = sounds[key]
     if not s then
       local pn = part_node(v, w.uid)
@@ -1435,7 +1447,26 @@ function update(node, dt)
     PROF.ms = ((os and os.clock and os.clock() or 0) - t0) * 1000
     PROF.n, PROF.crafts, PROF.mods = PROF.n + 1, n, nm
   end
+  if next(JET.on) and t - JET.t >= JET.every then JET.t = t; JET.tick() end
   draw(node)
+end
+-- the plumes (above): one SteamJet per leaking hole near you
+function JET.tick()
+  local V = ref("vfx")
+  if not (V and V.emit and vec3) then return end
+  for key, j in pairs(JET.on) do
+    local v = j.v
+    local F = valid(v.node) and v.partFrameNow and v.partFrameNow(j.uid, true)
+    if not F then JET.on[key] = nil
+    else
+      local x = F.ox + F.rx * JET.r + F.ux * JET.up
+      local y = F.oy + F.ry * JET.r + F.uy * JET.up
+      local z = F.oz + F.rz * JET.r + F.uz * JET.up
+      pcall(V.emit, "LeakFrost", x, y, z, { normal = vec3(F.rx, F.ry, F.rz), scale = 0.3 + 0.6 * (j.vol or 0.5), intensity = j.vol or 0.5 })
+      JET.emitted = JET.emitted + 1
+      JET.last = { uid = j.uid, t = now() }
+    end
+  end
 end
 
 -- vessel_controller.undock asks before it lets go of port `uid` on craft

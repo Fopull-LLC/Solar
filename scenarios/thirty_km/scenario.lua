@@ -45,7 +45,8 @@ return {
             portrait = "auto", look = 2207, expression = "focus" },
     jonah = { name = "Jonah Priestley", tag = "PILOT", crew = "Priestley", color = { 0.85, 0.88, 0.95 }, portrait = "auto" },
     sunniva = { name = "Dr Sunniva Berge", tag = "SCIENTIST · MEDIC", crew = "Berge", color = { 0.62, 0.92, 0.70 }, portrait = "auto" },
-    ray = { name = "Ray Castellanos", tag = "ENGINEER · ASHA-2", crew = "Castellanos", color = { 1.0, 0.70, 0.45 }, portrait = "auto", expression = "pain" },
+    ray = { name = "Ray Castellanos", tag = "ENGINEER · ASHA-2", crew = "Castellanos", color = { 1.0, 0.70, 0.45 }, portrait = "auto", expression = "pain",
+          playable = false },   -- (scnfix2) his leg is broken: not someone you play
     kit = { name = "Kit Nakamura", tag = "SURVEYOR · ASHA-2", crew = "Nakamura", color = { 1.0, 0.86, 0.42 }, portrait = "auto", expression = "tired" },
     -- Kit on her suit radio once Asha-1 is in range of it (clear), and on
     -- Asha-2's set before that (its battery is flat: garbled, LINK LOST)

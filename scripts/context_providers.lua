@@ -999,7 +999,8 @@ local function member_carry(t, ctx)
       hint = "on your back", enabled = function() return c.carryWhyNot(t.id) == nil end,
       why = function() return c.carryWhyNot(t.id) end, act = function() return c.carry(t.id) end }
   end
-  if r.client and c.follow then
+  -- (scnfix2) the crew too: a party that keeps up with you (crew.lua FOLLOWERS)
+  if c.follow and not (ctx and ctx.actor and ctx.actor.id == t.id) then
     if r.follow then
       out[#out + 1] = { type = "action", id = "follow_off", group = "CREW", label = "Wait here",
         act = function() return c.follow(t.id, false) end }
@@ -1018,6 +1019,42 @@ local function astro_carry(t, ctx)
   local r = c.get(who)
   return { { type = "action", id = "putdown", group = "CREW", label = "Set " .. tostring(r and r.name or "them") .. " down",
     hint = "in front of you", act = function() return c.putDown() end } }
+end
+
+-- PLAY AS (scnfix2, Ty 2026-11-12b: "right-click another crew member and
+-- choose Play as <name>"): take control of the member you right-clicked,
+-- through crew.switchToMember (the switcher's rules: never a survivor, a
+-- story member the scenario keeps, someone asleep or down). Dimmed with the
+-- reason when it can't be done ("Dana Kowalczyk is asleep").
+local function member_playas(t, ctx)
+  local c = R(ctx, "crew")
+  if not (t.id and c and c.canSwitch and c.switchToMember) then return {} end
+  local r = c.get(t.id)
+  if not r or r.client or r.status == "dead" then return {} end
+  if ctx and ctx.actor and ctx.actor.id == t.id then return {} end
+  return { { type = "action", id = "playas", group = "CREW", label = "Play as " .. tostring(r.name or "them"),
+    hint = "switch", enabled = function() return (c.canSwitch(t.id)) == true end,
+    why = function() local _, why = c.canSwitch(t.id); return why end,
+    act = function() return c.switchToMember(t.id) end } }
+end
+
+-- SIT / LIE DOWN (scnfix2, Ty 2026-11-12b: "right-click a chair, Sit; a bed,
+-- Lie down"): on a Chair or a Bunk of a structure, for the member on foot
+-- (crew.lua REST holds the pose; a movement key, Space or E gets you up).
+local function prop_rest(t, ctx)
+  local c, FB = R(ctx, "crew"), R(ctx, "field_builder")
+  if not (c and c.restStart and FB and FB.pickTarget) then return {} end
+  if ctx and ctx.actor and ctx.actor.kind ~= "crew" then return {} end
+  local rec, part = FB.pickTarget(t)
+  if not (rec and part) then return {} end
+  local base = tostring(part.id):match("^([^%.]+)")
+  local spot = c.REST_SPOTS and c.REST_SPOTS[base]
+  if not spot then return {} end
+  local sid, uid = rec.id, part.uid
+  return { { type = "action", id = "rest", group = "Piece", label = spot.kind == "lie" and "Lie down" or "Sit",
+    hint = "move to get up", enabled = function() return c.restWhyNot(sid, uid) == nil end,
+    why = function() return c.restWhyNot(sid, uid) end,
+    act = function() return c.restStart(sid, uid) end } }
 end
 
 -- ENTER (Ty 2026-11-11: "right-clicking and entering that hatch"): a crewed
@@ -1047,10 +1084,12 @@ PROVIDED = {
   { "astro", "medkit", astro_medkit, 8 },
   { "member", "medkit", member_medkit, 10 },
   { "member", "carry", member_carry, 11 },
+  { "member", "playas", member_playas, 4 },
   { "astro", "suit", astro_provider, 10 },
   { "part", "task.cancel", task_cancel_part, 5 },
   { "part", "held.repair", held_repair, 15 },
   { "prop", "pickup", pickup, 20 },
+  { "prop", "rest", prop_rest, 3 },
   { "part", "core", part_core, 10 },
   { "part", "tank", part_tank, 20 },
   { "part", "engine", part_engine, 25 },

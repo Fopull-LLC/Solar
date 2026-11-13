@@ -211,6 +211,32 @@ function SOLVE(SP)
     until_(sr, function() local st = sr.state(); return st.line and st.line.who == "brennan" end, 30, "Brennan")
     wait(0.4); SP.shot("a1_brennan_radio", true)
     talk_for(sr, 6)
+    -- (scnfix2, Ty 11-12b: "party members get left behind easily") Teodor
+    -- told "Follow me" from his right-click; you go 60 m on (the probe's
+    -- stand is a jump: he is far behind at once): he keeps up, by a jog in
+    -- sight or set down on your trail out of it, and stands off you
+    do
+      local C, reg = findScript("crew"), findScript("context_registry")
+      local tid = (save.get("scn.crew") or {}).Lindqvist
+      local bn = C.bodyNodes and C.bodyNodes() or {}
+      local n = tid and bn[tid]
+      local okF, whyF = false, "no body"
+      if n then
+        local t = { kind = "member", node = n, id = tid, pack = "crew:" .. tid, label = (C.get(tid) or {}).name }
+        local ctx = { ref = function(k) return findScript(k) end, actor = { kind = "crew", id = C.activeId(), node = find("Astronaut") }, toast = function() end }
+        okF, whyF = reg.press(reg.byId(reg.entriesFor(t, ctx), "follow"))
+      end
+      local c0 = C.followCatches or 0
+      SP.stand("mark:approach", 30)
+      local d0 = apart(sr, "crew:Lindqvist", "crew:Haddad") or -1
+      local kept = until_(sr, function() local d = apart(sr, "crew:Lindqvist", "crew:Haddad"); return d and d < 8 end, 30, "Teodor keeps up")
+      talk_for(sr, 3)
+      local d1 = apart(sr, "crew:Lindqvist", "crew:Haddad") or -1
+      SP.check("party_follows", okF and kept and d1 > 0.8 and d1 < 8, "Follow me %s (%s): %.0f m behind after the jump, %.1f m after (%d out-of-sight catch-ups)",
+        tostring(okF), tostring(whyF), d0, d1, (C.followCatches or 0) - c0)
+      look_at(sr, "crew:Lindqvist", 1.2, 0.55); SP.shot("a1_teodor_follows", true)
+      if tid then C.follow(tid, false) end
+    end
     -- the walk in: the ruin from the flats, then the door
     view("a1_ruin_from_flats", { 2.5, 1.7, -40 }, { 4, 2.0, 2 }, false)
     view("a1_ruin_close", { -3.5, 1.8, -7.5 }, { 3.0, 1.2, 2.0 }, false)

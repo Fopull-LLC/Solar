@@ -676,24 +676,54 @@ end
 -- Feet on the ground: a ray down the local vertical from inside the capsule
 -- (a little over the record's centre: never from above a ceiling, which put
 -- a body on the roof); the record moves to stand on what it finds.
+-- (scnfix2, Ty 2026-11-12b: "NPCs stand or sink into base floors") Two ways
+-- a body ended up in the floor:
+--   the base's colliders land frames after the body (structures spawn their
+--     prefabs one by one), so the one ray at spawn met the terrain under the
+--     slab and the body stood on that: the feet are settled again at
+--     SETTLE_AGAIN s after each placement, on what is there by then;
+--   a post or a set-down on a terrain mark under a raised floor puts the
+--     capsule's centre inside the slab, and a ray cast from inside a collider
+--     does not see it: the ray now starts SETTLE_UP over the centre, or just
+--     under the ceiling when a ray up meets one first (never from a roof).
+SETTLE_AGAIN = { 0.5, 1.5, 3.0, 6.0 }
+SETTLE_UP = 1.4
+local settle_k, settle_t0 = 0, nil
 local function settle(node, c, r, b)
-  if settled or not raycast then settled = true return end
-  settled = true
+  if not raycast then settled = true return end
+  local t = time or 0
+  if settled then
+    if steer then return end      -- (a walk sets its own feet every tick)
+    local due = settle_t0 and SETTLE_AGAIN[settle_k + 1]
+    if not (due and t - settle_t0 >= due) then return end
+    settle_k = settle_k + 1
+  else
+    settled, settle_k, settle_t0 = true, 0, t
+  end
   local x, y, z = b.x + (r.x or 0), b.y + (r.y or 0), b.z + (r.z or 0)
   local ux, uy, uz = x - b.x, y - b.y, z - b.z
   local l = math.sqrt(ux * ux + uy * uy + uz * uz)
   if l < 1e-6 then return end
   ux, uy, uz = ux / l, uy / l, uz / l
-  local ok, h = pcall(raycast, x + ux * 0.35, y + uy * 0.35, z + uz * 0.35, -ux, -uy, -uz, 4.0, node)
-  if ok and h and h.distance and h.distance < 3.9 then
-    -- (the distance only: the hit point may be a planet-step off, frames doc rule 2)
+  -- how high the ray may start: SETTLE_UP, or under a ceiling (the distance
+  -- only; the hit's point may be a planet-step off, frames doc rule 2)
+  local o = SETTLE_UP
+  local oku, hu = pcall(raycast, x, y, z, ux, uy, uz, SETTLE_UP + 0.1, node)
+  if oku and hu and hu.distance then o = math.max(0.0, math.min(o, hu.distance - 0.08)) end
+  o = math.max(o, 0.35)
+  local ok, h = pcall(raycast, x + ux * o, y + uy * o, z + uz * o, -ux, -uy, -uz, o + 3.65, node)
+  if ok and h and h.distance and h.distance < o + 3.55 then
     local hh = P("half_h") + 0.02
-    local up = hh - (h.distance - 0.35)
+    local up = hh - (h.distance - o)
+    if math.abs(up) < 0.02 then return end
     local nx, ny, nz = (r.x or 0) + ux * up, (r.y or 0) + uy * up, (r.z or 0) + uz * up
     c.patch(memberId, { x = nx, y = ny, z = nz })
     seen = { x = nx, y = ny, z = nz }
+    settleStats.moves = settleStats.moves + 1
+    settleStats.last = up
   end
 end
+settleStats = { moves = 0, last = 0 }     -- (probes)
 
 -- Who am I? (crew.lua spawned this node; its spawn callback runs before
 -- this script does, so the binding is asked for here.)

@@ -27,7 +27,8 @@ return {
 
   cast = {
     ops   = { name = "Kessel Ops", tag = "OPS · 9 MIN DELAY", color = { 0.55, 0.85, 1.0 } },
-    dana  = { name = "Dana Kowalczyk", tag = "ENGINEER · OFF SHIFT", crew = "Kowalczyk", color = { 1.0, 0.78, 0.45 }, portrait = "auto", expression = "tired" },
+    dana  = { name = "Dana Kowalczyk", tag = "ENGINEER · OFF SHIFT", crew = "Kowalczyk", color = { 1.0, 0.78, 0.45 }, portrait = "auto", expression = "tired",
+              playable = false },   -- (scnfix2) off shift and going to sleep: not someone you play
     priya = { name = "Dr Priya Anand", tag = "SCIENTIST", crew = "Anand", color = { 0.62, 0.92, 0.70 }, portrait = "auto" },
     me    = { name = "Halloran", tag = "ENGINEER · NIGHTS", crew = "Halloran", color = { 0.85, 0.88, 0.95 }, portrait = "auto" },
     log   = { name = "Shift Log", tag = "TERMINAL · KERNE-1", color = { 1.0, 0.70, 0.25 } },

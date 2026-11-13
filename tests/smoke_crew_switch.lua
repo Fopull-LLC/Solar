@@ -213,6 +213,18 @@ check(not onList, "npc: not on the [ ] list")
 check(C.playable(B) == false and C.playable(D) == true, "playable(): the npc no, you yes")
 C.patch(B, { npc = false })
 check(C.get(B).npc == nil and C.playable(B), "npc = false clears it")
+-- (scnfix2, Ty 11-12b: "unless they're sleeping or incapacitated like Dana")
+-- someone a story or a bunk laid down is asleep: not taken until they're up;
+-- you lying down yourself (pose.self) are not
+C.patch(B, { pose = { kind = "lie", x = 0, y = 0, z = 0 } })
+local oks, whys = C.canSwitch(B)
+check(not oks and tostring(whys):find("asleep", 1, true), "asleep: canSwitch refuses (" .. tostring(whys) .. ")")
+local okc2, whyc2 = C.control(B)
+check(not okc2 and tostring(whyc2):find("asleep", 1, true), "asleep: control refuses (" .. tostring(whyc2) .. ")")
+check(C.restingWhy({ name = "X", pose = { kind = "lie", self = true } }) == nil and C.restingWhy({ name = "X", pose = { kind = "sit" } }) == nil,
+  "lying down yourself, or sitting, is not asleep")
+C.patch(B, { pose = false })
+check(C.restingWhy(B) == nil, "up again: playable")
 
 if #failures == 0 then
   print(string.format("CREW SWITCH SMOKE OK — %d checks passed", passed))

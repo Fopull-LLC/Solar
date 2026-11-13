@@ -55,6 +55,66 @@ function SP.stand(ref, frames_)
     yield()
   end
 end
+-- (scnfix2) A piece's right-click menu, asked as the crew member on foot asks
+-- it, and one of its rows pressed the way the panel presses it (a toggle
+-- flips with the hand's rules: whyNot, Local control, a knock). Ty 11-12b:
+-- FW-2's "Pump running" showed ON and the press never took. The probes used to
+-- call reactor_plant.setPump with no hand, past every refusal.
+-- → ok, why, the row (nil when the menu has no such row)
+function SP.menu_press(struct, uid, rowId, quiet)
+  local ST, reg, cm, C = findScript("structures"), findScript("context_registry"), findScript("context_menu"), findScript("crew")
+  local sid = (save.get("scn.structs") or {})[struct]
+  local node = sid and ST and ST.nodeOf and ST.nodeOf(sid, uid)
+  if not (node and reg and cm and cm.resolve) then return false, "no node for " .. tostring(struct) .. "#" .. tostring(uid) end
+  local w = node.worldPos
+  local tgt = cm.resolve({ node = node, x = w.x, y = w.y, z = w.z })
+  local id = C and C.activeId and C.activeId()
+  local ctx = { actor = { kind = "crew", node = astro(), id = id, pack = C and C.packOf and C.packOf(id) or "astro", aboard = false },
+                ref = function(k) return findScript(k) end, toast = function(m, bad) P("SP toast %s%s", bad and "(bad) " or "", tostring(m)) end, close = function() end }
+  local rows = tgt and reg.entriesFor(tgt, ctx) or {}
+  local row = reg.byId(rows, rowId)
+  if not quiet then
+    local labels = {}
+    for _, r in ipairs(rows) do if r.type == "toggle" or r.type == "action" then labels[#labels + 1] = tostring(r.id) .. "=" .. tostring(r.label) end end
+    P("SP menu %s#%s (%s): %s", tostring(struct), tostring(uid), tostring(tgt and tgt.kind), table.concat(labels, " | "))
+  end
+  if not row then return false, "no row " .. rowId, nil end
+  local ok, why = reg.press(row)
+  return ok, why, row
+end
+-- (scnfix2, Ty 11-12b: "NPCs stand or sink into base floors") every standing
+-- crew body's feet against the floor under it: a ray down from 1.4 m over its
+-- centre (under a ceiling), the capsule's half height below the centre
+function SP.floor_check(tag, tol)
+  local C = findScript("crew")
+  local worst, n, lines = 0, 0, {}
+  for _, s in ipairs(findScripts("crew_body")) do
+    local r = s.memberId and C.get(s.memberId)
+    local node = s.self_node
+    if r and node and node.valid ~= false and not s.doll and r.status == "afoot" and type(r.pose) ~= "table" and not r.downed
+       and not (s.walking and s.walking()) then
+      local d = space.dominant(node.x, node.y, node.z)
+      local b = d and space.body(d)
+      if b then
+        local ux, uy, uz = node.x - b.x, node.y - b.y, node.z - b.z
+        local l = math.sqrt(ux * ux + uy * uy + uz * uz)
+        ux, uy, uz = ux / l, uy / l, uz / l
+        local o = 1.4
+        local oku, hu = pcall(raycast, node.x, node.y, node.z, ux, uy, uz, 1.5, node)
+        if oku and hu and hu.distance then o = math.max(0.3, math.min(o, hu.distance - 0.08)) end
+        local ok, h = pcall(raycast, node.x + ux * o, node.y + uy * o, node.z + uz * o, -ux, -uy, -uz, o + 3.0, node)
+        if ok and h and h.distance then
+          local hh = ((s.params and s.params.half_h) or 0.95) + 0.02
+          local off = (h.distance - o) - hh       -- + : the feet over the floor, − : sunk into it
+          n = n + 1
+          if math.abs(off) > math.abs(worst) then worst = off end
+          lines[#lines + 1] = string.format("%s %+.2f", tostring(r.name), off)
+        end
+      end
+    end
+  end
+  return SP.check("floor_" .. tag, n > 0 and math.abs(worst) <= (tol or 0.12), "%d standing bodies, worst %+.2f m (%s)", n, worst, table.concat(lines, ", "))
+end
 function SP.wait_step(id, tmo)
   local sr = SP.run_()
   local ok = wait_for(function() return (save.get("scn.done") or {})[id] ~= nil end, tmo or 30, "step " .. id)

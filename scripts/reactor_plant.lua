@@ -658,6 +658,16 @@ function setPump(sid, uid, on, by)
   return false, "not plumbed to a reactor loop"
 end
 function pumpOn(sid, uid)
+  -- (scnfix2) the plant whose loop the pump is on answers first, the plant
+  -- setPump writes: a second plant in one structure (or a stale entry) with
+  -- its own word on this uid must not be read by the hash's order
+  for _, e in pairs(PL) do
+    if e.sid == sid and e.pumpsOn[uid] ~= nil and e.pl then
+      for _, L in ipairs({ e.pl.pri, e.pl.sec }) do
+        for _, pu in ipairs((L and L.pumps) or {}) do if pu.uid == uid then return e.pumpsOn[uid] ~= false end end
+      end
+    end
+  end
   for _, e in pairs(PL) do if e.sid == sid and e.pumpsOn[uid] ~= nil then return e.pumpsOn[uid] ~= false end end
   return true
 end

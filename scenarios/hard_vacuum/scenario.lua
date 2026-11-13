@@ -142,14 +142,21 @@ return {
     core_up = {
       { say = { who = "ewan", text = "Quick. Right. Your dosimeter, your quarter." } },
     },
+    -- (scnfix2, Ty 2026-11-12b: "I just go outside and the rest completes
+    -- itself") the hole is found by its cues, not handed over: the hiss
+    -- louder as you close on it (cabin_air's leak loop on the holed can),
+    -- the plume of freezing air off its face (cabin_air JET), and the can's
+    -- own LEAK row on its menu. Ewan gives the side of the ship, nothing more.
     outside = {
       { say = { who = "ewan", text = "Hab's open. I've got you on the suit camera. Don't wave." } },
       { say = { who = "mira", text = "I wasn't going to." } },
-      { say = { who = "ewan", text = "X holds you on the ship. Stores is aft of you, past B. Follow the noise." } },
+      { state = { craft = "Ansel", uid = 14, st = { creg = "off" } } },
+      { say = { who = "ewan", text = "I've shut the hab's regulator, or its bottles follow you out the door. It's yours to turn back on when you're in." } },
+      { say = { who = "ewan", text = "X holds you on the ship. Stores is aft of you, past B. I can't see the hole from here. Listen for it, and watch for frost coming off the hull." } },
     },
     found = {
-      { say = { who = "mira", text = "Here. It's this can. I can feel it through my gloves." } },
-      { say = { who = "ewan", text = "I see it. There's a plume coming off the aft can, frost in the floodlight. That's your hole." } },
+      { say = { who = "mira", text = "Here. It's this can. I can feel it through my gloves, and there's frost coming off it." } },
+      { say = { who = "ewan", text = "I see the plume on the camera. That's your hole." } },
     },
     patched = {
       { sound = "audio/foley/hiss_seal.ogg" },
@@ -243,10 +250,10 @@ return {
       goals = { { kind = "helmet", who = "crew:Castellanos", off = false, label = "Outside, helmet on" } },
       hint = "From your seat press F (EVA): the hab's hatch opens and its air goes. The RCS pack is on your back: WASD, Space and Ctrl to move, X to HOLD still against the ship.",
       on_done = { { run = "outside" } } },
-    { id = "find", text = "Find the hole. Listen for it.",
-      goals = { { kind = "at", who = "crew:Castellanos", at = "craft:Ansel@10", r = 2.2, label = "At the hole" } },
-      hint = "The stores is the two cans aft of hatch B, toward the shield. The hiss sits on the can with the hole: closer is louder.",
-      hint2 = "It's the aft can, the one standing on the shadow shield.",
+    { id = "find", text = "Find the hole: listen for the hiss, look for frost venting off the hull.",
+      goals = { { kind = "at", who = "crew:Castellanos", at = "craft:Ansel@10", r = 1.8, hold = 2, label = "At the hole" } },
+      hint = "The stores is the two cans aft of hatch B. The hiss gets louder as you close on the hole; while it still has air, a plume of frost comes off it. Right-click a can: the holed one shows a LEAK row.",
+      hint2 = "It's the aft can, the one standing on the shadow shield. Go round it: the plume comes off one face.",
       on_done = { { run = "found" } } },
     { id = "patch", text = "Patch it: the Repair Kit in hand, right-click the can, Patch the leak.", mark = "craft:Ansel@10",
       goals = { { kind = "part_hp", craft = "Ansel", uid = 10, above = 0.5, label = "The hole patched" } },
@@ -254,13 +261,17 @@ return {
       hint2 = "If the dose chip is climbing, you're out of the shield's shadow: come in closer to the can's surface.",
       on_done = { { run = "patched" } } },
     -- ACT 4: home
-    { id = "home", text = "Back in through the hab's hatch.", act = "Act 4 · home", checkpoint = true,
+    { id = "home", text = "Back in through the hab's hatch, then turn its air regulator back on.", act = "Act 4 · home", checkpoint = true,
       stage = { beats = { { wear = { craft = "Ansel", uid = 10, hp = 0.55 } }, { var = { struck = true, briefed = true } },
                           { state = { craft = "Ansel", uid = 13, st = { ph = "sealed" } } },
-                          { state = { craft = "Ansel", uid = 16, st = { ph = "sealed" } } } } },
+                          { state = { craft = "Ansel", uid = 16, st = { ph = "sealed" } } },
+                          { state = { craft = "Ansel", uid = 14, st = { creg = "off" } } } } },
+      -- (scnfix2) the air comes back when you put it back: Ewan shut the
+      -- hab's regulator for the EVA, and with it off nothing refills the can
       goals = { { kind = "cabin", craft = "Ansel", module = "#14", breathable = true, p = 0.9, label = "The hab breathable again" } },
-      waitLabel = "The hab's bottles filling it",      -- (scnfix) the wait bar, once you're in and it climbs
-      hint = "Fly back to the hab, the can between hatch A and hatch B, and press F at its side hatch to board. Boarding seals it; the hab's bottles bring the air back.",
+      waitLabel = "The hab's bottles filling it",      -- (scnfix) the wait bar, only once the air is climbing
+      hint = "Fly back to the hab, the can between hatch A and hatch B, and press F at its side hatch to board. Then right-click the hab (your can): Air regulator, AUTO. The gauge (top right) shows the air climb.",
+      hint2 = "Boarding seals the hatch, but the regulator Ewan shut stays shut: nothing refills the hab until you turn it back on.",
       on_done = { { run = "home" } } },
     { id = "stores", text = "Bring the stores back over 0.85 atm: its own bottles, or the hab's through hatch B.",
       goals = { { kind = "cabin", craft = "Ansel", module = "#10", p = 0.85, label = "Stores back over 0.85 atm" } },

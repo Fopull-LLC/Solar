@@ -1960,6 +1960,15 @@ function playable(id)
   local r = type(id) == "table" and id or get(id)
   return r ~= nil and not r.npc
 end
+-- (scnfix2, Ty 2026-11-12b: "unless they're sleeping or incapacitated like
+-- Dana") someone lying down that a story or a bed put there (not you, who
+-- lay down yourself: pose.self) is asleep: not taken until they are up.
+function restingWhy(id)
+  local r = type(id) == "table" and id or get(id)
+  local p = r and r.pose
+  if type(p) == "table" and p.kind == "lie" and not p.self then return (r.name or "they") .. " is asleep" end
+  return nil
+end
 
 -- TAKE CONTROL of member `id` (§4.1).
 function control(id)
@@ -1971,6 +1980,7 @@ function control(id)
   if r.status == "dead" then return false, r.name .. " is dead" end
   if r.status == "base" then return false, r.name .. " is at the base" end
   if r.downed then return false, r.name .. " is down — bring a Medkit" end
+  if id ~= activeId() and restingWhy(r) then return false, restingWhy(r) end
   local v = craftOf(id)
   if v then return takeCraft(v, id) end
   if id == activeId() and not avatarCraft() then
@@ -2086,7 +2096,7 @@ function switchList(range)
       -- (not the downed: control() refuses them, so the strip's CONTROL chip
       -- and [ ] would offer what can't be done; the DOWN chip lists them)
       -- (missions N1: nor a survivor, who is not ours to play)
-      if r and r.status == "afoot" and not r.downed and not r.npc and not r.client and d <= range then
+      if r and r.status == "afoot" and not r.downed and not r.npc and not r.client and not restingWhy(r) and d <= range then
         out[#out + 1] = { kind = "crew", id = id, name = r.name, dist = d }
       end
     end
@@ -2228,6 +2238,7 @@ function canSwitch(id)
   end
   if r.downed then return false, r.name .. " is down — bring a Medkit" end
   if r.npc then return false, NOT_YOURS end
+  if restingWhy(r) then return false, restingWhy(r) end
   local b = busy(r)
   if b then return false, b end
   if r.status == "aboard" then
@@ -2753,6 +2764,7 @@ local rope_by = nil
 function setRopeHold(id) rope_by = id end
 function held(id)
   if TREAT and TREAT.by == (id or activeId()) then return true end
+  if REST and REST.id == (id or activeId()) then return true end     -- (scnfix2) sitting or lying down
   if rope_by ~= nil and rope_by == (id or activeId()) then return true end
   local ct = ref("crew_task")
   if ct and ct.isHeld then return ct.isHeld(id or activeId()) == true end
@@ -4067,7 +4079,9 @@ function followWhyNot(who)
   if not r then return "nobody there" end
   if r.status ~= "afoot" then return "only someone on foot" end
   if r.downed or (r.hp or 1) < CARRY.follow_hp then return (r.name or "they") .. " can't walk: carry them" end
-  if not r.client then return "crew go where you send them" end
+  -- (scnfix2) crew follow too: the party walking with you
+  if who == activeId() then return "that's you" end
+  if type(r.pose) == "table" then return (r.name or "they") .. " is resting" end
   return nil
 end
 function follow(who, on)
@@ -4110,31 +4124,293 @@ function carry_tick(dt)
       apply_load()
     end
   end
-  -- followers: 2 Hz, a point behind the avatar; aboard with you when you board
+  -- FOLLOWERS (scnfix2, Ty 2026-11-12b: "party members get left behind
+  -- easily if you aren't paying attention"): 2 Hz, everyone with `follow`
+  -- (a survivor, or a crew member told "Follow me" or put on it by a story):
+  --   a slot behind you, each their own (side by side, never in a pile);
+  --   a walk at your pace close by, a jog when they fall back (FOLLOW_JOG);
+  --   round what is in the way (crew_body's planner); never at a craft's
+  --     hull: the slot stands off any craft within FOLLOW_CRAFT_R, so a
+  --     follower never leans on a rover (the physical push is the vehicles
+  --     agent's business);
+  --   board when you board (a free seat, within 25 m), out again with you;
+  --   far behind (FOLLOW_CATCH) and out of your view, at both ends, they are
+  --     set down out of sight on your trail: no teleport you can see, and
+  --     nobody is left on the far side of the map.
+  -- Every point is read this tick and used at once (docs/positions-and-frames.md).
   local a = astro()
   local v = avatarCraft()
-  for _, r in ipairs(clients()) do
-    if r.follow and r.status == "afoot" then
+  local pw = ref("planet_walker")
+  local pc = ref("planet_camera")
+  local fx, fy, fz = 0, 0, 0
+  if pc and pc.fwd_x then fx, fy, fz = pc.flat_x or pc.fwd_x, pc.flat_y or pc.fwd_y, pc.flat_z or pc.fwd_z end
+  local fl = len(fx, fy, fz)
+  if fl > 1e-6 then fx, fy, fz = fx / fl, fy / fl, fz / fl end
+  local slot = 0
+  for _, r in ipairs(followers()) do
+    if r.status == "afoot" and r.id ~= activeId() then
+      slot = slot + 1
       local b = bodies[r.id]
-      local cb = b and b.valid ~= false and b.getScript and b:getScript("crew_body") or nil
-      if v and b then
-        if len(b.x - v.node.x, b.y - v.node.y, b.z - v.node.z) < 25 then
+      if b and b.valid == false then b = nil end
+      local cb = b and b.getScript and b:getScript("crew_body") or nil
+      if v then
+        -- you boarded: they come aboard (walk up, then a free seat)
+        local bx, by, bz
+        if b then bx, by, bz = b.x, b.y, b.z else bx, by, bz = world_of(r) end
+        local dv = bx and len(bx - v.node.x, by - v.node.y, bz - v.node.z) or 1e9
+        if dv < 25 then
           local ok = board(r.id, v)
-          if ok then patch(r.id, { follow = false }) end
+          if ok then patch(r.id, { follow = (not r.client) and "aboard" or false }) end
+        elseif cb and cb.steerSelf then
+          local dn, rx, ry, rz = rel(v.node.x, v.node.y, v.node.z)
+          if dn then pcall(cb.steerSelf, dn, rx, ry, rz, { arrive = 3.0, speed = FOLLOW_JOG }) end
         end
-      elseif a and cb and cb.steerSelf and not (ref("planet_walker") and ref("planet_walker").onFoot == false) then
-        local pc = ref("planet_camera")
-        local fx, fy, fz = 0, 0, 0
-        if pc and pc.fwd_x then fx, fy, fz = pc.flat_x or pc.fwd_x, pc.flat_y or pc.fwd_y, pc.flat_z or pc.fwd_z end
-        local p, d = followPoint(a.x, a.y, a.z, fx, fy, fz, b.x, b.y, b.z)
-        if d and d > CARRY.follow_far then patch(r.id, { follow = false })
-        elseif p then
+      elseif a and not (pw and pw.onFoot == false) then
+        local p, d = follow_slot(a, fx, fy, fz, slot, b)
+        if not b then
+          local wx, wy, wz = world_of(r)
+          if wx then d = len(wx - a.x, wy - a.y, wz - a.z) end
+        end
+        local seen = b and in_view(pc, b.x, b.y, b.z)
+        if d and d > FOLLOW_CATCH and not seen then
+          -- far behind and out of sight: on your trail, out of sight too
+          local t = follow_slot(a, fx, fy, fz, slot, nil, FOLLOW_CATCH_BACK)
+          if t and not in_view(pc, t.x, t.y, t.z) then
+            local sx, sy, sz = freeSpot(t.x, t.y, t.z)
+            if cb and cb.steerStop then pcall(cb.steerStop) end
+            setDown(r.id, sx, sy, sz)
+            followCatches = followCatches + 1
+          end
+        elseif p and cb and cb.steerSelf then
+          local sp = (d and d > FOLLOW_JOG_AT) and FOLLOW_JOG or ((d and d > CARRY.behind + 2.5) and 1.8 or 1.4)
           local dn, rx, ry, rz = rel(p.x, p.y, p.z)
-          if dn then pcall(cb.steerSelf, dn, rx, ry, rz, { arrive = 0.6 }) end
-        elseif cb.steerStop and cb.walking and cb.walking() then pcall(cb.steerStop) end
+          if dn then pcall(cb.steerSelf, dn, rx, ry, rz, { arrive = 0.6, speed = sp }) end
+        elseif not p and cb and cb.steerStop and cb.walking and cb.walking() then pcall(cb.steerStop) end
+      end
+    elseif r.follow == "aboard" and r.status == "aboard" and not v and a then
+      -- you got out of the craft they ride: they get out with you and fall in behind
+      local w = craftOf(r.id)
+      if w and w.node and len(w.node.x - a.x, w.node.y - a.y, w.node.z - a.z) < 30 then
+        pcall(eva, r.id, { stay = true, confirmed = true })
+        patch(r.id, { follow = true })
       end
     end
   end
+end
+FOLLOW_JOG, FOLLOW_JOG_AT = 3.0, 7.0            -- m/s; m behind before they jog
+FOLLOW_CATCH, FOLLOW_CATCH_BACK = 45.0, 22.0    -- m behind before the out-of-sight catch-up; where on your trail
+FOLLOW_CRAFT_R = 3.5                            -- m a follower's slot keeps from a craft's centre
+followCatches = 0                               -- (probes)
+-- everyone who follows you: survivors and crew with `follow`
+function followers()
+  local out = {}
+  for _, r in ipairs(everyone()) do if r.follow then out[#out + 1] = r end end
+  return out
+end
+-- Slot `k` behind avatar node `a` (world, this tick): `back` m (default
+-- CARRY.behind) behind along your flat facing, the 2nd and 3rd to the sides,
+-- then a row further back; kept off craft. → point (world, now: never kept),
+-- metres from body node `b` to you (nil without b); no point when b is in place
+function follow_slot(a, fx, fy, fz, k, b, back)
+  local behind = (back or CARRY.behind) + math.floor((k - 1) / 3) * 1.6
+  local m = (k - 1) % 3
+  local side = (m == 1 and 1.2) or (m == 2 and -1.2) or 0
+  local dn = space.dominant(a.x, a.y, a.z)
+  local B = dn and space.body(dn)
+  if not B then return nil end
+  local ux, uy, uz = a.x - B.x, a.y - B.y, a.z - B.z
+  local ul = len(ux, uy, uz)
+  ux, uy, uz = ux / ul, uy / ul, uz / ul
+  local rx, ry, rz = fy * uz - fz * uy, fz * ux - fx * uz, fx * uy - fy * ux
+  local tx, ty, tz = a.x - fx * behind + rx * side, a.y - fy * behind + ry * side, a.z - fz * behind + rz * side
+  for _, w in ipairs(vessels()) do
+    local n = w.node
+    if n and n.valid ~= false and not (w.isLost and w.isLost()) then
+      local dx, dy, dz = tx - n.x, ty - n.y, tz - n.z
+      local dl = len(dx, dy, dz)
+      if dl < FOLLOW_CRAFT_R and dl > 1e-3 then
+        tx, ty, tz = n.x + dx / dl * FOLLOW_CRAFT_R, n.y + dy / dl * FOLLOW_CRAFT_R, n.z + dz / dl * FOLLOW_CRAFT_R
+      end
+    end
+  end
+  if not b then return { x = tx, y = ty, z = tz }, nil end
+  local dd = len(b.x - a.x, b.y - a.y, b.z - a.z)
+  if dd < behind + 1.0 and len(b.x - tx, b.y - ty, b.z - tz) < 2.2 then return nil, dd end
+  return { x = tx, y = ty, z = tz }, dd
+end
+-- Is world point (x, y, z) in the camera's view (within 60 deg of its axis, 150 m)?
+function in_view(pc, x, y, z)
+  if not (pc and pc.cam_x and pc.fwd_x) then return true end
+  local dx, dy, dz = x - pc.cam_x, y - pc.cam_y, z - pc.cam_z
+  local l = len(dx, dy, dz)
+  if l < 4 then return true end
+  if l > 150 then return false end
+  return (dx * pc.fwd_x + dy * pc.fwd_y + dz * pc.fwd_z) / l > 0.5
+end
+
+-- ── SIT AND LIE DOWN (scnfix2, Ty 2026-11-12b: "right-click to sit in
+-- chairs and lie on beds") ──────────────────────────────────────────────────
+-- The member you play, on a Chair ("Sit") or a Bunk ("Lie down"): held where
+-- the furniture is (crew.held: the walker, the RCS Pack and the impact
+-- monitor stand down, as for a job or a rope), the body kinematic and placed
+-- every physics tick on the piece's tick pose (structures are fixed to their
+-- world: a body-relative point read against this tick's space.body; frames
+-- doc rules 1-3), the Pose layer playing sit_idle or lie_rest (the clips
+-- crew_body poses the story's crew with), faced the furniture's way
+-- (restFace, read by planet_walker), the eyes lowered when lying (eyeDrop).
+-- Up again with a movement key, Space or E: set down where you got in, in
+-- front of the chair or beside the bunk. First and third person alike: the
+-- camera follows the body. NPCs sit and lie by a scenario's `pose` beat.
+REST = nil            -- { id, kind, sid, uid, t0, out = { x, y, z } body-relative }
+REST_SPOTS = {
+  -- (in the piece's own frame: x right, y up, z front; the box is parts_kit's)
+  chair = { kind = "sit", seat = { 0, 0.46, 0.0 }, face = { 0, 0, -1 }, out = { 0, 0, -0.75 } },
+  bunk  = { kind = "lie", seat = { 0, 0.48, 0.0 }, head = { 1, 0, 0 }, out = { 0, 0, 0.95 } },   -- (Graveyard's Dana: the mattress 0.48 m up)
+}
+REST_LIFT = { sit = 0.10, lie = 0.23 }       -- the capsule's centre over the surface (crew_body's sit_lift, lie_lift)
+REST_EYE_DROP = { sit = 0.0, lie = 0.55 }    -- the eyes lowered (planet_walker.eyeDrop, read by the camera)
+local function rest_kind_of(p)
+  local base = tostring(p and p.id or ""):match("^([^%.]+)")
+  return REST_SPOTS[base], base
+end
+-- body-relative point of piece-frame offset o on piece (sid, uid), its up and
+-- front (structures.partPose, the piece's own axes) → x, y, z, U, F, R, rec
+local function rest_frame(sid, uid, o)
+  local ST = ref("structures")
+  local rec = ST and ST.get and ST.get(sid)
+  local p = rec and ST.getPart and ST.getPart(sid, uid)
+  if not (p and ST.partPose) then return nil end
+  local x, y, z, U, F = ST.partPose(rec, p, 0)
+  local R = { x = U.y * F.z - U.z * F.y, y = U.z * F.x - U.x * F.z, z = U.x * F.y - U.y * F.x }
+  o = o or { 0, 0, 0 }
+  return x + R.x * o[1] + U.x * o[2] + F.x * o[3], y + R.y * o[1] + U.y * o[2] + F.y * o[3],
+         z + R.z * o[1] + U.z * o[2] + F.z * o[3], U, F, R, rec
+end
+-- may the member you play sit or lie on piece (sid, uid)? → nil | why
+function restWhyNot(sid, uid)
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(sid, uid)
+  local spot = rest_kind_of(p)
+  if not spot then return "nothing to sit on" end
+  if p.wr then return "it's knocked over" end
+  if avatarCraft() then return "you're aboard a craft" end
+  local pw = ref("planet_walker")
+  if pw and pw.onFoot == false then return "not on foot" end
+  if held(activeId()) then return "your hands are busy" end
+  local r = get(activeId())
+  if not r or r.downed then return "not now" end
+  local a = astro()
+  local x, y, z, _, _, _, rec = rest_frame(sid, uid, spot.seat)
+  local b = rec and space.body(rec.b)
+  if not (a and b) then return "out of reach" end
+  if len(b.x + x - a.x, b.y + y - a.y, b.z + z - a.z) > 3.0 then return "walk up to it first" end
+  return nil
+end
+function restStart(sid, uid)
+  local why = restWhyNot(sid, uid)
+  if why then return false, why end
+  local ST = ref("structures")
+  local spot = rest_kind_of(ST.getPart(sid, uid))
+  local ox, oy, oz = rest_frame(sid, uid, spot.out)
+  REST = { id = activeId(), kind = spot.kind, sid = sid, uid = uid, t0 = time or 0, out = { x = ox, y = oy, z = oz } }
+  patch(activeId(), { pose = false })
+  return true
+end
+function resting() return REST ~= nil and REST.id == activeId() and REST or nil end
+-- the way the seated body faces (planet_walker's held turn), this frame
+function restFace()
+  local R_ = resting()
+  if not R_ then return nil end
+  local _, _, _, U, F = rest_frame(R_.sid, R_.uid)
+  if not U then return nil end
+  -- (probe a1_lie_bunk_side: with -U the model turned 180 deg, face down;
+  -- a1_sit_chair_side: the chair's open side is its -Z)
+  if R_.kind == "lie" then return U.x, U.y, U.z end
+  return -F.x, -F.y, -F.z
+end
+local function rest_anim(a, want, w)
+  local m = nil
+  for _, ch in ipairs(a.children and a:children() or {}) do if ch.name == "AstroModel" then m = ch end end
+  local an = m and m.animator and m:animator()
+  if not an then return end
+  if want and REST.clip ~= want then pcall(an.crossfade, an, want, 0.35, "Pose"); REST.clip = want end
+  pcall(an.setLayerWeight, an, "Pose", w)
+end
+local function rest_body(a, kinematic, align)
+  local getc = a and (a.getComponent or a.getcomponent)
+  local rb = getc and getc(a, "RigidBody")
+  if not rb then return end
+  rb.kinematic = kinematic and 1 or 0
+  if rb.alignUp ~= align then rb.alignUp = align end
+end
+function restEnd(why)
+  local R_ = REST
+  if not R_ then return false end
+  REST = nil
+  local a = astro()
+  local pw = ref("planet_walker")
+  if a then
+    rest_body(a, false, true)
+    local b = R_.out and space.body((ref("structures").get(R_.sid) or {}).b or "")
+    if b and R_.id == activeId() then
+      local sx, sy, sz = freeSpot(b.x + R_.out.x, b.y + R_.out.y, b.z + R_.out.z)
+      local ux, uy, uz = sx - b.x, sy - b.y, sz - b.z
+      local l = len(ux, uy, uz)
+      a.x, a.y, a.z = sx + ux / l * 1.0, sy + uy / l * 1.0, sz + uz / l * 1.0
+      a.vx, a.vy, a.vz = 0, 0, 0
+    end
+    local m = nil
+    for _, ch in ipairs(a.children and a:children() or {}) do if ch.name == "AstroModel" then m = ch end end
+    local an = m and m.animator and m:animator()
+    if an then pcall(an.setLayerWeight, an, "Pose", 0) end
+  end
+  if pw then pw.eyeDrop = 0 end
+  restLast = { why = why, t = time or 0 }
+  return true
+end
+restLast = nil
+-- the physics tick: the body on the furniture (the tick pose, written here only)
+function restTick(dt)
+  local R_ = REST
+  if not R_ then return end
+  if R_.id ~= activeId() or avatarCraft() then return restEnd("switched") end
+  local ST = ref("structures")
+  local p = ST and ST.getPart and ST.getPart(R_.sid, R_.uid)
+  local spot = rest_kind_of(p)
+  if not spot or p.wr then return restEnd("the furniture went") end
+  local a = astro()
+  local x, y, z, U, F, Rr, rec = rest_frame(R_.sid, R_.uid, spot.seat)
+  local b = rec and space.body(rec.b)
+  if not (a and b and x) then return end
+  local lift = REST_LIFT[R_.kind] or 0.1
+  rest_body(a, true, R_.kind ~= "lie")
+  a.x, a.y, a.z = b.x + x + U.x * lift, b.y + y + U.y * lift, b.z + z + U.z * lift
+  a.vx, a.vy, a.vz = 0, 0, 0
+  if R_.kind == "lie" and a.setUp then
+    -- on the back, the head toward the bunk's head end: the node's up along
+    -- the bed, its front (+Z) to the ceiling (crew_body's lying pose)
+    local h = spot.head
+    local hx, hy, hz = Rr.x * h[1] + U.x * h[2] + F.x * h[3], Rr.y * h[1] + U.y * h[2] + F.y * h[3], Rr.z * h[1] + U.z * h[2] + F.z * h[3]
+    a:setUp(vec3(hx, hy, hz), vec3(-U.x, -U.y, -U.z))
+  end
+end
+-- the frame: the pose clip eased in, the eyes, and the keys that get you up
+function restFrame(dt)
+  local R_ = REST
+  if not R_ then return end
+  local a = astro()
+  if not a then return end
+  local w = math.min(1, ((time or 0) - R_.t0) / 0.4)
+  rest_anim(a, R_.kind == "lie" and "lie_rest" or "sit_idle", w)
+  local pw = ref("planet_walker")
+  if pw then pw.eyeDrop = (REST_EYE_DROP[R_.kind] or 0) * w end
+  local gm = ref("game_manager")
+  if gm and gm.inputOwner then return end
+  if (time or 0) - R_.t0 < 0.4 or not (input and input.key) then return end
+  for _, k in ipairs({ "w", "a", "s", "d", "space" }) do
+    if input.key(k) then return restEnd("moved") end
+  end
+  if input.pressed and input.pressed("e") then return restEnd("key") end
 end
 
 -- ── the manager ────────────────────────────────────────────────────────────
@@ -4188,6 +4464,7 @@ function update(node, dt)
   -- read at the same moment (a physics tick sees them a rails carry apart)
   treat_tick(dt or 0.016)
   carry_tick(dt or 0.016)       -- (missions N1)
+  if REST then restFrame(dt or 0.016) end     -- (scnfix2) sitting, lying: the clip, the eyes, the keys
   -- ` : back to the last thing you controlled
   if input and input.pressed and input.pressed("`") then
     local gm = ref("game_manager")
@@ -4210,6 +4487,7 @@ function fixedUpdate(node, dt)
     elseif not r and living() == 0 and #roster() > 0 then handoff(nil, nil) end
   end
   run_queue()
+  if REST then restTick(dt or 0.016) end      -- (scnfix2) the body on the furniture, this tick
   recordTick()
   curtain_tick()
   avatar_monitor(dt or 0.016)

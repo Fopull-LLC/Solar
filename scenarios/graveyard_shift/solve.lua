@@ -242,24 +242,60 @@ local function side_view(sr, nm, a, b)
   local pc = findScript("planet_camera")
   if pc and pc.setFreecam then pc.setFreecam(false) end
 end
--- (gy3, Ty: "I can control Dana as one of the crew members") the cast
--- members you don't play: refused by every switching verb, on no list
+-- (gy3, Ty: "I can control Dana as one of the crew members"; scnfix2, Ty
+-- 11-12b: "story crew members should be your actual crew members ... unless
+-- they're sleeping or incapacitated like Dana") Dana is refused by every
+-- switching verb and on no list; Priya is yours: on the picker (the pause
+-- menu's Switch crew member), and taken with a right-click "Play as", then
+-- back to Halloran from the picker
 local function npc_test(sr, tg)
   local C = findScript("crew")
   local r, id = rec_of("Kowalczyk")
   local rp, idp = rec_of("Anand")
   local me, idm = rec_of("Halloran")
   local ok1, why1 = C.control(id)
-  local ok2 = C.control(idp)
   local ok3 = C.canSwitch(id)
   local ok4 = C.switchToMember(id)
-  local inList, inPick = false, false
-  for _, e in ipairs(C.switchList() or {}) do if e.id == id or e.id == idp then inList = true end end
-  for _, m in ipairs(C.switchTargets() or {}) do if m.id == id or m.id == idp then inPick = true end end
+  local danaList, danaPick, priyaPick = false, false, false
+  for _, e in ipairs(C.switchList() or {}) do if e.id == id then danaList = true end end
+  for _, m in ipairs(C.switchTargets() or {}) do if m.id == id then danaPick = true end; if m.id == idp then priyaPick = true end end
   wait(0.6)
-  SP.check("dana_not_playable", not ok1 and not ok2 and not ok3 and not ok4 and not inList and not inPick and C.activeId() == idm,
-    "control %s (%s), Priya %s, canSwitch %s, switchToMember %s, on the [ ] list %s, on the picker %s, still Halloran %s",
-    tostring(ok1), tostring(why1), tostring(ok2), tostring(ok3), tostring(ok4), tostring(inList), tostring(inPick), tostring(C.activeId() == idm))
+  SP.check("dana_not_playable", not ok1 and not ok3 and not ok4 and not danaList and not danaPick and C.activeId() == idm,
+    "control %s (%s), canSwitch %s, switchToMember %s, on the [ ] list %s, on the picker %s, still Halloran %s",
+    tostring(ok1), tostring(why1), tostring(ok3), tostring(ok4), tostring(danaList), tostring(danaPick), tostring(C.activeId() == idm))
+  -- the right-click on Priya: "Play as Dr Priya Anand"; on Dana: dimmed
+  local reg = findScript("context_registry")
+  local bn = C.bodyNodes and C.bodyNodes() or {}
+  local function row_on(mid)
+    local n = bn[mid]
+    if not (n and n.valid ~= false) then return nil end
+    local t = { kind = "member", node = n, id = mid, pack = "crew:" .. mid, label = (C.get(mid) or {}).name }
+    local ctx = { ref = function(k) return findScript(k) end, actor = { kind = "crew", id = C.activeId(), node = find("Astronaut") }, toast = function() end }
+    return reg.byId(reg.entriesFor(t, ctx), "playas")
+  end
+  local rowD, rowP = row_on(id), row_on(idp)
+  local enD = rowD and reg.usable(rowD)
+  local okP, whyP = false, "no row"
+  if rowP then okP, whyP = reg.press(rowP) end
+  local took = wait_for(function() return C.activeId() == idp end, 5, "Priya taken")
+  SP.check("priya_play_as", priyaPick and rowP ~= nil and okP and took and rowD ~= nil and not enD,
+    "Priya on the picker %s; right-click 'Play as' %s (%s %s) took %s; on Dana the row is there %s, dimmed %s",
+    tostring(priyaPick), tostring(rowP and rowP.label), tostring(okP), tostring(whyP), tostring(took ~= nil), tostring(rowD ~= nil), tostring(not enD))
+  wait(1.0)
+  SP.shot("a1_playing_priya", true)
+  -- who triggers what follows the body you play: a goal naming Halloran is
+  -- met by Priya now (an `at` 0.5 m from Priya: never by his own body)
+  do
+    local RB = findScript("scenario")
+    local g = { kind = "at", who = "crew:Halloran", at = "crew:Anand", r = 0.5 }
+    local plain = RB and sr.worldAdapter and RB.evalGoal(g, sr.worldAdapter, {}, { now = 0 })
+    local asMe = sr.SC5R and sr.SC5R.evalAsMe(g, {}, "probe", { now = 0 }, false)
+    SP.check("goals_follow_you", plain ~= true and asMe == true, "an `at` naming Halloran: by his own body %s, as the one you play %s", tostring(plain), tostring(asMe))
+  end
+  local okB = C.switchToMember(idm)
+  local back = wait_for(function() return C.activeId() == idm end, 5, "back to Halloran")
+  wait(1.0)
+  SP.check("back_to_halloran", okB and back ~= nil, "back to Halloran from the picker (%s)", tostring(okB))
   SP.check("names_agree", r and r.name == "Dana Kowalczyk" and rp and rp.name == "Dr Priya Anand" and me and me.name == "Halloran"
     and tg ~= nil and tg.name == "Dana Kowalczyk" and tostring(tg.rec) == "Dana Kowalczyk",
     "records %s / %s / %s; the tag over her %s (record %s)", tostring(r and r.name), tostring(rp and rp.name), tostring(me and me.name),
@@ -502,6 +538,7 @@ function SOLVE(SP)
   -- (gy3, Ty: "she doesn't go to the bedroom to sleep when she says she's gonna sleep")
   dana_bed(sr)
   npc_test(sr, tg)
+  SP.floor_check("control_room")     -- (scnfix2) Priya, and Halloran left standing, on the floor, not in it
   local _, cuid = sr.pieceOf({ struct = S, part = "reactorConsole" })
   if not alt then
     stand_st(-6.6, 1.23, 2.6, 30)
@@ -612,6 +649,35 @@ function SOLVE(SP)
   cost("gs_control_room", { -6.4, 1.7, 4.4 }, { -1.0, 1.0, 0.0 })
   cost("gs_hall", { 11.8, 3.6, -6.2 }, { 4.0, 1.2, 0.5 })
   cost("gs_outside", { -14, 3.0, -14 }, { 6, 1.5, 2 })
+  -- (scnfix2, Ty 11-12b: "right-click to sit in chairs and lie on beds") once
+  -- the console step is done (standing by it earlier would latch it) the
+  -- console chair's "Sit", up with W; the spare bunk's "Lie down", up with E
+  do
+    local C = findScript("crew")
+    local function rest_on(uid, row, want, shot, key, eye, tgt)
+      local okR, whyR, r = SP.menu_press(S, uid, "rest")
+      wait(1.5)
+      local R_ = C.resting and C.resting()
+      local h0 = astro_h()
+      SP.shot(shot, true)
+      view(shot .. "_side", eye, tgt, false)
+      local pc = findScript("planet_camera")
+      if pc and pc.setFootFirstPerson then
+        local fp0 = pc.firstPerson == true
+        pcall(pc.setFootFirstPerson, not fp0); wait(1.2); SP.shot(shot .. (fp0 and "_third" or "_first"), true); pcall(pc.setFootFirstPerson, fp0)
+      end
+      input.simulate({ key = key, down = true }); yield(); yield(); yield(); input.simulate({ key = key, down = false })
+      wait(1.0)
+      local up = C.resting and C.resting() == nil
+      SP.check("rest_" .. want, okR and r and r.label == row and R_ and R_.kind == want and C.held(C.activeId()) == false and up,
+        "%s: %s (%s); resting %s, held while there; centre %.2f m over the station's origin; up with %s %s",
+        row, tostring(okR), tostring(whyR), tostring(R_ and R_.kind), h0 or -1, key, tostring(up))
+    end
+    stand_st(-3.05, 1.23, 0.0, 30)
+    rest_on(350, "Sit", "sit", "a1_sit_chair", "w", { -1.4, 1.5, 1.6 }, { -3.3, 0.7, 0.0 })
+    stand_st(-2.45, 1.23, 7.3, 30)
+    rest_on(424, "Lie down", "lie", "a1_lie_bunk", "e", { -2.45, 1.6, 6.6 }, { -2.45, 0.7, 8.45 })
+  end
   -- ── ACT 2 ──
   step(sr, "diagnose", 60)
   RP.setPoint(key, 0.4)
@@ -631,7 +697,37 @@ function SOLVE(SP)
   step(sr, "skid", 30)
   wait(1.0); SP.shot("a2_at_the_skid", true)
   view("a2_skid_wide", { 14.0, 2.4, -1.5 }, { 19.0, 0.8, 4.6 }, false)
-  RP.setPump(sid, 147, false)
+  -- (scnfix2, Ty 11-12b: "Pump running ON", the press never took) the pump's
+  -- own menu row pressed as the panel presses it, the hand's rules and all
+  -- the right-click as a player aims it: rays at FW-2 from round the skid,
+  -- each pick resolved as the menu resolves it (field_builder.pickTarget)
+  do
+    local cm, reg, FB = findScript("context_menu"), findScript("context_registry"), findScript("field_builder")
+    for i, e in ipairs({ { 17.0, 1.6, 5.0 }, { 20.0, 1.6, 5.0 }, { 18.5, 1.6, 3.4 }, { 18.5, 1.6, 6.6 }, { 17.3, 1.2, 3.9 }, { 19.7, 1.2, 6.1 }, { 18.5, 2.2, 5.0 } }) do
+      local eye = sl(e[1], e[2], e[3])
+      local ty = sl(18.5, 0.45, 5.0)
+      if eye and ty then
+        local dx, dy, dz = ty.x - eye.x, ty.y - eye.y, ty.z - eye.z
+        local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+        local okr, hit = pcall(raycast, eye.x, eye.y, eye.z, dx / l, dy / l, dz / l, 5, { ignore = astro(), ignoreChildren = true })
+        local t = okr and hit and cm.resolve(hit, astro()) or nil
+        local rec, part = nil, nil
+        if t and FB and FB.pickTarget then rec, part = FB.pickTarget(t) end
+        local rows = t and reg.entriesFor(t, { ref = function(k) return findScript(k) end, actor = { kind = "crew", id = findScript("crew").activeId(), node = astro() }, toast = function() end }) or {}
+        local row = reg.byId(rows, "rx_pump")
+        local en, why = nil, nil
+        if row then en, why = reg.usable(row) end
+        P("GS PICK %d: hit %s · %s → part %s #%s · rx_pump %s on %s enabled %s %s", i, tostring(hit and hit.node and hit.node.name),
+          tostring(t and t.kind), tostring(part and part.id), tostring(part and part.uid), tostring(row ~= nil),
+          tostring(row and reg.live(row.on)), tostring(en), tostring(why))
+      end
+    end
+  end
+  local okM, whyM = SP.menu_press(S, 147, "rx_pump")
+  wait(1.0)
+  SP.check("fw2_menu_off", okM and RP.pumpOn(sid, 147) == false, "FW-2's menu switch took: %s (%s), pumpOn %s",
+    tostring(okM), tostring(whyM), tostring(RP.pumpOn(sid, 147)))
+  if RP.pumpOn(sid, 147) ~= false then RP.setPump(sid, 147, false) end
   step(sr, "isolate", 30)
   until_(sr, function() local p = ST.getPart(sid, 147); return p and p.wr end, 10, "knocked")
   -- the repair, as the menu's job ends: the kit used, the piece back
@@ -639,7 +735,11 @@ function SOLVE(SP)
   wait(2.0)
   RU.repairPiece(sid, 147)
   step(sr, "swap", 30)
-  RP.setPump(sid, 147, true)
+  wait(1.0)     -- (the repaired piece's node lands a frame or two after its respawn)
+  local okN, whyN = SP.menu_press(S, 147, "rx_pump")
+  wait(1.0)
+  SP.check("fw2_menu_on", okN and RP.pumpOn(sid, 147) == true, "FW-2 back on from its menu: %s (%s)", tostring(okN), tostring(whyN))
+  if not RP.pumpOn(sid, 147) then RP.setPump(sid, 147, true) end
   step(sr, "restore", 30)
   stand_st(-3.05, 1.23, 0.0, 30)
   if su and su.setHelmet then pcall(su.setHelmet, false) end
@@ -707,7 +807,10 @@ function SOLVE(SP)
     SP.stand("mark:mu1", 30)
     wait(1.0)
     local FN = findScript("fluid_net")
-    FN.setOn(sid, 116, true)
+    local okP, whyP = SP.menu_press(S, 116, "fl_on")
+    wait(0.5)
+    SP.check("p3_menu_on", okP and FN.isOn(sid, 116) == true, "P-3 on from its menu: %s (%s)", tostring(okP), tostring(whyP))
+    if not FN.isOn(sid, 116) then FN.setOn(sid, 116, true) end
     P("GS TANK %s kg", tostring(FN.content(sid, 118)))
     wait(2.0); SP.shot("a3_makeup_on", true)
   else

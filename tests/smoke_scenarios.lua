@@ -919,7 +919,8 @@ do
   local byName = {}
   for _, c in ipairs(gs.start.crew) do byName[c.name] = c end
   check("gy3 playable: the one you control", SCN.playableOf(gs, byName.Halloran))
-  check("gy3 playable: Dana and Priya are not (cast, default false)", not SCN.playableOf(gs, byName.Kowalczyk) and not SCN.playableOf(gs, byName.Anand))
+  -- (scnfix2, Ty 11-12b) story crew are real crew: Priya is yours to play, Dana (asleep) is not
+  check("scnfix2 playable: Priya yes (default true), Dana no (cast playable = false)", not SCN.playableOf(gs, byName.Kowalczyk) and SCN.playableOf(gs, byName.Anand))
   local g2 = SCN.load("graveyard_shift", true)
   g2.cast.dana.playable = true
   check("gy3 playable: cast playable = true", SCN.playableOf(g2, byName.Kowalczyk))

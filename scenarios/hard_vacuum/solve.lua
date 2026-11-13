@@ -223,8 +223,20 @@ function SOLVE(SP)
   view("a3_eva_hatch_hab", { uid = 14, astro = true, 3.2, 1.2, 2.4, 0.5, 0, 0 }, true)
   -- the walk aft: along the hull to the stores, listening
   local t_out = time
+  -- (scnfix2, Ty 11-12b: "I just go outside and the rest completes itself")
+  -- out of the hatch, the hole is NOT found yet: it has to be looked for
+  wait(3.0)
+  SP.check("find_not_free", (save.get("scn.done") or {}).find == nil, "not found from the hab's hatch (find %s)", tostring((save.get("scn.done") or {}).find))
   local d1 = fly_to(v, 11, 1.25, 0, 0, 0.5, 60)
   air("at the forward stores can")
+  SP.check("find_not_next_can", (save.get("scn.done") or {}).find == nil, "not found at the forward stores can either")
+  local CAj = findScript("cabin_air")
+  local j0 = CAj and CAj.JET and CAj.JET.emitted or 0
+  wait(1.0)
+  SP.check("plume", CAj and CAj.JET and CAj.JET.emitted > j0 and CAj.JET.last and CAj.JET.last.uid == 10,
+    "frost venting off the holed can: %d plumes in 1 s, on part %s", (CAj and CAj.JET and CAj.JET.emitted or 0) - j0, tostring(CAj and CAj.JET and CAj.JET.last and CAj.JET.last.uid))
+  view("a3_eva_plume_side", { uid = 10, 2.2, 0.4, 4.0, 1.8, 0.1, 0 }, false)
+  view("a3_eva_plume_far", { uid = 10, 6.0, -1.0, -4.0, 1.0, 0.1, 0 }, false)
   local hiss = CA.lastLeakSound
   SP.check("hiss", hiss ~= nil and hiss.uid == 10, "the hiss on part %s at volume %.2f", tostring(hiss and hiss.uid), hiss and hiss.vol or -1)
   view("a3_eva_hull_stores", { uid = 11, astro = true, 2.6, 1.6, -2.2, 0.6, -0.6, 0 }, true)
@@ -261,8 +273,21 @@ function SOLVE(SP)
   wait(1.0)
   SP.check("boarded", boarded and v.crewAboard, "back in (%s), %.0f s outside", tostring(boarded), time - t_out)
   local exposure = sr.var("dose_msv")
-  -- the hab back from its bottles (warped)
+  -- (scnfix2) the hab's regulator, shut for the EVA: no air comes back by itself
   local wc = findScript("warp_chip")
+  if wc and wc.request then wc.request(10) end
+  wait(4.0)
+  if wc and wc.request then wc.request(1) end
+  SP.check("home_waits_on_you", (save.get("scn.done") or {}).home == nil and v.partSt(14, "creg") == "off",
+    "aboard, the hab still empty with its regulator off (home %s, creg %s)", tostring((save.get("scn.done") or {}).home), tostring(v.partSt(14, "creg")))
+  do
+    local reg = findScript("context_registry")
+    local tgt = { kind = "part", vessel = v, uid = 14, rec = v.partRec(14), node = part_node(v, 14), label = "Crew Cabin" }
+    local ctx = { ref = function(k) return findScript(k) end, actor = { kind = "craft", vessel = v, node = v.node, id = C.activeId() }, toast = function() end }
+    local row = reg.byId(reg.entriesFor(tgt, ctx), "ca_reg")
+    local okR, whyR = reg.press(row)
+    SP.check("regulator_on", okR and v.partSt(14, "creg") ~= "off", "the hab's regulator AUTO from its menu (%s %s)", tostring(okR), tostring(whyR))
+  end
   if wc and wc.request then wc.request(10) end
   talk_until(sr, function() return (save.get("scn.done") or {}).home ~= nil end, 90, "home")
   if wc and wc.request then wc.request(1) end

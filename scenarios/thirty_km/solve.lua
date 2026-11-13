@@ -622,6 +622,12 @@ function SOLVE(SP)
     if last and p then gone = gone + math.sqrt((p.x - last.x) ^ 2 + (p.y - last.y) ^ 2 + (p.z - last.z) ^ 2) end
     last = p
     if variant ~= "abandon" and A2 then
+      -- (scnfix2: convoy_follows was flaky) Asha-2's path, summed the way
+      -- Asha-1's is: its straight-line displacement fell short of the
+      -- leader's path length on every bend of the route
+      local q = sr.posOf("craft:Asha-2")
+      if mem.a2last and q then mem.a2path = (mem.a2path or 0) + math.sqrt((q.x - mem.a2last.x) ^ 2 + (q.y - mem.a2last.y) ^ 2 + (q.z - mem.a2last.z) ^ 2) end
+      mem.a2last = q
       local g = dist_to(sr, "craft:Asha-1", "craft:Asha-2")
       if g then gaps[#gaps + 1] = g end
       local inf = assembly.info(A2.node)
@@ -637,7 +643,9 @@ function SOLVE(SP)
   if shot_done then SP.shot("05_convoy_front", true); cam_off() end
   if variant ~= "abandon" and A2 then
     local p21 = sr.posOf("craft:Asha-2")
-    a2moved = (p20 and p21) and math.sqrt((p21.x - p20.x) ^ 2 + (p21.y - p20.y) ^ 2 + (p21.z - p20.z) ^ 2) or 0
+    local a2disp = (p20 and p21) and math.sqrt((p21.x - p20.x) ^ 2 + (p21.y - p20.y) ^ 2 + (p21.z - p20.z) ^ 2) or 0
+    a2moved = mem.a2path or a2disp
+    P("TK CONVOY Asha-2 path %.0f m, displacement %.0f m", a2moved, a2disp)
     local lo, hi, sum = 1e9, 0, 0
     for _, g in ipairs(gaps) do lo, hi, sum = math.min(lo, g), math.max(hi, g), sum + g end
     local tail = {}

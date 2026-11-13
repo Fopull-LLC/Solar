@@ -1896,6 +1896,8 @@ local function stand_down(node, dt, ux, uy, uz, fx, fy, fz, on_ground, swimming)
     local rc = is_held and ref("rope_climb")
     local rdx, rdy, rdz = nil, nil, nil
     if rc and rc.faceDir then rdx, rdy, rdz = rc.faceDir() end
+    -- (scnfix2) sitting or lying down (crew.lua REST): the furniture's way
+    if not rdx and is_held and cl.restFace then rdx, rdy, rdz = cl.restFace() end
     if rdx then
       want = local_yaw(node, rdx, rdy, rdz)
     elseif ct and ct.aimNow and cl.activeId then

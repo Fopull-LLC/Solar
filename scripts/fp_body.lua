@@ -354,6 +354,10 @@ function update(node, dt)
   local want = enabled and pc ~= nil and pc.firstPerson == true and pc.cockpit ~= true and pc.freecam ~= true
     and not ((pc.shotW or 0) > 0)
     and pw ~= nil and pw.onFoot == true and node.valid ~= false
+  -- (scnfix2) sitting or lying down (crew.lua REST): the body under the eye is
+  -- a standing body's, and sat or laid down the eye ended inside the chest;
+  -- first person then hides the body, as before the drawn body
+  if want then local C = ref("crew"); if C and C.resting and C.resting() then want = false end end
   local was = active
   active = want == true
   if was and not active then leave() end

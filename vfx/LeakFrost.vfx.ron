@@ -1,0 +1,33 @@
+// (scnfix2) A hull leak venting to vacuum: the air freezing as it goes, a white plume off the hole
+// (cabin_air JET; Hard Vacuum's hole is found by it). Unlit so it reads on the shadowed side; no wind.
+(
+    name: "LeakFrost",
+    lifetime: 1.6,
+    playback: OneShot,
+    end: Destroy,
+    tracks: [
+        (
+            name: "Frost",
+            render: Billboard(texture: Some("textures/vfx/smoke/billow_a.png")),
+            blend: Alpha,
+            lit: false,
+            lamp_response: 0.45,
+            translucency: 0.6,
+            soft: 0.6,
+            space: Local,
+            clips: [(start: 0.0, end: 1.8, lifetime_jitter: 0.4, emit: Some(Burst(count: 14, count_jitter: 0.2, pulses: 1, interval: 0.0, interval_jitter: 0.2)))],
+            automation: [],
+            shape: Cone(angle: 16.0, radius: 0.08),
+            velocity: Range(Vec3((0.0, 2.0, 0.0)), Vec3((0.0, 4.5, 0.0))),
+            size: CurveRange((keys: [(t: 0.0, v: F32(0.12), interp: Linear), (t: 0.3, v: F32(0.55), interp: Linear), (t: 1.0, v: F32(1.4), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: F32(0.078), interp: Linear), (t: 0.3, v: F32(0.3575), interp: Linear), (t: 1.0, v: F32(0.91), interp: Linear)], extrapolate: Clamp)),
+            rotation: Range(Vec3((0.0, 0.0, 0.0)), Vec3((0.0, 0.0, 6.283))),
+            angular_velocity: Range(Vec3((0.0, 0.0, -0.6)), Vec3((0.0, 0.0, 0.6))),
+            color: CurveRange((keys: [(t: 0.0, v: Rgba((0.95, 0.96, 0.97, 0.0)), interp: Linear), (t: 0.08, v: Rgba((0.95, 0.96, 0.97, 0.9)), interp: Linear), (t: 0.6, v: Rgba((0.92, 0.93, 0.95, 0.55)), interp: Linear), (t: 1.0, v: Rgba((0.9, 0.9, 0.92, 0.0)), interp: Linear)], extrapolate: Clamp), (keys: [(t: 0.0, v: Rgba((0.779, 0.7872, 0.7954, 0.0)), interp: Linear), (t: 0.08, v: Rgba((0.779, 0.7872, 0.7954, 0.9)), interp: Linear), (t: 0.6, v: Rgba((0.7544, 0.7626, 0.779, 0.55)), interp: Linear), (t: 1.0, v: Rgba((0.738, 0.738, 0.7544, 0.0)), interp: Linear)], extrapolate: Clamp)),
+            gravity: 0.0,
+            drag: 0.0,
+            forces: [],
+        ),
+    ],
+    seed: 1,
+    gravity_mode: Field,
+)

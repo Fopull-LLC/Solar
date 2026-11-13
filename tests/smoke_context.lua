@@ -91,8 +91,8 @@ end
 
 -- providers register into the registry
 ok(PR.registerAll(R), "the providers register")
-ok(#R.providers("part") >= 6 and #R.providers("astro") == 4 and #R.providers("member") == 2,
-  "the part, suit and crew providers are there (the suit, the task's cancel, the Medkit on yourself and on others, carrying)")
+ok(#R.providers("part") >= 6 and #R.providers("astro") == 4 and #R.providers("member") == 3,
+  "the part, suit and crew providers are there (the suit, the task's cancel, the Medkit on yourself and on others, carrying, Play as)")
 ok(R.byId(R.entriesFor({ kind = "part" }, {}), "repair") == nil, "no repair entry on a part that isn't damaged")
 
 -- ── actors ──────────────────────────────────────────────────────────────────

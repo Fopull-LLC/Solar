@@ -665,6 +665,15 @@ kind("at", { req = { "who", "at" }, eval = function(g, W)
   if a.body ~= b.body then return false, string.format("on %s, not %s", tostring(a.body), tostring(b.body)) end
   local d, du = groundApart(a, b)
   local r = g.r or 20
+  -- (scnfix2, Ty 2026-11-12b: Hard Vacuum's "find the hole" latched as he
+  -- left the hatch) a point on a craft's hull (craft:<name>@<uid>), or
+  -- `d3 = true`: the straight distance. In orbit "the ground" is under the
+  -- ship: the hab and the holed can, one above the other, were 0 m apart
+  -- along it and under 3 m apart up it.
+  if g.d3 or (type(g.at) == "string" and g.at:match("^craft:.+@%d+$")) then
+    local d3 = len(a.x - b.x, a.y - b.y, a.z - b.z)
+    return d3 <= r, d3 <= r and string.format("there (%s)", fmt_m(d3)) or string.format("%s to go", fmt_m(d3 - r))
+  end
   local dyMax = g.dy or math.max(3, r)
   if d <= r and math.abs(du) > dyMax then return false, string.format("%s %s", fmt_m(math.abs(du)), du > 0 and "above" or "below") end
   return d <= r, d <= r and string.format("there (%s)", fmt_m(d)) or string.format("%s to go", fmt_m(d - r))
@@ -1318,17 +1327,20 @@ function castOfCrew(sc, name)
   end
   return bk, bc
 end
--- (gy3, Ty 2026-11-11: "I can control Dana as one of the crew members")
--- May the player take start crew member `c`? The one with control = true
--- always; anyone else only when the scenario says so: their start.crew
--- `playable`, else their cast entry's `playable` (default false).
+-- May the player take start crew member `c`? (scnfix2, Ty 2026-11-12b:
+-- "story crew members should be your actual crew members you can switch
+-- between and play as", reversing gy3's default.) Yes, unless the scenario
+-- says no: their start.crew `playable = false`, else their cast entry's. The
+-- one with control = true always. Someone asleep or hurt (a bunk, a broken
+-- leg) is `playable = false` in data; crew.lua also refuses anyone lying down
+-- or downed at the moment of the switch.
 function playableOf(sc, c)
   if type(c) ~= "table" then return false end
   if c.control then return true end
   if c.playable ~= nil then return c.playable == true end
   local _, cc = castOfCrew(sc, c.name)
   if cc and cc.playable ~= nil then return cc.playable == true end
-  return false
+  return true
 end
 -- (gy3, Ty: "Dana's name doesn't match the crew member she counts as") the
 -- name the crew record wears: the cast's full name ("Dana Kowalczyk") when a
@@ -1727,6 +1739,8 @@ BEATS = { ops = "string", say = "table", caption = "table", camera = "table", wa
           music = "music",
           -- graveyard2: a body turned to face something; lying or sitting
           turn = "table", pose = "table", gesture = "table",
+          -- scnfix2: a party member who keeps up with you (crew.lua FOLLOWERS)
+          follow = "table",
           -- S6 (the interaction plan §5.3): a designation, a base-log line, a
           -- container's contents, a keypad, a console opened on a page
           tag = "table", log = "table", container = "table", lock = "table", terminal = "table",
@@ -1803,7 +1817,7 @@ function validate(sc, ctx)
     -- graveyard2: what they are, in words ("Night engineer"), shown on the
     -- strip, the picker, the tag over them and the plate
     if c.title ~= nil and type(c.title) ~= "string" then E(p .. ".title", "a few words (\"Night engineer\")") end
-    if c.playable ~= nil and type(c.playable) ~= "boolean" then E(p .. ".playable", "true or false (default: only the member with control = true)") end
+    if c.playable ~= nil and type(c.playable) ~= "boolean" then E(p .. ".playable", "true or false (default true)") end
   end
   local marks = {}
   for k in pairs(st.marks or {}) do marks[k] = true end
@@ -2267,6 +2281,10 @@ function validate(sc, ctx)
             if val.who == nil then E(pk .. ".who", "missing") end
             if val.clip ~= false and not GESTURES[tostring(val.clip)] then E(pk .. ".clip", "stand_talk, point, wave, lean_console, kneel_work, or false") end
             if val.secs ~= nil and type(val.secs) ~= "number" then E(pk .. ".secs", "seconds (none: held)") end
+          elseif key == "follow" then
+            check_who(pk .. ".who", val.who)
+            if val.who == nil then E(pk .. ".who", "missing") end
+            if val.on ~= nil and type(val.on) ~= "boolean" then E(pk .. ".on", "true or false (default true)") end
           elseif key == "turn" then
             check_who(pk .. ".who", val.who)
             if val.who == nil then E(pk .. ".who", "missing") end
@@ -2496,7 +2514,7 @@ function validate(sc, ctx)
       for f in pairs(c) do if not CAST_FIELDS[f] then E(pc .. "." .. tostring(f), "unknown cast field (name, tag, color, crew, portrait, expression, look, radio, delay, link, playable)") end end
       -- (gy3, Ty: "I can control Dana as one of the crew members") a cast
       -- member the player does not play is no one the switcher offers
-      if c.playable ~= nil and type(c.playable) ~= "boolean" then E(pc .. ".playable", "true or false (default false: the crew switcher never offers them)") end
+      if c.playable ~= nil and type(c.playable) ~= "boolean" then E(pc .. ".playable", "true or false (default true: the crew switcher offers them)") end
       if c.playable ~= nil and not c.crew then E(pc .. ".playable", "only a cast member with crew = <name> can be played") end
       if c.portrait ~= nil and type(c.portrait) ~= "string" then E(pc .. ".portrait", "\"auto\" (the booth's picture) or a file under scenarios/") end
       if c.portrait == "auto" and not c.crew and type(c.look) ~= "number" then E(pc .. ".portrait", "\"auto\" needs crew = <name> or look = <seed>") end

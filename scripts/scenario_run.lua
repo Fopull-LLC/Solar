@@ -145,6 +145,9 @@ local function crew_ids() local t = sget("scn.crew"); return type(t) == "table" 
 local function member_id(name)
   if type(name) == "number" then return name end
   if name == nil then local C = ref("crew"); return C and C.activeId and C.activeId() end
+  -- (scnfix2) while a goal is asked "as you" (SC5R.evalAsMe), the scenario's
+  -- own player member means whoever you are playing now
+  if SC5R and SC5R.asMe and name == SC5R.asMe then local C = ref("crew"); local a = C and C.activeId and C.activeId(); if a then return a end end
   -- (missions S0) a career run's people: survivors and clients are crew
   -- records off the roster, named by the contract
   if CAREER and CAREER.crew and CAREER.crew[name] then return CAREER.crew[name] end
@@ -734,7 +737,7 @@ WORLD_BEATS = { reactor = true, knock = true, state = true, power = true, var = 
                 -- FW-C: what changes the world (or the light it is seen in)
                 light = true, weather = true, breaker = true, wear = true, music = true,
                 -- graveyard2: where a body faces and how it rests
-                turn = true, pose = true, gesture = true,
+                turn = true, pose = true, gesture = true, follow = true,
                 -- S6: designations, the base log, contents, keypads
                 tag = true, log = true, container = true, lock = true,
                 core = true,      -- (F8: a core read, sealed, placed or finished)
@@ -1893,7 +1896,8 @@ local function run_beat(b, e)
       -- (graveyard2) wait = true: the story holds until they get there
       if v.wait then beat_busy = { kind = "walk", id = id, t1 = now() + (v.secs or 20) + 0.5 } end
       local C = ref("crew")
-      if C and C.patch then C.patch(id, { pose = false, gesture = false }) end
+      -- (scnfix2) a walk the story sends them on ends their following you
+      if C and C.patch then C.patch(id, { pose = false, gesture = false, follow = false }) end
     end
   elseif k == "give" then give(v)
   elseif k == "funds" then local co = ref("company"); if co then if v >= 0 then co.earn(v, "scenario") else co.spend(-v, "scenario") end end
@@ -1938,6 +1942,7 @@ local function run_beat(b, e)
   -- SC-5
   elseif k == "drive" then SC5R.drive(v)
   elseif k == "board" then SC5R.board(v)
+  elseif k == "follow" then SC5R.follow(v)
   elseif k == "place" then SC5R.place(v)
   elseif k == "charge" then SC5R.charge(v)
   -- storypolish: UNTIL { kind = <goal kind>, …, secs }: the queue holds until
@@ -1987,7 +1992,15 @@ local function walks_tick()
           local m = math.max(math.abs(f), math.abs(s), 1e-3)
           pw.steer(f / m, s / m)
         end
-      elseif not active_ then
+      elseif active_ then
+        -- (scnfix2, Ty 11-12b: story crew are yours to play) the player took
+        -- the walker over: the story never moves the body you are playing
+        -- outside a cutscene, so the walk is over (a `wait` walk does not hold
+        -- the story on someone who will never arrive by themselves; nor
+        -- seats them: you board yourself)
+        walks[id] = nil
+        w.board = nil
+      else
         -- FW-C: their CrewBody walks there (crew_body.steerTo: the target
         -- handed over body-relative, re-read from the ref every frame); a
         -- walk out of time, skipped, or with no body in range is set down
@@ -3000,6 +3013,48 @@ end
 -- craft set down far away standing on their wheels, a craft's batteries ────
 -- Globals in one table (the main chunk is near its local ceiling).
 SC5R = {}
+-- (scnfix2) FOLLOW { who, on = true }: a party member keeps up with you
+-- (crew.lua FOLLOWERS: a jog when behind, aboard when you board, never at a
+-- hull); on = false: they stay where they are. The player is never put on it.
+function SC5R.follow(v)
+  local C = ref("crew")
+  local id = who_id(v.who)
+  if not (C and id and C.patch) or id == (C.activeId and C.activeId()) then return end
+  C.patch(id, { follow = v.on ~= false })
+end
+-- (scnfix2, Ty 2026-11-12b: "story crew are your actual crew ... make the
+-- scenario logic robust to the player switching mid-scene; who triggers what
+-- follows the controlled body") A goal or an event that names the scenario's
+-- player member (start.crew control = true: "crew:Halloran") is met by that
+-- member OR by whoever you play now. Asked twice only while you play someone
+-- else and the first answer is no; the second has its own memory (holds).
+function SC5R.meName()
+  for _, c in ipairs((sc and sc.start and sc.start.crew) or {}) do if c.control then return c.name end end
+  return nil
+end
+function SC5R.namesMe(g, me, depth)
+  if type(g) ~= "table" or (depth or 0) > 3 then return false end
+  for k, v in pairs(g) do
+    if type(v) == "string" and (k == "who" or k == "at" or k == "to") and (v == me or v == "crew:" .. me) then return true end
+    if k == "goals" and type(v) == "table" then for _, h in ipairs(v) do if SC5R.namesMe(h, me, (depth or 0) + 1) then return true end end end
+  end
+  return false
+end
+-- → met, reading: g asked as you when the plain answer was no
+function SC5R.evalAsMe(g, mem, key, ctx, met, reading)
+  if met then return met, reading end
+  local me = SC5R.meName()
+  if not me then return met, reading end
+  local C = ref("crew")
+  local act = C and C.activeId and C.activeId()
+  if not act or act == crew_ids()[me] or not SC5R.namesMe(g, me) then return met, reading end
+  mem[key] = mem[key] or {}
+  SC5R.asMe = me
+  local ok, m2, r2 = pcall(rulebook().evalGoal, g, W, mem[key], ctx)
+  SC5R.asMe = nil
+  if ok and m2 then return m2, r2 end
+  return met, reading
+end
 -- (scnfix) a line's time on screen: the plate types it out (scenario_stage
 -- pacedChars: CPS and a pause at punctuation), then it is read
 function SC5R.lineSecs(text)
@@ -3186,7 +3241,24 @@ function SC5R.stageGround(i, c, bp, wh, out)
   for k, d in ipairs(bp.parts) do
     local cp = {}
     for kk, vv in pairs(d) do cp[kk] = vv end
-    if E and E.modsOf then for _, m in ipairs(E.modsOf(cp)) do if m.type == "battery" then cap = cap + (m.ec or 0) end end end
+    if E and E.modsOf then
+      for _, m in ipairs(E.modsOf(cp)) do
+        if m.type == "battery" then
+          cap = cap + (m.ec or 0)
+          -- (scnfix2: Asha-2 once woke full instead of flat) each battery
+          -- carries its own share in its record: a craft rebuilt from a
+          -- record whose parts hold any state (the wear beats write theirs)
+          -- reads each battery's st.charge and skips the pooled figure, and
+          -- a battery with no st.charge read as FULL (vessel_controller
+          -- start, flight_ops' board)
+          local st = type(cp.st) == "table" and cp.st or ((type(cp.st) == "string" and E.decodeState) and E.decodeState(cp.st)) or {}
+          local s2 = {}
+          for kk, vv in pairs(st) do s2[kk] = vv end
+          s2.charge = (m.ec or 0) * (wh.charge or 1)
+          cp.st = s2
+        end
+      end
+    end
     recs[k] = (E and E.packRecord) and E.packRecord(cp) or cp
   end
   local nx = (tonumber(save.get("fleet.next")) or 0) + 1
@@ -3289,6 +3361,12 @@ function SC5R.board(v)
   if not vc then say_log("board: no craft " .. tostring(v.craft)); return end
   local cur = C.craftOf and C.craftOf(id)
   if cur and cur.node and vc.node and cur.node.id == vc.node.id then return end
+  -- (scnfix2) the member you play now (story crew are yours to switch to):
+  -- you board yourself; the story never seats your body from afar
+  if phase == "running" and not cut and not cur and C.activeId and C.activeId() == id then
+    say_log("board: " .. tostring(v.who) .. " is the member you play: left to you")
+    return
+  end
   -- (scnfix, Ty 2026-11-12: "my crewmate teleported onto the rover with me")
   -- a member on foot in sight of the craft WALKS to it and climbs in when
   -- there (the walk's end boards them: walks_tick); seated straight away
@@ -4073,6 +4151,7 @@ local function evaluate()
       local key = s.id .. ":" .. j
       mem[key] = mem[key] or {}
       local met, reading = R_.evalGoal(g, W, mem[key], ctx)
+      met, reading = SC5R.evalAsMe(g, mem, key .. ":me", ctx, met, reading)
       rows[j] = { label = R_.goalLabel(g), met = met, reading = reading }
       if met then n = n + 1 else all = false end
     end
@@ -4106,10 +4185,12 @@ local function evaluate()
       mem["ev:" .. key] = mem["ev:" .. key] or {}
       local c2 = { done = done, t0 = ctx.t0, now = t, stepAt = ctx.stepAt, stepT0 = cur and step_t0[sc.steps[cur].id] or nil }
       local hit = R_.evalGoal(ev.when, W, mem["ev:" .. key], c2)
+      hit = SC5R.evalAsMe(ev.when, mem, "evme:" .. key, c2, hit)
       -- (graveyard2) `also`: a second condition that must hold too
       if hit and ev.also then
         mem["ev2:" .. key] = mem["ev2:" .. key] or {}
         hit = R_.evalGoal(ev.also, W, mem["ev2:" .. key], c2)
+        hit = SC5R.evalAsMe(ev.also, mem, "ev2me:" .. key, c2, hit)
       end
       if hit then
         fired[key] = t

@@ -324,6 +324,7 @@ function SOLVE(SP)
   wait(0.6); SP.shot("a1_plan_choice", true)
   POLICY["What do we shed"] = pick
   step(sr, "handover", 60)
+  SP.floor_check("ops_room")     -- (scnfix2) Wren and the rest stand on the hab's floor, not in it
   -- the console: its LOG page, then its POWER page; the plan done by its keys
   SP.stand("mark:console", 30)
   local ok = T.openAt(hsid, 109, "LOG")
